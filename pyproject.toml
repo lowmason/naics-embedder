@@ -1,0 +1,69 @@
+[build-system]
+requires = ["uv>=0.1.20"]
+build-backend = "uv.uv_builder"
+
+[project]
+name = "naics-gemini"
+version = "0.1.0"
+description = "Contrastive Learning for NAICS Code Embeddings using a 4-channel MoE model."
+authors = ["Your Name <you@example.com>"]
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Define all project dependencies
+dependencies = [
+    "torch>=2.1.0",
+    "pytorch-lightning>=2.2.0",
+    "transformers>=4.38.0",
+    "peft>=0.9.0",         # For LoRA
+    "hydra-core>=1.3.2",
+    "typer[all]>=0.9.0",   # Includes rich
+    "polars>=0.20.10",     # For data processing
+    "pyarrow>=15.0.0",     # For Parquet streaming
+    "networkx>=3.2.1",     # For graph distances
+    "httpx>=0.27.0",       # For data download
+    "openpyxl>=3.1.2",     # For reading Excel files
+    "scipy>=1.11.4",       # For hierarchical clustering/metrics
+    "scikit-learn>=1.3.2", # For metrics
+    "tqdm>=4.66.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.1",
+    "mypy>=1.9.0",
+    "jupyterlab>=4.0.0",
+]
+
+# Define the CLI entry point
+[project.scripts]
+naics-gemini = "naics_gemini.cli:app"
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+
+[tool.ruff]
+# Enable Pyflakes, Pycodestyle, and isort rules
+select = ["E", "F", "I"]
+line-length = 88
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

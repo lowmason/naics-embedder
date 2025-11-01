@@ -1,0 +1,11 @@
+# Data Configuration: conf/data/default.yaml
+descriptions_file: ${paths.data_dir}/naics_descriptions.parquet
+training_pairs_file: ${paths.data_dir}/naics_training_pairs.parquet
+
+# --- Dataloader Settings ---
+batch_size: 32
+num_workers: 4
+k_negatives: 16 # Number of negatives per anchor-positive pair
+
+# --- Validation Set ---
+val_split_fraction: 0.01 # Use 1% of anchors for validation
