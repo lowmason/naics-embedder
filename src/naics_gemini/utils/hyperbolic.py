@@ -1,14 +1,15 @@
 # src/naics_gemini/utils/hyperbolic.py
 import torch
 
+
 def lorentz_dot(u, v):
-    """Lorentzian inner product."""
+    '''Lorentzian inner product.'''
     uv = u * v
     # The first coordinate has a negative sign
     return torch.sum(uv[:, 1:], dim=1) - uv[:, 0]
 
 def lorentz_distance(u, v, c=1.0):
-    """Calculate the distance between two points in the Lorentz model."""
+    '''Calculate the distance between two points in the Lorentz model.'''
     dot_product = lorentz_dot(u, v)
     # Clamp to avoid numerical errors leading to values slightly less than -1
     clamped_dot = torch.clamp(dot_product, min=-1.0)
@@ -16,7 +17,7 @@ def lorentz_distance(u, v, c=1.0):
     return dist
 
 def exp_map_zero(v, c=1.0):
-    """Exponential map from the tangent space at the origin to the hyperboloid."""
+    '''Exponential map from the tangent space at the origin to the hyperboloid.'''
     sqrt_c = torch.sqrt(torch.tensor(c))
     norm_v = torch.norm(v, p=2, dim=1, keepdim=True)
     # Avoid division by zero for zero vectors

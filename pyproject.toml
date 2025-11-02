@@ -1,67 +1,123 @@
-[build-system]
-requires = ["uv>=0.1.20"]
-build-backend = "uv.uv_builder"
-
 [project]
-name = "naics-gemini"
-version = "0.1.0"
-description = "Contrastive Learning for NAICS Code Embeddings using a 4-channel MoE model."
-authors = ["Your Name <you@example.com>"]
-requires-python = ">=3.10"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    "Intended Audience :: Science/Research",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
+name = 'naics-gemini'
+version = '0.1.0'
+description = 'Cross-platform NAICS embeddings and text-hierarchy modeling project.'
+requires-python = '>=3.10'
 
 dependencies = [
-    "torch>=2.1.0",
-    "pytorch-lightning>=2.2.0",
-    "transformers>=4.38.0",
-    "peft>=0.9.0",
-    "hydra-core>=1.3.2",
-    "typer>=0.9.0",
-    "polars>=0.20.10",
-    "pyarrow>=15.0.0",
-    "networkx>=3.2.1",
-    "httpx>=0.27.0",
-    "openpyxl>=3.1.2",
-    "scipy>=1.11.4",
-    "scikit-learn>=1.3.2",
-    "tqdm>=4.66.1",
+    'torch==2.5.1',
+    'pytorch-lightning>=2.4',
+    'transformers[torch]>=4.46',
+    'accelerate>=1.2',
+    'peft>=0.13',
+    'hydra-core>=1.3',
+    'typer>=0.12',
+    'polars>=1.9',
+    'pyarrow>=17.0',
+    'networkx>=3.4',
+    'httpx>=0.28',
+    'openpyxl>=3.1',
+    'scipy>=1.13',
+    'scikit-learn>=1.5',
+    'tqdm>=4.67',
+    "fastexcel>=0.16.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-cov>=4.1.0",
-    "ruff>=0.4.1",
-    "mypy>=1.9.0",
-    "jupyterlab>=4.0.0",
+    'ruff>=0.6',
+    'pytest>=8.3',
+    'rich>=13.9',
 ]
 
-[project.scripts]
-naics-gemini = "naics_gemini.cli:app"
+
+# -------------------------------------------------------------------------------------------------
+# UV settings:
+#   1. Indices: PyTorch wheel registries for mps & cuda
+#.  2. Sources: Platform-dependent resolution
+# -------------------------------------------------------------------------------------------------
+
+[tool.uv]
+# --- Tell uv to ensure compatible wheels exist for both macOS ARM64 and Linux x86_64 ---
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 
 [[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
+# --- CPU/MPS wheels (for macOS, includes Apple Metal backend) ---
+name = 'pytorch-cpu'
+url = 'https://download.pytorch.org/whl/cpu'
+explicit = true
+
+[[tool.uv.index]]
+# --- CUDA 12.1 wheels (for Linux with NVIDIA GPUs) --- 
+name = 'pytorch-cu121'
+url = 'https://download.pytorch.org/whl/cu121'
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu121" }
+# --- Platform-dependent resolution ---
+torch = [
+    { index = 'pytorch-cpu',  marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
+    { index = 'pytorch-cu121', marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+
+
+# -------------------------------------------------------------------------------------------------
+# Ruff + YAPF configuration:
+#   1. Prefer single quotes
+#   2. Two blank lines after defs/classes, one elsewhere
+#   3. Vertical, dot-aligned method chaining
+#   4. Semantic section dividers preserved
+# -------------------------------------------------------------------------------------------------
 
 [tool.ruff]
-select = ["E", "F", "I"]
 line-length = 100
-target-version = "py310"
+indent-width = 4
+target-version = 'py310'
 
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-ignore_missing_imports = false
+[tool.ruff.lint]
+# Linting rules
+select = ['E', 'F', 'I', 'Q']
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = 'single'
+docstring-quotes = 'single'
+
+[tool.ruff.format]
+# Formatting behavior
+quote-style = 'preserve'
+indent-style = 'space'
+docstring-code-format = true
+docstring-code-line-length = 'dynamic'
+
+
+# -------------------------------------------------------------------------------------------------
+# YAPF - handles detailed spacing, chaining, and section divider rules
+# -------------------------------------------------------------------------------------------------
+
+[tool.yapf]
+based_on_style = 'pep8'
+
+# --- Spacing & blank lines (2 after defs/classes) ---
+blank_lines_around_top_level_definition = 2
+blank_line_before_nested_class_or_def = true
+join_multiple_lines = false
+
+# --- Chaining and indentation ---
+split_before_dot = true
+split_before_logical_operator = true
+align_closing_bracket_with_visual_indent = true
+dedent_closing_brackets = true
+continuation_indent_width = 4
+split_before_first_argument = false
+split_before_closing_bracket = true
+
+# --- Preserve manual line breaks & semantic dividers ---
+coalesce_brackets = false
+split_before_comment = true
+split_penalty_after_opening_bracket = 10000
+split_penalty_for_added_line_split = 10000
+split_penalty_excess_character = 10000
+allow_multiline_lambdas = true

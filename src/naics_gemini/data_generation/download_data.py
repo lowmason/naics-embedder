@@ -1,16 +1,42 @@
-import io
-from dataclasses import asdict, dataclass, field
-import json
-import time
-from typing import Dict, Mapping, Optional
-import logging
+# -------------------------------------------------------------------------------------------------
+# Imports and settings
+# -------------------------------------------------------------------------------------------------
 
-import httpx
+import json
+import logging
+from dataclasses import asdict, dataclass, field
+from io import BytesIO
+from typing import Dict, Optional, Set, Tuple
+
 import polars as pl
-from polars._typing import PolarsDataType
-from rich.progress import track
+from rich.logging import RichHandler
+
+from naics_gemini.utils.utilities import download_with_retry as _download_with_retry
+from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
+
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+handler = RichHandler(
+    rich_tracebacks=False,
+    markup=False,
+    show_time=True,
+    show_level=False,
+    show_path=False,
+    log_time_format='[%H:%M:%S]'
+)
+
+handler.console.width = 200
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',
+    datefmt='[%H:%M:%S]',
+    handlers=[handler]
+)
 
 logger = logging.getLogger(__name__)
+
 
 # -------------------------------------------------------------------------------------------------
 # Configuration
@@ -18,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Config:
-    """Configuration for downloading and preprocessing NAICS data."""
+
     output_parquet: str = './data/naics_descriptions.parquet'
 
     url_codes: str = 'https://www.census.gov/naics/2022NAICS/2-6%20digit_2022_Codes.xlsx'
@@ -30,322 +56,794 @@ class Config:
     sheet_index: str = '2022NAICS'
     sheet_descriptions: str = '2022_NAICS_Descriptions'
     sheet_exclusions: str = '2022_NAICS_Cross_References'
-    schema_codes: Mapping[str, PolarsDataType] = field(
+    
+    schema_codes: Dict[str, pl.DataType] = field(
         default_factory=lambda: {
-            "Seq. No.": "UInt32",
-            "2022 NAICS US   Code": "String",
-            "2022 NAICS US Title": "String",
+            'Seq. No.': pl.UInt32,
+            '2022 NAICS US   Code': pl.Utf8,
+            '2022 NAICS US Title': pl.Utf8,
+        }
+    ) # type: ignore
+    schema_index: Dict[str, pl.DataType] = field(
+        default_factory=lambda: {'NAICS22': pl.Utf8, 'INDEX ITEM DESCRIPTION': pl.Utf8}
+    ) # type: ignore
+    schema_descriptions: Dict[str, pl.DataType] = field(
+        default_factory=lambda: {'Code': pl.Utf8, 'Description': pl.Utf8}
+    ) # type: ignore
+    schema_exclusions: Dict[str, pl.DataType] = field(
+        default_factory=lambda: {'Code': pl.Utf8, 'Cross-Reference': pl.Utf8}
+    ) # type: ignore
+
+    rename_codes: Dict[str, str] = field(
+        default_factory=lambda: {
+            'Seq. No.': 'index',
+            '2022 NAICS US   Code': 'code',
+            '2022 NAICS US Title': 'title',
         }
     )
-    schema_index: Mapping[str, PolarsDataType] = field(
-        default_factory=lambda: {
-            "NAICS22": "String",
-            "INDEX ITEM": "String",
-        }
+    rename_index: Dict[str, str] = field(
+        default_factory=lambda: {'NAICS22': 'code', 'INDEX ITEM DESCRIPTION': 'examples'}
     )
-    schema_descriptions: Mapping[str, PolarsDataType] = field(
-        default_factory=lambda: {
-            "NAICS": "String",
-            "DESCRIPTION": "String",
-        }
+    rename_descriptions: Dict[str, str] = field(
+        default_factory=lambda: {'Code': 'code', 'Description': 'description'}
     )
-    schema_exclusions: Mapping[str, PolarsDataType] = field(
-        default_factory=lambda: {
-            "NAICS": "String",
-            "CROSS-REFERENCE": "String",
-        }
+    rename_exclusions: Dict[str, str] = field(
+        default_factory=lambda: {'Code': 'code', 'Cross-Reference': 'excluded'}
     )
 
 
 # -------------------------------------------------------------------------------------------------
-# 1. Download
+# Utilities
 # -------------------------------------------------------------------------------------------------
 
-def _download_xlsx(url: str) -> io.BytesIO:
-    """Helper to download an Excel file into an in-memory buffer."""
-    try:
-        with httpx.Client(timeout=30.0) as client:
-            response = client.get(url)
-            response.raise_for_status()  # Raise an exception for bad status codes
-            return io.BytesIO(response.content)
-    except httpx.RequestError as e:
-        logger.error(f"Error downloading {url}: {e}")
-        raise
-
-def download_files(cfg: Config) -> Dict[str, io.BytesIO]:
-    """Downloads all required NAICS Excel files from Census.gov."""
-    urls = {
-        'codes': cfg.url_codes,
-        'index': cfg.url_index,
-        'descriptions': cfg.url_descriptions,
-        'exclusions': cfg.url_exclusions,
-    }
+def _read_xlsx_bytes(
+    data: bytes,
+    sheet: str,
+    schema: Dict[str, pl.DataType],
+    cols: Dict[str, str]
+) -> pl.DataFrame:
     
-    downloaded_files = {}
+    '''
+    Read Excel data from bytes into a Polars DataFrame.
     
-    desc = "Downloading NAICS data"
-    for name, url in track(urls.items(), description=desc):
-        logger.info(f"Downloading {name} data from {url}...")
-        downloaded_files[name] = _download_xlsx(url)
-        time.sleep(0.5) # Be polite
+    Args:
+        data: Excel file content as bytes
+        sheet: Sheet name to read
+        schema: Column schema mapping
+        cols: Column rename mapping
         
-    logger.info("All files downloaded successfully.")
-    return downloaded_files
+    Returns:
+        pl.DataFrame: Processed DataFrame
+    '''
+    
+    return (
+        pl
+        .read_excel(
+            BytesIO(data),
+            sheet_name=sheet,
+            columns=list(schema.keys()),
+            schema_overrides=schema
+        )
+        .rename(mapping=cols)
+    )
+
+
+def _read_xlsx(
+    url: str,
+    sheet: str,
+    schema: Dict[str, pl.DataType],
+    cols: Dict[str, str],
+    max_retries: int = 3,
+    initial_delay: float = 1.0,
+    backoff_factor: float = 2.0,
+    timeout: float = 30.0
+) -> Optional[pl.DataFrame]:
+    
+    '''Download and read Excel file from URL.'''
+        
+    data = _download_with_retry(
+        url,
+        max_retries,
+        initial_delay,
+        backoff_factor,
+        timeout
+    )
+
+    if data is None:
+        return None
+
+    return _read_xlsx_bytes(data, sheet, schema, cols)
 
 
 # -------------------------------------------------------------------------------------------------
-# 2. Preprocess
+# Download files
 # -------------------------------------------------------------------------------------------------
 
-def _read_excel(
-    file_buffer: io.BytesIO,
-    sheet_name: str,
-    schema: Mapping[str, PolarsDataType],
-) -> pl.DataFrame:
-    """Helper to read a specific sheet from an in-memory Excel file."""
-    return pl.read_excel(
-        file_buffer,
-        sheet_name=sheet_name,
-        schema_overrides=schema,
-        read_options={"has_header": True},
-    )
-
-def get_titles(
-    file_buffer: io.BytesIO, 
-    sheet_name: str, 
-    schema: Mapping[str, PolarsDataType]
-) -> pl.DataFrame:
-    """Extracts and cleans NAICS codes and titles."""
-    return (
-        _read_excel(file_buffer, sheet_name, schema)
-        .select(
-            code=pl.col("2022 NAICS US   Code").str.replace_all("-", ""),
-            title=pl.col("2022 NAICS US Title"),
-        )
-        .filter(pl.col("code").str.lengths() >= 2)
-        .with_columns(
-            level=pl.col("code").str.lengths(),
-            index=pl.col("Seq. No.").cum_count().sub(1),
-        )
-        .select("index", "level", "code", "title")
-        .sort("index")
-    )
-
-def get_examples(
-    file_buffer: io.BytesIO, 
-    sheet_name: str, 
-    schema: Mapping[str, PolarsDataType]
-) -> pl.DataFrame:
-    """Extracts and groups illustrative examples for each code."""
-    return (
-        _read_excel(file_buffer, sheet_name, schema)
-        .select(
-            code=pl.col("NAICS22").str.replace_all("-", ""),
-            example=pl.col("INDEX ITEM").str.to_lowercase(),
-        )
-        .filter(pl.col("code").str.lengths() >= 2)
-        .group_by("code")
-        .agg(pl.col("example").alias("examples"))
-    )
-
-def get_descriptions(
-    file_buffer: io.BytesIO, 
-    sheet_name: str, 
-    schema: Mapping[str, PolarsDataType]
-) -> pl.DataFrame:
-    """Extracts and cleans detailed descriptions for each code."""
-    return (
-        _read_excel(file_buffer, sheet_name, schema)
-        .select(
-            code=pl.col("NAICS").str.replace_all("-", ""),
-            description=pl.col("DESCRIPTION"),
-        )
-        .filter(pl.col("code").str.lengths() >= 2)
-        .with_columns(
-            description=pl.col("description")
-            .str.replace_all("\n", " ")
-            .str.replace_all(r"\s+", " ")
-            .str.strip()
+def _download_files(
+        cfg: Config
+) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    
+    # NAICS titles
+    titles_df = (
+        _read_xlsx(
+            url=cfg.url_codes, 
+            sheet=cfg.sheet_codes, 
+            schema=cfg.schema_codes, 
+            cols=cfg.rename_codes
         )
     )
 
-def get_exclusions(
-    file_buffer: io.BytesIO, 
-    sheet_name: str, 
-    schema: Mapping[str, PolarsDataType]
-) -> pl.DataFrame:
-    """Extracts and cleans exclusion (cross-reference) information."""
-    return (
-        _read_excel(file_buffer, sheet_name, schema)
-        .select(
-            code=pl.col("NAICS").str.replace_all("-", ""),
-            excluded=pl.col("CROSS-REFERENCE"),
+    # NAICS descriptions
+    descriptions_df = (
+        _read_xlsx(
+            url=cfg.url_descriptions,
+            sheet=cfg.sheet_descriptions,
+            schema=cfg.schema_descriptions,
+            cols=cfg.rename_descriptions,
         )
-        .filter(pl.col("code").str.lengths() >= 2)
-        .with_columns(
-            excluded=pl.col("excluded")
-            .str.replace_all("\n", " ")
-            .str.replace_all(r"\s+", " ")
-            .str.strip()
-        )
-        .group_by("code")
-        .agg(pl.col("excluded").list().join(separator="; "))
     )
 
-def _fill_missing_descriptions(
-    titles: pl.DataFrame, descriptions: pl.DataFrame
-) -> pl.DataFrame:
-    """
-    Fills missing descriptions for higher-level codes by borrowing from 
-    their children's descriptions.
-    """
-    naics_desc_filled = (
-        titles.join(descriptions, how="left", on="code")
-        .filter(pl.col("description").is_null())
-        .select("index", "level", "code")
+    # NAICS index file for examples
+    examples_df = (
+        _read_xlsx(
+            url=cfg.url_index, 
+            sheet=cfg.sheet_index, 
+            schema=cfg.schema_index, 
+            cols=cfg.rename_index
+        )
     )
 
-    naics_desc_complete = (
-        titles.join(descriptions, how="inner", on="code")
-        .filter(pl.col("description").is_not_null())
-        .select("index", "level", "code", "description")
+    # NAICS cross reference file for exclusions
+    exclusions_df = (
+        _read_xlsx(
+            url=cfg.url_exclusions,
+            sheet=cfg.sheet_exclusions,
+            schema=cfg.schema_exclusions,
+            cols=cfg.rename_exclusions,
+        )
     )
+    
+    df_list = [
+        ('Titles', titles_df),
+        ('Descriptions', descriptions_df),
+        ('Examples', examples_df), 
+        ('Exclusions', exclusions_df)
+    ]
+    
+    
+    if all(isinstance(df, pl.DataFrame) for _, df in df_list):
 
-    logger.info(f"Total codes: {titles.height}")
-    logger.info(f"Codes with descriptions: {naics_desc_complete.height}")
-    logger.info(f"Codes missing descriptions: {naics_desc_filled.height}")
+        logger.info('Downloaded NAICS files successfully:')
 
-    # Fill level 4
-    naics_desc_4_missing = naics_desc_filled.filter(pl.col("level") == 4)
-    naics_desc_4_complete = (
-        naics_desc_4_missing.join(
-            naics_desc_complete.filter(pl.col("level") == 5).select(
-                code_5=pl.col("code"), description_5=pl.col("description")
-            ),
-            how="left",
-            on=pl.Expr.register_plugin_function(
-                "register_py_mod", "is_descendent", is_entrypoint=True
-            )(pl.col("code"), pl.col("code_5")),
-        )
-        .group_by("index", "level", "code")
-        .agg(
-            pl.col("description_5")
-            .filter(pl.col("description_5").is_not_null())
-            .list()
-            .join(separator=" ")
-            .alias("description")
-        )
-        .select("index", "level", "code", "description")
-    )
+        dfs = []
+        for col, df in df_list:
 
-    # Fill level 2, 3, 5
-    naics_desc_2_3_5_missing = naics_desc_filled.filter(pl.col("level") != 4)
-    naics_desc_2_3_5_complete = (
-        naics_desc_2_3_5_missing.join(
-            naics_desc_complete.filter(pl.col("level") == 6).select(
-                code_6=pl.col("code"), description_6=pl.col("description")
-            ),
-            how="left",
-            on=pl.Expr.register_plugin_function(
-                "register_py_mod", "is_descendent", is_entrypoint=True
-            )(pl.col("code"), pl.col("code_6")),
-        )
-        .group_by("index", "level", "code")
-        .agg(
-            pl.col("description_6")
-            .filter(pl.col("description_6").is_not_null())
-            .list()
-            .join(separator=" ")
-            .alias("description")
-        )
-        .select("index", "level", "code", "description")
-        .with_columns(
-            pl.col("description")
-            .str.replace_all("Illustrative Examples: ", " ")
-            .str.replace_all("Cross-References: ", " ")
-            .str.replace(
-                "This U.S. industry", "This industry group", literal=True
+            dfs.append(
+                df
+                .with_columns( # type: ignore
+                    code=pl.when(pl.col('code').eq('31-33')).then(pl.lit('31'))
+                           .when(pl.col('code').eq('44-45')).then(pl.lit('44'))
+                           .when(pl.col('code').eq('48-49')).then(pl.lit('48'))
+                           .otherwise(pl.col('code'))
+                )
             )
-            .str.replace("This U.S. industry", "This industry", literal=True)
-            .str.replace(
-                "This NAICS industry", "This industry group", literal=True
-            ),
+
+            logger.info(f'  {col} observations: {df.height: ,}') # type: ignore
+
+        return dfs[0], dfs[1], dfs[2], dfs[3]
+    
+    else:
+        raise ValueError('Failed to download one or more NAICS files.')
+
+
+# -------------------------------------------------------------------------------------------------
+# NAICS titles
+# -------------------------------------------------------------------------------------------------
+
+def _get_titles(
+    titles_df: pl.DataFrame
+) -> Tuple[pl.DataFrame, Set[str]]:
+
+    # Load NAICS titles and normalize combined sector codes (31-33, 44-45, 48-49)
+    titles = (
+        titles_df
+        .select(
+            index=pl.col('index')
+                    .sub(1),
+            level=pl.col('code')
+                    .str.len_chars()
+                    .cast(pl.UInt8),
+            code=pl.col('code'),
+            title=pl.col('title'),
         )
-        .unique(subset=["code"])
+    )
+
+    # Unique set of NAICS codes
+    codes = set(
+        titles
+        .get_column('code')
+        .unique()
+        .to_list()
+    )
+
+    logger.info('Titles:')
+    logger.info(f'  Number of titles: {titles.height: ,}')
+    logger.info(f'  Number of codes: {len(codes): ,}')
+
+    return titles, codes
+
+
+# -------------------------------------------------------------------------------------------------
+# NAICS descriptions 1 (still need to remove exclusions and examples)
+# -------------------------------------------------------------------------------------------------
+
+def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl.DataFrame]:
+
+    # descriptions: normalize combined sector codes
+    descriptions_1 = (
+        descriptions_df
+        .select('code', 'description')
+    )
+
+    # Split multiline descriptions and filter out section headers and cross-references
+    descriptions_2 = (
+        descriptions_1
+        .with_columns(
+            description=pl.col('description')
+                        .str.split('\r\n')
+                        .list.eval(pl.element().filter(pl.element().str.len_chars() > 0))
+        )
+        .explode('description')
+        .with_columns(
+            description_id=pl.col('description')
+                            .cum_count()
+                            .over('code')
+        )
+        .select('code', 'description_id', 'description')
+        .filter(
+            (pl.col('description').ne('The Sector as a Whole')) &
+            (~pl.col('description').str.contains('Cross-References.')) & 
+            (pl.col('description').str.len_chars().gt(0))
+        )
+    )
+
+    # Clean and normalize description text
+    descriptions_3 = (
+        descriptions_2
+        .select(
+            code=pl.col('code')
+                .str.strip_chars(),
+            description_id=pl.col('description_id'),
+            description=pl.col('description')
+                        .str.strip_prefix(' ')
+                        .str.strip_suffix(' ')
+                        .str.replace_all('NULL', '', literal=True)
+                        .str.replace_all(r'See industry description for \d{6}\.', '')
+                        .str.replace_all(r'<.*?>', '')
+                        .str.replace_all(r'\xa0', ' ')
+                        .str.replace_all('.', '. ', literal=True)
+                        .str.replace_all('U. S. ', 'U.S.', literal=True)
+                        .str.replace_all('e. g. ,', 'e.g.,', literal=True)
+                        .str.replace_all('i. e. ,', 'i.e.,', literal=True)
+                        .str.replace_all(';', '; ', literal=True)
+                        .str.replace_all('31-33', '31', literal=True)
+                        .str.replace_all('44-45', '44', literal=True)
+                        .str.replace_all('48-49', '48', literal=True)
+                        .str.replace_all(r'\s{2,}', ' ')
+                        .str.strip_prefix(' ')
+                        .str.strip_suffix(' ')
+        )
+    )
+
+    logger.info('Descriptions:')
+    logger.info(f'  Number: {descriptions_1.height: ,}')
+    logger.info(f'  Number (split on paragraphs): {descriptions_3.height: ,}')
+
+    return descriptions_2, descriptions_3
+
+
+# -------------------------------------------------------------------------------------------------
+# NAICS exclusions
+# -------------------------------------------------------------------------------------------------
+
+def _get_exclusions(
+    exclusions_df: pl.DataFrame,
+    descriptions_3: pl.DataFrame,
+    codes: Set[str]
+ ) -> Tuple[pl.DataFrame, pl.DataFrame]:
+
+    # Load descriptions from cross-reference file
+    exclusions_1 = (
+        exclusions_df
+        .filter(
+            pl.col('excluded').str.contains(r' \d{2,6}'),
+        )
+    )
+
+    # Aggregate exclusions by code
+    exclusions_2 = (
+        exclusions_1
+        .group_by('code', maintain_order=True)
+        .agg(
+            excluded=pl.col('excluded')
+        )
+        .select(
+            code=pl.col('code'), 
+            description_id=pl.lit(1, pl.UInt32), 
+            description=pl.col('excluded').list.join(' ')
+        )
+    )
+
+    # Extract excluded activities (typically last description block for a code)
+    exclusions_3 = (
+        descriptions_3
+        .filter(
+            pl.col('description_id').max().over('code').eq(pl.col('description_id')),
+            pl.col('description').str.contains_any(['Excluded', 'excluded', 'Exclude', 'exclude']),
+            pl.col('description').str.contains(r' \d{2,6}'),
+        )
+        .select(
+            code=pl.col('code')
+                .str.strip_chars(),
+            description_id=pl.col('description_id'),
+            description=pl.col('description'),
+        )
+    )
+
+    # Exclusions for cleaning descriptions
+    descriptions_exclusions = (
+        exclusions_3
+        .select('code', 'description_id')
+    )
+
+    # Combine and extract excluded codes
+    exclusions_4 = (
+        pl
+        .concat([
+            exclusions_2, 
+            exclusions_3
+        ])
+        .filter(
+            pl.col('description').is_not_null()
+        )
+        .with_columns(
+            digit=pl.col('description')
+                    .str.extract_all(r' \d{2,6}')
+                    .list.eval(pl.element().str.strip_prefix(' '))
+                    .list.set_intersection(codes)
+                    .list.drop_nulls()
+        )
+        .filter(
+            pl.col('digit').list.len().gt(0)
+        )
+    )
+    
+    # Final exclusions DataFrame
+    exclusions = (
+        exclusions_4
+        .explode('digit')
+        .select(
+            level=pl.col('code')
+                    .str.len_chars()
+                    .cast(pl.UInt8),
+            code=pl.col('code'),
+            excluded=pl.col('description'),
+            excluded_codes=pl.col('digit')
+        )
+        .sort('level', 'code')
+        .group_by('level', 'code', maintain_order=True)
+        .agg(
+            excluded=pl.col('excluded'),
+            excluded_codes=pl.col('excluded_codes')
+        )
+        .with_columns(
+            excluded=pl.col('excluded').list.join(' ')
+        )
+    )
+
+    exclusions_cnt = (
+        exclusions
+        .with_columns(
+            excluded_count=pl.col('excluded_codes').list.len()
+        )
+        .get_column('excluded_count')
+        .sum()
+    )
+
+    logger.info('Exclusions:')
+    logger.info('  Reference codes:')
+    logger.info(f'    Cross-references: {exclusions_2.height: ,}')
+    logger.info(f'    Extracted from descriptions: {exclusions_3.height: ,}')
+    logger.info(f'    Final: {exclusions.height: ,}')
+    logger.info(f'  Excluded codes: {exclusions_cnt: ,}')
+
+    return exclusions, descriptions_exclusions
+
+
+# -------------------------------------------------------------------------------------------------
+# NAICS examples
+# -------------------------------------------------------------------------------------------------
+
+def _get_examples(
+        examples_df: pl.DataFrame,
+        codes: Set[str],
+        descriptions_2: pl.DataFrame,
+        descriptions_3: pl.DataFrame
+    ) -> Tuple[pl.DataFrame, pl.DataFrame]: 
+    
+    # Example spreadsheet
+    examples_1 = (
+        examples_df
+        .filter(
+            pl.col('code').is_in(codes)
+        )
+        .sort('code')
+        .group_by('code', maintain_order=True)
+        .agg(
+            examples_1=pl.col('examples')
+        )
+    )
+
+    # Identify where 'Illustrative Examples:' section begins
+    examples_2 = (
+        descriptions_2
+        .filter(
+            pl.col('description').str.contains('Illustrative Examples:')
+        )
+        .select(
+            code=pl.col('code'), 
+            example_id=pl.col('description_id')
+        )
+    )
+    
+    # Extract examples that appear after 'Illustrative Examples:' marker
+    examples_3 = (
+        descriptions_3
+        .join(
+            examples_2, 
+            how='inner', 
+            on='code'
+        )
+        .filter(
+            pl.col('example_id').lt(pl.col('description_id'))
+        )
+        .group_by('code', maintain_order=True)
+        .agg(
+            examples_2=pl.col('description'),
+            description_id_min=pl.col('description_id').min()
+        )
+    )
+
+    # Description IDs to exclude in description dataframe
+    descriptions_examples = (
+        examples_3
+        .select('code', 'description_id_min')
+    )
+    
+    # Merge examples, preferring spreadsheet example 
+    examples_4 = (
+        examples_1
+        .join(
+            examples_3, 
+            how='full', 
+            on='code', 
+            coalesce=True
+        )
+        .select(
+            code=pl.col('code'), 
+            examples=pl.coalesce('examples_1', 'examples_2')
+        )
+    )
+
+    examples = (
+        examples_4
+        .select(
+            code=pl.col('code'), 
+            examples=pl.col('examples')
+                       .list.join('; ')
+        )
+    )
+
+    examples_cnt = (
+        examples_4
+        .with_columns(
+            example_cnt=pl.col('examples')
+                          .list.len()
+        )
+        .get_column('example_cnt')
+        .sum()
+    )
+
+    logger.info('Examples:')
+    logger.info('  Reference codes:')
+    logger.info(f'    Cross-references: {examples_1.height: ,}')
+    logger.info(f'    Extracted from descriptions: {examples_3.height: ,}')
+    logger.info(f'    Final: {examples.height: ,}')
+    logger.info(f'  Number of examples: {examples_cnt: ,}')
+
+    return examples, descriptions_examples
+
+
+# -------------------------------------------------------------------------------------------------
+# NAICS description 2 (cleaned descriptions)
+# -------------------------------------------------------------------------------------------------
+
+def _get_descriptions_2(
+    descriptions_3: pl.DataFrame,
+    descriptions_exclusions: pl.DataFrame,
+    descriptions_examples: pl.DataFrame
+) -> pl.DataFrame:
+    
+    # descriptions: exclude exclusion and example description blocks
+    descriptions_4 = (
+        descriptions_3
+        .join(
+            descriptions_exclusions,
+            how='anti',
+            on=['code', 'description_id']
+        )
+        .join(
+            descriptions_examples,
+            how='left',
+            on='code'
+        )
+        .with_columns(
+            pl.col('description_id_min')
+              .fill_null(999)
+        )
+        .filter(
+            pl.col('description_id').lt(pl.col('description_id_min'))
+        )
+        .group_by('code', maintain_order=True)
+        .agg(
+            pl.col('description')
+        )
+        .with_columns(
+            description=pl.col('description')
+                          .list.join(' ')
+        )
+    )
+
+    # Separate complete descriptions from missing ones
+    description_complete_1 = (
+        descriptions_4
+        .filter(
+            pl.col('description').ne('')
+        )
+    )
+
+    # Find 4-digit codes missing descriptions
+    description_4_missing = (
+        descriptions_4
+        .filter(
+            pl.col('code').str.len_chars().eq(4), 
+            pl.col('description').eq('')
+        )
+        .select(
+            code1=pl.col('code').str.pad_end(5, '1'),
+            code2=pl.col('code').str.pad_end(5, '2'),
+            code3=pl.col('code').str.pad_end(5, '3'),
+            code4=pl.col('code').str.pad_end(5, '4'),
+            code9=pl.col('code').str.pad_end(5, '9'),
+    ))
+
+    # Find 5-digit codes missing descriptions
+    description_5_missing = (
+        descriptions_4
+        .filter(
+            pl.col('code').str.len_chars().eq(5), 
+            pl.col('description').eq('')
+        )
+        .select(code=pl.col('code').str.pad_end(6, '0'))
+    )
+
+    logger.info('NAICS missing descriptions:')
+    logger.info(f'  Total: {descriptions_4.height: ,}')
+    logger.info(f'  Complete: {description_complete_1.height: ,}')
+    logger.info(f'  Missing (level 4): {description_4_missing.height: ,}')
+    logger.info(f'  Missing (level 5): {description_5_missing.height: ,}\n')
+
+    # Fill missing 5-digit descriptions from 6-digit children
+    description_5_complete = (
+        description_5_missing
+        .join(
+            description_complete_1, 
+            how='inner', 
+            on='code'
+        )
+        .with_columns(
+            code=pl.col('code').str.slice(0, 5)
+        )
+        .select(
+            code=pl.col('code'),
+            description=pl.col('description')
+                        .str.replace('This industry', 'This NAICS industry', literal=True)
+        )
+    )
+
+    description_complete_2 = (
+        pl
+        .concat([
+            description_complete_1, 
+            description_5_complete
+        ])
+    )
+
+    # Fill missing 4-digit descriptions from 5-digit children (try multiple suffixes)
+    description_4_complete_1 = (description_4_missing.join(
+        description_complete_2, how='inner', right_on='code', left_on='code1'
+    ))
+
+    description_4_complete_2 = (
+        description_4_missing
+        .join(
+            description_complete_2, 
+            how='inner', 
+            right_on='code', 
+            left_on='code2'
+        )
+    )
+
+    description_4_complete_3 = (
+        description_4_missing
+        .join(
+            description_complete_2, 
+            how='inner', 
+            right_on='code', 
+            left_on='code3'
+        )
+    )
+
+    description_4_complete_4 = (
+        description_4_missing
+        .join(
+            description_complete_2, 
+            how='inner', 
+            right_on='code', 
+            left_on='code4'
+        )
+    )
+
+    description_4_complete_9 = (
+        description_4_missing
+        .join(
+            description_complete_2, 
+            how='inner', 
+            right_on='code', 
+            left_on='code9'
+        )
+    )
+
+    description_4_complete = (
+        pl
+        .concat([
+            description_4_complete_1,
+            description_4_complete_2,
+            description_4_complete_3,
+            description_4_complete_4,
+            description_4_complete_9,
+        ])
+        .select(
+            code=pl.col('code1')
+                .str.slice(0, 4),
+            description=pl.col('description')
+                        .str.replace('This industry', 'This industry group', literal=True)
+                        .str.replace('This NAICS industry', 'This industry group', literal=True),
+        )
+        .unique(subset=['code'])
     )
 
     # Combine all descriptions
-    naics_descriptions = pl.concat(
-        [naics_desc_complete, naics_desc_4_complete, naics_desc_2_3_5_complete]
+    descriptions = (
+        pl.concat([
+            description_complete_2, 
+            description_4_complete
+        ])
     )
-    
-    logger.info(f"Filled {naics_desc_4_complete.height} level 4 descriptions.")
-    logger.info(f"Filled {naics_desc_2_3_5_complete.height} other descriptions.")
-    logger.info(f"Total descriptions: {naics_descriptions.height}")
 
-    return naics_descriptions
+    logger.info('NAICS completed descriptions:')
+    logger.info(f'  Missing (level 4): {description_4_missing.height: ,}')
+    logger.info(f'  Filled missing (level 4): {description_4_complete.height: ,}')
+    logger.info(f'  Missing (level 5): {description_5_missing.height: ,}')
+    logger.info(f'  Filled missing (level 5): {description_5_complete.height: ,}')
+    logger.info(f'  Complete: {descriptions.height: ,}\n')
+
+    return descriptions
+
+
+# -------------------------------------------------------------------------------------------------
+# Combine all and write final output
+# -------------------------------------------------------------------------------------------------
+
+def download_preprocess_data() -> pl.DataFrame:
+    
+    config = Config()
+
+    config_dict = asdict(config)
+    for key, value in config_dict.items():
+        if isinstance(value, dict):
+            config_dict[key] = {k: str(v) for k, v in value.items()}
+
+    logger.info('Configuration:')
+    logger.info(json.dumps(config_dict, indent=2))
+    
+    titles_df, descriptions_df, examples_df, exclusions_df = _download_files(config)
+
+    titles, codes = _get_titles(titles_df)
+
+    descriptions_2, descriptions_3 = _get_descriptions_1(descriptions_df)
+
+    exclusions, descriptions_exclusions = _get_exclusions(
+        exclusions_df, 
+        descriptions_3, 
+        codes
+    )
+
+    examples, descriptions_examples = _get_examples(
+        examples_df, 
+        codes, 
+        descriptions_2, 
+        descriptions_3
+    )
+
+    descriptions = _get_descriptions_2(
+        descriptions_3,
+        descriptions_exclusions,
+        descriptions_examples
+    )
+
+    # Join all components and write final output
+    naics_final = (
+        titles
+            .join(
+                descriptions, 
+                how='inner', 
+                on='code'
+            )
+            .join(
+                exclusions, 
+                how='left', 
+                on='code'
+            )
+            .join(
+                examples, 
+                how='left', 
+                on='code'
+            )
+            .select(
+                index=pl.col('index'),
+                level=pl.col('level'),
+                code=pl.col('code'),
+                title=pl.col('title'),
+                description=pl.col('description'),
+                examples=pl.col('examples'),
+                excluded=pl.col('excluded'),
+                excluded_codes=pl.col('excluded_codes')
+            )
+            .sort('index')
+    )
+
+    (
+        naics_final
+        .write_parquet(
+            config.output_parquet
+        )
+    )    
+
+    _parquet_stats(
+        parquet_df=naics_final,
+        message='NAICS codes (text + hierarchy) written to:',
+        output_parquet=config.output_parquet,
+        logger=logger
+    )
+
+    return naics_final
 
 
 # -------------------------------------------------------------------------------------------------
 # Main
 # -------------------------------------------------------------------------------------------------
 
-def download_naics_data() -> None:
-    """
-    Main entry point for downloading and preprocessing all NAICS data.
-    """
-    # Configuration
-    cfg = Config()
-    logger.info("Configuration:")
-    logger.info(json.dumps(asdict(cfg), indent=2))
+if __name__ == '__main__':
 
-    # Download
-    files = download_files(cfg)
-
-    # Process each file
-    logger.info("Processing downloaded files...")
-    naics_titles = get_titles(
-        files["codes"], cfg.sheet_codes, cfg.schema_codes
-    )
-    naics_examples = get_examples(
-        files["index"], cfg.sheet_index, cfg.schema_index
-    )
-    naics_descriptions_raw = get_descriptions(
-        files["descriptions"], cfg.sheet_descriptions, cfg.schema_descriptions
-    )
-    naics_exclusions = get_exclusions(
-        files["exclusions"], cfg.sheet_exclusions, cfg.schema_exclusions
-    )
-
-    # Fill missing descriptions
-    logger.info("Filling missing descriptions...")
-    naics_descriptions = _fill_missing_descriptions(
-        naics_titles, naics_descriptions_raw
-    )
-
-    # Join all components
-    logger.info("Joining all data components...")
-    naics_final = (
-        naics_titles.join(naics_descriptions, how="left", on=["index", "level", "code"])
-        .join(naics_exclusions, how="left", on="code")
-        .join(naics_examples, how="left", on="code")
-        .with_columns(
-            examples=pl.col("examples").list.join(separator="; ")
-        )
-        .select("index", "level", "code", "title", "description", "excluded", "examples")
-        .sort("index")
-    )
-
-    # Write final output
-    logger.info(f"Writing final output to {cfg.output_parquet}...")
-    naics_final.write_parquet(cfg.output_parquet)
-
-    logger.info(f"\nSuccessfully generated {cfg.output_parquet}")
-    logger.info(f"Total codes processed: {naics_final.height}")
-
-
-if __name__ == "__main__":
-    # This script can still be run directly if needed,
-    # but it's now designed to be called by cli.py
-    configure_logging()
-    download_naics_data()
+    download_preprocess_data()
