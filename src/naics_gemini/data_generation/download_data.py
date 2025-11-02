@@ -9,31 +9,9 @@ from io import BytesIO
 from typing import Dict, Optional, Set, Tuple
 
 import polars as pl
-from rich.logging import RichHandler
 
 from naics_gemini.utils.utilities import download_with_retry as _download_with_retry
 from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
-
-for handler in logging.root.handlers[:]:
-    logging.root.removeHandler(handler)
-
-handler = RichHandler(
-    rich_tracebacks=False,
-    markup=False,
-    show_time=True,
-    show_level=False,
-    show_path=False,
-    log_time_format='[%H:%M:%S]'
-)
-
-handler.console.width = 200
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s',
-    datefmt='[%H:%M:%S]',
-    handlers=[handler]
-)
 
 logger = logging.getLogger(__name__)
 
