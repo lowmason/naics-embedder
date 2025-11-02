@@ -60,7 +60,7 @@ def run_preprocess():
 
     download_preprocess_data()
 
-    console.print('\n✅ [bold]Preprocessing complete.[/bold]\n')
+    console.print('\n[bold]Preprocessing complete.[/bold]\n')
 
 
 @data_app.command('distances')
@@ -79,7 +79,7 @@ def run_distances():
 
     calculate_pairwise_distances()
 
-    console.print('\n✅ [bold]Distance computation complete.[/bold]\n')
+    console.print('\n[bold]Distance computation complete.[/bold]\n')
 
 
 @data_app.command('triplets')
@@ -98,7 +98,7 @@ def run_triplets():
 
     generate_training_triplets()
 
-    console.print('\n✅ [bold]Triplet generation complete.[/bold]\n')
+    console.print('\n[bold]Triplet generation complete.[/bold]\n')
 
 
 @data_app.command('all')
@@ -116,7 +116,7 @@ def run_all_data_gen():
     run_distances()
     run_triplets()
     
-    console.rule('[bold green]🎉 Full Data Pipeline Complete! 🎉[/bold green]')
+    console.rule('[bold green]Full Data Pipeline Complete![/bold green]')
 
 
 # --- Model Training Command ---
@@ -194,7 +194,7 @@ def train(
         # --- End Future Implementation ---
 
         console.print(
-            f'\n[bold green]✅ Training command stub for curriculum '
+            f'\n[bold green]Training command stub for curriculum '
             f"'[cyan]{curriculum}[/cyan]' executed successfully.[/bold]"
         )
         console.print('Next steps: Implement NAICSDataModule and NAICSModel.')
