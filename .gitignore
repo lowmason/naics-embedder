@@ -71,6 +71,7 @@ dmypy.json
 .vscode/
 
 # Data files
+archive/
 data/
 *.parquet
 *.cache
