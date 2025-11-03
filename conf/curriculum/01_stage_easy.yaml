@@ -1,0 +1,13 @@
+name: 01_stage_easy
+
+positive_levels: [6]
+positive_distance_min: null
+positive_distance_max: 2.0
+max_positives: null
+
+difficulty_buckets: [1, 2]
+bucket_percentages:
+  1: 0.875
+  2: 0.125
+
+k_negatives: 16
