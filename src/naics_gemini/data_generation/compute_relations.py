@@ -4,7 +4,7 @@
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
@@ -26,11 +26,30 @@ logger = logging.getLogger(__name__)
 class Config:
 
     input_parquet: str = './data/naics_descriptions.parquet'
-    output_parquet: str = './data/naics_distances.parquet'
+    output_parquet: str = './data/naics_relations.parquet'
+
+    relation_id: Dict[str, int] = field(
+        default_factory=lambda: {
+            'child': 0,
+            'sibling': 1,
+            'grandchild': 2,
+            'nephew/niece': 3,
+            'great-grandchild': 4,
+            'grand-nephew/niece': 5,
+            'cousin': 6,
+            'great-great-grandchild': 7,
+            'grand-grand-nephew/niece': 8,
+            'cousin_1_times_removed': 9,
+            'second_cousin': 10,
+            'cousin_2_times_removed': 11,
+            'second_cousin_1_times_removed': 12,
+            'third_cousin': 13,
+        }
+    )
 
 
 # -------------------------------------------------------------------------------------------------
-# Distance utilities
+# Relations utilities
 # -------------------------------------------------------------------------------------------------
 
 def _sectors(input_parquet: str) -> List[str]:
@@ -152,41 +171,75 @@ def _find_common_ancestor(i: str, j: str, ancestors: Dict[str, List[str]]) -> Op
 # 2. Compute relationships
 # -------------------------------------------------------------------------------------------------
 
-
-def _get_distance(
+def _get_relations(
     i: str, 
     j: str, 
     depths: Dict[str, int], 
     ancestors: Dict[str, List[str]]
-) -> float:
+) -> str:
 
     depth_i, depth_j = depths[i], depths[j]
+    ancestors_j = ancestors[j]
+
+    if i in ancestors_j:
+        generation_gap = depth_j - depth_i
+
+        if generation_gap == 1:
+            return 'child'
+
+        elif generation_gap == 2:
+            return 'grandchild'
+
+        elif generation_gap == 3:
+            return 'great-grandchild'
+
+        else:
+            return 'great-great-grandchild'
 
     common_ancestor = _find_common_ancestor(i, j, ancestors)
-    if common_ancestor is None:
-        return depths[i] + depths[j]
 
-    depth_ancestor = depths[common_ancestor]
+    distance_i = depth_i - depths[common_ancestor] #type: ignore
+    distance_j = depth_j - depths[common_ancestor] #type: ignore
 
-    distance = (
-        (depth_i - depth_ancestor) +
-        (depth_j - depth_ancestor)
-    )
+    if distance_i == 1 and distance_j == 1:
+        return 'sibling'
 
-    lineal = 1 if i in ancestors[j] else 0
+    elif distance_i == 1 and distance_j == 2:
+        return 'nephew/niece'
 
-    return distance - 0.5 * lineal
+    elif distance_i == 2 and distance_j == 2:
+        return 'cousin'
+
+    elif distance_i == 1 and distance_j > 2:
+        num_grands = distance_j - 2
+        return f'{"grand-" * num_grands}nephew/niece'
+
+    elif distance_i == 2 and distance_j > 2:
+        times_removed = distance_j - 2
+        return f'cousin_{times_removed}_times_removed'
+
+    else:
+        degree = min(distance_i, distance_j) - 1
+        removed = abs(distance_j - distance_i)
+        ordinals = {1: 'first', 2: 'second', 3: 'third', 4: 'fourth', 5: 'fifth'}
+        degree_name = ordinals.get(degree, f'{degree}th')
+
+        if removed == 0:
+            return f'{degree_name}_cousin'
+
+        else:
+            return f'{degree_name}_cousin_{removed}_times_removed'
 
 
 # -------------------------------------------------------------------------------------------------
 # Distance stats
 # -------------------------------------------------------------------------------------------------
 
-def _distance_stats(distances_df: pl.DataFrame):       
+def _relation_stats(relations_df: pl.DataFrame):       
     
     stats_df = (
-        distances_df
-        .group_by('distance')
+        relations_df
+        .group_by('relation_id', 'relation')
         .agg(
             count=pl.len()
         )
@@ -194,27 +247,31 @@ def _distance_stats(distances_df: pl.DataFrame):
             pct=pl.col('count')
                   .truediv(pl.col('count').sum())
         )
-        .sort('distance')
+        .sort('relation_id')
     )
 
     console = Console()
 
     def _render_triplet_table(rows):
 
-        title = Text('\nDistance Statistics:', style='bold')
+        title = Text('\nRelation Statistics:', style='bold')
 
-        table = Table(title=title, title_justify='left', show_lines=True, show_footer=True)
+        table = Table( title=title, title_justify='left', show_lines=True, show_footer=True)
 
-        total_count = sum(row.get('count', 0) for row in rows)
+        total_n = sum(row.get('count', 0) for row in rows)
         total_pct = 100 * sum(row.get('pct', 0) for row in rows)
 
-        table.add_column('Distance', justify='center', style='bold cyan')
-        table.add_column('Frequency', justify='right', footer=f'[bold]{total_count: ,}[/bold]')
+        table.add_column('Relation ID', justify='center', style='bold cyan')
+        table.add_column('Relation', justify='left', style='bold cyan')
+        table.add_column('Frequency', justify='right', footer=f'[bold]{total_n: ,}[/bold]')
         table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .4f}%[/bold]')
+
+        print(total_n, total_pct)
 
         for row in rows:
 
-            distance = str(row.get('distance', ''))
+            relation_id = str(row.get('relation_id', ''))
+            relation = row.get('relation', '')
 
             n = row.get('count', 0)
             pct = row.get('pct', 0)
@@ -222,7 +279,7 @@ def _distance_stats(distances_df: pl.DataFrame):
             n_cell = Text(f'{n: ,}')
             pct_cell = Text(f'{100 * pct: .4f}%', style='bold')
 
-            table.add_row(distance, n_cell, pct_cell)
+            table.add_row(relation_id, relation, n_cell, pct_cell)
 
         console.print(table)
 
@@ -233,7 +290,7 @@ def _distance_stats(distances_df: pl.DataFrame):
 # Main Entry Point
 # -------------------------------------------------------------------------------------------------
 
-def calculate_pairwise_distances() -> pl.DataFrame:
+def calculate_pairwise_relations() -> pl.DataFrame:
     
     cfg = Config()
 
@@ -248,16 +305,19 @@ def calculate_pairwise_distances() -> pl.DataFrame:
 
         pairs = [(i, j) if int(i) < int(j) else (j, i) for i, j in combinations(G.nodes, 2)]
 
-        depths, ancestors, parents = _compute_tree_metadata(G, sector)
+        depths, ancestors, _ = _compute_tree_metadata(G, sector)
 
-        distances = []
+        relationships = []
         for i, j in sorted(pairs, key=lambda x: (x[0], x[1])):
-            distance = _get_distance(i, j, depths, ancestors)
-            distances.append({'code_i': i, 'code_j': j, 'distance': distance})
+            relationship = _get_relations(i, j, depths, ancestors)
+            relationships.append({'code_i': i, 'code_j': j, 'relationship': relationship})
 
-        df = pl.DataFrame(
-            data=distances,
-            schema={'code_i': pl.Utf8, 'code_j': pl.Utf8, 'distance': pl.Float32},
+        df = (
+            pl
+            .DataFrame(
+                data=relationships,
+                schema={'code_i': pl.Utf8, 'code_j': pl.Utf8, 'relationship': pl.Utf8},
+            )
         )
 
         logger.info(f'Sector {sector}: [{len(depths): ,} nodes, {df.height: ,} pairs]')
@@ -272,8 +332,12 @@ def calculate_pairwise_distances() -> pl.DataFrame:
         .select(
             pl.col('code_i'),
             pl.col('code_j'),
-            distance=pl.col('distance')
-    ))
+            relation_id=pl.col('relationship')
+                          .replace_strict(cfg.relation_id, default=None)
+                          .cast(pl.Int8),
+            relation=pl.col('relationship'),
+        )
+    )
 
     naics_i = (
         pl.scan_parquet(cfg.input_parquet)
@@ -293,8 +357,9 @@ def calculate_pairwise_distances() -> pl.DataFrame:
         )
     )
 
-    naics_distances = (
-        naics_i.join(
+    relations_df = (
+        naics_i
+        .join(
             naics_j, 
             how='cross'
         )
@@ -304,13 +369,13 @@ def calculate_pairwise_distances() -> pl.DataFrame:
         )
         .with_columns(
             keep=(
-                (pl.col('lvl_i') <= pl.col('lvl_j'))
-                & (pl.col('sector_i') == pl.col('sector_j'))
-                & (pl.col('code_i').cast(pl.UInt32) < pl.col('code_j').cast(pl.UInt32))
-            )
-            | (
-                (pl.col('lvl_i') <= pl.col('lvl_j'))
-                & (pl.col('sector_i') != pl.col('sector_j'))
+                (pl.col('lvl_i') <= pl.col('lvl_j')) &
+                (pl.col('sector_i') == pl.col('sector_j')) &
+                (pl.col('code_i').cast(pl.UInt32) < pl.col('code_j').cast(pl.UInt32))
+            ) | 
+            (
+                (pl.col('lvl_i') <= pl.col('lvl_j')) &
+                (pl.col('sector_i') != pl.col('sector_j'))
             )
         )
         .filter(
@@ -323,38 +388,41 @@ def calculate_pairwise_distances() -> pl.DataFrame:
             on=['code_i', 'code_j']
         )
         .select(
-            pl.col('idx_i'),
-            pl.col('idx_j'),
-            pl.col('code_i'),
-            pl.col('code_j'),
-            distance=pl.col('distance')
-                       .fill_null(10.0)
+            idx_i=pl.col('idx_i'),
+            idx_j=pl.col('idx_j'),
+            code_i=pl.col('code_i'),
+            code_j=pl.col('code_j'),
+            relation_id=pl.col('relation_id')
+                          .fill_null(14),
+            relation=pl.col('relation')
+                       .fill_null('unrelated')
         )
         .sort('idx_i', 'idx_j')
     )
 
     (
-        naics_distances
-        .write_parquet(cfg.output_parquet)
+        relations_df
+        .write_parquet(
+            cfg.output_parquet
+        )
     )
 
-    _distance_stats(naics_distances)   
+    _relation_stats(relations_df)
 
     _parquet_stats(
-        parquet_df=naics_distances,
-        message='NAICS pairwise distances written to',
+        parquet_df=relations_df,
+        message='NAICS pairwise relations written to',
         output_parquet=cfg.output_parquet,
         logger=logger
     )
 
-    return naics_distances
+    return relations_df
 
 
 # -------------------------------------------------------------------------------------------------
-# Main
+# Main Entry Point
 # -------------------------------------------------------------------------------------------------
-
 
 if __name__ == '__main__':
-    
-    calculate_pairwise_distances()
+
+    calculate_pairwise_relations()

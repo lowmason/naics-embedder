@@ -1,0 +1,14 @@
+name: 02_stage
+
+# Positive filtering
+positive_levels: [4, 5, 6]
+positive_distance_min: null
+positive_distance_max: 2.0
+max_positives: 15
+
+# Negative sampling
+difficulty_buckets: [1, 2]
+bucket_percentages:
+  1: 0.7
+  2: 0.3
+k_negatives: 12

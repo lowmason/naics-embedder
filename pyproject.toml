@@ -21,6 +21,8 @@ dependencies = [
     'scikit-learn>=1.5',
     'tqdm>=4.67',
     "fastexcel>=0.16.0",
+    "tensorboard>=2.20.0",
+    "tensorboardx>=2.6.4",
 ]
 
 [project.scripts]
@@ -47,11 +49,11 @@ dev = [
 # -------------------------------------------------------------------------------------------------
 
 [tool.uv]
+package = true
 # --- Tell uv to ensure compatible wheels exist for both macOS ARM64 and Linux x86_64 ---
 required-environments = [
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "sys_platform == 'linux' and platform_machine == 'aarch64'",
 ]
 
 [[tool.uv.index]]
@@ -71,7 +73,6 @@ explicit = true
 torch = [
     { index = 'pytorch-cpu',  marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
     { index = 'pytorch-cu121', marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-    { index = 'pytorch-cu121', marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
 ]
 
 

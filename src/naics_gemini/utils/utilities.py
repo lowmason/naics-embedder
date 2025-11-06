@@ -3,11 +3,84 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
+import operator
 import time
-from typing import Optional
+from functools import reduce
+from typing import Dict, List, Optional, Tuple, Union
 
 import httpx
 import polars as pl
+
+# -------------------------------------------------------------------------------------------------
+# Get relationship
+# -------------------------------------------------------------------------------------------------
+
+def get_relationship(idx_code_i: Union[str, int], idx_code_j: Union[str, int]) -> str:
+    filter_list = []
+    if isinstance(idx_code_i, str):
+        filter_list.append(pl.col('code_i').eq(idx_code_i))
+    else:
+        filter_list.append(pl.col('idx_i').eq(idx_code_i))
+
+    if isinstance(idx_code_j, str):
+        filter_list.append(pl.col('code_j').eq(idx_code_j))
+    else:
+        filter_list.append(pl.col('idx_j').eq(idx_code_j))
+
+    filters = reduce(operator.and_, filter_list)
+
+    return (
+        pl.read_parquet(
+            './data/naics_relations.parquet'
+        )
+        .filter(filters)
+        .select('relation')
+        .get_column('relation')
+        .item()
+    )
+
+
+# -------------------------------------------------------------------------------------------------
+# Indices, codes, and mappings
+# -------------------------------------------------------------------------------------------------
+
+def get_indices_codes(
+    parquet_path: str
+) -> Tuple[List[int], List[str], Dict[int, str], Dict[str, int]]:
+
+    '''
+    Extract indices and NAICS codes from a Polars DataFrame.
+    
+    Args:
+        parquet_df (pl.DataFrame): The input DataFrame containing 'index' and 'naics_code' columns.
+        
+    Returns:
+        indices (List[int]): List of indices from the DataFrame.
+        codes (List[str]): List of NAICS codes from the DataFrame.
+        code_to_idx (Dict[str, int]): Mapping from NAICS codes to indices.
+        idx_to_code (Dict[int, str]): Mapping from indices to NAICS codes.
+    '''
+
+    idx_code_iter = (
+        pl
+        .read_parquet(
+            parquet_path
+        )
+        .select('index', 'code')
+        .iter_rows(named=True)
+    )
+
+    indices, codes, code_to_idx, idx_to_code = [], [], {}, {}
+    for row in idx_code_iter:
+        idx, code = row['index'], row['code']
+        
+        indices.append(idx)
+        codes.append(code)
+        code_to_idx[code] = idx
+        idx_to_code[idx] = code
+    
+    return indices, codes, code_to_idx, idx_to_code
+
 
 # -------------------------------------------------------------------------------------------------
 # Download with exponential backoff retry

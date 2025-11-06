@@ -1,0 +1,15 @@
+name: default
+
+# Positive filtering
+positive_levels: [4, 5, 6]
+positive_distance_min: null
+positive_distance_max: 2.0
+max_positives: 10
+
+# Negative sampling
+difficulty_buckets: [1, 2, 3]
+bucket_percentages:
+  1: 0.5
+  2: 0.3
+  3: 0.2
+k_negatives: 8

@@ -131,6 +131,7 @@ class NAICSDataModule(pyl.LightningDataModule):
         if stage == 'fit' or stage is None:
             
             self.train_dataset = NAICSStreamingDataset(
+                descriptions_path=self.descriptions_path,
                 triplets_path=self.triplets_path,
                 token_cache=self.token_cache,
                 curriculum=self.curriculum,
@@ -138,6 +139,7 @@ class NAICSDataModule(pyl.LightningDataModule):
             )
             
             self.val_dataset = NAICSStreamingDataset(
+                descriptions_path=self.descriptions_path,
                 triplets_path=self.triplets_path,
                 token_cache=self.token_cache,
                 curriculum=self.curriculum,

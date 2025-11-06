@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn.functional as F
 
+from naics_gemini.utils.backend import get_device
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,14 +19,14 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingEvaluator:
     
-    def __init__(self, device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self):
         '''
         Evaluator for embedding quality metrics.
         
         Args:
             device: Device to run computations on
-        '''
-        self.device = device
+        ''' 
+        self.device = get_device()
     
     
     def compute_pairwise_distances(
@@ -129,14 +131,14 @@ class EmbeddingEvaluator:
 
 class RetrievalMetrics:
     
-    def __init__(self, device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self):
         '''
         Metrics for evaluating retrieval quality.
         
         Args:
             device: Device to run computations on
         '''
-        self.device = device
+        self.device = get_device()
     
     
     def precision_at_k(
@@ -316,14 +318,14 @@ class RetrievalMetrics:
 
 class HierarchyMetrics:
     
-    def __init__(self, device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self):
         '''
         Metrics for evaluating hierarchy preservation.
         
         Args:
             device: Device to run computations on
         '''
-        self.device = device
+        self.device = get_device()
     
     
     def cophenetic_correlation(
@@ -484,14 +486,14 @@ class HierarchyMetrics:
 
 class EmbeddingStatistics:
     
-    def __init__(self, device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self):
         '''
         Statistics for analyzing embedding space.
         
         Args:
             device: Device to run computations on
         '''
-        self.device = device
+        self.device = get_device()
     
     
     def compute_statistics(
@@ -594,8 +596,7 @@ class NAICSEvaluationRunner:
     
     def __init__(
         self,
-        model,
-        device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model
     ):
         '''
         Complete evaluation runner for NAICS embeddings.
@@ -605,12 +606,12 @@ class NAICSEvaluationRunner:
             device: Device to run on
         '''
         self.model = model
-        self.device = device
+        self.device = get_device()
         
-        self.embedding_eval = EmbeddingEvaluator(device)
-        self.retrieval_metrics = RetrievalMetrics(device)
-        self.hierarchy_metrics = HierarchyMetrics(device)
-        self.embedding_stats = EmbeddingStatistics(device)
+        self.embedding_eval = EmbeddingEvaluator(self.device)
+        self.retrieval_metrics = RetrievalMetrics(self.device)
+        self.hierarchy_metrics = HierarchyMetrics(self.device)
+        self.embedding_stats = EmbeddingStatistics(self.device)
     
     
     def evaluate(

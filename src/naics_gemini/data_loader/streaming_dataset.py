@@ -5,12 +5,14 @@
 import logging
 import random
 from dataclasses import dataclass
+from random import sample
 from typing import Dict, List, Optional
 
 import polars as pl
 from torch.utils.data import IterableDataset
 
 from naics_gemini.data_loader.tokenization_cache import TokenizationCache
+from naics_gemini.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ class NAICSStreamingDataset(IterableDataset):
 
     def __init__(
         self,
+        descriptions_path: str,
         triplets_path: str,
         token_cache: TokenizationCache,
         curriculum: CurriculumConfig,
@@ -69,6 +72,7 @@ class NAICSStreamingDataset(IterableDataset):
     ):
         super().__init__()
 
+        self.descriptions_path = descriptions_path
         self.triplets_path = triplets_path
         self.token_cache = token_cache
         self.curriculum = curriculum
@@ -81,6 +85,8 @@ class NAICSStreamingDataset(IterableDataset):
 
     def _build_indices(self):
 
+        _, codes, _, _ = get_indices_codes(self.descriptions_path)
+
         if self._anchor_to_positives is not None:
             return
 
@@ -92,6 +98,16 @@ class NAICSStreamingDataset(IterableDataset):
                 self.triplets_path
             )
         )
+
+        # Limit max positives per anchor if specified
+        if self.curriculum.max_positives:
+            df = (
+                df
+                .filter(
+                    pl.col('positive_code')
+                      .is_in(sample(codes, self.curriculum.max_positives))
+                )
+            )
 
         # Apply curriculum filters for positive levels
         if self.curriculum.positive_levels:
@@ -130,14 +146,14 @@ class NAICSStreamingDataset(IterableDataset):
             df
             .with_columns(
                 hardness=pl.when(pl.col('excluded') & pl.col('unrelated')).then(pl.lit(8))
-                          .when(pl.col('distance_diff').le(0.5)).then(pl.lit(7))
-                          .when(pl.col('distance_diff').le(1.0)).then(pl.lit(6))
-                          .when(pl.col('distance_diff').le(2.0)).then(pl.lit(5))
-                          .when(pl.col('distance_diff').le(3.0)).then(pl.lit(4))
-                          .when(pl.col('distance_diff').le(4.0)).then(pl.lit(3))
-                          .when(pl.col('distance_diff').le(6.5)).then(pl.lit(2))
-                          .when(~pl.col('excluded') & pl.col('unrelated')).then(pl.lit(1))
-                          .otherwise(pl.lit(0))
+                           .when(pl.col('distance_diff').le(0.5)).then(pl.lit(7))
+                           .when(pl.col('distance_diff').le(1.0)).then(pl.lit(6))
+                           .when(pl.col('distance_diff').le(2.0)).then(pl.lit(5))
+                           .when(pl.col('distance_diff').le(3.0)).then(pl.lit(4))
+                           .when(pl.col('distance_diff').le(4.0)).then(pl.lit(3))
+                           .when(pl.col('distance_diff').le(6.5)).then(pl.lit(2))
+                           .when(~pl.col('excluded') & pl.col('unrelated')).then(pl.lit(1))
+                           .otherwise(pl.lit(0))
             )
         )
 

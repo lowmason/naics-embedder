@@ -1,17 +1,65 @@
-defaults:
-  - data: default
-  - model: default
-  - loss: default
-  - training: default
-  - curriculum: 01_stage_easy
-  - _self_
+# Main configuration file for NAICS Gemini
+# Uses Hydra defaults for curriculum selection
 
+defaults:
+  - _self_
+  - curriculum: default  # This allows curriculum override
+
+# Experiment identification
+experiment_name: ${curriculum.name}
 seed: 42
 
-project_name: naics_gemini
-experiment_name: ${curriculum.name}
-
+# Paths
 paths:
   data_dir: ./data
   output_dir: ./outputs
   checkpoint_dir: ./checkpoints
+
+# Data configuration
+data:
+  descriptions_path: ${paths.data_dir}/naics_descriptions.parquet
+  triplets_path: ${paths.data_dir}/naics_training_pairs.parquet
+  tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
+  batch_size: 32
+  num_workers: 4
+  val_split: 0.05
+
+# Model configuration
+model:
+  base_model_name: sentence-transformers/all-MiniLM-L6-v2
+  
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.1
+  
+  moe:
+    enabled: true
+    num_experts: 4
+    top_k: 2
+    hidden_dim: 1024
+    load_balancing_coef: 0.01
+  
+  eval_sample_size: 500
+  eval_every_n_epochs: 1
+
+# Loss configuration
+loss:
+  temperature: 0.07
+  curvature: 1.0
+
+# Training configuration
+training:
+  learning_rate: 2e-4
+  weight_decay: 0.01
+  warmup_steps: 500
+  
+  trainer:
+    max_epochs: 10
+    accelerator: mps
+    devices: 1
+    precision: 16-mixed
+    gradient_clip_val: 1.0
+    accumulate_grad_batches: 1
+    log_every_n_steps: 10
+    val_check_interval: 1.0

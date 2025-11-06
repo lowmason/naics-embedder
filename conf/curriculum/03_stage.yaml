@@ -1,0 +1,19 @@
+# Stage 3: Hard Curriculum
+# Full difficulty with all negative types
+
+curriculum:
+  name: 03_stage
+  
+  # Positive filtering
+  positive_levels: [4, 5, 6]
+  positive_distance_min: null
+  positive_distance_max: 3.0
+  max_positives: 20
+  
+  # Negative sampling
+  difficulty_buckets: [1, 2, 3]
+  bucket_percentages:
+    1: 0.5
+    2: 0.3
+    3: 0.2
+  k_negatives: 16

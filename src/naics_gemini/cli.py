@@ -18,11 +18,17 @@ from rich.panel import Panel
 from typing_extensions import Annotated
 
 from naics_gemini.data_generation.compute_distances import calculate_pairwise_distances
+from naics_gemini.data_generation.compute_relations import calculate_pairwise_relations
 from naics_gemini.data_generation.create_triplets import generate_training_triplets
 from naics_gemini.data_generation.download_data import download_preprocess_data
-from naics_gemini.data_loader.datamodule import NAICSDataModule
-from naics_gemini.model.naics_model import NAICSContrastiveModel
 from naics_gemini.utils.console import configure_logging
+
+#from naics_gemini.data_loader.datamodule import NAICSDataModule
+#from naics_gemini.model.naics_model import NAICSContrastiveModel
+
+console = Console()
+logger = logging.getLogger(__name__)
+
 
 # -------------------------------------------------------------------------------------------------
 # Setup Typer App
@@ -37,9 +43,6 @@ app = typer.Typer(
 )
 data_app = typer.Typer(help='Manage and generate project datasets.')
 app.add_typer(data_app, name='data')
-
-console = Console()
-logger = logging.getLogger(__name__)
 
 
 # -------------------------------------------------------------------------------------------------
@@ -62,6 +65,25 @@ def run_preprocess():
     download_preprocess_data()
 
     console.print('\n[bold]Preprocessing complete.[/bold]\n')
+
+
+@data_app.command('relations')
+def run_relations():
+
+    '''
+    Compute pairwise graph relationships between all NAICS codes.
+    
+    Requires: data/naics_descriptions.parquet
+    Generates: data/naics_relations.parquet
+    '''
+
+    configure_logging()
+    
+    console.rule('[bold green]Stage 2: Computing Relations[/bold green]')
+
+    calculate_pairwise_relations()
+
+    console.print('\n[bold]Relation computation complete.[/bold]\n')
 
 
 @data_app.command('distances')
@@ -114,6 +136,7 @@ def run_all_data_gen():
     console.rule('[bold green]Starting Full Data Pipeline[/bold green]')
     
     run_preprocess()
+    run_relations()
     run_distances()
     run_triplets()
     
@@ -121,7 +144,7 @@ def run_all_data_gen():
 
 
 # --- Model Training Command ---
-
+'''
 @app.command('train')
 def train(
     curriculum: Annotated[
@@ -129,9 +152,9 @@ def train(
         typer.Option(
             '--curriculum',
             '-c',
-            help="Curriculum config name (e.g., '01_stage_easy').",
+            help="Curriculum config name (e.g., '01_stage').",
         ),
-    ] = '01_stage_easy',
+    ] = '01_stage',
     overrides: Annotated[
         Optional[List[str]],
         typer.Argument(
@@ -139,11 +162,8 @@ def train(
         ),
     ] = None,
 ):
-    
-    '''
-    Train the NAICS-Gemini model using a specified curriculum.
-    '''
-    
+    # Train the NAICS-Gemini model using a specified curriculum.
+        
     configure_logging()
     
     console.rule(
@@ -154,7 +174,7 @@ def train(
         
         # 1. Initialize Hydra
         GlobalHydra.instance().clear()
-        initialize(config_path='../conf', job_name='naics_gemini_train')
+        initialize(config_path='../../conf', job_name='naics_gemini_train')
 
         # 2. Compose Config
         cfg_overrides = [f'curriculum={curriculum}'] + (overrides or [])
@@ -272,7 +292,7 @@ def train(
     except Exception as e:
         logger.error(f'An error occurred during training: {e}', exc_info=True)
         raise typer.Exit(code=1)
-
+'''
 
 if __name__ == '__main__':
     app()
