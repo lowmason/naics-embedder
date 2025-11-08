@@ -210,7 +210,7 @@ def _distance_stats(distances_df: pl.DataFrame):
 
         table.add_column('Distance', justify='center', style='bold cyan')
         table.add_column('Frequency', justify='right', footer=f'[bold]{total_count: ,}[/bold]')
-        table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .4f}%[/bold]')
+        table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .2f}%[/bold]')
 
         for row in rows:
 
@@ -328,7 +328,7 @@ def calculate_pairwise_distances() -> pl.DataFrame:
             pl.col('code_i'),
             pl.col('code_j'),
             distance=pl.col('distance')
-                       .fill_null(10.0)
+                       .fill_null(9.0)
         )
         .sort('idx_i', 'idx_j')
     )

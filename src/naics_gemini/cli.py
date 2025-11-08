@@ -58,7 +58,7 @@ def run_preprocess():
     Generates: data/naics_descriptions.parquet
     '''
     
-    configure_logging()
+    configure_logging('data_preprocess.log')
 
     console.rule('[bold green]Stage 1: Preprocessing[/bold green]')
 
@@ -77,7 +77,7 @@ def run_relations():
     Generates: data/naics_relations.parquet
     '''
 
-    configure_logging()
+    configure_logging('data_relations.log')
     
     console.rule('[bold green]Stage 2: Computing Relations[/bold green]')
 
@@ -96,7 +96,7 @@ def run_distances():
     Generates: data/naics_distances.parquet
     '''
 
-    configure_logging()
+    configure_logging('data_distances.log')
     
     console.rule('[bold green]Stage 2: Computing Distances[/bold green]')
 
@@ -115,7 +115,7 @@ def run_triplets():
     Generates: data/naics_training_pairs.parquet
     '''
 
-    configure_logging()
+    configure_logging('data_triplets.log')
 
     console.rule('[bold green]Stage 3: Generating Triplets[/bold green]')
 
@@ -131,7 +131,7 @@ def run_all_data_gen():
     Run the full data generation pipeline: preprocess, distances, and triplets.
     '''
 
-    configure_logging()
+    configure_logging('data_all.log' )
 
     console.rule('[bold green]Starting Full Data Pipeline[/bold green]')
     

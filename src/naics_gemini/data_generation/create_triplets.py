@@ -22,8 +22,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Config:
     # Input
-    distances_parquet: str = './data/naics_distances.parquet'
     descriptions_parquet: str = './data/naics_descriptions.parquet'
+    distances_parquet: str = './data/naics_distances.parquet'
+    relations_parquet: str = './data/naics_relations.parquet'
 
     # Output
     output_parquet: str = './data/naics_training_pairs'
@@ -35,8 +36,8 @@ class Config:
 
 
 def _input_parquet_files(
-    descriptions_parquet: str, distances_parquet: str
-) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    descriptions_parquet: str, distances_parquet: str, relations_parquet: str
+) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     descriptions = pl.read_parquet(descriptions_parquet)
 
     distances = pl.read_parquet(distances_parquet).select(
@@ -47,17 +48,24 @@ def _input_parquet_files(
         distance=pl.col('distance'),
     )
 
+    relations = pl.read_parquet(relations_parquet).select(
+        idx_i=pl.col('idx_i'),
+        idx_j=pl.col('idx_j'),
+        code_i=pl.col('code_i'),
+        code_j=pl.col('code_j'),
+        relation=pl.col('relation_id'),
+    )
+
     logger.info('Number of input observations:')
     logger.info(f'  descriptions: {descriptions.height: ,}')
     logger.info(f'  distances: {distances.height: ,}\n')
 
-    return descriptions, distances
+    return descriptions, distances, relations
 
 
 # -------------------------------------------------------------------------------------------------
 # Exclusions
 # -------------------------------------------------------------------------------------------------
-
 
 def _get_exclusions(descriptions_df: pl.DataFrame, distances_df: pl.DataFrame) -> pl.DataFrame:
     codes = set(descriptions_df.get_column('code').unique().sort().to_list())
@@ -99,10 +107,11 @@ def _get_exclusions(descriptions_df: pl.DataFrame, distances_df: pl.DataFrame) -
 # Distances
 # -------------------------------------------------------------------------------------------------
 
-
 def _get_distances(distances_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl.DataFrame]:
+
     positive_distances = (
-        distances_df.filter(pl.col('distance').ne(pl.col('distance').max()))
+        distances_df
+        .filter(pl.col('distance').ne(pl.col('distance').max()))
         .select(
             anchor_code=pl.col('code_i'),
             positive_code=pl.col('code_j'),
@@ -113,7 +122,8 @@ def _get_distances(distances_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl.DataFra
     )
 
     negative_distances = (
-        distances_df.select(
+        distances_df
+        .select(
             anchor_code=pl.col('code_i'),
             negative_code=pl.col('code_j'),
             negative_distance=pl.col('distance'),
@@ -130,13 +140,73 @@ def _get_distances(distances_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl.DataFra
 
 
 # -------------------------------------------------------------------------------------------------
+# Relationships
+# -------------------------------------------------------------------------------------------------
+
+def _get_relations(
+    relations_df: pl.DataFrame, 
+    distances_df: pl.DataFrame
+) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    
+    positive_relations_df = (
+        relations_df
+        .select(
+            anchor_code=pl.col('code_i'),
+            positive_code=pl.col('code_j'),
+            positive_relation=pl.col('relation'),
+        )
+        .unique()
+        .sort('anchor_code', 'positive_code')
+    )
+
+    negative_relations_df = (
+        relations_df
+        .select(
+            anchor_code=pl.col('code_i'),
+            negative_code=pl.col('code_j'),
+            negative_relation=pl.col('relation'),
+        )
+        .unique()
+        .sort('anchor_code', 'negative_code')
+    )
+
+    positive_distances_df, negative_distances_df = _get_distances(distances_df)
+
+    positive_relations = (
+        positive_relations_df
+        .join(
+            positive_distances_df,
+            how='inner',
+            on=['anchor_code', 'positive_code']
+        )
+    )
+
+    negative_relations = (
+        negative_relations_df
+        .join(
+            negative_distances_df,
+            how='inner',
+            on=['anchor_code', 'negative_code']
+        )
+    )
+
+    logger.info('Number of relationships:')
+    logger.info(f'  positives: {positive_relations.height: ,}')
+    logger.info(f'  negatives: {negative_relations.height: ,}\n')
+
+    return positive_relations, negative_relations
+
+
+# -------------------------------------------------------------------------------------------------
 # Pairs
 # -------------------------------------------------------------------------------------------------
 
 
 def _get_pairs(
-    distances_df: pl.DataFrame, exclusions_df: pl.DataFrame
+        distances_df: pl.DataFrame, 
+        exclusions_df: pl.DataFrame
 ) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    
     positives = (
         distances_df.filter(pl.col('distance').ne(pl.col('distance').max()))
         .select(
@@ -180,53 +250,115 @@ def _get_pairs(
 # Triplets
 # -------------------------------------------------------------------------------------------------
 
-
 def _get_triplets(
     positives_df: pl.DataFrame,
     negatives_df: pl.DataFrame,
     positive_distances_df: pl.DataFrame,
     negative_distances_df: pl.DataFrame,
 ) -> pl.DataFrame:
-    triplets = positives_df.join(negatives_df, how='inner', on='positive_code')
-
-    triplets = triplets.join(
-        positive_distances_df, how='inner', on=['anchor_code', 'positive_code']
-    )
-
+    
     triplets = (
-        triplets.
-        join(
+        positives_df
+        .join(
+            negatives_df, 
+            how='inner', 
+            on='positive_code'
+        )
+    )
+    triplets = (
+        triplets
+        .join(
+            positive_distances_df, 
+            how='inner',
+            on=['anchor_code', 'positive_code']
+        )
+    )
+                    
+    triplets = (
+        triplets
+        .join(
             negative_distances_df, 
             how='inner', 
             on=['anchor_code', 'negative_code']
         )
         .with_columns(
-            distance_diff=pl.col('negative_distance').sub(pl.col('positive_distance'))
+            positive_distance=pl.when(pl.col('positive_relation').eq(2)).then(1.0)
+                                .when(pl.col('positive_distance').is_in([1.0, 1.5]))
+                                .then(pl.col('positive_distance').add(0.5))
+                                .otherwise(pl.col('positive_distance')),
+            negative_distance=pl.when(pl.col('negative_relation').eq(2)).then(1.0)
+                                .when(pl.col('negative_distance').is_in([1.0, 1.5]))
+                                .then(pl.col('negative_distance').add(0.5))
+                                .otherwise(pl.col('negative_distance'))
+        )
+        .with_columns(
+            anchor_distance=pl.col('negative_distance').sub(pl.col('positive_distance'))
         )
         .with_columns(
             unrelated=pl.when(pl.col('excluded'))
                         .then(pl.lit(False))
                         .otherwise(pl.col('unrelated')),
-            distance_diff=pl.when(pl.col('excluded')).then(pl.lit(0.125))
-                            .when(pl.col('unrelated')).then(pl.lit(7.0))
-                            .when(pl.col('distance_diff').eq(-0.5)).then(pl.lit(0.25))
-                            .otherwise(pl.col('distance_diff')),
+            anchor_distance=pl.when(pl.col('excluded')).then(pl.lit(0.125))
+                              .when(pl.col('unrelated')).then(pl.lit(7.0))
+                              .otherwise(pl.col('anchor_distance')),
         )
         .filter(
-            pl.col('distance_diff').gt(0.0)
-        )
-        .sort('anchor_idx', 'positive_idx')
-        .with_columns(batch=pl.col('anchor_idx').floordiv(21.25))
-        .select(
-            'batch',
-            'anchor_idx', 'positive_idx', 'negative_idx',
-            'anchor_code', 'positive_code', 'negative_code',
-            'excluded', 'unrelated',
-            'positive_distance', 'negative_distance', 
-            'distance_diff',
+            pl.col('anchor_distance').gt(0.0)
         )
     )
 
+    triplets_anti = (
+        triplets
+        .filter(
+            pl.col('unrelated')
+        )
+        .group_by('anchor_idx', 'positive_idx')
+        .agg(
+            negatives=pl.col('negative_idx')
+        )
+        .with_columns(
+            sample=pl.col('negatives')
+                     .list.sample(100, shuffle=True)
+        )
+        .select(
+            anchor_idx=pl.col('anchor_idx'), 
+            positive_idx=pl.col('positive_idx'),
+            negative_idx=pl.col('negatives')
+                           .list.set_difference(pl.col('sample'))
+        )
+        .explode('negative_idx')
+    )
+
+    triplets = (
+        triplets
+        .join(
+            triplets_anti,
+            how='anti',
+            on=['anchor_idx', 'positive_idx', 'negative_idx']
+        )
+    )
+
+    triplets = (
+        triplets
+        .with_columns(
+            anchor_level=pl.col('anchor_code')
+                           .str.len_chars(),
+            positive_level=pl.col('positive_code')
+                             .str.len_chars(),
+            negative_level=pl.col('negative_code')
+                             .str.len_chars(),
+        )
+        .sort('anchor_idx', 'positive_idx', 'negative_idx')
+        .select(
+            'anchor_idx', 'positive_idx', 'negative_idx',
+            'anchor_code', 'positive_code', 'negative_code',
+            'anchor_level', 'positive_level', 'negative_level',
+            'excluded', 'unrelated',
+            'positive_relation', 'negative_relation',
+            'anchor_distance', 'positive_distance', 'negative_distance'
+        )
+    )
+    
     logger.info(f'Number of triplets: {triplets.height: ,}\n')
 
     return triplets
@@ -240,7 +372,7 @@ def _triplet_stats(triplets_df: pl.DataFrame):
 
     stats_df = (
         triplets_df
-        .group_by('excluded', 'unrelated', 'distance_diff')
+        .group_by('excluded', 'unrelated', 'anchor_distance')
         .agg(
             count=pl.len()
         )
@@ -248,10 +380,10 @@ def _triplet_stats(triplets_df: pl.DataFrame):
             pct=pl.col('count')
                   .truediv(pl.col('count').sum())
         )
-        .sort('distance_diff', 'excluded', 'unrelated', descending=[False, False, True])
+        .sort('anchor_distance', 'excluded', 'unrelated', descending=[False, False, True])
     )
 
-    dists = stats_df.get_column('distance_diff').unique().sort().to_list()
+    dists = stats_df.get_column('anchor_distance').unique().sort().to_list()
 
     logger.info(
         f'Observed differences in positive and negative distances: {", ".join(map(str, dists))}\n'
@@ -270,7 +402,7 @@ def _triplet_stats(triplets_df: pl.DataFrame):
 
         table.add_column('Exclusion', justify='center')
         table.add_column('Unrelated', justify='center')
-        table.add_column('Distance Difference', justify='center')
+        table.add_column('Anchor Dstance', justify='center')
         table.add_column('Frequency', justify='right', footer=f'[bold]{total_count: ,}[/bold]')
         table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .4f}%[/bold]')
 
@@ -278,8 +410,8 @@ def _triplet_stats(triplets_df: pl.DataFrame):
             excluded = 'True' if row.get('excluded', False) else 'False'
             unrelated = 'True' if row.get('unrelated', False) else 'False'
 
-            distance_diff = row.get('distance_diff')
-            dd_cell = Text(f'{distance_diff: .3f}', style='bold')
+            anchor_distance = row.get('anchor_distance')
+            dd_cell = Text(f'{anchor_distance: .3f}', style='bold')
 
             n = row.get('count', 0)
             pct = row.get('pct', 0)
@@ -298,7 +430,6 @@ def _triplet_stats(triplets_df: pl.DataFrame):
 # Generate triplets
 # -------------------------------------------------------------------------------------------------
 
-
 def generate_training_triplets() -> pl.DataFrame:
     # Configuration
     cfg = Config()
@@ -308,13 +439,17 @@ def generate_training_triplets() -> pl.DataFrame:
     logger.info('')
 
     # Load data
-    descriptions, distances = _input_parquet_files(cfg.descriptions_parquet, cfg.distances_parquet)
+    descriptions, distances, relations = _input_parquet_files(
+        cfg.descriptions_parquet, 
+        cfg.distances_parquet, 
+        cfg.relations_parquet
+    )
 
     # Exclusions
     exclusions = _get_exclusions(descriptions, distances)
 
     # All positive and negative distances
-    positive_distances, negative_distances = _get_distances(distances)
+    positive_distances, negative_distances = _get_relations(relations, distances)
 
     # All positive and negative pairs
     positives, negatives = _get_pairs(distances, exclusions)
@@ -327,7 +462,7 @@ def generate_training_triplets() -> pl.DataFrame:
     _parquet_stats(
         parquet_df=triplets_df,
         message='NAICS triplets written to',
-        output_parquet=cfg.output_parquet,
+        output_parquet=cfg.output_parquet, 
         logger=logger,
     )
 
@@ -338,11 +473,14 @@ def generate_training_triplets() -> pl.DataFrame:
 
     (
         triplets_df
+        .with_columns(
+            anchor=pl.col('anchor_idx')
+        )
         .write_parquet(
             cfg.output_parquet,
             use_pyarrow=True,
             pyarrow_options={
-                'partition_cols': ['batch']
+                'partition_cols': ['anchor']
             }
         )
     )

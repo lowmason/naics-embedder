@@ -6,7 +6,7 @@ import logging
 import operator
 import time
 from functools import reduce
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Union
 
 import httpx
 import polars as pl
@@ -16,6 +16,7 @@ import polars as pl
 # -------------------------------------------------------------------------------------------------
 
 def get_relationship(idx_code_i: Union[str, int], idx_code_j: Union[str, int]) -> str:
+
     filter_list = []
     if isinstance(idx_code_i, str):
         filter_list.append(pl.col('code_i').eq(idx_code_i))
@@ -39,26 +40,58 @@ def get_relationship(idx_code_i: Union[str, int], idx_code_j: Union[str, int]) -
         .item()
     )
 
+# -------------------------------------------------------------------------------------------------
+# Get distance
+# -------------------------------------------------------------------------------------------------
+
+def get_distance(idx_code_i: Union[str, int], idx_code_j: Union[str, int]) -> float:
+
+    filter_list = []
+    if isinstance(idx_code_i, str):
+        filter_list.append(pl.col('code_i').eq(idx_code_i))
+    else:
+        filter_list.append(pl.col('idx_i').eq(idx_code_i))
+
+    if isinstance(idx_code_j, str):
+        filter_list.append(pl.col('code_j').eq(idx_code_j))
+    else:
+        filter_list.append(pl.col('idx_j').eq(idx_code_j))
+
+    filters = reduce(operator.and_, filter_list)
+
+    return (
+        pl.read_parquet(
+            './data/naics_distances.parquet'
+        )
+        .filter(filters)
+        .select('distance')
+        .get_column('distance')
+        .item()
+    )
+
 
 # -------------------------------------------------------------------------------------------------
 # Indices, codes, and mappings
 # -------------------------------------------------------------------------------------------------
 
 def get_indices_codes(
-    parquet_path: str
-) -> Tuple[List[int], List[str], Dict[int, str], Dict[str, int]]:
+    parquet_path: str,
+    return_type: Literal['codes', 'indices', 'code_to_idx', 'idx_to_code']
+) -> Union[List[str], List[int], Dict[str, int], Dict[int, str]]:
 
     '''
     Extract indices and NAICS codes from a Polars DataFrame.
     
     Args:
         parquet_df (pl.DataFrame): The input DataFrame containing 'index' and 'naics_code' columns.
+        return_type (str): One of 'codes', 'indices', 'code_to_idx', 'idx_to_code'.
         
     Returns:
-        indices (List[int]): List of indices from the DataFrame.
-        codes (List[str]): List of NAICS codes from the DataFrame.
-        code_to_idx (Dict[str, int]): Mapping from NAICS codes to indices.
-        idx_to_code (Dict[int, str]): Mapping from indices to NAICS codes.
+        One of the following based on return_type:
+            codes (List[str]): List of unique NAICS codes.
+            indices (List[int]): List of indices for the NAICS codes.
+            code_to_idx (Dict[str, int]): Mapping from NAICS codes to indices.
+            idx_to_code (Dict[int, str]): Mapping from indices to NAICS codes.
     '''
 
     idx_code_iter = (
@@ -74,12 +107,25 @@ def get_indices_codes(
     for row in idx_code_iter:
         idx, code = row['index'], row['code']
         
-        indices.append(idx)
         codes.append(code)
+        indices.append(idx)
         code_to_idx[code] = idx
         idx_to_code[idx] = code
-    
-    return indices, codes, code_to_idx, idx_to_code
+
+    match return_type:
+        case 'codes':
+            return codes
+        case 'indices':
+            return indices
+        case 'code_to_idx':
+            return code_to_idx
+        case 'idx_to_code':
+            return idx_to_code
+        case _:
+            raise ValueError(
+                f'Invalid return_type: {return_type}. '
+                'Expected one of: codes, indices, code_to_idx, idx_to_code.'
+            )
 
 
 # -------------------------------------------------------------------------------------------------

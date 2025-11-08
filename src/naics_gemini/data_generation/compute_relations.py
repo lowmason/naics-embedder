@@ -30,20 +30,20 @@ class Config:
 
     relation_id: Dict[str, int] = field(
         default_factory=lambda: {
-            'child': 0,
-            'sibling': 1,
-            'grandchild': 2,
-            'nephew/niece': 3,
+            'child': 1,
+            'sibling': 2,
+            'grandchild': 3,
             'great-grandchild': 4,
-            'grand-nephew/niece': 5,
-            'cousin': 6,
-            'great-great-grandchild': 7,
-            'grand-grand-nephew/niece': 8,
-            'cousin_1_times_removed': 9,
-            'second_cousin': 10,
-            'cousin_2_times_removed': 11,
-            'second_cousin_1_times_removed': 12,
-            'third_cousin': 13,
+            'nephew/niece': 5,
+            'great-great-grandchild': 6,
+            'cousin': 7,
+            'grand-nephew/niece': 8,
+            'grand-grand-nephew/niece': 9,
+            'cousin_1_times_removed': 10,
+            'second_cousin': 11,
+            'cousin_2_times_removed': 12,
+            'second_cousin_1_times_removed': 13,
+            'third_cousin': 14,
         }
     )
 
@@ -264,7 +264,7 @@ def _relation_stats(relations_df: pl.DataFrame):
         table.add_column('Relation ID', justify='center', style='bold cyan')
         table.add_column('Relation', justify='left', style='bold cyan')
         table.add_column('Frequency', justify='right', footer=f'[bold]{total_n: ,}[/bold]')
-        table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .4f}%[/bold]')
+        table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .2f}%[/bold]')
 
         print(total_n, total_pct)
 
@@ -393,7 +393,7 @@ def calculate_pairwise_relations() -> pl.DataFrame:
             code_i=pl.col('code_i'),
             code_j=pl.col('code_j'),
             relation_id=pl.col('relation_id')
-                          .fill_null(14),
+                          .fill_null(15),
             relation=pl.col('relation')
                        .fill_null('unrelated')
         )
