@@ -6,11 +6,8 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-import pytorch_lightning as pl
+import pytorch_lightning as pyl
 import typer
-from hydra import compose, initialize
-from hydra.core.global_hydra import GlobalHydra
-from omegaconf import OmegaConf
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from rich.console import Console
@@ -21,10 +18,10 @@ from naics_gemini.data_generation.compute_distances import calculate_pairwise_di
 from naics_gemini.data_generation.compute_relations import calculate_pairwise_relations
 from naics_gemini.data_generation.create_triplets import generate_training_triplets
 from naics_gemini.data_generation.download_data import download_preprocess_data
+from naics_gemini.data_loader.datamodule import NAICSDataModule
+from naics_gemini.model.naics_model import NAICSContrastiveModel
+from naics_gemini.utils.config import Config, list_available_curricula, parse_override_value
 from naics_gemini.utils.console import configure_logging
-
-#from naics_gemini.data_loader.datamodule import NAICSDataModule
-#from naics_gemini.model.naics_model import NAICSContrastiveModel
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -143,8 +140,10 @@ def run_all_data_gen():
     console.rule('[bold green]Full Data Pipeline Complete![/bold green]')
 
 
-# --- Model Training Command ---
-'''
+# -------------------------------------------------------------------------------------------------
+# Model training commands
+# -------------------------------------------------------------------------------------------------
+
 @app.command('train')
 def train(
     curriculum: Annotated[
@@ -152,47 +151,99 @@ def train(
         typer.Option(
             '--curriculum',
             '-c',
-            help="Curriculum config name (e.g., '01_stage').",
+            help="Curriculum config name (e.g., '01_stage', '02_stage')",
         ),
-    ] = '01_stage',
+    ] = 'default',
+    config_file: Annotated[
+        str,
+        typer.Option(
+            '--config',
+            help='Path to base config YAML file',
+        ),
+    ] = 'conf/config.yaml',
+    list_curricula: Annotated[
+        bool,
+        typer.Option(
+            '--list-curricula',
+            help='List available curricula and exit',
+        ),
+    ] = False,
     overrides: Annotated[
         Optional[List[str]],
         typer.Argument(
-            help="Hydra-style overrides, e.g., 'training.trainer.max_epochs=10'"
+            help="Config overrides (e.g., 'training.learning_rate=1e-4 data.batch_size=64')"
         ),
     ] = None,
 ):
-    # Train the NAICS-Gemini model using a specified curriculum.
-        
-    configure_logging()
+    
+    # List curricula and exit
+    if list_curricula:
+        curricula = list_available_curricula()
+        console.print('\n[bold]Available Curricula:[/bold]')
+        for curr in curricula:
+            console.print(f'  • {curr}')
+        console.print('')
+        return
+    
+    configure_logging('train.log')
     
     console.rule(
-        f"[bold green]Starting Training: Curriculum '[cyan]{curriculum}[/cyan]'[/bold green]"
+        f"[bold green]Training NAICS: Curriculum '[cyan]{curriculum}[/cyan]'[/bold green]"
     )
-
+    
     try:
+
+        # Load configuration
+        logger.info('Loading configuration...')
+        cfg = Config.from_yaml(config_file, curriculum_name=curriculum)
         
-        # 1. Initialize Hydra
-        GlobalHydra.instance().clear()
-        initialize(config_path='../../conf', job_name='naics_gemini_train')
-
-        # 2. Compose Config
-        cfg_overrides = [f'curriculum={curriculum}'] + (overrides or [])
-        cfg = compose(config_name='config', overrides=cfg_overrides)
-
+        # Apply command-line overrides
+        if overrides:
+            override_dict = {}
+            for override in overrides:
+                if '=' not in override:
+                    console.print(
+                        f'[yellow]Warning:[/yellow] Skipping invalid override: {override}'
+                    )
+                    continue
+                
+                key, value_str = override.split('=', 1)
+                value = parse_override_value(value_str)
+                override_dict[key] = value
+                logger.info(f'Override: {key} = {value} ({type(value).__name__})')
+            
+            cfg = cfg.override(override_dict)
+        
+        # Display configuration summary
         console.print(
             Panel(
-                OmegaConf.to_yaml(cfg),
-                title='[yellow]Computed Configuration[/yellow]',
+                f'[bold]Experiment:[/bold] {cfg.experiment_name}\n'
+                f'[bold]Curriculum:[/bold] {cfg.curriculum.name}\n'
+                f'[bold]Seed:[/bold] {cfg.seed}\n\n'
+                f'[cyan]Data:[/cyan]\n'
+                f'  • Batch size: {cfg.data.batch_size}\n'
+                f'  • Num workers: {cfg.data.num_workers}\n\n'
+                f'[cyan]Model:[/cyan]\n'
+                f'  • Base: {cfg.model.base_model_name.split("/")[-1]}\n'
+                f'  • LoRA rank: {cfg.model.lora.r}\n'
+                f'  • MoE: {"enabled" if cfg.model.moe.enabled else "disabled"} '
+                f'({cfg.model.moe.num_experts} experts)\n\n'
+                f'[cyan]Training:[/cyan]\n'
+                f'  • Learning rate: {cfg.training.learning_rate}\n'
+                f'  • Max epochs: {cfg.training.trainer.max_epochs}\n'
+                f'  • Accelerator: {cfg.training.trainer.accelerator}\n'
+                f'  • Precision: {cfg.training.trainer.precision}',
+                title='[yellow]Configuration Summary[/yellow]',
                 border_style='yellow',
-                expand=True,
+                expand=False
             )
         )
-        console.rule()
-
-        logger.info('Seeding random generators...')
-        pl.seed_everything(cfg.seed)
         
+        # Seed for reproducibility
+        logger.info(f'Setting random seed: {cfg.seed}')
+        pyl.seed_everything(cfg.seed)
+        
+        # Initialize DataModule
         logger.info('Initializing DataModule...')
         datamodule = NAICSDataModule(
             descriptions_path=cfg.data.descriptions_path,
@@ -216,6 +267,7 @@ def train(
         # Construct distances path
         distances_path = str(Path(cfg.paths.data_dir) / 'naics_distances.parquet')
         
+        # Initialize Model
         logger.info('Initializing Model with evaluation metrics...')
         model = NAICSContrastiveModel(
             base_model_name=cfg.model.base_model_name,
@@ -234,10 +286,11 @@ def train(
             load_balancing_coef=cfg.model.moe.load_balancing_coef,
             # Evaluation settings
             distances_path=distances_path,
-            eval_every_n_epochs=1,
-            eval_sample_size=500
+            eval_every_n_epochs=cfg.model.eval_every_n_epochs,
+            eval_sample_size=cfg.model.eval_sample_size
         )
         
+        # Setup callbacks
         logger.info('Setting up callbacks and checkpointing...')
         checkpoint_dir = Path(cfg.paths.checkpoint_dir) / cfg.experiment_name
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -262,14 +315,23 @@ def train(
             name=cfg.experiment_name
         )
         
-        logger.info('Initializing Trainer...')
-        trainer = pl.Trainer(
-            **cfg.training.trainer,
+        # Initialize Trainer
+        logger.info('Initializing PyTorch Lightning Trainer...')
+        trainer = pyl.Trainer(
+            max_epochs=cfg.training.trainer.max_epochs,
+            accelerator=cfg.training.trainer.accelerator,
+            devices=cfg.training.trainer.devices,
+            precision=cfg.training.trainer.precision,
+            gradient_clip_val=cfg.training.trainer.gradient_clip_val,
+            accumulate_grad_batches=cfg.training.trainer.accumulate_grad_batches,
+            log_every_n_steps=cfg.training.trainer.log_every_n_steps,
+            val_check_interval=cfg.training.trainer.val_check_interval,
             callbacks=[checkpoint_callback, early_stopping],
             logger=tb_logger,
             default_root_dir=cfg.paths.output_dir
         )
         
+        # Start training
         logger.info('Starting model training with evaluation metrics...')
         console.print('\n[bold cyan]📊 Evaluation metrics enabled:[/bold cyan]')
         console.print('  • Cophenetic correlation (hierarchy preservation)')
@@ -280,19 +342,21 @@ def train(
         
         trainer.fit(model, datamodule)
         
-        logger.info('Training complete.')
+        # Training complete
+        logger.info('Training complete!')
         logger.info(f'Best model checkpoint: {checkpoint_callback.best_model_path}')
         
         console.print(
-            f'\n[bold green]Training for curriculum '
-            f"'[cyan]{curriculum}[/cyan]' completed successfully.[/bold]"
+            f'\n[bold green]✓ Training completed successfully![/bold green]\n'
+            f'Best checkpoint: [cyan]{checkpoint_callback.best_model_path}[/cyan]\n'
         )
-        console.print(f'Best checkpoint: {checkpoint_callback.best_model_path}')
-
+        
+        # Save final config
+        config_output_path = checkpoint_dir / 'config.yaml'
+        cfg.to_yaml(str(config_output_path))
+        console.print(f'Config saved: [cyan]{config_output_path}[/cyan]\n')
+        
     except Exception as e:
-        logger.error(f'An error occurred during training: {e}', exc_info=True)
+        logger.error(f'Training failed: {e}', exc_info=True)
+        console.print(f'\n[bold red]✗ Training failed:[/bold red] {e}\n')
         raise typer.Exit(code=1)
-'''
-
-if __name__ == '__main__':
-    app()

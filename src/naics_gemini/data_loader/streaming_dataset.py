@@ -5,7 +5,7 @@
 import logging
 import operator
 from collections import defaultdict
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, fields
 from functools import reduce
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
@@ -193,7 +193,7 @@ def create_streaming_generator(
             positives=pl.col('positives'),
             negatives=pl.col('negatives'),
             fallback=pl.when(pl.col('negatives').list.len().lt(n_negatives))
-                       .then(pl.col('fallback'))
+                       .then(pl.col('negatives'))
                        .otherwise(None)
         )
     )
@@ -307,7 +307,6 @@ def create_streaming_generator(
                     'distance_margin': distance_margin
                 })
 
-
             if key not in grouped:
                 grouped[key] = {
                     'anchor_idx': row['anchors']['anchor_idx'],
@@ -327,16 +326,6 @@ def create_streaming_generator(
 def create_streaming_dataset(
     curriculum: CurriculumConfig
 ) -> Iterator[Dict[str, Any]]:
-    
-    curriculum = replace(
-        CurriculumConfig(),
-        anchor_level=[2, 3],
-        positive_relation=[1, 2],
-        excluded=False,
-        unrelated=False,
-        n_positives=100,
-        n_negatives=20
-    )
 
     token_cache = tokenization_cache()
 

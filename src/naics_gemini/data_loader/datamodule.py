@@ -3,16 +3,17 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
+from dataclasses import replace
 from typing import Dict, List, Optional
 
 import torch
+from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, IterableDataset
 
 from naics_gemini.data_loader.streaming_dataset import (
     CurriculumConfig,
     create_streaming_dataset,
 )
-from naics_gemini.data_loader.tokenization_cache import tokenization_cache
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,8 @@ logger = logging.getLogger(__name__)
 # Collate function for DataLoader
 # -------------------------------------------------------------------------------------------------
 
-def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
+def collate_fn(batch: List[Dict]) -> Dict:
+
     '''
     Collate function for batching training examples.
     
@@ -39,7 +41,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     positive_batch = {channel: {} for channel in channels}
     negatives_batch = {channel: {} for channel in channels}
     
-    # Collect codes for evaluation tracking
+    # Collect codes and indices for evaluation tracking
     anchor_codes = []
     positive_codes = []
     negative_codes = []
@@ -53,14 +55,16 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         
         # Collect anchor and positive for this channel
         for item in batch:
-            anchor_ids.append(item['anchor'][channel]['input_ids'])
-            anchor_masks.append(item['anchor'][channel]['attention_mask'])
-            positive_ids.append(item['positive'][channel]['input_ids'])
-            positive_masks.append(item['positive'][channel]['attention_mask'])
+            anchor_ids.append(item['anchor_embedding'][channel]['input_ids'])
+            anchor_masks.append(item['anchor_embedding'][channel]['attention_mask'])
+            positive_ids.append(item['positive_embedding'][channel]['input_ids'])
+            positive_masks.append(item['positive_embedding'][channel]['attention_mask'])
         
-        # Stack anchor and positive
+        # Stack anchor
         anchor_batch[channel]['input_ids'] = torch.stack(anchor_ids)
         anchor_batch[channel]['attention_mask'] = torch.stack(anchor_masks)
+        
+        # Stack positive
         positive_batch[channel]['input_ids'] = torch.stack(positive_ids)
         positive_batch[channel]['attention_mask'] = torch.stack(positive_masks)
         
@@ -68,9 +72,9 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         all_neg_ids = []
         all_neg_masks = []
         for item in batch:
-            for neg_tokens in item['negatives']:
-                all_neg_ids.append(neg_tokens[channel]['input_ids'])
-                all_neg_masks.append(neg_tokens[channel]['attention_mask'])
+            for neg_dict in item['negatives']:
+                all_neg_ids.append(neg_dict['negative_embedding'][channel]['input_ids'])
+                all_neg_masks.append(neg_dict['negative_embedding'][channel]['attention_mask'])
         
         # Stack negatives
         negatives_batch[channel]['input_ids'] = torch.stack(all_neg_ids)
@@ -78,10 +82,10 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     
     # Extract codes from batch items
     for item in batch:
-        anchor_codes.append(item.get('anchor_code', ''))
-        positive_codes.append(item.get('positive_code', ''))
-        if 'negative_codes' in item:
-            negative_codes.extend(item['negative_codes'])
+        anchor_codes.append(item['anchor_code'])
+        positive_codes.append(item['positive_code'])
+        for neg_dict in item['negatives']:
+            negative_codes.append(neg_dict['negative_code'])
     
     return {
         'anchor': anchor_batch,
@@ -89,7 +93,6 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         'negatives': negatives_batch,
         'batch_size': len(batch),
         'k_negatives': len(batch[0]['negatives']),
-        # Add codes for evaluation tracking
         'anchor_code': anchor_codes,
         'positive_code': positive_codes,
         'negative_codes': negative_codes
@@ -101,6 +104,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
 # -------------------------------------------------------------------------------------------------
 
 class GeneratorDataset(IterableDataset):
+
     '''Wrapper to make a generator function work with PyTorch DataLoader.'''
     
     def __init__(self, generator_fn, *args, **kwargs):
@@ -116,7 +120,8 @@ class GeneratorDataset(IterableDataset):
 # Main DataModule for PyTorch Lightning (optional but recommended)
 # -------------------------------------------------------------------------------------------------
 
-class NAICSDataModule:
+class NAICSDataModule(LightningDataModule):
+
     '''
     Data module for NAICS contrastive learning.
     
@@ -129,96 +134,120 @@ class NAICSDataModule:
     
     def __init__(
         self,
-        descriptions_path: str = './data/naics_descriptions.parquet',
-        triplets_path: str = './data/naics_training_pairs',
-        tokenizer_name: str = 'sentence-transformers/all-mpnet-base-v2',
         curriculum_config: Optional[Dict] = None,
         batch_size: int = 32,
         num_workers: int = 4,
-        val_split: float = 0.05,
         seed: int = 42,
-        cache_dir: str = './data/token_cache'
+        # CLI compatibility parameters (ignored for now, handled by streaming dataset)
+        descriptions_path: Optional[str] = None,
+        triplets_path: Optional[str] = None,
+        tokenizer_name: Optional[str] = None,
+        val_split: float = 0.1,
+        **kwargs  # Catch any other unexpected parameters
     ):
         '''
         Initialize NAICS DataModule.
         
         Args:
-            descriptions_path: Path to NAICS descriptions parquet
-            triplets_path: Path to triplets parquet directory
-            tokenizer_name: HuggingFace tokenizer name
-            curriculum_config: Dictionary with curriculum settings
+            curriculum_config: Dictionary with curriculum (will be passed to CurriculumConfig)
             batch_size: Batch size for training
             num_workers: Number of dataloader workers
-            val_split: Fraction of data for validation (not used with streaming)
-            seed: Random seed
-            cache_dir: Directory for tokenization cache
+            seed: Random seed for training dataset
+            descriptions_path: Path to descriptions (for CLI compatibility)
+            triplets_path: Path to triplets (for CLI compatibility) 
+            tokenizer_name: Tokenizer name (for CLI compatibility)
+            val_split: Validation split ratio (for CLI compatibility)
+            **kwargs: Additional arguments (ignored)
         '''
+
+        super().__init__()
+
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.seed = seed
+        self.val_split = val_split
+        
+        # Store paths for potential future use
         self.descriptions_path = descriptions_path
         self.triplets_path = triplets_path
         self.tokenizer_name = tokenizer_name
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.val_split = val_split
-        self.seed = seed
-        self.cache_dir = cache_dir
         
         # Convert curriculum config dict to CurriculumConfig
         curriculum_config = curriculum_config or {}
-        self.curriculum = CurriculumConfig(**curriculum_config)
+        
+        # Map CLI parameter names to CurriculumConfig parameter names
+        param_mapping = {
+            'positive_levels': 'positive_level',
+            'k_negatives': 'n_negatives',
+            'max_positives': 'n_positives'
+        }
+        
+        # Apply parameter mapping and filter out unsupported parameters
+        mapped_config = {}
+        supported_params = set(CurriculumConfig.__dataclass_fields__.keys())
+        
+        for key, value in curriculum_config.items():
+            # Map parameter name if needed
+            mapped_key = param_mapping.get(key, key)
+            # Only include if it's a supported parameter
+            if mapped_key in supported_params:
+                mapped_config[mapped_key] = value
+            else:
+                logger.warning(f'Ignoring unsupported curriculum parameter: {key}')
+        
+        # Set default seed if not provided
+        if 'seed' not in mapped_config:
+            mapped_config['seed'] = seed
+            
+        self.curriculum = CurriculumConfig(**mapped_config)
         
         # Will be set during setup
-        self.token_cache = None
         self.train_dataset = None
         self.val_dataset = None
     
     
     def setup(self, stage: Optional[str] = None):
+
         '''
-        Setup datasets and cache.
+        Setup datasets.
         
         Args:
             stage: 'fit', 'validate', 'test', or 'predict'
         '''
+        
         logger.info('Setting up NAICS DataModule...')
         
-        # Load or create tokenization cache
-        logger.info('Loading tokenization cache...')
-        self.token_cache = tokenization_cache(
-            fields_path=self.descriptions_path,
-            tokenizer_name=self.tokenizer_name,
-            max_length=512,
-            cache_dir=self.cache_dir
-        )
-        logger.info(f'Token cache loaded: {len(self.token_cache)} codes')
-        
         if stage == 'fit' or stage is None:
+
             # Create training dataset
             logger.info('Creating training dataset...')
             self.train_dataset = GeneratorDataset(
                 create_streaming_dataset,
-                descriptions_path=self.descriptions_path,
-                triplets_path=self.triplets_path,
-                token_cache=self.token_cache,
-                curriculum=self.curriculum,
-                seed=self.seed
+                self.curriculum
             )
             
-            # Create validation dataset (same as train but different seed)
+            # Create validation curriculum with different seed
+            val_curriculum = replace(
+                self.curriculum,
+                seed=self.seed + 1
+            )
+            
             logger.info('Creating validation dataset...')
             self.val_dataset = GeneratorDataset(
                 create_streaming_dataset,
-                descriptions_path=self.descriptions_path,
-                triplets_path=self.triplets_path,
-                token_cache=self.token_cache,
-                curriculum=self.curriculum,
-                seed=self.seed + 1  # Different seed for validation
+                val_curriculum
             )
             
             logger.info('DataModule setup complete!')
     
     
     def train_dataloader(self) -> DataLoader:
+
         '''Create training dataloader.'''
+        
+        if self.train_dataset is None:
+            raise RuntimeError('Training dataset not initialized. Call setup() first.')
+        
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -227,9 +256,13 @@ class NAICSDataModule:
             persistent_workers=True if self.num_workers > 0 else False
         )
     
-    
     def val_dataloader(self) -> DataLoader:
+        
         '''Create validation dataloader.'''
+        
+        if self.val_dataset is None:
+            raise RuntimeError('Validation dataset not initialized. Call setup() first.')
+        
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,

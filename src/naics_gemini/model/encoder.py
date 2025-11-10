@@ -64,13 +64,19 @@ class MultiChannelEncoder(nn.Module):
             from naics_gemini.model.moe import MixtureOfExperts
             logger.info(f'Initializing MoE with {num_experts} experts (top-k={top_k})...')
             self.moe = MixtureOfExperts(
-                input_dim=self.embedding_dim,
+                input_dim=self.embedding_dim * len(self.channels),  # 4 channels concatenated
                 hidden_dim=moe_hidden_dim,
                 num_experts=num_experts,
                 top_k=top_k
             )
+            # Projection to reduce MoE output back to embedding_dim
+            self.moe_projection = nn.Linear(
+                self.embedding_dim * len(self.channels),
+                self.embedding_dim
+            )
         else:
             self.moe = None
+            self.moe_projection = None
         
         logger.info(f'Encoder initialized: embedding_dim={self.embedding_dim}, use_moe={use_moe}')
     
@@ -115,7 +121,9 @@ class MultiChannelEncoder(nn.Module):
         
         # Optional: Pass through MoE
         if self.moe is not None:
-            output, load_balancing_loss = self.moe(combined)
+            moe_output, load_balancing_loss = self.moe(combined)
+            # Project back to embedding_dim
+            output = self.moe_projection(moe_output)
             return {
                 'embedding': output,
                 'load_balancing_loss': load_balancing_loss
