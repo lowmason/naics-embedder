@@ -10,10 +10,8 @@ from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 import polars as pl
-from rich.console import Console
-from rich.table import Table
-from rich.text import Text
 
+from naics_gemini.utils.console import log_table as _log_table
 from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
@@ -241,49 +239,23 @@ def _relation_stats(relations_df: pl.DataFrame):
         relations_df
         .group_by('relation_id', 'relation')
         .agg(
-            count=pl.len()
+            cnt=pl.len()
         )
         .with_columns(
-            pct=pl.col('count')
-                  .truediv(pl.col('count').sum())
+            pct=pl.col('cnt')
+                  .truediv(pl.col('cnt').sum())
+                  .mul(100)
         )
         .sort('relation_id')
     )
 
-    console = Console()
-
-    def _render_triplet_table(rows):
-
-        title = Text('\nRelation Statistics:', style='bold')
-
-        table = Table( title=title, title_justify='left', show_lines=True, show_footer=True)
-
-        total_n = sum(row.get('count', 0) for row in rows)
-        total_pct = 100 * sum(row.get('pct', 0) for row in rows)
-
-        table.add_column('Relation ID', justify='center', style='bold cyan')
-        table.add_column('Relation', justify='left', style='bold cyan')
-        table.add_column('Frequency', justify='right', footer=f'[bold]{total_n: ,}[/bold]')
-        table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .2f}%[/bold]')
-
-        print(total_n, total_pct)
-
-        for row in rows:
-
-            relation_id = str(row.get('relation_id', ''))
-            relation = row.get('relation', '')
-
-            n = row.get('count', 0)
-            pct = row.get('pct', 0)
-
-            n_cell = Text(f'{n: ,}')
-            pct_cell = Text(f'{100 * pct: .4f}%', style='bold')
-
-            table.add_row(relation_id, relation, n_cell, pct_cell)
-
-        console.print(table)
-
-    _render_triplet_table(stats_df.to_dicts())
+    _log_table(
+        df=stats_df,
+        title='Relation Statistics',
+        headers=['Relation ID:relation_id', 'Relation:relation', 'cnt', 'pct'],
+        logger=logger,
+        output='./outputs/relation_stats.pdf'
+    )
 
 
 # -------------------------------------------------------------------------------------------------

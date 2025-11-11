@@ -6,10 +6,8 @@ from pathlib import Path
 from typing import Tuple
 
 import polars as pl
-from rich.console import Console
-from rich.table import Table
-from rich.text import Text
 
+from naics_gemini.utils.console import log_table as _log_table
 from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
@@ -426,11 +424,11 @@ def _triplet_stats(triplets_df: pl.DataFrame):
         triplets_df
         .group_by('excluded', 'unrelated', 'relation_margin', 'distance_margin')
         .agg(
-            n=pl.len(),
+            cnt=pl.len(),
         )
         .with_columns(
-            pct=pl.col('n')
-                  .truediv(pl.col('n').sum())
+            pct=pl.col('cnt')
+                  .truediv(pl.col('cnt').sum())
                   .mul(100)
         )
         .sort(
@@ -452,45 +450,16 @@ def _triplet_stats(triplets_df: pl.DataFrame):
         f'{", ".join(str(d) for d in dists)}\n'
     )
 
-    console = Console()
-
-    def _render_triplet_table(rows):
-        
-        title = Text('Triplet Statistics:', style='bold')
-
-        table = Table(title=title, title_justify='left', show_lines=True, show_footer=True)
-
-        total_count = sum(row.get('n', 0) for row in rows)
-        total_pct = sum(row.get('pct', 0) for row in rows)
-
-        table.add_column('Exclusion', justify='center')
-        table.add_column('Unrelated', justify='center')
-        table.add_column('Relation Margin', justify='center')
-        table.add_column('Distance Margin', justify='center')
-        table.add_column('Frequency', justify='right', footer=f'[bold]{total_count: ,}[/bold]')
-        table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .4f}%[/bold]')
-
-        for row in rows:
-            excluded = 'True' if row.get('excluded', False) else 'False'
-            unrelated = 'True' if row.get('unrelated', False) else 'False'
-
-            relation_margin = row.get('relation_margin')
-            distance_margin = row.get('distance_margin')
-            
-            rm_cell = Text(f'{relation_margin}', style='bold')
-            dm_cell = Text(f'{distance_margin: .3f}', style='bold')
-
-            n = row.get('n', 0)
-            pct = row.get('pct', 0)
-
-            n_cell = Text(f'{n: ,}')
-            pct_cell = Text(f'{pct: .4f}%', style='bold')
-
-            table.add_row(excluded, unrelated, rm_cell, dm_cell, n_cell, pct_cell)
-
-        console.print(table)
-
-    return _render_triplet_table(stats_df.to_dicts())
+    _log_table(
+        df=stats_df,
+        title='Triplet Statistics',
+        headers=[
+            'Margins:Excluded', 'Margins:Unrelated', 'Margins:Relation', 'Margins:Distance', 
+            'cnt', 'pct'
+        ],
+        logger=logger,
+        output='./outputs/triplets_stats.pdf'
+    )
 
 
 # -------------------------------------------------------------------------------------------------

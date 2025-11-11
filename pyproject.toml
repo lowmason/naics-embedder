@@ -24,6 +24,7 @@ dependencies = [
     "tensorboard>=2.20.0",
     "tensorboardx>=2.6.4",
     "pydantic>=2.12.4",
+    "selenium>=4.38.0",
 ]
 
 [project.scripts]

@@ -5,7 +5,10 @@
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 
+import polars as pl
+from polars import selectors as cs
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -81,3 +84,76 @@ def configure_logging(
 
     # Explicitly re-enable your own package
     logging.getLogger('naics_gemini').setLevel(level)
+
+
+# -------------------------------------------------------------------------------------------------
+# Print styled table
+# -------------------------------------------------------------------------------------------------
+
+def log_table(
+    df: pl.DataFrame,
+    title: str,
+    headers: Optional[List[str]] = None,
+    logger: Optional[logging.Logger] = None,
+    output: Optional[str] = None
+) -> None:
+    
+    if headers:
+    
+        cols, span_1, span_2 = [], [], []
+        for h, c in zip(headers, df.columns):
+            if ':' in h:
+                s_part, h_part = h.split(':')
+
+                cols.append((h_part, c))
+                span_1.append(s_part)
+                span_2.append(c)
+            else:
+                cols.append((h, c))
+
+        cols_labels_dict = {c: h for h, c in cols}
+
+        if len(span_2) >= 2:
+            span_label = list(set(span_1))[0]
+            span_cols = span_2
+        else:
+            span_label = None
+            span_cols = None
+
+    else:
+        cols_labels_dict, span_label, span_cols = {c: c for c in df.columns}, None, None
+
+    if (
+        span_label is not None and 
+        span_cols is not None
+    ):
+        table = (
+            df
+            .style
+            .tab_header(title=title)
+            .cols_label(cols_labels_dict) # type: ignore
+            .tab_spanner(span_label, cs.by_name(span_cols))
+            .fmt_integer('cnt')
+            .fmt_number('pct', decimals=4)
+        ) 
+
+    else:
+        table = (
+            df
+            .style
+            .tab_header(title=title)
+            .cols_label(cols_labels_dict) # type: ignore
+            .fmt_integer('cnt')
+            .fmt_number('pct', decimals=4)
+        )
+
+    with pl.Config() as cfg:
+        cfg.set_tbl_rows(df.height)
+        cfg.set_thousands_separator(',')
+        cfg.set_float_precision(4)
+
+        if logger:
+            logger.info(f'\n{str(df)}')
+            
+        if output:
+            table.save(output)

@@ -10,10 +10,8 @@ from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 import polars as pl
-from rich.console import Console
-from rich.table import Table
-from rich.text import Text
 
+from naics_gemini.utils.console import log_table as _log_table
 from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
@@ -188,45 +186,23 @@ def _distance_stats(distances_df: pl.DataFrame):
         distances_df
         .group_by('distance')
         .agg(
-            count=pl.len()
+            cnt=pl.len()
         )
         .with_columns(
-            pct=pl.col('count')
-                  .truediv(pl.col('count').sum())
+            pct=pl.col('cnt')
+                  .truediv(pl.col('cnt').sum())
+                  .mul(100)
         )
         .sort('distance')
     )
 
-    console = Console()
-
-    def _render_triplet_table(rows):
-
-        title = Text('\nDistance Statistics:', style='bold')
-
-        table = Table(title=title, title_justify='left', show_lines=True, show_footer=True)
-
-        total_count = sum(row.get('count', 0) for row in rows)
-        total_pct = 100 * sum(row.get('pct', 0) for row in rows)
-
-        table.add_column('Distance', justify='center', style='bold cyan')
-        table.add_column('Frequency', justify='right', footer=f'[bold]{total_count: ,}[/bold]')
-        table.add_column('Percent', justify='right', footer=f'[bold]{total_pct: .2f}%[/bold]')
-
-        for row in rows:
-
-            distance = str(row.get('distance', ''))
-
-            n = row.get('count', 0)
-            pct = row.get('pct', 0)
-
-            n_cell = Text(f'{n: ,}')
-            pct_cell = Text(f'{100 * pct: .4f}%', style='bold')
-
-            table.add_row(distance, n_cell, pct_cell)
-
-        console.print(table)
-
-    _render_triplet_table(stats_df.to_dicts())
+    _log_table(
+        df=stats_df,
+        title='Distance Statistics',
+        headers=['Distance', 'Frequency', 'Percent'],
+        logger=logger,
+        output='./outputs/distance_stats.pdf'
+    )
 
 
 # -------------------------------------------------------------------------------------------------
