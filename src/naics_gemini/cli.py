@@ -10,19 +10,11 @@ from typing import List, Optional
 
 import pytorch_lightning as pyl
 import typer
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from rich.console import Console
 from rich.panel import Panel
 from typing_extensions import Annotated
-
-# Suppress precision warning from PyTorch Lightning model summary
-warnings.filterwarnings(
-    'ignore',
-    message='.*Precision.*is not supported by the model summary.*',
-    category=UserWarning,
-    module='pytorch_lightning.utilities.model_summary.model_summary'
-)
 
 from naics_gemini.data_generation.compute_distances import calculate_pairwise_distances
 from naics_gemini.data_generation.compute_relations import calculate_pairwise_relations
@@ -36,6 +28,46 @@ from naics_gemini.utils.console import configure_logging
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+# -------------------------------------------------------------------------------------------------
+# Suppress warnings
+# -------------------------------------------------------------------------------------------------
+
+warnings.filterwarnings(
+    'ignore',
+    message='.*Precision.*is not supported by the model summary.*',
+    category=UserWarning,
+    module='pytorch_lightning.utilities.model_summary.model_summary'
+)
+
+warnings.filterwarnings(
+    'ignore',
+    message='.*Found .* module.*in eval mode.*',
+    category=UserWarning,
+    module='pytorch_lightning'
+)
+
+warnings.filterwarnings(
+    'ignore',
+    message='.*does not have many workers.*',
+    category=UserWarning,
+    module='pytorch_lightning'
+)
+
+warnings.filterwarnings(
+    'ignore',
+    message='.*Checkpoint directory.*exists and is not empty.*',
+    category=UserWarning,
+    module='pytorch_lightning'
+)
+
+warnings.filterwarnings(
+    'ignore',
+    message='.*Trying to infer the.*batch_size.*',
+    category=UserWarning,
+    module='pytorch_lightning'
+)
 
 
 # -------------------------------------------------------------------------------------------------
@@ -344,8 +376,11 @@ def train(
             name=cfg.experiment_name
         )
         
+        # Don't add epoch progress callback - PyTorch Lightning's progress bar already shows epoch info
+        
         # Initialize Trainer
         logger.info('Initializing PyTorch Lightning Trainer...\n')
+        
         trainer = pyl.Trainer(
             max_epochs=cfg.training.trainer.max_epochs,
             accelerator=accelerator,
@@ -368,6 +403,8 @@ def train(
         console.print('  • Embedding statistics (norms, distances)')
         console.print('  • Collapse detection (variance, norm, distance)')
         console.print('  • Distortion metrics (mean, std)\n')
+        
+        console.print(f'[bold yellow]Training for {cfg.training.trainer.max_epochs} epochs...[/bold yellow]\n')
         
         trainer.fit(model, datamodule)
         

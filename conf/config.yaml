@@ -17,8 +17,8 @@ dirs:
 
 # Data loading configuration
 data_loader:
-  batch_size: 8
-  num_workers: 1
+  batch_size: 4
+  num_workers: 0
   val_split: 0.05
   
   tokenization:
@@ -72,6 +72,6 @@ training:
     devices: 1
     precision: "16-mixed"
     gradient_clip_val: 1.0
-    accumulate_grad_batches: 1
+    accumulate_grad_batches: 32  # Simulate batch_size=32 (32 steps of batch_size=1)
     log_every_n_steps: 10
     val_check_interval: 1.0

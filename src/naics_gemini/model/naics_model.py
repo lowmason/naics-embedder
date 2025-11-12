@@ -158,9 +158,11 @@ class NAICSContrastiveModel(pyl.LightningModule):
         
         total_loss = contrastive_loss + self.load_balancing_coef * load_balancing_loss
         
-        self.log('train/contrastive_loss', contrastive_loss, prog_bar=True)
-        self.log('train/load_balancing_loss', load_balancing_loss, prog_bar=True)
-        self.log('train/total_loss', total_loss, prog_bar=True)
+        batch_size = batch['batch_size']
+        
+        self.log('train/contrastive_loss', contrastive_loss, prog_bar=True, batch_size=batch_size)
+        self.log('train/load_balancing_loss', load_balancing_loss, prog_bar=True, batch_size=batch_size)
+        self.log('train/total_loss', total_loss, prog_bar=True, batch_size=batch_size)
         
         return total_loss
     
@@ -186,7 +188,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
             k_negatives
         )
         
-        self.log('val/contrastive_loss', contrastive_loss, prog_bar=True)
+        self.log('val/contrastive_loss', contrastive_loss, prog_bar=True, batch_size=batch_size)
         
         # Cache embeddings for epoch-level evaluation
         if 'anchor_code' in batch:
@@ -211,7 +213,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
             return
         
         try:
-            logger.info(f'Running evaluation metrics (epoch {self.current_epoch})...')
+            logger.info(f'\nRunning evaluation metrics (epoch {self.current_epoch})...')
             
             # Stack embeddings in consistent order
             codes = sorted(self.validation_embeddings.keys())
@@ -233,18 +235,21 @@ class NAICSContrastiveModel(pyl.LightningModule):
             
             gt_dists = self.ground_truth_distances[code_indices][:, code_indices].to(self.device)
             
+            # Number of samples for logging
+            num_samples = len(embeddings)
+            
             # 1. Embedding statistics
             stats = self.embedding_stats.compute_statistics(embeddings)
-            self.log('val/mean_norm', stats['mean_norm'])
-            self.log('val/std_norm', stats['std_norm'])
-            self.log('val/mean_pairwise_distance', stats['mean_pairwise_distance'])
-            self.log('val/std_embedding', stats['std_embedding'])
+            self.log('val/mean_norm', stats['mean_norm'], batch_size=num_samples)
+            self.log('val/std_norm', stats['std_norm'], batch_size=num_samples)
+            self.log('val/mean_pairwise_distance', stats['mean_pairwise_distance'], batch_size=num_samples)
+            self.log('val/std_embedding', stats['std_embedding'], batch_size=num_samples)
             
             # 2. Collapse check
             collapse = self.embedding_stats.check_collapse(embeddings, threshold=0.01)
-            self.log('val/variance_collapsed', float(collapse['variance_collapsed']))
-            self.log('val/norm_collapsed', float(collapse['norm_collapsed']))
-            self.log('val/distance_collapsed', float(collapse['distance_collapsed']))
+            self.log('val/variance_collapsed', float(collapse['variance_collapsed']), batch_size=num_samples)
+            self.log('val/norm_collapsed', float(collapse['norm_collapsed']), batch_size=num_samples)
+            self.log('val/distance_collapsed', float(collapse['distance_collapsed']), batch_size=num_samples)
             
             # 3. Compute embedding distances
             emb_dists = self.embedding_eval.compute_pairwise_distances(
@@ -257,23 +262,23 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 emb_dists,
                 gt_dists
             )
-            self.log('val/cophenetic_correlation', cophenetic_corr, prog_bar=True)
+            self.log('val/cophenetic_correlation', cophenetic_corr, prog_bar=True, batch_size=num_samples)
             
             spearman_corr = self.hierarchy_metrics.spearman_correlation(
                 emb_dists,
                 gt_dists
             )
-            self.log('val/spearman_correlation', spearman_corr)
+            self.log('val/spearman_correlation', spearman_corr, batch_size=num_samples)
             
             # 5. Distortion metrics
             distortion = self.hierarchy_metrics.distortion(emb_dists, gt_dists)
-            self.log('val/mean_distortion', distortion['mean_distortion'])
-            self.log('val/std_distortion', distortion['std_distortion'])
+            self.log('val/mean_distortion', distortion['mean_distortion'], batch_size=num_samples)
+            self.log('val/std_distortion', distortion['std_distortion'], batch_size=num_samples)
             
             logger.info(
                 f'Evaluation complete: cophenetic={cophenetic_corr:.4f}, '
                 f'spearman={spearman_corr:.4f}, '
-                f'collapse={collapse["any_collapse"]}'
+                f'collapse={collapse["any_collapse"]}\n'
             )
             
         except Exception as e:

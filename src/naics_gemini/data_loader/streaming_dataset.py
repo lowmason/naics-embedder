@@ -232,11 +232,12 @@ def create_streaming_generator(
     df_iter = [k[0] for k in df_dict.keys()]
     df_dict = {k[0]: v for k, v in df_dict.items()}
 
-    logging.info(f'Number of anchors: {len(df_iter): ,}')
-    logging.info(f'Number of anchors/positives: {df.height: ,}')
-    logging.info(f'  w/o fallbacks: {df_2.height: ,}')
-    logging.info(f'  w/ fallbacks: {df_3.height: ,}')
-    logging.info(f'Number of anchors/positives/negatives: {df.explode("negatives").height: ,}')
+    # Log dataset statistics only at DEBUG level to reduce overhead
+    logger.debug(f'Number of anchors: {len(df_iter): ,}')
+    logger.debug(f'Number of anchors/positives: {df.height: ,}')
+    logger.debug(f'  w/o fallbacks: {df_2.height: ,}')
+    logger.debug(f'  w/ fallbacks: {df_3.height: ,}')
+    logger.debug(f'Number of anchors/positives/negatives: {df.explode("negatives").height: ,}')
 
     for anchor in df_iter:
         

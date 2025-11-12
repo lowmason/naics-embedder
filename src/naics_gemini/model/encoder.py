@@ -28,7 +28,8 @@ class MultiChannelEncoder(nn.Module):
         use_moe: bool = True,
         num_experts: int = 4,
         top_k: int = 2,
-        moe_hidden_dim: int = 1024
+        moe_hidden_dim: int = 1024,
+        use_gradient_checkpointing: bool = True
     ):
         super().__init__()
         
@@ -59,6 +60,13 @@ class MultiChannelEncoder(nn.Module):
             for channel in self.channels
         })
         
+        # Enable gradient checkpointing to save memory
+        if use_gradient_checkpointing:
+            for channel in self.channels:
+                self.encoders[channel].enable_input_require_grads()
+                self.encoders[channel].base_model.gradient_checkpointing_enable()
+            logger.info('Gradient checkpointing enabled for memory efficiency\n')
+        
         # Optional: Mixture of Experts
         if use_moe:
             from naics_gemini.model.moe import MixtureOfExperts
@@ -78,10 +86,16 @@ class MultiChannelEncoder(nn.Module):
             self.moe = None
             self.moe_projection = None
         
+        # Count trainable vs frozen parameters
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.parameters())
+        
         logger.info(
             'Encoder initialized:\n'
             f'  • embedding_dim={self.embedding_dim}\n'
             f'  • use_moe={use_moe}\n'
+            f'  • trainable params: {trainable_params:,} / {total_params:,} '
+            f'({100 * trainable_params / total_params:.2f}%)\n'
         )
     
     

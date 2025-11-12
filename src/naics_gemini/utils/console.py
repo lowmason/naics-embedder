@@ -20,7 +20,7 @@ class ConsoleFormatter(logging.Formatter):
     
     '''Formatter that prints time only if more than `time_interval` seconds have elapsed.'''
 
-    def __init__(self, timefmt='[%H:%M:%S]', time_interval: float = 10.0):
+    def __init__(self, timefmt='[%H:%M:%S]', time_interval: float = 600.0):
         super().__init__()
         self.timefmt = timefmt
         self.time_interval = time_interval
