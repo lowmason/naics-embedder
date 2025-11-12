@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import List, Optional
 
 import pytorch_lightning as pyl
-import torch
 import typer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
