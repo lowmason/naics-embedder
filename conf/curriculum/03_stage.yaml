@@ -3,17 +3,20 @@
 
 curriculum:
   name: 03_stage
-  
-  # Positive filtering
-  positive_levels: [4, 5, 6]
-  positive_distance_min: null
-  positive_distance_max: 3.0
-  max_positives: 20
-  
-  # Negative sampling
-  difficulty_buckets: [1, 2, 3]
-  bucket_percentages:
-    1: 0.5
-    2: 0.3
-    3: 0.2
-  k_negatives: 16
+
+# Anchor filtering
+anchor_level: null
+relation_margins: null
+distance_margins: null
+
+# Positive filtering
+positive_level: [4, 5, 6]
+positive_relation: [1, 2, 3, 4, 5, 6, 7]
+positive_distance: null
+n_positives: 100
+
+# Negative sampling
+negative_level: [4, 5, 6]
+negative_relation: [8, 9, 10, 11, 12, 13, 14]
+negative_distance: null
+n_negatives: 64

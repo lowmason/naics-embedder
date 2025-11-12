@@ -1,36 +1,18 @@
 name: 02_stage
 
 # Anchor filtering
-anchor_level: None
-excluded: None
-unrelated: None
-relation_margins: None
-distance_margins: None
+anchor_level: null
+relation_margins: null
+distance_margins: null
 
 # Positive filtering
 positive_level: [4, 5, 6]
-positive_relation: None
-positive_distance: None
+positive_relation: [1, 2]
+positive_distance: null
 n_positives: 100
 
 # Negative sampling
-negative_level: None
-negative_relation: None
-negative_distance: None
-n_negatives: 20
-
-
-
-
-# Positive filtering
-positive_levels: [4, 5, 6]
-positive_distance_min: null
-positive_distance_max: 2.0
-max_positives: 15
-
-# Negative sampling
-difficulty_buckets: [1, 2]
-bucket_percentages:
-  1: 0.7
-  2: 0.3
-k_negatives: 12
+negative_level: [4, 5, 6]
+negative_relation: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+negative_distance: null
+n_negatives: 32

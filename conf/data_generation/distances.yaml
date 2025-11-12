@@ -1,0 +1,4 @@
+# Configuration for computing pairwise distances
+
+input_parquet: ./data/naics_descriptions.parquet
+output_parquet: ./data/naics_distances.parquet

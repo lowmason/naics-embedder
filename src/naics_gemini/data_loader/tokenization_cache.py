@@ -3,7 +3,6 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
 
@@ -11,32 +10,16 @@ import polars as pl
 import torch
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+from naics_gemini.utils.config import TokenizationConfig
+
 logger = logging.getLogger(__name__)
-
-
-# -------------------------------------------------------------------------------------------------
-# Configuration
-# -------------------------------------------------------------------------------------------------
-
-@dataclass
-class TokenizationConfig:
-
-    descriptions_parquet: str = './data/naics_descriptions.parquet'
-    tokenizer_name: str = 'sentence-transformers/all-MiniLM-L6-v2'
-    max_length: Optional[int] = None
-    output_path: str = './data/token_cache/token_cache.pt'
-    
-    def __post_init__(self):
-        if self.max_length is None:
-            tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
-            self.max_length = tokenizer.model_max_length
 
 
 # -------------------------------------------------------------------------------------------------
 # Tokenization functions
 # -------------------------------------------------------------------------------------------------
 
-def tokenize_text(
+def _tokenize_text(
     dict: Dict[str, str],
     field: str,
     counter: Dict[str, int],
@@ -71,7 +54,7 @@ def tokenize_text(
 
     return encoding, counter
 
-def build_tokenization_cache(
+def _build_tokenization_cache(
     descriptions_path: str,
     tokenizer_name: str,
     max_length: int
@@ -99,10 +82,10 @@ def build_tokenization_cache(
 
         idx, code = row['index'], row['code']
         
-        title, cnt = tokenize_text(row, 'title', cnt, tokenizer, 24)
-        description, cnt = tokenize_text(row, 'description', cnt, tokenizer, max_length)
-        excluded, cnt = tokenize_text(row, 'excluded', cnt, tokenizer, max_length)
-        examples, cnt = tokenize_text(row, 'examples', cnt, tokenizer, max_length)
+        title, cnt = _tokenize_text(row, 'title', cnt, tokenizer, 24)
+        description, cnt = _tokenize_text(row, 'description', cnt, tokenizer, max_length)
+        excluded, cnt = _tokenize_text(row, 'excluded', cnt, tokenizer, max_length)
+        examples, cnt = _tokenize_text(row, 'examples', cnt, tokenizer, max_length)
         
         cache[idx] = {
             'code': code,
@@ -121,7 +104,7 @@ def build_tokenization_cache(
     return cache
 
 
-def save_tokenization_cache(
+def _save_tokenization_cache(
     cache: Dict[int, Dict[str, torch.Tensor]],
     cache_path: str
 ) -> Path:
@@ -138,7 +121,7 @@ def save_tokenization_cache(
     return cache_file
 
 
-def load_tokenization_cache(
+def _load_tokenization_cache(
     cache_path: str
 ) -> Optional[Dict[int, Dict[str, torch.Tensor]]]:
     
@@ -164,17 +147,17 @@ def tokenization_cache(
     '''Get tokenization cache, loading from disk or building if necessary.'''
 
     # Try to load from cache
-    cache = load_tokenization_cache(cfg.output_path)
+    cache = _load_tokenization_cache(cfg.output_path)
     if cache is not None:
         return cache
     
     # Build cache if it doesn't exist
-    cache = build_tokenization_cache(
+    cache = _build_tokenization_cache(
         cfg.descriptions_parquet, 
         cfg.tokenizer_name, 
         cfg.max_length # type: ignore
     )
-    save_tokenization_cache(cache, cfg.output_path)
+    _save_tokenization_cache(cache, cfg.output_path)
 
     return cache
 

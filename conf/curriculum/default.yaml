@@ -1,20 +1,20 @@
 name: default
 
 # Anchor filtering
-anchor_level: None
-excluded: None
-unrelated: None
-relation_margins: None
-distance_margins: None
+anchor_level: null
+excluded: null
+unrelated: null
+relation_margins: null
+distance_margins: null
 
 # Positive filtering
-positive_level: None
-positive_relation: None
-positive_distance: None
+positive_level: null
+positive_relation: null
+positive_distance: null
 n_positives: 64
 
 # Negative sampling
-negative_level: None
-negative_relation: None
-negative_distance: None
+negative_level: null
+negative_relation: null
+negative_distance: null
 n_negatives: 32

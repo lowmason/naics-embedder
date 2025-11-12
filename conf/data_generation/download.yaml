@@ -1,0 +1,51 @@
+# Configuration for downloading and preprocessing NAICS data
+
+output_parquet: ./data/naics_descriptions.parquet
+
+# URLs for data sources
+url_codes: https://www.census.gov/naics/2022NAICS/2-6%20digit_2022_Codes.xlsx
+url_index: https://www.census.gov/naics/2022NAICS/2022_NAICS_Index_File.xlsx
+url_descriptions: https://www.census.gov/naics/2022NAICS/2022_NAICS_Descriptions.xlsx
+url_exclusions: https://www.census.gov/naics/2022NAICS/2022_NAICS_Cross_References.xlsx
+
+# Sheet names
+sheet_codes: tbl_2022_title_description_coun
+sheet_index: 2022NAICS
+sheet_descriptions: 2022_NAICS_Descriptions
+sheet_exclusions: 2022_NAICS_Cross_References
+
+# Schema definitions
+schema_codes:
+  Seq. No.: UInt32
+  2022 NAICS US   Code: Utf8
+  2022 NAICS US Title: Utf8
+
+schema_index:
+  NAICS22: Utf8
+  INDEX ITEM DESCRIPTION: Utf8
+
+schema_descriptions:
+  Code: Utf8
+  Description: Utf8
+
+schema_exclusions:
+  Code: Utf8
+  Cross-Reference: Utf8
+
+# Column renames
+rename_codes:
+  Seq. No.: index
+  2022 NAICS US   Code: code
+  2022 NAICS US Title: title
+
+rename_index:
+  NAICS22: code
+  INDEX ITEM DESCRIPTION: examples
+
+rename_descriptions:
+  Code: code
+  Description: description
+
+rename_exclusions:
+  Code: code
+  Cross-Reference: excluded

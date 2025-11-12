@@ -2,29 +2,18 @@
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
-import json
 import logging
-from dataclasses import asdict, dataclass
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 import polars as pl
 
+from naics_gemini.utils.config import DistancesConfig, load_config
 from naics_gemini.utils.console import log_table as _log_table
 from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
-
-# -------------------------------------------------------------------------------------------------
-# Configuration
-# -------------------------------------------------------------------------------------------------
-
-@dataclass
-class Config:
-
-    input_parquet: str = './data/naics_descriptions.parquet'
-    output_parquet: str = './data/naics_distances.parquet'
 
 
 # -------------------------------------------------------------------------------------------------
@@ -211,10 +200,11 @@ def _distance_stats(distances_df: pl.DataFrame):
 
 def calculate_pairwise_distances() -> pl.DataFrame:
     
-    cfg = Config()
+    # Load configuration from YAML
+    cfg = load_config(DistancesConfig, 'data_generation/distances.yaml')
 
     logger.info('Configuration:')
-    logger.info(json.dumps(asdict(cfg), indent=2))
+    logger.info(cfg.model_dump_json(indent=2))
     logger.info('')
 
     df_list = []

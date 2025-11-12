@@ -1,41 +1,31 @@
-import json
+# -------------------------------------------------------------------------------------------------
+# Imports and settings
+# -------------------------------------------------------------------------------------------------
+
 import logging
 import shutil
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Tuple
 
 import polars as pl
 
+from naics_gemini.utils.config import TripletsConfig, load_config
 from naics_gemini.utils.console import log_table as _log_table
 from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
-
-# -------------------------------------------------------------------------------------------------
-# Configuration
-# -------------------------------------------------------------------------------------------------
-
-
-@dataclass
-class Config:
-    # Input
-    descriptions_parquet: str = './data/naics_descriptions.parquet'
-    distances_parquet: str = './data/naics_distances.parquet'
-    relations_parquet: str = './data/naics_relations.parquet'
-
-    # Output
-    output_parquet: str = './data/naics_training_pairs'
 
 
 # -------------------------------------------------------------------------------------------------
 # Input
 # -------------------------------------------------------------------------------------------------
 
-
 def _input_parquet_files(
-    descriptions_parquet: str, distances_parquet: str, relations_parquet: str
+    descriptions_parquet: str,
+    distances_parquet: str,
+    relations_parquet: str
 ) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    
     descriptions = pl.read_parquet(descriptions_parquet)
 
     distances = pl.read_parquet(distances_parquet).select(
@@ -467,11 +457,12 @@ def _triplet_stats(triplets_df: pl.DataFrame):
 # -------------------------------------------------------------------------------------------------
 
 def generate_training_triplets() -> pl.DataFrame:
-    # Configuration
-    cfg = Config()
+    
+    # Load configuration from YAML
+    cfg = load_config(TripletsConfig, 'data_generation/triplets.yaml')
 
     logger.info('Configuration:')
-    logger.info(json.dumps(asdict(cfg), indent=2))
+    logger.info(cfg.model_dump_json(indent=2))
     logger.info('')
 
     # Load data

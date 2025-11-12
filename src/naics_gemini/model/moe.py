@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------------------------------------
 
 class MixtureOfExperts(nn.Module):
+
     '''
     Mixture of Experts layer with top-k gating and load balancing.
     
@@ -32,6 +33,7 @@ class MixtureOfExperts(nn.Module):
         num_experts: int = 4,
         top_k: int = 2
     ):
+        
         '''
         Initialize Mixture of Experts layer.
         
@@ -41,6 +43,7 @@ class MixtureOfExperts(nn.Module):
             num_experts: Number of expert networks
             top_k: Number of experts to select for each input
         '''
+
         super().__init__()
         
         self.input_dim = input_dim
@@ -63,12 +66,16 @@ class MixtureOfExperts(nn.Module):
         ])
         
         logger.info(
-            f'MoE initialized: {num_experts} experts, '
-            f'input_dim={input_dim}, hidden_dim={hidden_dim}, top_k={top_k}'
+            'MoE initialized:\n'
+            f'  • {num_experts} experts\n'
+            f'  • input_dim={input_dim}\n'
+            f'  • hidden_dim={hidden_dim}\n'
+            f'  • top_k={top_k}\n'
         )
     
     
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+
         '''
         Forward pass through MoE layer.
         
@@ -80,7 +87,6 @@ class MixtureOfExperts(nn.Module):
                 - Output tensor of shape (batch_size, input_dim)
                 - Load balancing loss (scalar)
         '''
-        batch_size = x.shape[0]
         
         # Compute gating scores for all experts
         gate_logits = self.gate(x)  # (batch_size, num_experts)
@@ -126,6 +132,7 @@ class MixtureOfExperts(nn.Module):
     
     
     def _compute_load_balancing_loss(self, gate_probs: torch.Tensor) -> torch.Tensor:
+
         '''
         Compute load balancing loss to encourage even expert utilization.
         
@@ -139,6 +146,7 @@ class MixtureOfExperts(nn.Module):
         Returns:
             Load balancing loss (scalar)
         '''
+
         # Average probability of routing to each expert
         mean_probs = gate_probs.mean(dim=0)  # (num_experts,)
         
@@ -165,6 +173,7 @@ def create_moe_layer(
     num_experts: int = 4,
     top_k: int = 2
 ) -> MixtureOfExperts:
+    
     '''
     Factory function to create a MoE layer.
     
@@ -177,6 +186,7 @@ def create_moe_layer(
     Returns:
         MixtureOfExperts module
     '''
+
     return MixtureOfExperts(
         input_dim=input_dim,
         hidden_dim=hidden_dim,

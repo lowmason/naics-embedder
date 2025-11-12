@@ -1,0 +1,6 @@
+# Configuration for tokenization caching
+
+descriptions_parquet: ./data/naics_descriptions.parquet
+tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
+max_length: null  # Use model default
+output_path: ./data/token_cache/token_cache.pt

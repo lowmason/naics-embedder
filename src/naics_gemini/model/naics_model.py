@@ -17,7 +17,7 @@ from naics_gemini.model.evaluation import (
 )
 from naics_gemini.model.loss import HyperbolicInfoNCELoss
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
 
 
 # -------------------------------------------------------------------------------------------------
@@ -88,9 +88,13 @@ class NAICSContrastiveModel(pyl.LightningModule):
     
     
     def _load_ground_truth_distances(self, distances_path: str):
+
         '''Load ground truth NAICS tree distances for evaluation.'''
+        
         try:
-            logger.info(f'Loading ground truth distances from {distances_path}')
+            logger.info(
+                f'Loading ground truth distances\n'
+                f'  • from: {distances_path}')
             
             df = pl.read_parquet(distances_path)
             
@@ -110,7 +114,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 dist_matrix[j, i] = dist
             
             self.ground_truth_distances = dist_matrix
-            logger.info(f'Loaded distance matrix: {n_codes} codes')
+            logger.info(f'  • distance matrix: [{n_codes}, {n_codes}]\n')
             
         except Exception as e:
             logger.warning(f'Could not load ground truth distances: {e}')

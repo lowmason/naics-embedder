@@ -2,72 +2,17 @@
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
-import json
 import logging
-from dataclasses import asdict, dataclass, field
 from io import BytesIO
 from typing import Dict, Optional, Set, Tuple
 
 import polars as pl
 
+from naics_gemini.utils.config import DownloadConfig, load_config
 from naics_gemini.utils.utilities import download_with_retry as _download_with_retry
 from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
-
-
-# -------------------------------------------------------------------------------------------------
-# Configuration
-# -------------------------------------------------------------------------------------------------
-
-@dataclass
-class Config:
-
-    output_parquet: str = './data/naics_descriptions.parquet'
-
-    url_codes: str = 'https://www.census.gov/naics/2022NAICS/2-6%20digit_2022_Codes.xlsx'
-    url_index: str = 'https://www.census.gov/naics/2022NAICS/2022_NAICS_Index_File.xlsx'
-    url_descriptions: str = 'https://www.census.gov/naics/2022NAICS/2022_NAICS_Descriptions.xlsx'
-    url_exclusions: str = 'https://www.census.gov/naics/2022NAICS/2022_NAICS_Cross_References.xlsx'
-
-    sheet_codes: str = 'tbl_2022_title_description_coun'
-    sheet_index: str = '2022NAICS'
-    sheet_descriptions: str = '2022_NAICS_Descriptions'
-    sheet_exclusions: str = '2022_NAICS_Cross_References'
-    
-    schema_codes: Dict[str, pl.DataType] = field(
-        default_factory=lambda: {
-            'Seq. No.': pl.UInt32,
-            '2022 NAICS US   Code': pl.Utf8,
-            '2022 NAICS US Title': pl.Utf8,
-        }
-    ) # type: ignore
-    schema_index: Dict[str, pl.DataType] = field(
-        default_factory=lambda: {'NAICS22': pl.Utf8, 'INDEX ITEM DESCRIPTION': pl.Utf8}
-    ) # type: ignore
-    schema_descriptions: Dict[str, pl.DataType] = field(
-        default_factory=lambda: {'Code': pl.Utf8, 'Description': pl.Utf8}
-    ) # type: ignore
-    schema_exclusions: Dict[str, pl.DataType] = field(
-        default_factory=lambda: {'Code': pl.Utf8, 'Cross-Reference': pl.Utf8}
-    ) # type: ignore
-
-    rename_codes: Dict[str, str] = field(
-        default_factory=lambda: {
-            'Seq. No.': 'index',
-            '2022 NAICS US   Code': 'code',
-            '2022 NAICS US Title': 'title',
-        }
-    )
-    rename_index: Dict[str, str] = field(
-        default_factory=lambda: {'NAICS22': 'code', 'INDEX ITEM DESCRIPTION': 'examples'}
-    )
-    rename_descriptions: Dict[str, str] = field(
-        default_factory=lambda: {'Code': 'code', 'Description': 'description'}
-    )
-    rename_exclusions: Dict[str, str] = field(
-        default_factory=lambda: {'Code': 'code', 'Cross-Reference': 'excluded'}
-    )
 
 
 # -------------------------------------------------------------------------------------------------
@@ -138,15 +83,21 @@ def _read_xlsx(
 # -------------------------------------------------------------------------------------------------
 
 def _download_files(
-        cfg: Config
+        cfg: DownloadConfig
 ) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    
+    # Convert string schema names to Polars types
+    schema_codes = {k: getattr(pl, v) for k, v in cfg.schema_codes.items()}
+    schema_index = {k: getattr(pl, v) for k, v in cfg.schema_index.items()}
+    schema_descriptions = {k: getattr(pl, v) for k, v in cfg.schema_descriptions.items()}
+    schema_exclusions = {k: getattr(pl, v) for k, v in cfg.schema_exclusions.items()}
     
     # NAICS titles
     titles_df = (
         _read_xlsx(
             url=cfg.url_codes, 
             sheet=cfg.sheet_codes, 
-            schema=cfg.schema_codes, 
+            schema=schema_codes, 
             cols=cfg.rename_codes
         )
     )
@@ -156,7 +107,7 @@ def _download_files(
         _read_xlsx(
             url=cfg.url_descriptions,
             sheet=cfg.sheet_descriptions,
-            schema=cfg.schema_descriptions,
+            schema=schema_descriptions,
             cols=cfg.rename_descriptions,
         )
     )
@@ -166,7 +117,7 @@ def _download_files(
         _read_xlsx(
             url=cfg.url_index, 
             sheet=cfg.sheet_index, 
-            schema=cfg.schema_index, 
+            schema=schema_index, 
             cols=cfg.rename_index
         )
     )
@@ -176,7 +127,7 @@ def _download_files(
         _read_xlsx(
             url=cfg.url_exclusions,
             sheet=cfg.sheet_exclusions,
-            schema=cfg.schema_exclusions,
+            schema=schema_exclusions,
             cols=cfg.rename_exclusions,
         )
     )
@@ -737,18 +688,14 @@ def _get_descriptions_2(
 
 def download_preprocess_data() -> pl.DataFrame:
     
-    config = Config()
-
-    config_dict = asdict(config)
-    for key, value in config_dict.items():
-        if isinstance(value, dict):
-            config_dict[key] = {k: str(v) for k, v in value.items()}
+    # Load configuration from YAML
+    cfg = load_config(DownloadConfig, 'data_generation/download.yaml')
 
     logger.info('Configuration:')
-    logger.info(json.dumps(config_dict, indent=2))
+    logger.info(cfg.model_dump_json(indent=2))
     logger.info('')
     
-    titles_df, descriptions_df, examples_df, exclusions_df = _download_files(config)
+    titles_df, descriptions_df, examples_df, exclusions_df = _download_files(cfg)
 
     titles, codes = _get_titles(titles_df)
 
@@ -807,14 +754,14 @@ def download_preprocess_data() -> pl.DataFrame:
     (
         naics_final
         .write_parquet(
-            config.output_parquet
+            cfg.output_parquet
         )
     )    
 
     _parquet_stats(
         parquet_df=naics_final,
         message='NAICS codes (text + hierarchy) written to:',
-        output_parquet=config.output_parquet,
+        output_parquet=cfg.output_parquet,
         logger=logger
     )
 

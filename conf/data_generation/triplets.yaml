@@ -1,0 +1,6 @@
+# Configuration for generating training triplets
+
+descriptions_parquet: ./data/naics_descriptions.parquet
+distances_parquet: ./data/naics_distances.parquet
+relations_parquet: ./data/naics_relations.parquet
+output_parquet: ./data/naics_training_pairs

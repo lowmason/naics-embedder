@@ -2,48 +2,18 @@
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
-import json
 import logging
-from dataclasses import asdict, dataclass, field
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 import polars as pl
 
+from naics_gemini.utils.config import RelationsConfig, load_config
 from naics_gemini.utils.console import log_table as _log_table
 from naics_gemini.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
-
-# -------------------------------------------------------------------------------------------------
-# Configuration
-# -------------------------------------------------------------------------------------------------
-
-@dataclass
-class Config:
-
-    input_parquet: str = './data/naics_descriptions.parquet'
-    output_parquet: str = './data/naics_relations.parquet'
-
-    relation_id: Dict[str, int] = field(
-        default_factory=lambda: {
-            'child': 1,
-            'sibling': 2,
-            'grandchild': 3,
-            'great-grandchild': 4,
-            'nephew/niece': 5,
-            'great-great-grandchild': 6,
-            'cousin': 7,
-            'grand-nephew/niece': 8,
-            'grand-grand-nephew/niece': 9,
-            'cousin_1_times_removed': 10,
-            'second_cousin': 11,
-            'cousin_2_times_removed': 12,
-            'second_cousin_1_times_removed': 13,
-            'third_cousin': 14,
-        }
-    )
 
 
 # -------------------------------------------------------------------------------------------------
@@ -264,10 +234,11 @@ def _relation_stats(relations_df: pl.DataFrame):
 
 def calculate_pairwise_relations() -> pl.DataFrame:
     
-    cfg = Config()
+    # Load configuration from YAML
+    cfg = load_config(RelationsConfig, 'data_generation/relations.yaml')
 
     logger.info('Configuration:')
-    logger.info(json.dumps(asdict(cfg), indent=2))
+    logger.info(cfg.model_dump_json(indent=2))
     logger.info('')
 
     df_list = []

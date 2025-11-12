@@ -1,0 +1,21 @@
+# Configuration for computing pairwise relations
+
+input_parquet: ./data/naics_descriptions.parquet
+output_parquet: ./data/naics_relations.parquet
+
+# Relation mapping from names to IDs
+relation_id:
+  child: 1
+  sibling: 2
+  grandchild: 3
+  great-grandchild: 4
+  nephew/niece: 5
+  great-great-grandchild: 6
+  cousin: 7
+  grand-nephew/niece: 8
+  grand-grand-nephew/niece: 9
+  cousin_1_times_removed: 10
+  second_cousin: 11
+  cousin_2_times_removed: 12
+  second_cousin_1_times_removed: 13
+  third_cousin: 14

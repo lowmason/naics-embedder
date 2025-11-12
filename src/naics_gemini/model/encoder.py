@@ -50,7 +50,7 @@ class MultiChannelEncoder(nn.Module):
         )
         
         # Create separate LoRA-adapted encoder for each channel
-        logger.info(f'Creating {len(self.channels)} channel encoders with LoRA (r={lora_r})...')
+        logger.info(f'Creating {len(self.channels)} channel encoders with LoRA (r={lora_r})...\n')
         self.encoders = nn.ModuleDict({
             channel: get_peft_model(
                 AutoModel.from_pretrained(base_model_name),
@@ -62,7 +62,7 @@ class MultiChannelEncoder(nn.Module):
         # Optional: Mixture of Experts
         if use_moe:
             from naics_gemini.model.moe import MixtureOfExperts
-            logger.info(f'Initializing MoE with {num_experts} experts (top-k={top_k})...')
+            logger.info(f'Initializing MoE with {num_experts} experts (top-k={top_k})...\n')
             self.moe = MixtureOfExperts(
                 input_dim=self.embedding_dim * len(self.channels),  # 4 channels concatenated
                 hidden_dim=moe_hidden_dim,
@@ -78,7 +78,11 @@ class MultiChannelEncoder(nn.Module):
             self.moe = None
             self.moe_projection = None
         
-        logger.info(f'Encoder initialized: embedding_dim={self.embedding_dim}, use_moe={use_moe}')
+        logger.info(
+            'Encoder initialized:\n'
+            f'  • embedding_dim={self.embedding_dim}\n'
+            f'  • use_moe={use_moe}\n'
+        )
     
     
     def forward(

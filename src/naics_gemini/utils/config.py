@@ -1,58 +1,588 @@
 # -------------------------------------------------------------------------------------------------
-# Path configuration
+# Imports and settings
 # -------------------------------------------------------------------------------------------------
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Type, TypeVar
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar('T', bound=BaseModel)
+
 
 # -------------------------------------------------------------------------------------------------
-# Path Configuration
+# Generic Config Loader
 # -------------------------------------------------------------------------------------------------
 
-class PathsConfig(BaseModel):
+def load_config(config_class: Type[T], yaml_path: str) -> T:
 
-    '''File system paths for data, outputs, and checkpoints.'''
+    '''
+    Generic configuration loader for any Pydantic model.
     
-    data_dir: str = Field(
-        default='./data',
-        description='Directory containing NAICS data files'
-    )
-    output_dir: str = Field(
-        default='./outputs',
-        description='Directory for training outputs and logs'
-    )
+    Args:
+        config_class: The Pydantic model class to instantiate
+        yaml_path: Path to YAML config file (relative to conf/ directory)
+        
+    Returns:
+        Instance of config_class with values from YAML
+        
+    Example:
+        cfg = load_config(DownloadConfig, 'data_generation/download.yaml')
+    '''
+    
+    # Construct full path relative to conf/ directory
+    if not yaml_path.startswith('conf/'):
+        yaml_path = f'conf/{yaml_path}'
+    
+    yaml_file = Path(yaml_path)
+    
+    if not yaml_file.exists():
+        logger.warning(f'Config file not found: {yaml_path}, using defaults')
+        return config_class()
+    
+    with open(yaml_file, 'r') as f:
+        data = yaml.safe_load(f)
+    
+    if data is None:
+        data = {}
+    
+    logger.info(f'Loaded config from {yaml_path}')
+    
+    return config_class(**data)
+
+
+# -------------------------------------------------------------------------------------------------
+# Directory Configuration
+# -------------------------------------------------------------------------------------------------
+
+class DirConfig(BaseModel):
+
+    '''File system directory configuration.'''
+        
     checkpoint_dir: str = Field(
         default='./checkpoints',
         description='Directory for model checkpoints'
     )
-
-
-# -------------------------------------------------------------------------------------------------
-# Data Configuration
-# -------------------------------------------------------------------------------------------------
-
-class DataConfig(BaseModel):
-
-    '''Data loading and preprocessing configuration.'''
-    
-    descriptions_path: str = Field(
-        default='./data/naics_descriptions.parquet',
-        description='Path to NAICS descriptions parquet file'
+    conf_dir: str = Field(
+        default='./conf',
+        description='Directory for config files'
     )
-    triplets_path: str = Field(
+    data_dir: str = Field(
+        default='./data',
+        description='Directory containing data files'
+    )
+    docs_dir: str = Field(
+        default='./data',
+        description='Directory containing data files'
+    )
+    log_dir: str = Field(
+        default='./logs',
+        description='Directory for logs'
+    )
+    output_dir: str = Field(
+        default='./outputs',
+        description='Directory for training outputs'
+    )
+
+
+# -------------------------------------------------------------------------------------------------
+# Data Generation Configuration
+# -------------------------------------------------------------------------------------------------
+
+class DownloadConfig(BaseModel):
+
+    '''Configuration for downloading and preprocessing NAICS data.'''
+    
+    output_parquet: str = Field(
+        default='./data/naics_descriptions.parquet',
+        description='Output path for processed descriptions'
+    )
+    
+    # URLs for data sources
+    url_codes: str = Field(
+        default='https://www.census.gov/naics/2022NAICS/2-6%20digit_2022_Codes.xlsx',
+        description='URL for NAICS codes Excel file'
+    )
+    url_index: str = Field(
+        default='https://www.census.gov/naics/2022NAICS/2022_NAICS_Index_File.xlsx',
+        description='URL for NAICS index file'
+    )
+    url_descriptions: str = Field(
+        default='https://www.census.gov/naics/2022NAICS/2022_NAICS_Descriptions.xlsx',
+        description='URL for NAICS descriptions'
+    )
+    url_exclusions: str = Field(
+        default='https://www.census.gov/naics/2022NAICS/2022_NAICS_Cross_References.xlsx',
+        description='URL for NAICS cross references'
+    )
+    
+    # Sheet names
+    sheet_codes: str = Field(
+        default='tbl_2022_title_description_coun',
+        description='Sheet name for codes'
+    )
+    sheet_index: str = Field(
+        default='2022NAICS',
+        description='Sheet name for index'
+    )
+    sheet_descriptions: str = Field(
+        default='2022_NAICS_Descriptions',
+        description='Sheet name for descriptions'
+    )
+    sheet_exclusions: str = Field(
+        default='2022_NAICS_Cross_References',
+        description='Sheet name for exclusions'
+    )
+    
+    # Schema definitions (stored as JSON-serializable dicts)
+    schema_codes: Dict[str, str] = Field(
+        default={
+            'Seq. No.': 'UInt32',
+            '2022 NAICS US   Code': 'Utf8',
+            '2022 NAICS US Title': 'Utf8',
+        },
+        description='Schema for codes sheet'
+    )
+    schema_index: Dict[str, str] = Field(
+        default={'NAICS22': 'Utf8', 'INDEX ITEM DESCRIPTION': 'Utf8'},
+        description='Schema for index sheet'
+    )
+    schema_descriptions: Dict[str, str] = Field(
+        default={'Code': 'Utf8', 'Description': 'Utf8'},
+        description='Schema for descriptions sheet'
+    )
+    schema_exclusions: Dict[str, str] = Field(
+        default={'Code': 'Utf8', 'Cross-Reference': 'Utf8'},
+        description='Schema for exclusions sheet'
+    )
+    
+    # Column renames
+    rename_codes: Dict[str, str] = Field(
+        default={
+            'Seq. No.': 'index',
+            '2022 NAICS US   Code': 'code',
+            '2022 NAICS US Title': 'title',
+        },
+        description='Column renames for codes'
+    )
+    rename_index: Dict[str, str] = Field(
+        default={'NAICS22': 'code', 'INDEX ITEM DESCRIPTION': 'examples'},
+        description='Column renames for index'
+    )
+    rename_descriptions: Dict[str, str] = Field(
+        default={'Code': 'code', 'Description': 'description'},
+        description='Column renames for descriptions'
+    )
+    rename_exclusions: Dict[str, str] = Field(
+        default={'Code': 'code', 'Cross-Reference': 'excluded'},
+        description='Column renames for exclusions'
+    )
+    
+
+    @classmethod
+    def from_yaml(cls, yaml_path: str) -> 'DownloadConfig':
+        
+        '''Load configuration from YAML file.'''
+
+        yaml_file = Path(yaml_path)
+        if not yaml_file.exists():
+            logger.warning(f'Config file not found: {yaml_path}, using defaults')
+            return cls()
+        
+        with open(yaml_file, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        if data is None:
+            data = {}
+        
+        return cls(**data)
+
+
+class RelationsConfig(BaseModel):
+    
+    '''Configuration for computing pairwise relations.'''
+    
+    input_parquet: str = Field(
+        default='./data/naics_descriptions.parquet',
+        description='Input descriptions parquet file'
+    )
+    output_parquet: str = Field(
+        default='./data/naics_relations.parquet',
+        description='Output relations parquet file'
+    )
+    
+    relation_id: Dict[str, int] = Field(
+        default={
+            'child': 1,
+            'sibling': 2,
+            'grandchild': 3,
+            'great-grandchild': 4,
+            'nephew/niece': 5,
+            'great-great-grandchild': 6,
+            'cousin': 7,
+            'grand-nephew/niece': 8,
+            'grand-grand-nephew/niece': 9,
+            'cousin_1_times_removed': 10,
+            'second_cousin': 11,
+            'cousin_2_times_removed': 12,
+            'second_cousin_1_times_removed': 13,
+            'third_cousin': 14,
+        },
+        description='Mapping of relation names to IDs'
+    )
+    
+
+    @classmethod
+    def from_yaml(cls, yaml_path: str) -> 'RelationsConfig':
+    
+        '''Load configuration from YAML file.'''
+    
+        yaml_file = Path(yaml_path)
+        if not yaml_file.exists():
+            logger.warning(f'Config file not found: {yaml_path}, using defaults')
+            return cls()
+        
+        with open(yaml_file, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        if data is None:
+            data = {}
+        
+        return cls(**data)
+
+
+class DistancesConfig(BaseModel):
+
+    '''Configuration for computing pairwise distances.'''
+    
+    input_parquet: str = Field(
+        default='./data/naics_descriptions.parquet',
+        description='Input descriptions parquet file'
+    )
+    output_parquet: str = Field(
+        default='./data/naics_distances.parquet',
+        description='Output distances parquet file'
+    )
+    
+    @classmethod
+    def from_yaml(cls, yaml_path: str) -> 'DistancesConfig':
+        
+        '''Load configuration from YAML file.'''
+        
+        yaml_file = Path(yaml_path)
+        if not yaml_file.exists():
+            logger.warning(f'Config file not found: {yaml_path}, using defaults')
+            return cls()
+        
+        with open(yaml_file, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        if data is None:
+            data = {}
+        
+        return cls(**data)
+
+
+class TripletsConfig(BaseModel):
+
+    '''Configuration for generating training triplets.'''
+    
+    descriptions_parquet: str = Field(
+        default='./data/naics_descriptions.parquet',
+        description='Input descriptions parquet file'
+    )
+    distances_parquet: str = Field(
+        default='./data/naics_distances.parquet',
+        description='Input distances parquet file'
+    )
+    relations_parquet: str = Field(
+        default='./data/naics_relations.parquet',
+        description='Input relations parquet file'
+    )
+    output_parquet: str = Field(
         default='./data/naics_training_pairs',
-        description='Path to training triplets directory'
+        description='Output directory for training pairs'
+    )
+    
+    # Anchor parameters
+    anchor_level: Optional[List[int]] = Field(
+        default=None,
+        description='Filter anchor codes by hierarchy level'
+    )
+    relation_margins: Optional[List[int]] = Field(
+        default=None,
+        description='Filter by relation margins'
+    )
+    distance_margins: Optional[List[float]] = Field(
+        default=None,
+        description='Filter by distance margins'
+    )
+    
+    # Margin parameters
+    positive_level: Optional[List[int]] = Field(
+        default=None,
+        description='Filter positive codes by hierarchy level'
+    )
+    positive_relation: Optional[List[int]] = Field(
+        default=None,
+        description='Filter positive pairs by relation'
+    )
+    positive_distance: Optional[List[float]] = Field(
+        default=None,
+        description='Filter positive pairs by distance'
+    )
+    n_positives: int = Field(
+        default=2125,
+        gt=0,
+        le=2125,
+        description='Maximum number of positives per anchor'
+    )
+    
+    # Margin parameters
+    negative_level: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative codes by hierarchy level'
+    )
+    negative_relation: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative pairs by relation'
+    )
+    negative_distance: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative pairs by distance'
+    )
+    n_negatives: int = Field(
+        default=2125,
+        gt=0,
+        le=2125,
+        description='Maximum number of negatives per positive'
+    )
+    
+
+    @classmethod
+    def from_yaml(cls, yaml_path: str) -> 'TripletsConfig':
+
+        '''Load configuration from YAML file.'''
+        
+        yaml_file = Path(yaml_path)
+        if not yaml_file.exists():
+            logger.warning(f'Config file not found: {yaml_path}, using defaults')
+            return cls()
+        
+        with open(yaml_file, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        if data is None:
+            data = {}
+        
+        return cls(**data)
+
+
+class DataGenerationConfig(BaseModel):
+
+    '''Data generation configuration.'''
+    
+    download: DownloadConfig = Field(
+        default_factory=DownloadConfig,
+        description='Download configuration'
+    )
+    relations: RelationsConfig = Field(
+        default_factory=RelationsConfig,
+        description='Relations configuration'
+    )    
+    distances: DistancesConfig = Field(
+        default_factory=DistancesConfig,
+        description='Distances configuration'
+    )
+    triplets: TripletsConfig = Field(
+        default_factory=TripletsConfig,
+        description='Triplets configuration'
+    )
+
+
+# -------------------------------------------------------------------------------------------------
+# Data Loader Configuration
+# -------------------------------------------------------------------------------------------------
+
+class TokenizationConfig(BaseModel):
+
+    '''Configuration for tokenization caching.'''
+    
+    descriptions_parquet: str = Field(
+        default='./data/naics_descriptions.parquet',
+        description='Path to descriptions parquet file'
     )
     tokenizer_name: str = Field(
         default='sentence-transformers/all-MiniLM-L6-v2',
         description='HuggingFace tokenizer name'
+    )
+    max_length: Optional[int] = Field(
+        default=None,
+        description='Maximum sequence length (None = use model default)'
+    )
+    output_path: str = Field(
+        default='./data/token_cache/token_cache.pt',
+        description='Path to save tokenization cache'
+    )
+    
+
+    @classmethod
+    def from_yaml(cls, yaml_path: str) -> 'TokenizationConfig':
+
+        '''Load configuration from YAML file.'''
+        
+        yaml_file = Path(yaml_path)
+        if not yaml_file.exists():
+            logger.warning(f'Config file not found: {yaml_path}, using defaults')
+            return cls()
+        
+        with open(yaml_file, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        if data is None:
+            data = {}
+        
+        return cls(**data)
+
+
+class StreamingConfig(BaseModel):
+
+    '''Configuration for streaming dataset.'''
+    
+    descriptions_parquet: str = Field(
+        default='./data/naics_descriptions.parquet',
+        description='Path to descriptions parquet file'
+    )
+    distances_parquet: str = Field(
+        default='./data/naics_distances.parquet',
+        description='Path to distances parquet file'
+    )
+    relations_parquet: str = Field(
+        default='./data/naics_relations.parquet',
+        description='Path to relations parquet file'
+    )
+    triplets_parquet: str = Field(
+        default='./data/naics_training_pairs',
+        description='Path to training pairs directory'
+    )
+    tokenizer_name: str = Field(
+        default='sentence-transformers/all-MiniLM-L6-v2',
+        description='HuggingFace tokenizer name'
+    )
+    max_length: int = Field(
+        default=512,
+        description='Maximum sequence length for tokenization'
+    )
+    seed: int = Field(
+        default=42,
+        ge=0,
+        description='Random seed for sampling'
+    )
+    
+    # Anchor parameters
+    anchor_level: Optional[List[int]] = Field(
+        default=None,
+        description='Filter anchor codes by hierarchy level'
+    )
+    relation_margins: Optional[List[int]] = Field(
+        default=None,
+        description='Filter by relation margins'
+    )
+    distance_margins: Optional[List[int]] = Field(
+        default=None,
+        description='Filter by distance margins'
+    )
+    
+    # Margin parameters
+    positive_level: Optional[List[int]] = Field(
+        default=None,
+        description='Filter positive codes by hierarchy level'
+    )
+    positive_relation: Optional[List[int]] = Field(
+        default=None,
+        description='Filter positive pairs by relation'
+    )
+    positive_distance: Optional[List[int]] = Field(
+        default=None,
+        description='Filter positive pairs by distance'
+    )
+    
+    # Margin parameters
+    negative_level: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative codes by hierarchy level'
+    )
+    negative_relation: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative pairs by relation'
+    )
+    negative_distance: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative pairs by distance'
+    )
+    
+    # Sampling parameters
+    n_positives: int = Field(
+        default=2125,
+        gt=0,
+        description='Maximum number of positives per anchor'
+    )
+    n_negatives: int = Field(
+        default=2125,
+        gt=0,
+        description='Maximum number of negatives per positive'
+    )
+
+
+    def items(self) -> Dict[str, Any]:
+        
+        '''Return configuration as dictionary.'''
+
+        exclude = [
+            'descriptions_parquet', 'distances_parquet', 
+            'relations_parquet', 'triplets_parquet', 
+            'seed'
+        ]
+
+        cfg_dict = {}
+        for name, value in self.model_dump().items():
+            if name not in exclude:
+                cfg_dict[name] = value
+        
+        return cfg_dict
+
+
+    def iter_fields(self) -> Iterator[Tuple[str, Any]]:
+        
+        '''Return configuration as dictionary.'''
+
+        exclude = [
+            'descriptions_parquet', 'distances_parquet', 
+            'relations_parquet', 'triplets_parquet', 
+            'seed'
+        ]
+
+        for name, value in self.model_dump().items():
+            if name not in exclude:
+                yield name, value
+        
+
+
+class DataLoaderConfig(BaseModel):
+
+    '''Data loading and preprocessing configuration.'''
+    
+    tokenization: TokenizationConfig = Field(
+        default_factory=TokenizationConfig,
+        description='Tokenization configuration'
+    )
+    streaming: StreamingConfig = Field(
+        default_factory=StreamingConfig,
+        description='Streaming configuration'
     )
     batch_size: int = Field(
         default=32,
@@ -73,27 +603,15 @@ class DataConfig(BaseModel):
         description='Validation split fraction'
     )
     
-    
+
     @field_validator('batch_size')
     @classmethod
     def warn_large_batch(cls, v: int) -> int:
-
+    
         '''Warn about potentially problematic batch sizes.'''
-
+    
         if v > 128:
             logger.warning(f'Large batch_size={v} may cause OOM errors')
-        return v
-    
-
-    @field_validator('descriptions_path', 'triplets_path')
-    @classmethod
-    def validate_paths_exist(cls, v: str) -> str:
-
-        '''Validate that data paths exist (optional check).'''
-        
-        path = Path(v)
-        if not path.exists():
-            logger.warning(f'Data path does not exist yet: {v}')
         return v
 
 
@@ -158,9 +676,9 @@ class MoEConfig(BaseModel):
 
     @model_validator(mode='after')
     def validate_top_k_vs_experts(self) -> 'MoEConfig':
-
+      
         '''Ensure top_k doesn't exceed num_experts.'''
-        
+      
         if self.top_k > self.num_experts:
             raise ValueError(
                 f'top_k ({self.top_k}) cannot exceed num_experts ({self.num_experts})'
@@ -169,7 +687,7 @@ class MoEConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-
+    
     '''Model architecture configuration.'''
     
     base_model_name: str = Field(
@@ -202,7 +720,7 @@ class ModelConfig(BaseModel):
 # -------------------------------------------------------------------------------------------------
 
 class LossConfig(BaseModel):
-
+  
     '''Loss function configuration.'''
     
     temperature: float = Field(
@@ -223,7 +741,7 @@ class LossConfig(BaseModel):
 # -------------------------------------------------------------------------------------------------
 
 class TrainerConfig(BaseModel):
-
+   
     '''PyTorch Lightning Trainer configuration.'''
     
     max_epochs: int = Field(
@@ -270,9 +788,9 @@ class TrainerConfig(BaseModel):
     @field_validator('accelerator')
     @classmethod
     def validate_accelerator(cls, v: str) -> str:
-
+    
         '''Validate accelerator choice.'''
-        
+    
         valid = ['auto', 'gpu', 'cpu', 'mps', 'cuda']
         if v not in valid:
             raise ValueError(f'accelerator must be one of {valid}')
@@ -282,9 +800,9 @@ class TrainerConfig(BaseModel):
     @field_validator('precision')
     @classmethod
     def validate_precision(cls, v: str) -> str:
-
+     
         '''Validate precision choice.'''
-        
+     
         valid = ['32', '16', '16-mixed', 'bf16', 'bf16-mixed']
         if v not in valid:
             raise ValueError(f'precision must be one of {valid}')
@@ -292,7 +810,7 @@ class TrainerConfig(BaseModel):
 
 
 class TrainingConfig(BaseModel):
-
+    
     '''Optimizer and training configuration.'''
     
     learning_rate: float = Field(
@@ -323,82 +841,78 @@ class TrainingConfig(BaseModel):
 # -------------------------------------------------------------------------------------------------
 
 class CurriculumConfig(BaseModel):
+
     '''Curriculum learning configuration.'''
     
     name: str = Field(
         default='default',
         description='Curriculum name'
     )
-    positive_levels: List[int] = Field(
-        default=[4, 5, 6],
-        description='NAICS hierarchy levels for positive pairs'
-    )
-    positive_distance_min: Optional[float] = Field(
+    
+    # Anchor parameters
+    anchor_level: Optional[List[int]] = Field(
         default=None,
-        ge=0,
-        description='Minimum distance for positive pairs'
+        description='Filter anchor codes by hierarchy level'
     )
-    positive_distance_max: float = Field(
-        default=2.0,
-        gt=0,
-        description='Maximum distance for positive pairs'
+    relation_margins: Optional[List[int]] = Field(
+        default=None,
+        description='Filter by relation margins'
     )
-    max_positives: int = Field(
-        default=10,
+    distance_margins: Optional[List[float]] = Field(
+        default=None,
+        description='Filter by distance margins'
+    )
+    
+    # Margin parameters
+    positive_level: Optional[List[int]] = Field(
+        default=None,
+        description='Filter positive codes by hierarchy level'
+    )
+    positive_relation: Optional[List[int]] = Field(
+        default=None,
+        description='Filter positive pairs by relation'
+    )
+    positive_distance: Optional[List[float]] = Field(
+        default=None,
+        description='Filter positive pairs by distance'
+    )
+    n_positives: int = Field(
+        default=2125,
         gt=0,
+        le=2125,
         description='Maximum number of positives per anchor'
     )
-    difficulty_buckets: List[int] = Field(
-        default=[1, 2, 3],
-        description='Hardness levels to sample negatives from'
+    
+    # Margin parameters
+    negative_level: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative codes by hierarchy level'
     )
-    bucket_percentages: Dict[int, float] = Field(
-        default={1: 0.5, 2: 0.3, 3: 0.2},
-        description='Percentage of negatives from each bucket'
+    negative_relation: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative pairs by relation'
     )
-    k_negatives: int = Field(
-        default=8,
+    negative_distance: Optional[List[int]] = Field(
+        default=None,
+        description='Filter negative pairs by distance'
+    )
+    n_negatives: int = Field(
+        default=2125,
         gt=0,
-        description='Number of negative samples per positive'
+        le=2125,
+        description='Maximum number of negatives per positive'
     )
     
 
-    @field_validator('positive_levels')
+    @field_validator('anchor_level', 'positive_level', 'negative_level')
     @classmethod
-    def validate_levels(cls, v: List[int]) -> List[int]:
+    def validate_levels(cls, v: Optional[List[int]]) -> Optional[List[int]]:
+    
         '''Validate NAICS levels are in valid range.'''
-        if not all(2 <= level <= 6 for level in v):
-            raise ValueError('positive_levels must be between 2 and 6')
-        return v
     
-
-    @field_validator('difficulty_buckets')
-    @classmethod
-    def validate_buckets(cls, v: List[int]) -> List[int]:
-        '''Validate hardness buckets are in valid range.'''
-        if not all(1 <= bucket <= 8 for bucket in v):
-            raise ValueError('difficulty_buckets must be between 1 and 8')
+        if v is not None and not all(2 <= level <= 6 for level in v):
+            raise ValueError('Levels must be between 2 and 6')
         return v
-    
-
-    @model_validator(mode='after')
-    def validate_bucket_percentages(self) -> 'CurriculumConfig':
-        '''Ensure bucket percentages sum to 1.0 and match difficulty_buckets.'''
-        # Check all buckets have percentages
-        for bucket in self.difficulty_buckets:
-            if bucket not in self.bucket_percentages:
-                raise ValueError(
-                    f'Bucket {bucket} in difficulty_buckets but not in bucket_percentages'
-                )
-        
-        # Check percentages sum to 1.0 (allow small floating point errors)
-        total = sum(self.bucket_percentages.values())
-        if not (0.99 <= total <= 1.01):
-            raise ValueError(
-                f'bucket_percentages must sum to 1.0, got {total:.4f}'
-            )
-        
-        return self
 
 
 # -------------------------------------------------------------------------------------------------
@@ -418,12 +932,16 @@ class Config(BaseModel):
         ge=0,
         description='Random seed for reproducibility'
     )
-    paths: PathsConfig = Field(
-        default_factory=PathsConfig,
+    dirs: DirConfig = Field(
+        default_factory=DirConfig,
         description='File system paths'
     )
-    data: DataConfig = Field(
-        default_factory=DataConfig,
+    data_generation: DataGenerationConfig = Field(
+        default_factory=DataGenerationConfig,
+        description='Data generation configuration'
+    )
+    data_loader: DataLoaderConfig = Field(
+        default_factory=DataLoaderConfig,
         description='Data loading configuration'
     )
     model: ModelConfig = Field(
@@ -450,10 +968,9 @@ class Config(BaseModel):
         yaml_path: str,
         curriculum_name: Optional[str] = None
     ) -> 'Config':
-        
+     
         '''Load configuration from YAML file.'''
-
-        # Load base config
+     
         yaml_file = Path(yaml_path)
         if not yaml_file.exists():
             raise FileNotFoundError(f'Config file not found: {yaml_path}')
@@ -479,23 +996,27 @@ class Config(BaseModel):
             if curriculum_data:
                 data['curriculum'] = curriculum_data
         
-        # Set experiment name from curriculum if not specified
-        if 'experiment_name' not in data and 'curriculum' in data:
-            data['experiment_name'] = data['curriculum'].get('name', 'default')
-        
-        # Pydantic automatically validates!
-        logger.info(f'Loading config from {yaml_path}')
+        # Set experiment name from curriculum if it contains a variable reference
+        if 'curriculum' in data:
+            curriculum_name_value = data['curriculum'].get('name', 'default')
+            if 'experiment_name' in data and '${curriculum.name}' in str(data['experiment_name']):
+                data['experiment_name'] = curriculum_name_value
+            elif 'experiment_name' not in data:
+                data['experiment_name'] = curriculum_name_value
+                
         if curriculum_name:
-            logger.info(f'Using curriculum: {curriculum_name}')
+            logger.info(f'  • Loaded config from {yaml_path}')
+            logger.info(f'  • Using curriculum: {curriculum_name}\n')
+        else:
+            logger.info(f'  • Loaded config from {yaml_path}\n')
         
         return cls(**data)
     
 
     def override(self, overrides: Dict[str, Any]) -> 'Config':
-        
+   
         '''Apply overrides using dot notation.'''
-    
-        # Convert to dict
+   
         data = self.model_dump()
         
         for key, value in overrides.items():
@@ -511,7 +1032,6 @@ class Config(BaseModel):
             # Set value
             current[parts[-1]] = value
         
-        # Re-validate with new values (Pydantic validates automatically)
         logger.info(f'Applied {len(overrides)} override(s)')
         return Config(**data)
     
@@ -524,9 +1044,9 @@ class Config(BaseModel):
     
 
     def to_yaml(self, path: str) -> None:
-
+    
         '''Save config to YAML file.'''
-        
+    
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -540,9 +1060,9 @@ class Config(BaseModel):
     
         '''Pydantic v2 configuration.'''
     
-        validate_assignment = True  # Validate on attribute assignment
-        extra = 'forbid'  # Raise error on unknown fields
-        str_strip_whitespace = True  # Strip whitespace from strings
+        validate_assignment = True
+        extra = 'forbid'
+        str_strip_whitespace = True
 
 
 # -------------------------------------------------------------------------------------------------
@@ -554,26 +1074,21 @@ def parse_override_value(value: str) -> Any:
     '''Parse override value from string to appropriate type.'''
 
     try:
-        # Handle common cases
         if value.lower() in ('true', 'false'):
             return value.lower() == 'true'
         
-        # Try numeric conversion
         if '.' in value or 'e' in value.lower():
             return float(value)
         
-        # Try int
         try:
             return int(value)
         except ValueError:
             pass
         
-        # Try Python literals (lists, dicts, etc.)
         import ast
         return ast.literal_eval(value)
     
     except (ValueError, SyntaxError):
-        # Keep as string
         return value
 
 

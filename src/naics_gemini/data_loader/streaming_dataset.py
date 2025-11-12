@@ -5,60 +5,17 @@
 import logging
 import operator
 from collections import defaultdict
-from dataclasses import dataclass, fields
 from functools import reduce
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator
 
 import polars as pl
 
 from naics_gemini.data_loader.tokenization_cache import tokenization_cache
+from naics_gemini.utils.config import StreamingConfig, TokenizationConfig
 from naics_gemini.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
-
-
-# -------------------------------------------------------------------------------------------------
-# Configuration
-# -------------------------------------------------------------------------------------------------
-
-@dataclass
-class CurriculumConfig:
-
-    # File paths
-    descriptions_parquet: str = './data/naics_descriptions.parquet'
-    distances_parquet: str = './data/naics_distances.parquet'
-    relations_parquet: str = './data/naics_relations.parquet'
-    triplets_parquet: str = './data/naics_training_pairs'
-
-    # Dataset creation parameters
-    seed: int = 42
-
-    excluded: Optional[bool] = None
-    unrelated: Optional[bool] = None
-
-    anchor_level: Optional[List[int]] = None
-    positive_level: Optional[List[int]] = None
-    negative_level: Optional[List[int]] = None
-
-    relation_margins: Optional[List[int]] = None
-    distance_margins: Optional[List[float]] = None
-
-    positive_relation: Optional[List[int]] = None
-    negative_relation: Optional[List[int]] = None
-
-    positive_distance: Optional[List[float]] = None
-    negative_distance: Optional[List[float]] = None
-    
-    n_positives: int = 2125
-    n_negatives: int = 2125
-
-    def items(self):
-        for f in fields(self):
-            if not f.name.endswith('_parquet') and f.name != 'seed':
-                v = getattr(self, f.name)
-                if v is not None:
-                    yield f.name, v
 
 
 # -------------------------------------------------------------------------------------------------
@@ -66,15 +23,15 @@ class CurriculumConfig:
 # -------------------------------------------------------------------------------------------------
     
 def create_streaming_generator(
-    curriculum: CurriculumConfig
+    cfg: StreamingConfig
 ) -> Iterator[Dict[str, Any]]:
     
-    # Parameters from curriculum
-    descriptions_parquet = curriculum.descriptions_parquet
-    triplets_parquet = curriculum.triplets_parquet
-    anchor_level = curriculum.anchor_level
-    n_positives = curriculum.n_positives
-    n_negatives = curriculum.n_negatives
+    # Parameters from StreamingConfig
+    descriptions_parquet = cfg.descriptions_parquet
+    triplets_parquet = cfg.triplets_parquet
+    anchor_level = cfg.anchor_level
+    n_positives = cfg.n_positives
+    n_negatives = cfg.n_negatives
 
     # Get all codes and code to index mapping
     codes = get_indices_codes(descriptions_parquet, return_type='codes')
@@ -100,9 +57,9 @@ def create_streaming_generator(
         for pq_path in Path(f'{triplets_parquet}/').glob('**/*.parquet'):
             dataset_files.append(pq_path.as_posix())
 
-    # Build filters from curriculum
+    # Build filters from cfg
     exprs = []
-    for k, v in curriculum.items():
+    for k, v in cfg.iter_fields():
 
         if isinstance(v, list):
             exprs.append(
@@ -175,7 +132,7 @@ def create_streaming_generator(
                         .list.sample(
                             pl.col('positives_negatives_len'), 
                             shuffle=True, 
-                            seed=curriculum.seed
+                            seed=cfg.seed
                         )
         )
         .drop('positives_negatives_len')
@@ -211,7 +168,7 @@ def create_streaming_generator(
                         .list.sample(
                             n_negatives, 
                             shuffle=True, 
-                            seed=curriculum.seed
+                            seed=cfg.seed
                         )
                     
         )
@@ -240,7 +197,7 @@ def create_streaming_generator(
                         .list.sample(
                             pl.col('sample_len'), 
                             shuffle=True, 
-                            seed=curriculum.seed
+                            seed=cfg.seed
                         )
         )
         .with_columns(
@@ -324,12 +281,18 @@ def create_streaming_generator(
 # -------------------------------------------------------------------------------------------------
 
 def create_streaming_dataset(
-    curriculum: CurriculumConfig
+    cfg: StreamingConfig
 ) -> Iterator[Dict[str, Any]]:
 
-    token_cache = tokenization_cache()
+    tokenization_cfg = TokenizationConfig(
+        descriptions_parquet=cfg.descriptions_parquet,
+        tokenizer_name=cfg.tokenizer_name,
+        max_length=cfg.max_length
+    )
+    
+    token_cache = tokenization_cache(tokenization_cfg)
 
-    triplets_iterator = create_streaming_generator(curriculum)
+    triplets_iterator = create_streaming_generator(cfg)
 
     for triplets in triplets_iterator:
         

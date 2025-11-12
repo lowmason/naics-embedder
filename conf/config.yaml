@@ -7,22 +7,34 @@ experiment_name: ${curriculum.name}
 seed: 42
 
 # Paths
-paths:
+dirs:
   data_dir: ./data
   log_dir: ./logs
   output_dir: ./outputs
   checkpoint_dir: ./checkpoints
+  conf_dir: ./conf
+  docs_dir: ./docs
 
-# Data configuration
-data:
-  descriptions_path: ${data_dir}/naics_descriptions.parquet
-  relations_path: ${data_dir}/naics_relations.parquet
-  distances_path: ${data_dir}/naics_distances.parquet
-  triplets_path: ${data_dir}/naics_training_pairs
-  tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
+# Data loading configuration
+data_loader:
   batch_size: 32
   num_workers: 0
   val_split: 0.05
+  
+  tokenization:
+    tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
+    max_length: 512
+    padding: max_length
+    truncation: true
+  
+  streaming:
+    descriptions_parquet: ./data/naics_descriptions.parquet
+    triplets_parquet: ./data/naics_training_pairs
+    distances_parquet: ./data/naics_distances.parquet
+    relations_parquet: ./data/naics_relations.parquet
+    tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
+    max_length: 512
+    seed: 42
 
 # Model configuration
 model:
@@ -58,7 +70,7 @@ training:
     max_epochs: 10
     accelerator: auto
     devices: 1
-    precision: 16
+    precision: "16-mixed"
     gradient_clip_val: 1.0
     accumulate_grad_batches: 1
     log_every_n_steps: 10

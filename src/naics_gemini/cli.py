@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import pytorch_lightning as pyl
+import torch
 import typer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -20,6 +21,7 @@ from naics_gemini.data_generation.create_triplets import generate_training_tripl
 from naics_gemini.data_generation.download_data import download_preprocess_data
 from naics_gemini.data_loader.datamodule import NAICSDataModule
 from naics_gemini.model.naics_model import NAICSContrastiveModel
+from naics_gemini.utils.backend import get_device
 from naics_gemini.utils.config import Config, list_available_curricula, parse_override_value
 from naics_gemini.utils.console import configure_logging
 
@@ -193,6 +195,10 @@ def train(
     
     try:
 
+        # Check device
+        logger.info('Determining infrastructure...')
+        accelerator, precision = get_device(log_info=True)
+
         # Load configuration
         logger.info('Loading configuration...')
         cfg = Config.from_yaml(config_file, curriculum_name=curriculum)
@@ -200,6 +206,7 @@ def train(
         # Apply command-line overrides
         if overrides:
             override_dict = {}
+            logger.info('Applying command-line overrides:')
             for override in overrides:
                 if '=' not in override:
                     console.print(
@@ -210,71 +217,78 @@ def train(
                 key, value_str = override.split('=', 1)
                 value = parse_override_value(value_str)
                 override_dict[key] = value
-                logger.info(f'Override: {key} = {value} ({type(value).__name__})')
+                logger.info(f'  • {key} = {value} ({type(value).__name__})')
+
+            logger.info('')
             
             cfg = cfg.override(override_dict)
         
-        # Display configuration summary
+        # Display configuration summary w/ curriculum
+        summary_list_1 = [
+            f'[bold]Experiment:[/bold] {cfg.experiment_name}',
+            f'[bold]Curriculum:[/bold] {cfg.curriculum.name}',
+            f'[bold]Seed:[/bold] {cfg.seed}\n',
+            '[cyan]Data:[/cyan]',
+            f'  • Batch size: {cfg.data_loader.batch_size}',
+            f'  • Num workers: {cfg.data_loader.num_workers}\n',
+            '[cyan]Curriculum:[/cyan]',
+        ]
+
+        summary_list_2 = []
+        for k, v in cfg.curriculum.model_dump().items():
+            if k != 'name' and v is not None:
+                summary_list_2.append(f'  • {k}: {v}')
+
+        summary_list_3 = [
+            '\n[cyan]Model:[/cyan]',
+            f'  • Base: {cfg.model.base_model_name.split("/")[-1]}',
+            f'  • LoRA rank: {cfg.model.lora.r}',
+            '  • MoE: ',
+            f'    - {"enabled" if cfg.model.moe.enabled else "disabled"} ',
+            f'    - {cfg.model.moe.num_experts} experts\n',
+            '[cyan]Training:[/cyan]',
+            f'  • Learning rate: {cfg.training.learning_rate}',
+            f'  • Max epochs: {cfg.training.trainer.max_epochs}',
+            f'  • Accelerator: {accelerator}',
+            f'  • Precision: {precision}'
+        ]
+
+        summary = '\n'.join(summary_list_1 + summary_list_2 + summary_list_3)
+
         console.print(
             Panel(
-                f'[bold]Experiment:[/bold] {cfg.experiment_name}\n'
-                f'[bold]Curriculum:[/bold] {cfg.curriculum.name}\n'
-                f'[bold]Seed:[/bold] {cfg.seed}\n\n'
-                f'[cyan]Data:[/cyan]\n'
-                f'  • Batch size: {cfg.data.batch_size}\n'
-                f'  • Num workers: {cfg.data.num_workers}\n\n'
-                f'[cyan]Model:[/cyan]\n'
-                f'  • Base: {cfg.model.base_model_name.split("/")[-1]}\n'
-                f'  • LoRA rank: {cfg.model.lora.r}\n'
-                f'  • MoE: {"enabled" if cfg.model.moe.enabled else "disabled"} '
-                f'({cfg.model.moe.num_experts} experts)\n\n'
-                f'[cyan]Training:[/cyan]\n'
-                f'  • Learning rate: {cfg.training.learning_rate}\n'
-                f'  • Max epochs: {cfg.training.trainer.max_epochs}\n'
-                f'  • Accelerator: {cfg.training.trainer.accelerator}\n'
-                f'  • Precision: {cfg.training.trainer.precision}',
+                summary,
                 title='[yellow]Configuration Summary[/yellow]',
                 border_style='yellow',
                 expand=False
             )
         )
-        
+        console.print('')
+
         # Seed for reproducibility
-        logger.info(f'Setting random seed: {cfg.seed}')
-        pyl.seed_everything(cfg.seed)
+        logger.info(f'Setting random seed: {cfg.seed}\n')
+        pyl.seed_everything(cfg.seed, verbose=False)
         
         # Initialize DataModule
         logger.info('Initializing DataModule...')
+
         datamodule = NAICSDataModule(
-            descriptions_path=cfg.data.descriptions_path,
-            triplets_path=cfg.data.triplets_path,
-            tokenizer_name=cfg.data.tokenizer_name,
-            curriculum_config={
-                'anchor_level': cfg.curriculum.anchor_level,
-                'excluded': cfg.curriculum.excluded,
-                'unrelated': cfg.curriculum.unrelated,
-                'relation_margins': cfg.curriculum.relation_margins,
-                'distance_margins': cfg.curriculum.distance_margins,
-                'positive_level': cfg.curriculum.positive_level,
-                'positive_relation': cfg.curriculum.positive_relation,
-                'positive_distance': cfg.curriculum.positive_distance,
-                'n_positives': cfg.curriculum.n_positives,
-                'negative_level': cfg.curriculum.negative_level,
-                'negative_relation': cfg.curriculum.negative_relation,
-                'negative_distance': cfg.curriculum.negative_distance,
-                'n_negatives': cfg.curriculum.n_negatives
-            },
-            batch_size=cfg.data.batch_size,
-            num_workers=cfg.data.num_workers,
-            val_split=cfg.data.val_split,
+            descriptions_path=cfg.data_loader.streaming.descriptions_parquet,
+            triplets_path=cfg.data_loader.streaming.triplets_parquet,
+            tokenizer_name=cfg.data_loader.tokenization.tokenizer_name,
+            streaming_config=cfg.curriculum.model_dump(),
+            batch_size=cfg.data_loader.batch_size,
+            num_workers=cfg.data_loader.num_workers,
+            val_split=cfg.data_loader.val_split,
             seed=cfg.seed
         )
         
         # Construct distances path
-        distances_path = str(Path(cfg.paths.data_dir) / 'naics_distances.parquet')
+        distances_path = cfg.data_loader.streaming.distances_parquet
         
         # Initialize Model
-        logger.info('Initializing Model with evaluation metrics...')
+        logger.info('Initializing Model with evaluation metrics...\n')
+
         model = NAICSContrastiveModel(
             base_model_name=cfg.model.base_model_name,
             lora_r=cfg.model.lora.r,
@@ -297,8 +311,8 @@ def train(
         )
         
         # Setup callbacks
-        logger.info('Setting up callbacks and checkpointing...')
-        checkpoint_dir = Path(cfg.paths.checkpoint_dir) / cfg.experiment_name
+        logger.info('Setting up callbacks and checkpointing...\n')
+        checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
         checkpoint_callback = ModelCheckpoint(
@@ -317,50 +331,50 @@ def train(
         )
         
         tb_logger = TensorBoardLogger(
-            save_dir=cfg.paths.output_dir,
+            save_dir=cfg.dirs.output_dir,
             name=cfg.experiment_name
         )
         
         # Initialize Trainer
-        logger.info('Initializing PyTorch Lightning Trainer...')
+        logger.info('Initializing PyTorch Lightning Trainer...\n')
         trainer = pyl.Trainer(
             max_epochs=cfg.training.trainer.max_epochs,
-            accelerator=cfg.training.trainer.accelerator,
+            accelerator=accelerator,
             devices=cfg.training.trainer.devices,
-            precision=cfg.training.trainer.precision,
+            precision=precision,
             gradient_clip_val=cfg.training.trainer.gradient_clip_val,
             accumulate_grad_batches=cfg.training.trainer.accumulate_grad_batches,
             log_every_n_steps=cfg.training.trainer.log_every_n_steps,
             val_check_interval=cfg.training.trainer.val_check_interval,
             callbacks=[checkpoint_callback, early_stopping],
             logger=tb_logger,
-            default_root_dir=cfg.paths.output_dir
+            default_root_dir=cfg.dirs.output_dir
         )
         
         # Start training
-        logger.info('Starting model training with evaluation metrics...')
-        console.print('\n[bold cyan]📊 Evaluation metrics enabled:[/bold cyan]')
+        logger.info('Starting model training with evaluation metrics...\n')
+        console.print('[bold cyan]Evaluation metrics enabled:[/bold cyan]')
         console.print('  • Cophenetic correlation (hierarchy preservation)')
         console.print('  • Spearman correlation (rank preservation)')
         console.print('  • Embedding statistics (norms, distances)')
         console.print('  • Collapse detection (variance, norm, distance)')
         console.print('  • Distortion metrics (mean, std)\n')
         
-        trainer.fit(model, datamodule)
+        #trainer.fit(model, datamodule)
         
         # Training complete
-        logger.info('Training complete!')
-        logger.info(f'Best model checkpoint: {checkpoint_callback.best_model_path}')
+        #logger.info('Training complete!')
+        #logger.info(f'Best model checkpoint: {checkpoint_callback.best_model_path}')
         
-        console.print(
-            f'\n[bold green]✓ Training completed successfully![/bold green]\n'
-            f'Best checkpoint: [cyan]{checkpoint_callback.best_model_path}[/cyan]\n'
-        )
+        #console.print(
+        #    f'\n[bold green]✓ Training completed successfully![/bold green]\n'
+        #    f'Best checkpoint: [cyan]{checkpoint_callback.best_model_path}[/cyan]\n'
+        #)
         
         # Save final config
-        config_output_path = checkpoint_dir / 'config.yaml'
-        cfg.to_yaml(str(config_output_path))
-        console.print(f'Config saved: [cyan]{config_output_path}[/cyan]\n')
+        #config_output_path = checkpoint_dir / 'config.yaml'
+        #cfg.to_yaml(str(config_output_path))
+        #console.print(f'Config saved: [cyan]{config_output_path}[/cyan]\n')
         
     except Exception as e:
         logger.error(f'Training failed: {e}', exc_info=True)

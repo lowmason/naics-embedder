@@ -17,20 +17,29 @@ from rich.logging import RichHandler
 # -------------------------------------------------------------------------------------------------
 
 class ConsoleFormatter(logging.Formatter):
+    
+    '''Formatter that prints time only if more than `time_interval` seconds have elapsed.'''
 
-    def __init__(self, timefmt='[%H:%M:%S]'):
+    def __init__(self, timefmt='[%H:%M:%S]', time_interval: float = 10.0):
         super().__init__()
         self.timefmt = timefmt
+        self.time_interval = time_interval
+        self._last_time = None
         self._last_time_str = None
 
     def format(self, record: logging.LogRecord) -> str:
-        time_str = datetime.fromtimestamp(record.created).strftime(self.timefmt)
+        current_time = datetime.fromtimestamp(record.created)
+        time_str = current_time.strftime(self.timefmt)
         message = record.getMessage()
 
-        if time_str != self._last_time_str:
+        # Determine whether to print timestamp
+        if (
+            self._last_time is None
+            or (current_time - self._last_time).total_seconds() >= self.time_interval
+        ):
+            self._last_time = current_time
             self._last_time_str = time_str
             return f'{time_str}\n{message}'
-        
         else:
             return message
 
