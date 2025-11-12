@@ -243,13 +243,17 @@ class NAICSContrastiveModel(pyl.LightningModule):
             self.log('val/mean_norm', stats['mean_norm'], batch_size=num_samples)
             self.log('val/std_norm', stats['std_norm'], batch_size=num_samples)
             self.log('val/mean_pairwise_distance', stats['mean_pairwise_distance'], batch_size=num_samples)
-            self.log('val/std_embedding', stats['std_embedding'], batch_size=num_samples)
+            self.log('val/std_pairwise_distance', stats['std_pairwise_distance'], batch_size=num_samples)
             
-            # 2. Collapse check
-            collapse = self.embedding_stats.check_collapse(embeddings, threshold=0.01)
+            # 2. Improved collapse check with actual values
+            collapse = self.embedding_stats.check_collapse(embeddings)
             self.log('val/variance_collapsed', float(collapse['variance_collapsed']), batch_size=num_samples)
             self.log('val/norm_collapsed', float(collapse['norm_collapsed']), batch_size=num_samples)
             self.log('val/distance_collapsed', float(collapse['distance_collapsed']), batch_size=num_samples)
+            # Log actual values for insight
+            self.log('val/mean_variance', collapse['mean_variance'], batch_size=num_samples)
+            self.log('val/norm_cv', collapse['norm_cv'], prog_bar=True, batch_size=num_samples)
+            self.log('val/distance_cv', collapse['distance_cv'], prog_bar=True, batch_size=num_samples)
             
             # 3. Compute embedding distances
             emb_dists = self.embedding_eval.compute_pairwise_distances(
@@ -257,27 +261,35 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 metric='euclidean'
             )
             
-            # 4. Hierarchy preservation metrics
-            cophenetic_corr = self.hierarchy_metrics.cophenetic_correlation(
+            # 4. Improved hierarchy preservation metrics
+            cophenetic_result = self.hierarchy_metrics.cophenetic_correlation(
                 emb_dists,
                 gt_dists
             )
-            self.log('val/cophenetic_correlation', cophenetic_corr, prog_bar=True, batch_size=num_samples)
+            self.log('val/cophenetic_correlation', cophenetic_result['correlation'], 
+                    prog_bar=True, batch_size=num_samples)
+            self.log('val/cophenetic_n_pairs', float(cophenetic_result['n_pairs']), batch_size=num_samples)
             
-            spearman_corr = self.hierarchy_metrics.spearman_correlation(
+            spearman_result = self.hierarchy_metrics.spearman_correlation(
                 emb_dists,
                 gt_dists
             )
-            self.log('val/spearman_correlation', spearman_corr, batch_size=num_samples)
+            self.log('val/spearman_correlation', spearman_result['correlation'], batch_size=num_samples)
+            self.log('val/spearman_n_pairs', float(spearman_result['n_pairs']), batch_size=num_samples)
             
             # 5. Distortion metrics
             distortion = self.hierarchy_metrics.distortion(emb_dists, gt_dists)
             self.log('val/mean_distortion', distortion['mean_distortion'], batch_size=num_samples)
             self.log('val/std_distortion', distortion['std_distortion'], batch_size=num_samples)
+            self.log('val/median_distortion', distortion['median_distortion'], 
+                    prog_bar=True, batch_size=num_samples)
             
             logger.info(
-                f'Evaluation complete: cophenetic={cophenetic_corr:.4f}, '
-                f'spearman={spearman_corr:.4f}, '
+                f'Evaluation complete: '
+                f'cophenetic={cophenetic_result["correlation"]:.4f} ({cophenetic_result["n_pairs"]} pairs), '
+                f'spearman={spearman_result["correlation"]:.4f}, '
+                f'norm_cv={collapse["norm_cv"]:.4f}, '
+                f'dist_cv={collapse["distance_cv"]:.4f}, '
                 f'collapse={collapse["any_collapse"]}\n'
             )
             

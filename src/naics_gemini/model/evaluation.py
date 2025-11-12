@@ -352,20 +352,23 @@ class HierarchyMetrics:
     def cophenetic_correlation(
         self,
         embedding_distances: torch.Tensor,
-        tree_distances: torch.Tensor
-    ) -> torch.Tensor:
+        tree_distances: torch.Tensor,
+        min_distance: float = 0.1
+    ) -> Dict[str, torch.Tensor]:
         
         '''
-        Compute cophenetic correlation coefficient.
+        Compute cophenetic correlation coefficient with better handling.
         
         Measures how well embedding distances preserve hierarchical tree distances.
+        Filters out pairs with very small tree distances to avoid noise.
         
         Args:
             embedding_distances: Distance matrix from embeddings (N, N)
             tree_distances: Ground truth tree distances (N, N)
+            min_distance: Minimum tree distance to include (filters out same-level codes)
             
         Returns:
-            Correlation coefficient (scalar)
+            Dictionary with correlation and metadata
         '''
 
         embedding_distances = embedding_distances.to(self.device)
@@ -379,10 +382,31 @@ class HierarchyMetrics:
         emb_dists = embedding_distances[triu_indices[0], triu_indices[1]]
         tree_dists = tree_distances[triu_indices[0], triu_indices[1]]
         
-        # Compute Pearson correlation
-        correlation = self._pearson_correlation(emb_dists, tree_dists)
+        # Filter out pairs with very small tree distances
+        valid_mask = tree_dists >= min_distance
+        emb_dists_filtered = emb_dists[valid_mask]
+        tree_dists_filtered = tree_dists[valid_mask]
         
-        return correlation
+        # Check if we have enough valid pairs
+        if len(emb_dists_filtered) < 2:
+            return {
+                'correlation': torch.tensor(0.0, device=self.device),
+                'n_pairs': len(emb_dists_filtered),
+                'n_total': len(emb_dists),
+                'mean_tree_dist': tree_dists.mean(),
+                'mean_emb_dist': emb_dists.mean()
+            }
+        
+        # Compute Pearson correlation on filtered pairs
+        correlation = self._pearson_correlation(emb_dists_filtered, tree_dists_filtered)
+        
+        return {
+            'correlation': correlation,
+            'n_pairs': len(emb_dists_filtered),
+            'n_total': len(emb_dists),
+            'mean_tree_dist': tree_dists_filtered.mean(),
+            'mean_emb_dist': emb_dists_filtered.mean()
+        }
     
     
     def _pearson_correlation(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -416,18 +440,20 @@ class HierarchyMetrics:
     def spearman_correlation(
         self,
         embedding_distances: torch.Tensor,
-        tree_distances: torch.Tensor
-    ) -> torch.Tensor:
+        tree_distances: torch.Tensor,
+        min_distance: float = 0.1
+    ) -> Dict[str, torch.Tensor]:
         
         '''
-        Compute Spearman rank correlation coefficient.
+        Compute Spearman rank correlation coefficient with filtering.
         
         Args:
             embedding_distances: Distance matrix from embeddings (N, N)
             tree_distances: Ground truth tree distances (N, N)
+            min_distance: Minimum tree distance to include
             
         Returns:
-            Correlation coefficient (scalar)
+            Dictionary with correlation and metadata
         '''
 
         embedding_distances = embedding_distances.to(self.device)
@@ -440,14 +466,30 @@ class HierarchyMetrics:
         emb_dists = embedding_distances[triu_indices[0], triu_indices[1]]
         tree_dists = tree_distances[triu_indices[0], triu_indices[1]]
         
+        # Filter out pairs with very small tree distances
+        valid_mask = tree_dists >= min_distance
+        emb_dists_filtered = emb_dists[valid_mask]
+        tree_dists_filtered = tree_dists[valid_mask]
+        
+        if len(emb_dists_filtered) < 2:
+            return {
+                'correlation': torch.tensor(0.0, device=self.device),
+                'n_pairs': len(emb_dists_filtered),
+                'n_total': len(emb_dists)
+            }
+        
         # Convert to ranks
-        emb_ranks = self._rank_tensor(emb_dists)
-        tree_ranks = self._rank_tensor(tree_dists)
+        emb_ranks = self._rank_tensor(emb_dists_filtered)
+        tree_ranks = self._rank_tensor(tree_dists_filtered)
         
         # Compute Pearson correlation of ranks
         correlation = self._pearson_correlation(emb_ranks, tree_ranks)
         
-        return correlation
+        return {
+            'correlation': correlation,
+            'n_pairs': len(emb_dists_filtered),
+            'n_total': len(emb_dists)
+        }
     
     
     def _rank_tensor(self, x: torch.Tensor) -> torch.Tensor:
@@ -581,18 +623,23 @@ class EmbeddingStatistics:
     def check_collapse(
         self,
         embeddings: torch.Tensor,
-        threshold: float = 0.01
-    ) -> Dict[str, bool]:
+        variance_threshold: float = 0.001,
+        norm_cv_threshold: float = 0.05,
+        distance_cv_threshold: float = 0.05
+    ) -> Dict[str, Any]:
         
         '''
         Check if embeddings have collapsed (become too similar).
+        Uses more informative metrics including actual values and ratios.
         
         Args:
             embeddings: Tensor of shape (N, D)
-            threshold: Threshold for considering collapse
+            variance_threshold: Threshold for mean variance per dimension
+            norm_cv_threshold: Threshold for coefficient of variation in norms
+            distance_cv_threshold: Threshold for coefficient of variation in distances
             
         Returns:
-            Dictionary with collapse indicators
+            Dictionary with collapse indicators and actual values
         '''
 
         embeddings = embeddings.to(self.device)
@@ -600,12 +647,15 @@ class EmbeddingStatistics:
         
         # Variance collapse: low variance across dimensions
         var_per_dim = embeddings.var(dim=0)
-        variance_collapsed = (var_per_dim.mean() < threshold).item()
+        mean_var = var_per_dim.mean().item()
+        variance_collapsed = (mean_var < variance_threshold)
         
-        # Norm collapse: all norms very similar
+        # Norm collapse: all norms very similar (use coefficient of variation)
         norms = torch.norm(embeddings, p=2, dim=1)
+        norm_mean = norms.mean().item()
         norm_std = norms.std().item()
-        norm_collapsed = (norm_std < threshold)
+        norm_cv = norm_std / (norm_mean + 1e-10)  # Coefficient of variation
+        norm_collapsed = (norm_cv < norm_cv_threshold)
         
         # Distance collapse: all pairwise distances very similar
         distances = torch.cdist(embeddings, embeddings, p=2)
@@ -616,8 +666,10 @@ class EmbeddingStatistics:
             device=self.device
         )
         pairwise_dists = distances[triu_indices[0], triu_indices[1]]
+        distance_mean = pairwise_dists.mean().item()
         distance_std = pairwise_dists.std().item()
-        distance_collapsed = (distance_std < threshold)
+        distance_cv = distance_std / (distance_mean + 1e-10)
+        distance_collapsed = (distance_cv < distance_cv_threshold)
 
         any_collapse = variance_collapsed or norm_collapsed or distance_collapsed
         
@@ -625,7 +677,15 @@ class EmbeddingStatistics:
             'variance_collapsed': variance_collapsed,
             'norm_collapsed': norm_collapsed,
             'distance_collapsed': distance_collapsed,
-            'any_collapse': any_collapse
+            'any_collapse': any_collapse,
+            # Include actual values for debugging
+            'mean_variance': mean_var,
+            'norm_cv': norm_cv,
+            'distance_cv': distance_cv,
+            'norm_mean': norm_mean,
+            'norm_std': norm_std,
+            'distance_mean': distance_mean,
+            'distance_std': distance_std
         }
 
 
