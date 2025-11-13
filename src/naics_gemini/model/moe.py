@@ -74,7 +74,7 @@ class MixtureOfExperts(nn.Module):
         )
     
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         '''
         Forward pass through MoE layer.
@@ -85,11 +85,13 @@ class MixtureOfExperts(nn.Module):
         Returns:
             Tuple of:
                 - Output tensor of shape (batch_size, input_dim)
-                - Load balancing loss (scalar)
+                - Gating probabilities of shape (batch_size, num_experts)
+                - Top-k indices of shape (batch_size, top_k)
         '''
         
         # Compute gating scores for all experts
         gate_logits = self.gate(x)  # (batch_size, num_experts)
+        gate_probs = F.softmax(gate_logits, dim=1) # (batch_size, num_experts)
         
         # Select top-k experts
         top_k_logits, top_k_indices = torch.topk(gate_logits, self.top_k, dim=1)
@@ -97,10 +99,7 @@ class MixtureOfExperts(nn.Module):
         # Compute gating weights with softmax over top-k
         top_k_gates = F.softmax(top_k_logits, dim=1)  # (batch_size, top_k)
         
-        # Compute load balancing loss
-        # Encourages even distribution of samples across experts
-        gate_probs = F.softmax(gate_logits, dim=1)  # (batch_size, num_experts)
-        load_balancing_loss = self._compute_load_balancing_loss(gate_probs)
+        # ----- The local loss calculation is REMOVED -----
         
         # Initialize output
         output = torch.zeros_like(x)
@@ -120,7 +119,9 @@ class MixtureOfExperts(nn.Module):
                 # Get gating weights for this expert
                 # Find position of expert i in top_k for each batch item
                 expert_positions = (top_k_indices[expert_mask] == i).float()
-                expert_gates = (top_k_gates[expert_mask] * expert_positions).sum(dim=1, keepdim=True)
+                expert_gates = (
+                    top_k_gates[expert_mask] * expert_positions
+                ).sum(dim=1, keepdim=True)
                 
                 # Weight expert output by gate
                 weighted_output = expert_output * expert_gates
@@ -128,39 +129,8 @@ class MixtureOfExperts(nn.Module):
                 # Add to output
                 output[expert_mask] += weighted_output
         
-        return output, load_balancing_loss
-    
-    
-    def _compute_load_balancing_loss(self, gate_probs: torch.Tensor) -> torch.Tensor:
-
-        '''
-        Compute load balancing loss to encourage even expert utilization.
-        
-        The load balancing loss penalizes the model when some experts are
-        used much more than others. It computes the variance of the average
-        routing probability across experts.
-        
-        Args:
-            gate_probs: Gating probabilities of shape (batch_size, num_experts)
-        
-        Returns:
-            Load balancing loss (scalar)
-        '''
-
-        # Average probability of routing to each expert
-        mean_probs = gate_probs.mean(dim=0)  # (num_experts,)
-        
-        # Ideal probability if perfectly balanced
-        ideal_prob = 1.0 / self.num_experts
-        
-        # L2 loss between actual and ideal probabilities
-        # This encourages uniform distribution across experts
-        loss = torch.mean((mean_probs - ideal_prob) ** 2)
-        
-        # Scale by number of experts for stability
-        loss = loss * self.num_experts
-        
-        return loss
+        # Return materials for global loss calculation
+        return output, gate_probs, top_k_indices
 
 
 # -------------------------------------------------------------------------------------------------

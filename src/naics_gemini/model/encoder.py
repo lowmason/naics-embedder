@@ -3,7 +3,7 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -102,7 +102,7 @@ class MultiChannelEncoder(nn.Module):
     def forward(
         self,
         channel_inputs: Dict[str, Dict[str, torch.Tensor]]
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, Optional[torch.Tensor]]:
         '''
         Forward pass through multi-channel encoder.
         
@@ -139,12 +139,13 @@ class MultiChannelEncoder(nn.Module):
         
         # Optional: Pass through MoE
         if self.moe is not None:
-            moe_output, load_balancing_loss = self.moe(combined)
-            # Project back to embedding_dim
+            moe_output, gate_probs, top_k_indices = self.moe(combined)
+            
             output = self.moe_projection(moe_output)
             return {
                 'embedding': output,
-                'load_balancing_loss': load_balancing_loss
+                'gate_probs': gate_probs,
+                'top_k_indices': top_k_indices
             }
         else:
             # Simple projection to reduce dimension
@@ -156,5 +157,6 @@ class MultiChannelEncoder(nn.Module):
             
             return {
                 'embedding': output,
-                'load_balancing_loss': torch.tensor(0.0, device=combined.device)
+                'gate_probs': None,
+                'top_k_indices': None
             }

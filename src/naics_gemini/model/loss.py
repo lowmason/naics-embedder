@@ -3,6 +3,7 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -99,7 +100,8 @@ class HyperbolicInfoNCELoss(nn.Module):
         positive_emb: torch.Tensor,
         negative_embs: torch.Tensor,
         batch_size: int,
-        k_negatives: int
+        k_negatives: int,
+        false_negative_mask: Optional[torch.Tensor] = None 
     ) -> torch.Tensor:
         
         anchor_hyp = self.hyperbolic_proj(anchor_emb)
@@ -121,6 +123,12 @@ class HyperbolicInfoNCELoss(nn.Module):
         
         pos_similarities = -pos_distances / self.temperature
         neg_similarities = -neg_distances / self.temperature
+
+        if false_negative_mask is not None:
+            neg_similarities = neg_similarities.masked_fill(
+                false_negative_mask,
+                -torch.finfo(neg_similarities.dtype).max
+            )
         
         logits = torch.cat([
             pos_similarities.unsqueeze(1),
