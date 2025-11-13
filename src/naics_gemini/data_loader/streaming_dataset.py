@@ -7,14 +7,78 @@ import operator
 from collections import defaultdict
 from functools import reduce
 from pathlib import Path
-from typing import Any, Dict, Iterator
+from typing import Any, Dict, Iterator, List, Optional, Union
 
+import numpy as np
 import polars as pl
 
 from naics_gemini.utils.config import StreamingConfig
 from naics_gemini.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
+
+
+# -------------------------------------------------------------------------------------------------
+# Utility functions
+# -------------------------------------------------------------------------------------------------
+
+def _get_config_dict(cfg: StreamingConfig) -> Dict[str, Any]:
+
+    keep = [
+        'anchor_level', 'relation_margin', 'distance_margin', 
+        'positive_level', 'positive_relation', 'positive_distance', 
+        'negative_level', 'negative_relation', 'negative_distance', 
+        'n_positives', 'n_negatives'
+    ]
+
+    cfg_dict: Dict[str, Any] = {}
+    for k, v in cfg.model_dump().items():
+        if k in keep and v is not None:
+            cfg_dict[k] = v
+
+    return cfg_dict
+
+
+def _get_weighted_sample(
+    df: pl.LazyFrame,
+    group_col: Union[str, List[str]],
+    weight_col: str,
+    n_samples: int,
+    seed: Optional[int] = None
+):
+    
+    if seed is not None:
+        rng = np.random.default_rng(seed)
+    else:
+        rng = np.random.default_rng()
+
+    if isinstance(df, pl.LazyFrame):
+        df_len = df.select(pl.len()).collect().item() 
+    else:
+        df_len = df.height
+    
+    df = (
+        df
+        .with_columns(
+            rnd=pl.Series('rnd', rng.uniform(size=df_len))
+        )
+    )
+    
+    return (
+        df
+        .with_columns(
+            norm_wgt=pl.col(weight_col)
+                       .truediv(pl.col(weight_col).sum().over(group_col))
+        )
+        .with_columns(
+            gm_sort=pl.col('rnd').log().mul(-1)
+                      .truediv(pl.col('norm_wgt'))
+        )
+        .sort('gm_sort')
+        .group_by(group_col, maintain_order=True)
+        .head(n_samples)
+        .drop('rnd', 'norm_wgt', 'gm_sort')
+    )
 
 
 # -------------------------------------------------------------------------------------------------
@@ -50,15 +114,17 @@ def create_streaming_generator(
                 idx = code_to_idx[code]
                 for pq_path in Path(f'{triplets_parquet}/anchor={idx}/').glob('*.parquet'):
                     dataset_files.append(pq_path.as_posix())
-    
+
     else:
         dataset_files = []
         for pq_path in Path(f'{triplets_parquet}/').glob('**/*.parquet'):
             dataset_files.append(pq_path.as_posix())
 
-    # Build filters from cfg
+    cfg_dict = _get_config_dict(cfg)
+
+    # Build filters from cfg_dict
     exprs = []
-    for k, v in cfg.iter_fields():
+    for k, v in cfg_dict.items():
 
         if isinstance(v, list):
             exprs.append(
@@ -72,19 +138,21 @@ def create_streaming_generator(
 
     if not exprs:
         exprs = [pl.col('anchor_idx').ge(0)]
-    
+
     filters = reduce(operator.and_, exprs)
-    
+
     # Build (anchors, positives, negatives, fallbacks) dataframe 
     df_1 = (
         pl
         .scan_parquet(
             dataset_files
         )
+        .filter(
+            filters
+        )
         .with_columns(
-            filtered=pl.when(filters)
-                       .then(pl.lit('negatives'))
-                       .otherwise(pl.lit('fallback'))
+            sample_wgt=pl.mean_horizontal('relation_margin', 'distance_margin')
+                        .pow(-1)
         )
         .select(
             anchors=pl.struct(
@@ -95,15 +163,17 @@ def create_streaming_generator(
                 pl.col('positive_idx'),
                 pl.col('positive_code')
             ),
-            filtered=pl.col('filtered'),
             negatives=pl.struct(
-                pl.col('negative_idx'),
-                pl.col('negative_code'),
-                pl.col('relation_margin'),
-                pl.col('distance_margin')
-            )
+                pl.struct(
+                    pl.col('negative_idx'),
+                    pl.col('negative_code'),
+                    pl.col('relation_margin'),
+                    pl.col('distance_margin')
+                ).alias('negatives'),
+                pl.col('sample_wgt')
+            ),
         )
-        .group_by('anchors', 'positives', 'filtered')
+        .group_by('anchors', 'positives')
         .agg(
             negatives=pl.col('negatives')
         )
@@ -111,7 +181,6 @@ def create_streaming_generator(
             anchors=pl.col('anchors'), 
             positives_negatives=pl.struct(
                 pl.col('positives'),
-                pl.col('filtered'),
                 pl.col('negatives')
             )
         )
@@ -137,113 +206,23 @@ def create_streaming_generator(
         .drop('positives_negatives_len')
         .explode('positives_negatives')
         .unnest('positives_negatives')
-        .collect()
-    )
-    
-    # Pivot to separate filtered (negatives) from unfiltered (fallback)
-    # When we pivot on the 'filtered' boolean column, Polars names the resulting columns
-    # based on the 'values' parameter combined with the boolean values.
-    # Since values='negatives' and filtered is True/False, we get 'negatives' and 'fallback'
-    df_1 = (
-        df_1
-        .pivot(
-            on='filtered',
-            index=['anchors', 'positives'],
-            values='negatives'
-        )
-        .filter(pl.col('negatives').is_not_null())
-        .with_columns(
-            negatives_len=pl.col('negatives').list.len(),
-            # Ensure fallback column exists and handle null
-            fallback=pl.when(pl.col('fallback').is_not_null())
-                      .then(pl.col('fallback'))
-                      .otherwise(pl.lit([]).cast(pl.List(pl.Struct)))
-        )
-        .select(
-            anchors=pl.col('anchors'),
-            positives=pl.col('positives'),
-            negatives=pl.col('negatives'),
-            negatives_len=pl.col('negatives_len'),
-            fallback=pl.col('fallback'),
-            fallback_len=pl.col('fallback').list.len()
-        )
+        .explode('negatives')
+        .unnest('negatives')
     )
 
-    # Complete batches - those with enough negatives already (>= n_negatives)
-    df_2 = (
-        df_1
-        .filter(
-            pl.col('negatives_len') >= n_negatives
-        )
-        .select(
-            anchors=pl.col('anchors'),
-            positives=pl.col('positives'),
-            negatives=pl.col('negatives')
-                        .list.sample(
-                            n_negatives, 
-                            shuffle=True,
-                            with_replacement=False,
-                            seed=cfg.seed
-                        )
-                    
-        )
-    )
-
-    # Incomplete batches - need fallback sampling to reach n_negatives
-    df_3 = (
-        df_1
-        .filter(
-            pl.col('negatives_len') < n_negatives
-        )
-        .with_columns(
-            # Calculate how many more negatives we need from fallback
-            need_from_fallback=pl.lit(n_negatives).sub(pl.col('negatives_len'))
-        )
-        .with_columns(
-            # Sample fallbacks - use with_replacement if needed, handle empty fallback
-            fallback_sample=pl.when(pl.col('fallback_len') == 0)
-                .then(
-                    # No fallbacks available: repeat existing negatives to reach n_negatives
-                    pl.col('negatives').list.sample(
-                        pl.col('need_from_fallback'),
-                        shuffle=True,
-                        with_replacement=True,
-                        seed=cfg.seed
-                    )
-                )
-                .when(pl.col('fallback_len') >= pl.col('need_from_fallback'))
-                .then(
-                    # Enough fallbacks: sample without replacement
-                    pl.col('fallback').list.sample(
-                        pl.col('need_from_fallback'),
-                        shuffle=True,
-                        with_replacement=False,
-                        seed=cfg.seed
-                    )
-                )
-                .otherwise(
-                    # Not enough fallbacks: sample with replacement to reach n_negatives
-                    pl.col('fallback').list.sample(
-                        pl.col('need_from_fallback'),
-                        shuffle=True,
-                        with_replacement=True,
-                        seed=cfg.seed
-                    )
-                )
-        )
-        .with_columns(
-            negatives=pl.col('negatives').list.concat(pl.col('fallback_sample'))
-        )
-        .drop('fallback', 'negatives_len', 'fallback_len', 'need_from_fallback', 'fallback_sample')
-    )
-
-    # Combine complete and completed
     df = (
-        pl
-        .concat([
-            df_2, 
-            df_3
-        ])
+        _get_weighted_sample(
+            df_1,
+            ['anchors', 'positives'],
+            'sample_wgt',
+            n_negatives,
+            seed=cfg.seed
+        )
+        .group_by('anchors', 'positives')
+        .agg(
+            negatives=pl.col('negatives')
+        )
+        .sort('anchors')
         .select(
             batch=pl.col('anchors')
                     .rank('dense'),
@@ -251,6 +230,7 @@ def create_streaming_generator(
             positives=pl.col('positives'),
             negatives=pl.col('negatives')
         )
+        .collect()
     )
 
     # Create iterator and dictionary of dataframes by batch
@@ -266,8 +246,6 @@ def create_streaming_generator(
     # Log dataset statistics only at DEBUG level to reduce overhead
     logger.debug(f'Number of anchors: {len(df_iter): ,}')
     logger.debug(f'Number of anchors/positives: {df.height: ,}')
-    logger.debug(f'  w/o fallbacks: {df_2.height: ,}')
-    logger.debug(f'  w/ fallbacks: {df_3.height: ,}')
     logger.debug(f'Number of anchors/positives/negatives: {df.explode("negatives").height: ,}')
 
     for anchor in df_iter:
@@ -315,16 +293,6 @@ def create_streaming_dataset(
     token_cache: Dict[int, Dict[str, Any]],
     cfg: StreamingConfig
 ) -> Iterator[Dict[str, Any]]:
-    """
-    Create a streaming dataset generator that yields training samples.
-    
-    Args:
-        token_cache: Pre-loaded tokenization cache (loaded once in main process)
-        cfg: Streaming configuration
-        
-    Yields:
-        Dictionary containing anchor, positive, and negative samples with embeddings
-    """
 
     triplets_iterator = create_streaming_generator(cfg)
 

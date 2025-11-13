@@ -4,7 +4,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Type, TypeVar
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -313,13 +313,13 @@ class TripletsConfig(BaseModel):
         default=None,
         description='Filter anchor codes by hierarchy level'
     )
-    relation_margins: Optional[List[int]] = Field(
+    relation_margin: Optional[List[int]] = Field(
         default=None,
-        description='Filter by relation margins'
+        description='Filter by relation margin'
     )
-    distance_margins: Optional[List[float]] = Field(
+    distance_margin: Optional[List[float]] = Field(
         default=None,
-        description='Filter by distance margins'
+        description='Filter by distance margin'
     )
     
     # Margin parameters
@@ -488,13 +488,13 @@ class StreamingConfig(BaseModel):
         default=None,
         description='Filter anchor codes by hierarchy level'
     )
-    relation_margins: Optional[List[int]] = Field(
+    relation_margin: Optional[List[int]] = Field(
         default=None,
-        description='Filter by relation margins'
+        description='Filter by relation margin'
     )
-    distance_margins: Optional[List[int]] = Field(
+    distance_margin: Optional[List[int]] = Field(
         default=None,
-        description='Filter by distance margins'
+        description='Filter by distance margin'
     )
     
     # Margin parameters
@@ -535,41 +535,7 @@ class StreamingConfig(BaseModel):
         default=2125,
         gt=0,
         description='Maximum number of negatives per positive'
-    )
-
-
-    def items(self) -> Dict[str, Any]:
-        
-        '''Return configuration as dictionary.'''
-
-        exclude = [
-            'descriptions_parquet', 'distances_parquet', 
-            'relations_parquet', 'triplets_parquet', 
-            'seed'
-        ]
-
-        cfg_dict = {}
-        for name, value in self.model_dump().items():
-            if name not in exclude:
-                cfg_dict[name] = value
-        
-        return cfg_dict
-
-
-    def iter_fields(self) -> Iterator[Tuple[str, Any]]:
-        
-        '''Return configuration as dictionary.'''
-
-        exclude = [
-            'descriptions_parquet', 'distances_parquet', 
-            'relations_parquet', 'triplets_parquet', 
-            'seed'
-        ]
-
-        for name, value in self.model_dump().items():
-            if name not in exclude:
-                yield name, value
-        
+    )        
 
 
 class DataLoaderConfig(BaseModel):
@@ -854,13 +820,13 @@ class CurriculumConfig(BaseModel):
         default=None,
         description='Filter anchor codes by hierarchy level'
     )
-    relation_margins: Optional[List[int]] = Field(
+    relation_margin: Optional[List[int]] = Field(
         default=None,
-        description='Filter by relation margins'
+        description='Filter by relation margin'
     )
-    distance_margins: Optional[List[float]] = Field(
+    distance_margin: Optional[List[float]] = Field(
         default=None,
-        description='Filter by distance margins'
+        description='Filter by distance margin'
     )
     
     # Margin parameters

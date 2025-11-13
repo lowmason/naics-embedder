@@ -2,8 +2,8 @@ name: 05_stage
 
 # Anchor filtering
 anchor_level: null
-relation_margins: null
-distance_margins: [7, 8, 9, 10, 11]
+relation_margin: null
+distance_margin: [7, 8, 9, 10, 11]
 
 # Positive filtering
 positive_level: null

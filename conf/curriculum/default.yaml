@@ -4,8 +4,8 @@ name: default
 anchor_level: null
 excluded: null
 unrelated: null
-relation_margins: null
-distance_margins: null
+relation_margin: null
+distance_margin: null
 
 # Positive filtering
 positive_level: null
