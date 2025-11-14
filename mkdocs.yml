@@ -1,6 +1,57 @@
 site_name: NAICS Hyperbolic Embedding System
+site_description: Hyperbolic contrastive learning and HGCN refinement for NAICS taxonomy
+site_author: Lowell Mason
+repo_name: lowmason/naics-gemini
+repo_url: https://github.com/lowmason/naics-gemini
+edit_uri: edit/main/docs/
+
 theme:
   name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+    - content.footnote.tooltips
+
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: cyan
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - toc:
+      permalink: true
+  - footnotes
+  - pymdownx.arithmatex
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.highlight
+  - pymdownx.snippets
+  - pymdownx.tabbed
+  - pymdownx.mark
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_full_path: false
+
 nav:
   - Home: index.md
   - Architecture:
@@ -14,5 +65,3 @@ nav:
       - Hyperbolic Ops: api/hyperbolic.md
       - Contrastive Loss: api/loss.md
       - HGCN: api/hgcn.md
-plugins:
-  - search
