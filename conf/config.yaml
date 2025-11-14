@@ -17,7 +17,7 @@ dirs:
 
 # Data loading configuration
 data_loader:
-  batch_size: 16
+  batch_size: 4
   num_workers: 0
   val_split: 0.05
   
@@ -31,6 +31,7 @@ data_loader:
     descriptions_parquet: ./data/naics_descriptions.parquet
     triplets_parquet: ./data/naics_training_pairs
     distances_parquet: ./data/naics_distances.parquet
+    distance_matrix_parquet: ./data/naics_distance_matrix.parquet
     relations_parquet: ./data/naics_relations.parquet
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
     max_length: 512
@@ -46,7 +47,6 @@ model:
     dropout: 0.1
   
   moe:
-    enabled: true
     num_experts: 4
     top_k: 2
     hidden_dim: 1024

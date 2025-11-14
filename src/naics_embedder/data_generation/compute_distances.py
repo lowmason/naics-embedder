@@ -7,6 +7,7 @@ from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
+import numpy as np
 import polars as pl
 
 from naics_embedder.utils.config import DistancesConfig, load_config
@@ -166,6 +167,40 @@ def _get_distance(
 
 
 # -------------------------------------------------------------------------------------------------
+# Distance matrix
+# -------------------------------------------------------------------------------------------------
+    
+def _get_distance_matrix(df: pl.DataFrame) -> pl.DataFrame:
+
+    '''Create distance matrix from distances DataFrame.'''
+    
+    codes = sorted(set(df['code_i'].to_list() + df['code_j'].to_list()))
+    n_codes = len(codes)
+
+    code_to_idx = {code: idx for idx, code in enumerate(codes)}
+
+    dist_matrix = np.zeros((n_codes, n_codes), dtype=float)
+    for row in df.iter_rows(named=True):
+        i = code_to_idx[row['code_i']]
+        j = code_to_idx[row['code_j']]
+        dist = row['distance']
+        dist_matrix[i, j] = dist
+        dist_matrix[j, i] = dist
+
+    dist_matric_schema = []
+    for code, idx in code_to_idx.items():
+        dist_matric_schema.append((f'idx_{idx}-code_{code}', pl.Float64))
+    
+    return (
+        pl
+        .from_numpy(
+            data=dist_matrix,
+            schema=dist_matric_schema
+        )
+    )
+            
+            
+# -------------------------------------------------------------------------------------------------
 # Distance stats
 # -------------------------------------------------------------------------------------------------
 
@@ -305,7 +340,7 @@ def calculate_pairwise_distances() -> pl.DataFrame:
 
     (
         naics_distances
-        .write_parquet(cfg.output_parquet)
+        .write_parquet(cfg.distances_parquet)
     )
 
     _distance_stats(naics_distances)   
@@ -313,7 +348,21 @@ def calculate_pairwise_distances() -> pl.DataFrame:
     _parquet_stats(
         parquet_df=naics_distances,
         message='NAICS pairwise distances written to',
-        output_parquet=cfg.output_parquet,
+        output_parquet=cfg.distances_parquet,
+        logger=logger
+    )
+    
+    dist_matrix = _get_distance_matrix(naics_distances)
+
+    (
+        dist_matrix
+        .write_parquet(cfg.distance_matrix_parquet)
+    )  
+
+    _parquet_stats(
+        parquet_df=dist_matrix,
+        message='NAICS distance matrix written to',
+        output_parquet=cfg.distance_matrix_parquet,
         logger=logger
     )
 

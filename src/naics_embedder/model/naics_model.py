@@ -34,7 +34,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
         lora_r: int = 8,
         lora_alpha: int = 16,
         lora_dropout: float = 0.1,
-        use_moe: bool = True,
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
@@ -46,12 +45,10 @@ class NAICSContrastiveModel(pyl.LightningModule):
         load_balancing_coef: float = 0.01,
         fn_curriculum_start_epoch: int = 10,
         fn_cluster_every_n_epochs: int = 5,
-        fn_num_clusters: int = 1000,
-        
-        # Evaluation settings
-        distances_path: Optional[str] = None,
+        fn_num_clusters: int = 500,
+        distance_matrix_path: Optional[str] = None,
         eval_every_n_epochs: int = 1,
-        eval_sample_size: int = 500  # Subsample for faster evaluation
+        eval_sample_size: int = 500
     ):
         super().__init__()
         
@@ -62,7 +59,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
             lora_r=lora_r,
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
-            use_moe=use_moe,
             num_experts=num_experts,
             top_k=top_k,
             moe_hidden_dim=moe_hidden_dim
@@ -76,56 +72,50 @@ class NAICSContrastiveModel(pyl.LightningModule):
         
         self.load_balancing_coef = load_balancing_coef
         
-        # Initialize evaluation components
         self.embedding_eval = EmbeddingEvaluator()
         self.embedding_stats = EmbeddingStatistics()
         self.hierarchy_metrics = HierarchyMetrics()
         
-        # Load ground truth distances for evaluation
         self.ground_truth_distances = None
         self.code_to_idx = None
-        if distances_path:
-            self._load_ground_truth_distances(distances_path)
+        if distance_matrix_path:
+            self._load_ground_truth_distances(distance_matrix_path)
         
-        # Cache for validation embeddings
         self.validation_embeddings = {}
         self.validation_codes = []
 
         self.code_to_pseudo_label: Dict[str, int] = {}
     
     
-    def _load_ground_truth_distances(self, distances_path: str):
+    def _load_ground_truth_distances(self, distance_matrix_path: str):
 
         '''Load ground truth NAICS tree distances for evaluation.'''
-        
+
         try:
-            logger.info(
+            print(
                 f'Loading ground truth distances\n'
-                f'  • from: {distances_path}')
+                f'  • from: {distance_matrix_path}')
             
-            df = pl.read_parquet(distances_path)
+            df = pl.read_parquet(distance_matrix_path)
+            n_codes = df.height
             
-            # Create code to index mapping
-            all_codes = sorted(set(df['code_i'].to_list() + df['code_j'].to_list()))
-            self.code_to_idx = {code: idx for idx, code in enumerate(all_codes)}
+            ground_truth_distances = df.to_torch()
+            print(f'  • distance matrix: [{n_codes}, {n_codes}]\n')
             
-            # Build distance matrix
-            n_codes = len(all_codes)
-            dist_matrix = torch.zeros(n_codes, n_codes)
-            
-            for row in df.iter_rows(named=True):
-                i = self.code_to_idx[row['code_i']]
-                j = self.code_to_idx[row['code_j']]
-                dist = row['distance']
-                dist_matrix[i, j] = dist
-                dist_matrix[j, i] = dist
-            
-            self.ground_truth_distances = dist_matrix
-            logger.info(f'  • distance matrix: [{n_codes}, {n_codes}]\n')
+            code_to_idx = {}
+            for col in df.columns:
+                idx_col, code_col = col.split('-')
+                idx = int(idx_col.replace('idx_', ''))
+                code = code_col.replace('code_', '')
+                code_to_idx[code] = idx
+                
+            self.ground_truth_distances = ground_truth_distances
+            self.code_to_idx = code_to_idx
             
         except Exception as e:
-            logger.warning(f'Could not load ground truth distances: {e}')
-            self.ground_truth_distances = None
+            print(f'Could not load ground truth distances: {e}')
+            ground_truth_distances = None
+            code_to_idx = None
     
     
     def forward(
@@ -153,10 +143,25 @@ class NAICSContrastiveModel(pyl.LightningModule):
         if (
             self.current_epoch >= self.hparams.fn_curriculum_start_epoch and 
             self.code_to_pseudo_label and 
-            'negatives_code' in batch
+            'negative_codes' in batch 
         ):
             
             try:
+                
+                assert_conds = [
+                    isinstance(batch['negative_codes'], list),
+                    len(batch['negative_codes']) == batch_size,
+                    all(isinstance(codes, list) for codes in batch['negative_codes'])
+                ]
+                assert_messages = [
+                    'negative_codes must be a list',
+                    f"Expected {batch_size} groups, got {len(batch['negative_codes'])}",
+                    'Each entry must be a list of codes'                    
+                ]
+                
+                for cond, msg in zip(assert_conds, assert_messages):
+                    assert cond, msg
+                
                 anchor_labels = torch.tensor(
                     [self.code_to_pseudo_label.get(code, -1) for code in batch['anchor_code']],
                     device=self.device
@@ -165,7 +170,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 neg_labels = torch.tensor(
                     [
                         [self.code_to_pseudo_label.get(code, -2) for code in neg_codes_for_anchor]
-                        for neg_codes_for_anchor in batch['negatives_code']
+                        for neg_codes_for_anchor in batch['negative_codes']
                     ],
                     device=self.device
                 )
@@ -196,38 +201,28 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 all_top_k_indices.append(output['top_k_indices'])
         
         if not all_gate_probs:
-            # MoE is disabled, loss is zero
             full_load_balancing_loss = torch.tensor(0.0, device=self.device)
-        else:
-            # Concatenate all stats from anchor, positive, and negatives
-            gate_probs = torch.cat(all_gate_probs, dim=0) # (total_batch_size, num_experts)
-            top_k_indices = torch.cat(all_top_k_indices, dim=0) # (total_batch_size, top_k)
             
-            # These are the MICRO-BATCH stats
+        else:
+            gate_probs = torch.cat(all_gate_probs, dim=0)
+            top_k_indices = torch.cat(all_top_k_indices, dim=0)
+            
             total_tokens = gate_probs.shape[0]
             num_experts = gate_probs.shape[1]
 
-            # Calculate P_i (average probability for expert i)
-            # P_i = gate_probs[:, i].mean()
-            P_micro = gate_probs.mean(dim=0) # Shape (num_experts,)
+            P_micro = gate_probs.mean(dim=0)
             
-            # Calculate f_i (fraction of tokens routed to expert i)
             expert_counts_micro = torch.zeros(num_experts, device=self.device)
             for i in range(num_experts):
                 expert_counts_micro[i] = (top_k_indices == i).any(dim=1).sum()
             
-            f_micro = expert_counts_micro / total_tokens # Shape (num_experts,)
+            f_micro = expert_counts_micro / total_tokens
             
-            # --- GLOBAL-BATCH Synchronization [cite: 278-279] ---
-            # Sync P and f. We sync the components (sums) for a more stable average.
-            if self.trainer.is_global_zero and torch.distributed.is_initialized():
-                # Get world size
+            if torch.distributed.is_initialized():
                 world_size = torch.distributed.get_world_size()
                 
                 if world_size > 1:
-                    # Sums for calculating global P_i
                     global_prob_sum = gate_probs.sum(dim=0)
-                    # Sums for calculating global f_i
                     global_expert_counts = expert_counts_micro * total_tokens
                     global_total_tokens = torch.tensor(
                         total_tokens, 
@@ -235,7 +230,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
                         device=self.device
                     )
                     
-                    # Sum across all workers
                     torch.distributed.all_reduce(
                         global_prob_sum, 
                         op=torch.distributed.ReduceOp.SUM
@@ -249,11 +243,14 @@ class NAICSContrastiveModel(pyl.LightningModule):
                         op=torch.distributed.ReduceOp.SUM
                     )
 
-                    # Calculate global f_i and P_i
-                    global_total_tokens_safe = torch.clamp(global_total_tokens, min=1e-6)
+                    global_total_tokens_safe = torch.clamp(global_total_tokens, min=1.0)
                     
                     f = global_expert_counts / global_total_tokens_safe
                     P = global_prob_sum / global_total_tokens_safe
+                    
+                    if self.trainer.is_global_zero:
+                        logger.debug(f'Global load balancing: f={f.mean():.4f}, P={P.mean():.4f}')
+                        
                 else:
                     f = f_micro
                     P = P_micro
@@ -261,14 +258,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 f = f_micro
                 P = P_micro
 
-            # Calculate Loss as per PDF: L_aux = alpha * N * sum(f_i * P_i) 
-            # alpha is self.load_balancing_coef
-            # N is num_experts
-            
-            # This is N * sum(f_i * P_i)
             unscaled_loss = num_experts * torch.sum(f * P)
-            
-            # This is alpha * (N * sum(f_i * P_i))
             full_load_balancing_loss = self.load_balancing_coef * unscaled_loss
 
         total_loss = contrastive_loss + full_load_balancing_loss
@@ -325,7 +315,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
             batch_size=batch_size
         )
 
-        # Cache embeddings for epoch-level evaluation
         if 'anchor_code' in batch:
             for i, code in enumerate(batch['anchor_code']):
                 if code not in self.validation_embeddings:
@@ -336,7 +325,9 @@ class NAICSContrastiveModel(pyl.LightningModule):
     
     
     def _to_python_scalar(self, value):
+        
         '''Convert any numeric value to a Python scalar for logging.'''
+        
         if isinstance(value, torch.Tensor):
             return value.item()
         elif isinstance(value, (bool, int)):
@@ -364,7 +355,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
             dataloader = self.trainer.train_dataloader
             
             for batch in dataloader:
-                batch = self.transfer_batch_to_device(batch, self.device, 0) # 0 is dataloader_idx
+                batch = self.transfer_batch_to_device(batch, self.device, 0)
                 
                 with torch.no_grad():
                     anchor_output = self(batch['anchor'])
@@ -382,7 +373,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
             kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10, verbose=0)
             labels = kmeans.fit_predict(all_embeddings)
             
-            # Store pseudo-labels
             self.code_to_pseudo_label = {code: int(label) for code, label in zip(all_codes, labels)}
             logger.info(f'Pseudo-label map updated with {len(self.code_to_pseudo_label)} entries.')
         
@@ -390,7 +380,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
             logger.error(f'Failed to update pseudo-labels: {e}', exc_info=True)
         
         finally:
-            self.train() # Set model back to train mode
+            self.train()
     
 
     def on_validation_epoch_end(self):
@@ -399,11 +389,9 @@ class NAICSContrastiveModel(pyl.LightningModule):
         Compute evaluation metrics and trigger pseudo-label update based on the curriculum schedule.
         '''
         
-        # Only evaluate every N epochs
         if self.current_epoch % self.hparams.eval_every_n_epochs != 0:
             return
         
-        # Need cached embeddings and ground truth distances
         if not self.validation_embeddings or self.ground_truth_distances is None:
             logger.warning('Skipping evaluation: missing embeddings or ground truth distances')
             return
@@ -411,19 +399,16 @@ class NAICSContrastiveModel(pyl.LightningModule):
         try:
             logger.info(f'\nRunning evaluation metrics (epoch {self.current_epoch})...')
             
-            # Stack embeddings in consistent order
             codes = sorted(self.validation_embeddings.keys())
             embeddings = torch.stack([
                 self.validation_embeddings[code] for code in codes
             ]).to(self.device)
             
-            # Subsample if too large
             if len(codes) > self.hparams.eval_sample_size:
                 indices = torch.randperm(len(codes))[:self.hparams.eval_sample_size]
                 embeddings = embeddings[indices]
                 codes = [codes[i] for i in indices]
             
-            # Get corresponding ground truth distances
             code_indices = [self.code_to_idx[code] for code in codes if code in self.code_to_idx]
             if len(code_indices) < 2:
                 logger.warning('Not enough codes in ground truth for evaluation')
@@ -431,10 +416,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
             
             gt_dists = self.ground_truth_distances[code_indices][:, code_indices].to(self.device)
             
-            # Number of samples for logging
             num_samples = len(embeddings)
             
-            # 1. Embedding statistics
             stats = self.embedding_stats.compute_statistics(embeddings)
             self.log(
                 'val/mean_norm', 
@@ -457,7 +440,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 batch_size=num_samples
             )
             
-            # 2. Improved collapse check with actual values
             collapse = self.embedding_stats.check_collapse(embeddings)
             self.log(
                 'val/variance_collapsed', 
@@ -474,7 +456,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 self._to_python_scalar(collapse['distance_collapsed']), 
                 batch_size=num_samples
             )
-            # Log actual values for insight
             self.log(
                 'val/mean_variance', 
                 self._to_python_scalar(collapse['mean_variance']), 
@@ -493,13 +474,11 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 batch_size=num_samples
             )
             
-            # 3. Compute embedding distances
             emb_dists = self.embedding_eval.compute_pairwise_distances(
                 embeddings,
                 metric='euclidean'
             )
             
-            # 4. Improved hierarchy preservation metrics
             cophenetic_result = self.hierarchy_metrics.cophenetic_correlation(
                 emb_dists,
                 gt_dists
@@ -531,7 +510,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 batch_size=num_samples
             )
             
-            # 5. Distortion metrics
             distortion = self.hierarchy_metrics.distortion(emb_dists, gt_dists)
             self.log(
                 'val/mean_distortion', 
@@ -550,10 +528,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 batch_size=num_samples
             )
             
-            # Check if it's a clustering epoch
             if self.current_epoch >= self.hparams.fn_curriculum_start_epoch:
                 
-                # Check if clustering is enabled
                 if self.hparams.fn_cluster_every_n_epochs > 0:
                     
                     epochs_since_start = (
@@ -561,7 +537,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
                         self.hparams.fn_curriculum_start_epoch
                     )
                     
-                    # Trigger on the first curriculum epoch, and every N epochs after
                     if epochs_since_start % self.hparams.fn_cluster_every_n_epochs == 0:
                         self._update_pseudo_labels()            
                         
@@ -579,7 +554,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
             logger.error(f'Error during evaluation: {e}', exc_info=True)
         
         finally:
-            # Clear cache for next epoch
             self.validation_embeddings.clear()
             self.validation_codes.clear()
     
@@ -592,18 +566,14 @@ class NAICSContrastiveModel(pyl.LightningModule):
             weight_decay=self.hparams.weight_decay
         )
         
-        # Calculate total training steps safely
-        # Use estimated_stepping_batches which handles all edge cases
         total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = self.hparams.warmup_steps
         
         def lr_lambda(current_step: int):
 
-            # Linear warmup
             if current_step < warmup_steps:
                 return float(current_step) / float(max(1, warmup_steps))
             
-            # Cosine decay after warmup
             progress_1 = float(current_step - warmup_steps)
             progress_2 = float(max(1, total_steps - warmup_steps))
             progress = progress_1 / progress_2

@@ -59,7 +59,7 @@ dev = [
 [tool.uv]
 package = true
 # --- Tell uv to ensure compatible wheels exist for both macOS ARM64 and Linux x86_64 ---
-required-environments = [
+environments = [
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]

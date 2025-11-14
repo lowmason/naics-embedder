@@ -263,7 +263,11 @@ class DistancesConfig(BaseModel):
         default='./data/naics_descriptions.parquet',
         description='Input descriptions parquet file'
     )
-    output_parquet: str = Field(
+    distances_parquet: str = Field(
+        default='./data/naics_distances.parquet',
+        description='Output distances parquet file'
+    )
+    distance_matrix_parquet: str = Field(
         default='./data/naics_distances.parquet',
         description='Output distances parquet file'
     )
@@ -461,6 +465,10 @@ class StreamingConfig(BaseModel):
         default='./data/naics_distances.parquet',
         description='Path to distances parquet file'
     )
+    distance_matrix_parquet: str = Field(
+        default='./data/naics_distance_matrix.parquet',
+        description='Path to distance matrix parquet file'
+    )
     relations_parquet: str = Field(
         default='./data/naics_relations.parquet',
         description='Path to relations parquet file'
@@ -611,11 +619,7 @@ class LoRAConfig(BaseModel):
 class MoEConfig(BaseModel):
 
     '''Mixture of Experts configuration.'''
-    
-    enabled: bool = Field(
-        default=True,
-        description='Whether to use MoE layer'
-    )
+        
     num_experts: int = Field(
         default=4,
         gt=0,

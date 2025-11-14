@@ -80,7 +80,7 @@ warnings.filterwarnings(
 
 app = typer.Typer(
     help=Panel.fit(
-        '[bold cyan]NAICS Gemini[/bold cyan]\n\nContrastive Learning for NAICS Code Embeddings.',
+        '[bold cyan]NAICS Embedder[/bold cyan]\n\nText-enhanced Hyperbolic NAICS Embedding System',
         border_style='cyan',
         padding=(1, 2),
     ) #type: ignore
@@ -289,7 +289,6 @@ def train(
             f'  • Base: {cfg.model.base_model_name.split("/")[-1]}',
             f'  • LoRA rank: {cfg.model.lora.r}',
             '  • MoE: ',
-            f'    - {"enabled" if cfg.model.moe.enabled else "disabled"} ',
             f'    - {cfg.model.moe.num_experts} experts\n',
             '[cyan]Training:[/cyan]',
             f'  • Learning rate: {cfg.training.learning_rate}',
@@ -328,9 +327,6 @@ def train(
             seed=cfg.seed
         )
         
-        # Construct distances path
-        distances_path = cfg.data_loader.streaming.distances_parquet
-        
         # Initialize Model
         logger.info('Initializing Model with evaluation metrics...\n')
 
@@ -339,7 +335,6 @@ def train(
             lora_r=cfg.model.lora.r,
             lora_alpha=cfg.model.lora.alpha,
             lora_dropout=cfg.model.lora.dropout,
-            use_moe=cfg.model.moe.enabled,
             num_experts=cfg.model.moe.num_experts,
             top_k=cfg.model.moe.top_k,
             moe_hidden_dim=cfg.model.moe.hidden_dim,
@@ -349,8 +344,7 @@ def train(
             weight_decay=cfg.training.weight_decay,
             warmup_steps=cfg.training.warmup_steps,
             load_balancing_coef=cfg.model.moe.load_balancing_coef,
-            # Evaluation settings
-            distances_path=distances_path,
+            distance_matrix_path=cfg.data_loader.streaming.distance_matrix_parquet,
             eval_every_n_epochs=cfg.model.eval_every_n_epochs,
             eval_sample_size=cfg.model.eval_sample_size
         )
@@ -553,7 +547,6 @@ def train_sequential(
                     lora_r=cfg.model.lora.r,
                     lora_alpha=cfg.model.lora.alpha,
                     lora_dropout=cfg.model.lora.dropout,
-                    use_moe=cfg.model.moe.enabled,
                     num_experts=cfg.model.moe.num_experts,
                     top_k=cfg.model.moe.top_k,
                     moe_hidden_dim=cfg.model.moe.hidden_dim,
@@ -563,7 +556,7 @@ def train_sequential(
                     weight_decay=cfg.training.weight_decay,
                     warmup_steps=cfg.training.warmup_steps,
                     load_balancing_coef=cfg.model.moe.load_balancing_coef,
-                    distances_path=cfg.data_loader.streaming.distances_parquet,
+                    distance_matrix_parquet=cfg.data_loader.streaming.distance_matrix_parquet,
                     eval_every_n_epochs=cfg.model.eval_every_n_epochs,
                     eval_sample_size=cfg.model.eval_sample_size
                 )
