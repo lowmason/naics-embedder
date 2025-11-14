@@ -1,3 +1,3 @@
 # Loss API
 
-::: naics_embedder.loss
+::: naics_embedder.model.loss

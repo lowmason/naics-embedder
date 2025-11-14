@@ -6,7 +6,7 @@ repo_url: https://github.com/lowmason/naics-embedder
 edit_uri: edit/main/docs/
 
 theme:
-  name: material
+  name: mkdocs 
   language: en
   features:
     - navigation.tabs

@@ -1,3 +1,3 @@
 # HGCN API
 
-::: naics_embedder.hgcn
+::: naics_embedder.model.naics_model

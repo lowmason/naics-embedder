@@ -26,6 +26,11 @@ dependencies = [
     "pydantic>=2.12.4",
     "selenium>=4.38.0",
     "great-tables>=0.20.0",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.7.0",
+    "mkdocstrings>=0.30.1",
+    "mkdocstrings-python>=1.14.0",
+    "pymdown-extensions>=10.17.1",
 ]
 
 [project.scripts]
