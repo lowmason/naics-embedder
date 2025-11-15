@@ -3,13 +3,16 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
+import os
+import pickle
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, IterableDataset
 
-from naics_embedder.data_loader.streaming_dataset import create_streaming_dataset
+from naics_embedder.data_loader.streaming_dataset import create_streaming_dataset, _get_final_cache_path, create_streaming_generator
 from naics_embedder.utils.config import StreamingConfig, TokenizationConfig
 
 logger = logging.getLogger(__name__)
@@ -20,7 +23,7 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------------------------------------
 
 def collate_fn(batch: List[Dict]) -> Dict:
-    
+    """Collate function to batch triplets for training."""
     channels = ['title', 'description', 'excluded', 'examples']
     
     # Initialize batch dictionaries
@@ -90,34 +93,54 @@ def collate_fn(batch: List[Dict]) -> Dict:
 # -------------------------------------------------------------------------------------------------
 
 class GeneratorDataset(IterableDataset):
+    """Dataset wrapper for streaming generators."""
     
     def __init__(self, generator_fn, tokenization_cfg, *args, **kwargs):
-        
-        '''
-        Args:
-            generator_fn: Function to create the streaming generator
-            tokenization_cfg: TokenizationConfig for loading cache (not the cache itself)
-            *args, **kwargs: Additional arguments for generator_fn
-        '''
-        
         self.generator_fn = generator_fn
         self.tokenization_cfg = tokenization_cfg
         self.args = args
         self.kwargs = kwargs
         self._token_cache = None
     
-    
     def _get_token_cache(self):
-        
-        '''Lazily load token cache once per worker process.'''
-        
+        """Lazily load token cache once per worker process."""
         if self._token_cache is None:
-            from naics_embedder.data_loader.tokenization_cache import tokenization_cache
-            self._token_cache = tokenization_cache(self.tokenization_cfg)
+            import time
+            import random
+            
+            # Set tokenizer parallelism to false in each worker
+            os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+            
+            from naics_embedder.data_loader.tokenization_cache import _load_tokenization_cache, tokenization_cache
+            
+            # Fast path: load cache directly (should already exist from prepare_data)
+            cache_path = Path(self.tokenization_cfg.output_path)
+            if cache_path.exists():
+                try:
+                    # Add small random delay to stagger worker loading
+                    worker_info = torch.utils.data.get_worker_info()
+                    if worker_info is not None:
+                        delay = random.uniform(0, 0.5) * (worker_info.id + 1)
+                        time.sleep(delay)
+                    
+                    self._token_cache = _load_tokenization_cache(
+                        self.tokenization_cfg.output_path,
+                        verbose=False
+                    )
+                    if self._token_cache is not None:
+                        return self._token_cache
+                except Exception as e:
+                    logger.warning(f'Worker {os.getpid()} failed to load cache: {e}, will try with locking')
+            
+            # Fallback: use full tokenization_cache() with locking
+            logger.warning(f'Worker {os.getpid()} cache not found, loading with locking (this should be rare)')
+            self._token_cache = tokenization_cache(self.tokenization_cfg, use_locking=True)
+            logger.debug(f'Worker {os.getpid()} loaded tokenization cache')
+        
         return self._token_cache
     
-    
     def __iter__(self):
+        """Iterate over dataset with worker sharding."""
         worker_info = torch.utils.data.get_worker_info()
         token_cache = self._get_token_cache()
         generator = self.generator_fn(token_cache, *self.args, **self.kwargs)
@@ -125,17 +148,21 @@ class GeneratorDataset(IterableDataset):
         if worker_info is None:
             return generator
         else:
-            worker_id = worker_info.id
-            num_workers = worker_info.num_workers
-            
-            return (item for i, item in enumerate(generator) if i % num_workers == worker_id)
+            # Shard the generator efficiently
+            # Each worker takes every num_workers-th item starting from worker_id
+            count = 0
+            for item in generator:
+                if count % worker_info.num_workers == worker_info.id:
+                    yield item
+                count += 1
 
 
 # -------------------------------------------------------------------------------------------------
-# Main DataModule for PyTorch Lightning (optional but recommended)
+# Main DataModule for PyTorch Lightning
 # -------------------------------------------------------------------------------------------------
 
 class NAICSDataModule(LightningDataModule):
+    """DataModule for NAICS embedding training."""
     
     def __init__(
         self,
@@ -149,38 +176,41 @@ class NAICSDataModule(LightningDataModule):
         val_split: float = 0.1,
         **kwargs: Any
     ):
-
         super().__init__()
-
+        
         self.descriptions_path = descriptions_path
         self.triplets_path = triplets_path
         self.tokenizer_name = tokenizer_name
         self.batch_size = batch_size
         self.num_workers = num_workers
-
-        if streaming_config is not None:    
+        
+        # Create streaming configs
+        if streaming_config is not None:
             val_streaming_config = streaming_config.copy()
             val_streaming_config['seed'] = seed + 1
-
             curriculum = StreamingConfig(**streaming_config)
             val_curriculum = StreamingConfig(**val_streaming_config)
-        
         else:
             curriculum = StreamingConfig()
             val_curriculum = StreamingConfig(seed=seed + 1)
-
+        
         self.tokenization_cfg = TokenizationConfig(
             descriptions_parquet=descriptions_path,
             tokenizer_name=tokenizer_name,
             max_length=curriculum.max_length
         )
-
+        
+        # Store streaming configs for use in prepare_data()
+        self.train_streaming_cfg = curriculum
+        self.val_streaming_cfg = val_curriculum
+        
+        # Create datasets
         logger.info('  • Creating training dataset')
         self.train_dataset = GeneratorDataset(
             create_streaming_dataset,
             self.tokenization_cfg,
             curriculum
-        )           
+        )
         
         logger.info('  • Creating validation dataset\n')
         self.val_dataset = GeneratorDataset(
@@ -189,41 +219,83 @@ class NAICSDataModule(LightningDataModule):
             val_curriculum
         )
     
-    
     def prepare_data(self):
-        
-        '''Build tokenization cache before worker processes are spawned.'''
-        
-        import os
+        """Build all caches before worker processes are spawned."""
         os.environ['TOKENIZERS_PARALLELISM'] = 'false'
         
         from naics_embedder.data_loader.tokenization_cache import tokenization_cache
+        from naics_embedder.utils.utilities import get_indices_codes
         
+        # Build tokenization cache
         logger.info('Preparing tokenization cache in main process...')
-        
         tokenization_cache(self.tokenization_cfg)
+        
+        # Build codes/indices cache
+        logger.info('Preparing codes/indices cache in main process...')
+        cache_dir = Path(self.tokenization_cfg.descriptions_parquet).parent / 'codes_cache'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        codes_cache_path = cache_dir / 'codes_indices.pkl'
+        
+        if not codes_cache_path.exists():
+            logger.info('Loading codes and indices for caching...')
+            codes = get_indices_codes(self.tokenization_cfg.descriptions_parquet, return_type='codes')
+            code_to_idx = get_indices_codes(self.tokenization_cfg.descriptions_parquet, return_type='code_to_idx')
+            
+            with open(codes_cache_path, 'wb') as f:
+                pickle.dump({'codes': codes, 'code_to_idx': code_to_idx}, f)
+            logger.info(f'Cached codes/indices to {codes_cache_path}')
+        else:
+            logger.info('Codes/indices cache already exists')
+        
+        # Build streaming query caches (complete pipeline including weighted sampling)
+        self._build_streaming_cache(self.train_streaming_cfg, 'training')
+        self._build_streaming_cache(self.val_streaming_cfg, 'validation')
     
+    def _build_streaming_cache(self, cfg: StreamingConfig, name: str):
+        """Build streaming query cache for a given config."""
+        logger.info(f'Preparing streaming query cache ({name}) in main process...')
+        cache_path = _get_final_cache_path(cfg)
+        
+        if cache_path.exists():
+            logger.info(f'{name.capitalize()} streaming query cache already exists')
+            return
+        
+        logger.info(f'Building {name} streaming query cache (this may take 30-60 seconds)...')
+        gen = create_streaming_generator(cfg)
+        
+        try:
+            # Consume first item to trigger cache build
+            # Cache is saved before iteration starts
+            next(gen)
+            
+            # Verify cache was created
+            if cache_path.exists():
+                logger.info(f'{name.capitalize()} streaming query cache built successfully')
+            else:
+                logger.warning(f'Cache build completed but file not found - this should not happen')
+        except StopIteration:
+            # Generator was empty, but cache should still be saved
+            if cache_path.exists():
+                logger.info(f'{name.capitalize()} streaming query cache built successfully')
+            else:
+                logger.warning(f'Cache file not found after build attempt')
     
     def train_dataloader(self) -> DataLoader:
-
-        '''Create training dataloader.'''
-        
+        """Create training dataloader."""
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            num_workers=0,
+            num_workers=self.num_workers,
             collate_fn=collate_fn,
-            persistent_workers=False
+            persistent_workers=self.num_workers > 0
         )
     
     def val_dataloader(self) -> DataLoader:
-        
-        '''Create validation dataloader.'''
-        
+        """Create validation dataloader."""
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
-            num_workers=0,
+            num_workers=self.num_workers,
             collate_fn=collate_fn,
-            persistent_workers=False
+            persistent_workers=self.num_workers > 0
         )

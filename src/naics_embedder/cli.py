@@ -26,9 +26,12 @@ from naics_embedder.model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.backend import get_device
 from naics_embedder.utils.config import ChainConfig, Config, list_available_curricula, parse_override_value
 from naics_embedder.utils.console import configure_logging
+from naics_embedder.tools.config_tools import show_current_config
+from naics_embedder.tools.gpu_tools import optimize_gpu_config, detect_gpu_memory
+from naics_embedder.tools.metrics_tools import visualize_metrics, investigate_hierarchy
 
 # Set CUDA memory allocator configuration to reduce fragmentation
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -87,6 +90,9 @@ app = typer.Typer(
 )
 data_app = typer.Typer(help='Manage and generate project datasets.')
 app.add_typer(data_app, name='data')
+
+tools_app = typer.Typer(help='Utility tools for configuration, GPU optimization, and metrics analysis.')
+app.add_typer(tools_app, name='tools')
 
 
 # -------------------------------------------------------------------------------------------------
@@ -215,6 +221,13 @@ def train(
             help='List available curricula and exit',
         ),
     ] = False,
+    ckpt_path: Annotated[
+        Optional[str],
+        typer.Option(
+            '--ckpt-path',
+            help='Path to checkpoint file to resume from, or "last" to auto-detect last checkpoint',
+        ),
+    ] = None,
     overrides: Annotated[
         Optional[List[str]],
         typer.Argument(
@@ -243,6 +256,34 @@ def train(
         # Check device
         logger.info('Determining infrastructure...')
         accelerator, precision, num_devices = get_device(log_info=True)
+        
+        # Check GPU memory status if CUDA is available
+        gpu_memory_info = None
+        if accelerator in ['cuda', 'gpu']:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    device = torch.cuda.current_device()
+                    total_memory = torch.cuda.get_device_properties(device).total_memory / (1024 ** 3)  # GB
+                    reserved_memory = torch.cuda.memory_reserved(device) / (1024 ** 3)  # GB
+                    allocated_memory = torch.cuda.memory_allocated(device) / (1024 ** 3)  # GB
+                    free_memory = total_memory - reserved_memory
+                    
+                    gpu_memory_info = {
+                        'total_gb': total_memory,
+                        'reserved_gb': reserved_memory,
+                        'allocated_gb': allocated_memory,
+                        'free_gb': free_memory,
+                        'utilization_pct': (reserved_memory / total_memory) * 100 if total_memory > 0 else 0
+                    }
+                    
+                    logger.info(
+                        f'GPU Memory: {reserved_memory:.1f} GB used / {total_memory:.1f} GB total '
+                        f'({gpu_memory_info["utilization_pct"]:.1f}% utilization, '
+                        f'{free_memory:.1f} GB free)'
+                    )
+            except Exception as e:
+                logger.debug(f'Could not get GPU memory info: {e}')
 
         # Load configuration
         logger.info('Loading configuration...')
@@ -296,8 +337,42 @@ def train(
             f'  • Accelerator: {accelerator}',
             f'  • Precision: {precision}'
         ]
+        
+        # Add GPU memory info and batch size suggestions
+        summary_list_4 = []
+        if gpu_memory_info:
+            summary_list_4.append('\n[cyan]GPU Memory:[/cyan]')
+            summary_list_4.append(
+                f'  • Used: {gpu_memory_info["reserved_gb"]:.1f} GB / '
+                f'{gpu_memory_info["total_gb"]:.1f} GB '
+                f'({gpu_memory_info["utilization_pct"]:.1f}% utilization)'
+            )
+            summary_list_4.append(f'  • Free: {gpu_memory_info["free_gb"]:.1f} GB')
+            
+            # Conservative batch size suggestion
+            current_batch_size = cfg.data_loader.batch_size
+            if gpu_memory_info["free_gb"] > 8.0 and current_batch_size < 12:
+                # Suggest 2x-3x current batch size conservatively
+                suggested_batch = min(12, current_batch_size * 2)
+                if suggested_batch > current_batch_size:
+                    summary_list_4.append(
+                        f'\n[yellow]Batch Size Suggestion:[/yellow]'
+                    )
+                    summary_list_4.append(
+                        f'  • Current: {current_batch_size}'
+                    )
+                    summary_list_4.append(
+                        f'  • Suggested: {suggested_batch} (conservative estimate)'
+                    )
+                    summary_list_4.append(
+                        f'  • [dim]Note: gpu_tools.py estimates are optimistic; '
+                        f'reduce suggested values by ~50%[/dim]'
+                    )
+                    summary_list_4.append(
+                        f'  • [dim]Override with: data.batch_size={suggested_batch}[/dim]'
+                    )
 
-        summary = '\n'.join(summary_list_1 + summary_list_2 + summary_list_3)
+        summary = '\n'.join(summary_list_1 + summary_list_2 + summary_list_3 + summary_list_4)
 
         console.print(
             Panel(
@@ -327,27 +402,62 @@ def train(
             seed=cfg.seed
         )
         
+        # Handle checkpoint resumption
+        checkpoint_path = None
+        if ckpt_path:
+            if ckpt_path.lower() == 'last':
+                # Auto-detect last checkpoint
+                checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
+                last_ckpt = checkpoint_dir / 'last.ckpt'
+                if last_ckpt.exists():
+                    checkpoint_path = str(last_ckpt)
+                    logger.info(f'Auto-detected last checkpoint: {checkpoint_path}')
+                    console.print(f'[green]✓[/green] Resuming from last checkpoint: [cyan]{checkpoint_path}[/cyan]\n')
+                else:
+                    console.print(f'[yellow]Warning:[/yellow] Last checkpoint not found at {last_ckpt}')
+                    console.print('Starting training from scratch.\n')
+            else:
+                # Use provided checkpoint path
+                checkpoint_path_obj = Path(ckpt_path)
+                if checkpoint_path_obj.exists():
+                    checkpoint_path = str(checkpoint_path_obj.resolve())
+                    logger.info(f'Using checkpoint: {checkpoint_path}')
+                    console.print(f'[green]✓[/green] Resuming from checkpoint: [cyan]{checkpoint_path}[/cyan]\n')
+                else:
+                    console.print(f'[yellow]Warning:[/yellow] Checkpoint not found at {ckpt_path}')
+                    console.print('Starting training from scratch.\n')
+        
         # Initialize Model
         logger.info('Initializing Model with evaluation metrics...\n')
 
-        model = NAICSContrastiveModel(
-            base_model_name=cfg.model.base_model_name,
-            lora_r=cfg.model.lora.r,
-            lora_alpha=cfg.model.lora.alpha,
-            lora_dropout=cfg.model.lora.dropout,
-            num_experts=cfg.model.moe.num_experts,
-            top_k=cfg.model.moe.top_k,
-            moe_hidden_dim=cfg.model.moe.hidden_dim,
-            temperature=cfg.loss.temperature,
-            curvature=cfg.loss.curvature,
-            learning_rate=cfg.training.learning_rate,
-            weight_decay=cfg.training.weight_decay,
-            warmup_steps=cfg.training.warmup_steps,
-            load_balancing_coef=cfg.model.moe.load_balancing_coef,
-            distance_matrix_path=cfg.data_loader.streaming.distance_matrix_parquet,
-            eval_every_n_epochs=cfg.model.eval_every_n_epochs,
-            eval_sample_size=cfg.model.eval_sample_size
-        )
+        if checkpoint_path:
+            # Load model from checkpoint
+            model = NAICSContrastiveModel.load_from_checkpoint(
+                checkpoint_path,
+                # Override learning rate if needed (checkpoint may have different LR)
+                learning_rate=cfg.training.learning_rate,
+            )
+            logger.info(f'Model loaded from checkpoint: {checkpoint_path}')
+        else:
+            # Initialize new model
+            model = NAICSContrastiveModel(
+                base_model_name=cfg.model.base_model_name,
+                lora_r=cfg.model.lora.r,
+                lora_alpha=cfg.model.lora.alpha,
+                lora_dropout=cfg.model.lora.dropout,
+                num_experts=cfg.model.moe.num_experts,
+                top_k=cfg.model.moe.top_k,
+                moe_hidden_dim=cfg.model.moe.hidden_dim,
+                temperature=cfg.loss.temperature,
+                curvature=cfg.loss.curvature,
+                learning_rate=cfg.training.learning_rate,
+                weight_decay=cfg.training.weight_decay,
+                warmup_steps=cfg.training.warmup_steps,
+                load_balancing_coef=cfg.model.moe.load_balancing_coef,
+                distance_matrix_path=cfg.data_loader.streaming.distance_matrix_parquet,
+                eval_every_n_epochs=cfg.model.eval_every_n_epochs,
+                eval_sample_size=cfg.model.eval_sample_size
+            )
         
         # Setup callbacks
         logger.info('Setting up callbacks and checkpointing...\n')
@@ -426,7 +536,8 @@ def train(
             f'[/bold yellow]\n'
         )
         
-        trainer.fit(model, datamodule)
+        # Pass checkpoint path to trainer.fit() if resuming
+        trainer.fit(model, datamodule, ckpt_path=checkpoint_path)
         
         # Training complete
         logger.info('Training complete!')
@@ -483,6 +594,13 @@ def train_sequential(
             help='Resume from last checkpoint if available',
         ),
     ] = True,
+    ckpt_path: Annotated[
+        Optional[str],
+        typer.Option(
+            '--ckpt-path',
+            help='Path to checkpoint file to resume from at start, or "last" to auto-detect last checkpoint',
+        ),
+    ] = None,
 ):
     
     configure_logging('train_sequential.log')
@@ -508,8 +626,75 @@ def train_sequential(
         console.print(f'[bold]Stages to run:[/bold] {", ".join(curricula)}\n')
     
     last_checkpoint = None
+    start_stage_index = 0  # Index in curricula list to start from
     
-    for i, curriculum in enumerate(curricula, 1):
+    # Handle initial checkpoint if provided
+    if ckpt_path:
+        if ckpt_path.lower() == 'last':
+            # Try to find last checkpoint from sequential training
+            # We need to determine the checkpoint directory structure
+            if chain_config:
+                stages = '-'.join(s.split('_')[0] for s in chain_config.get_stage_names())
+            elif curricula:
+                stages = '-'.join(s.split('_')[0] for s in curricula)
+            else:
+                stages = '01-02-03-04-05'  # Default
+            
+            # Try to find the last checkpoint from the last stage
+            # We'll check the first curriculum's config to get the checkpoint dir
+            temp_cfg = Config.from_yaml(config_file, curriculum_name=curricula[0] if curricula else '01_stage')
+            sequential_dir = Path(f'{temp_cfg.dirs.checkpoint_dir}/sequential_{stages}')
+            
+            # Find the last stage that has a checkpoint
+            for curriculum in reversed(curricula if curricula else ['01_stage', '02_stage', '03_stage', '04_stage', '05_stage']):
+                stage_checkpoint_dir = sequential_dir / curriculum
+                last_ckpt = stage_checkpoint_dir / 'last.ckpt'
+                if last_ckpt.exists():
+                    last_checkpoint = str(last_ckpt)
+                    # Find which stage this checkpoint belongs to
+                    if curricula:
+                        try:
+                            start_stage_index = curricula.index(curriculum)
+                        except ValueError:
+                            start_stage_index = 0
+                    logger.info(f'Auto-detected last checkpoint: {last_checkpoint}')
+                    logger.info(f'Checkpoint belongs to stage: {curriculum} (index {start_stage_index})')
+                    console.print(f'[green]✓[/green] Resuming from last checkpoint: [cyan]{last_checkpoint}[/cyan]')
+                    console.print(f'[cyan]Will resume from stage: {curriculum} (stage {start_stage_index + 1}/{len(curricula)})[/cyan]\n')
+                    break
+            
+            if not last_checkpoint:
+                console.print(f'[yellow]Warning:[/yellow] Last checkpoint not found in sequential training directory')
+                console.print('Starting training from scratch.\n')
+        else:
+            # Use provided checkpoint path
+            checkpoint_path_obj = Path(ckpt_path)
+            if checkpoint_path_obj.exists():
+                last_checkpoint = str(checkpoint_path_obj.resolve())
+                # Extract stage name from checkpoint path
+                # Path format: .../sequential_01-02-03/02_stage/last.ckpt
+                path_parts = Path(last_checkpoint).parts
+                for part in path_parts:
+                    if part.endswith('_stage'):
+                        stage_name = part
+                        if curricula:
+                            try:
+                                start_stage_index = curricula.index(stage_name)
+                            except ValueError:
+                                start_stage_index = 0
+                        logger.info(f'Checkpoint belongs to stage: {stage_name} (index {start_stage_index})')
+                        console.print(f'[green]✓[/green] Resuming from checkpoint: [cyan]{last_checkpoint}[/cyan]')
+                        console.print(f'[cyan]Will resume from stage: {stage_name} (stage {start_stage_index + 1}/{len(curricula)})[/cyan]\n')
+                        break
+                else:
+                    logger.info(f'Using initial checkpoint: {last_checkpoint}')
+                    console.print(f'[green]✓[/green] Resuming from checkpoint: [cyan]{last_checkpoint}[/cyan]\n')
+            else:
+                console.print(f'[yellow]Warning:[/yellow] Checkpoint not found at {ckpt_path}')
+                console.print('Starting training from scratch.\n')
+    
+    # Start from the stage that contains the checkpoint
+    for i, curriculum in enumerate(curricula[start_stage_index:], start_stage_index + 1):
         console.rule(
             f'[bold cyan]Stage {i}/{len(curricula)}: {curriculum}[/bold cyan]'
         )
@@ -535,16 +720,19 @@ def train_sequential(
             existing_checkpoints = list(checkpoint_dir.glob(f'{curriculum}-*.ckpt'))
             last_ckpt = checkpoint_dir / 'last.ckpt'
             
-            if resume_from_checkpoint and existing_checkpoints and last_ckpt.exists():
-                # Stage already complete - use its checkpoint and skip training
-                last_checkpoint = str(last_ckpt)
-                console.print(f'[green]✓[/green] Stage already complete: {curriculum}')
-                console.print(f'[cyan]Using checkpoint:[/cyan] {last_checkpoint}\n')
-                logger.info(f'Skipping stage {curriculum} - already trained')
-                continue
+            # Check if we're resuming from a checkpoint that belongs to this stage
+            resuming_this_stage = False
+            if ckpt_path and last_checkpoint:
+                # Check if the checkpoint path matches this stage's checkpoint
+                if str(last_ckpt.resolve()) == Path(last_checkpoint).resolve():
+                    resuming_this_stage = True
+                    logger.info(f'Resuming training within stage {curriculum} from checkpoint')
+            
+            # Note: We don't skip stages here because the loop already starts from start_stage_index
+            # If we're resuming this stage, we'll handle it below by passing ckpt_path to trainer.fit()
             
             # Check device
-            accelerator, precision, num_devices = get_device(log_info=(i == 1))
+            accelerator, precision, num_devices = get_device(log_info=(i == start_stage_index + 1))
             
             # Seed for reproducibility
             pyl.seed_everything(cfg.seed + i, verbose=False)
@@ -562,8 +750,33 @@ def train_sequential(
             )
             
             # Initialize or load model
-            if last_checkpoint and resume_from_checkpoint:
-                logger.info(f'Loading model from checkpoint: {last_checkpoint}')
+            # If we're resuming within this stage, trainer.fit() will load from checkpoint
+            # Otherwise, if we have a checkpoint from a previous stage, load it for continuation
+            if resuming_this_stage:
+                # Don't load manually - trainer.fit() will load from checkpoint with epoch info
+                logger.info(f'Will resume from checkpoint in trainer.fit() - initializing model structure')
+                model = NAICSContrastiveModel(
+                    base_model_name=cfg.model.base_model_name,
+                    lora_r=cfg.model.lora.r,
+                    lora_alpha=cfg.model.lora.alpha,
+                    lora_dropout=cfg.model.lora.dropout,
+                    num_experts=cfg.model.moe.num_experts,
+                    top_k=cfg.model.moe.top_k,
+                    moe_hidden_dim=cfg.model.moe.hidden_dim,
+                    temperature=cfg.loss.temperature,
+                    curvature=cfg.loss.curvature,
+                    learning_rate=cfg.training.learning_rate,
+                    weight_decay=cfg.training.weight_decay,
+                    warmup_steps=cfg.training.warmup_steps,
+                    load_balancing_coef=cfg.model.moe.load_balancing_coef,
+                    distance_matrix_path=cfg.data_loader.streaming.distance_matrix_parquet,
+                    eval_every_n_epochs=cfg.model.eval_every_n_epochs,
+                    eval_sample_size=cfg.model.eval_sample_size
+                )
+                console.print('[cyan]Model structure initialized - will load weights from checkpoint[/cyan]\n')
+            elif last_checkpoint and resume_from_checkpoint:
+                # Loading from previous stage checkpoint for next stage
+                logger.info(f'Loading model from previous stage checkpoint: {last_checkpoint}')
                 model = NAICSContrastiveModel.load_from_checkpoint(
                     last_checkpoint,
                     # Override learning rate for new stage if needed
@@ -587,7 +800,7 @@ def train_sequential(
                     weight_decay=cfg.training.weight_decay,
                     warmup_steps=cfg.training.warmup_steps,
                     load_balancing_coef=cfg.model.moe.load_balancing_coef,
-                    distance_matrix_parquet=cfg.data_loader.streaming.distance_matrix_parquet,
+                    distance_matrix_path=cfg.data_loader.streaming.distance_matrix_parquet,
                     eval_every_n_epochs=cfg.model.eval_every_n_epochs,
                     eval_sample_size=cfg.model.eval_sample_size
                 )
@@ -645,7 +858,17 @@ def train_sequential(
             
             # Train this stage
             logger.info(f'Starting training for stage: {curriculum}\n')
-            trainer.fit(model, datamodule)
+            
+            # Check if we should resume training within this stage
+            stage_checkpoint_path = None
+            if resume_from_checkpoint and resuming_this_stage and last_checkpoint:
+                # We're resuming this specific stage from a checkpoint
+                # Use the checkpoint path directly (it contains epoch information)
+                stage_checkpoint_path = last_checkpoint
+                logger.info(f'Resuming training within stage {curriculum} from: {stage_checkpoint_path}')
+                console.print(f'[cyan]Resuming stage {curriculum} from checkpoint (will continue from saved epoch)[/cyan]\n')
+            
+            trainer.fit(model, datamodule, ckpt_path=stage_checkpoint_path)
             
             # Store checkpoint path for next stage
             last_checkpoint = checkpoint_callback.best_model_path
@@ -676,3 +899,196 @@ def train_sequential(
     
     console.rule('[bold green]Sequential Training Complete![/bold green]')
     console.print(f'\n[bold]Final checkpoint:[/bold] [cyan]{last_checkpoint}[/cyan]\n')
+
+
+# -------------------------------------------------------------------------------------------------
+# Tools commands
+# -------------------------------------------------------------------------------------------------
+
+@tools_app.command('config')
+def show_config(
+    config_file: Annotated[
+        str,
+        typer.Option(
+            '--config',
+            help='Path to base config YAML file',
+        ),
+    ] = 'conf/config.yaml',
+):
+    """
+    Display current training and curriculum configuration.
+    """
+    show_current_config(config_file)
+
+
+@tools_app.command('gpu')
+def optimize_gpu(
+    gpu_memory: Annotated[
+        Optional[float],
+        typer.Option(
+            '--gpu-memory',
+            help='GPU memory in GB (e.g., 24 for RTX 6000, 80 for A100). Use --auto to detect automatically.',
+        ),
+    ] = None,
+    auto: Annotated[
+        bool,
+        typer.Option(
+            '--auto',
+            help='Auto-detect GPU memory',
+        ),
+    ] = False,
+    target_effective_batch: Annotated[
+        int,
+        typer.Option(
+            '--target-effective-batch',
+            help='Target effective batch size (batch_size * accumulate_grad_batches)',
+        ),
+    ] = 256,
+    apply: Annotated[
+        bool,
+        typer.Option(
+            '--apply',
+            help='Apply suggested configuration to config files',
+        ),
+    ] = False,
+    config_file: Annotated[
+        str,
+        typer.Option(
+            '--config',
+            help='Path to base config YAML file',
+        ),
+    ] = 'conf/config.yaml',
+):
+    """
+    Optimize training configuration for available GPU memory.
+    
+    Suggests optimal batch_size and accumulate_grad_batches based on your GPU.
+    """
+    configure_logging('gpu_config.log')
+    
+    if not auto and gpu_memory is None:
+        console.print('[bold red]Error:[/bold red] Must specify either --gpu-memory or --auto')
+        raise typer.Exit(code=1)
+    
+    try:
+        result = optimize_gpu_config(
+            gpu_memory_gb=gpu_memory,
+            auto_detect=auto,
+            target_effective_batch=target_effective_batch,
+            apply=apply,
+            config_path=config_file
+        )
+        
+        console.print('\n[bold green]GPU Configuration Optimization[/bold green]\n')
+        console.print(f'GPU Memory: {result["gpu_memory_gb"]:.1f} GB\n')
+        
+        for i, config in enumerate(result['suggestions'], 1):
+            console.print(f'[bold]Configuration {i}:[/bold] {config["stage"]}')
+            console.print(f'  • batch_size: {config["batch_size"]}')
+            console.print(f'  • n_positives: {config["n_positives"]}')
+            console.print(f'  • n_negatives: {config["n_negatives"]}')
+            console.print(f'  • accumulate_grad_batches: {config["accumulate_grad_batches"]}')
+            console.print(f'  • Effective batch size: {config["effective_batch_size"]}')
+            console.print(f'  • Memory utilization: {config["memory_utilization"]}')
+            console.print(str(config['memory_estimate']))
+            console.print()
+        
+        if result['applied']:
+            console.print('[bold green]✓ Configuration files updated successfully![/bold green]')
+            console.print('  Backup files created with .backup extension\n')
+        elif not apply:
+            console.print('[yellow]Tip:[/yellow] Use --apply to automatically update config files\n')
+            
+    except Exception as e:
+        console.print(f'[bold red]Error:[/bold red] {e}')
+        raise typer.Exit(code=1)
+
+
+@tools_app.command('visualize')
+def visualize(
+    stage: Annotated[
+        str,
+        typer.Option(
+            '--stage',
+            '-s',
+            help="Stage name to filter (e.g., '02_stage')",
+        ),
+    ] = '02_stage',
+    log_file: Annotated[
+        Optional[str],
+        typer.Option(
+            '--log-file',
+            help='Path to log file (default: logs/train_sequential.log)',
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Optional[str],
+        typer.Option(
+            '--output-dir',
+            help='Output directory for plots (default: outputs/visualizations/)',
+        ),
+    ] = None,
+):
+    """
+    Visualize training metrics from log files.
+    
+    Creates comprehensive visualizations and analysis of training metrics including:
+    - Hyperbolic radius over time
+    - Hierarchy preservation correlations
+    - Embedding diversity metrics
+    """
+    try:
+        log_path = Path(log_file) if log_file else None
+        output_path = Path(output_dir) if output_dir else None
+        
+        result = visualize_metrics(
+            stage=stage,
+            log_file=log_path,
+            output_dir=output_path
+        )
+        
+        if result.get('output_file'):
+            console.print(f'\n[bold green]✓[/bold green] Visualization saved to: [cyan]{result["output_file"]}[/cyan]\n')
+        
+    except Exception as e:
+        console.print(f'[bold red]Error:[/bold red] {e}')
+        raise typer.Exit(code=1)
+
+
+@tools_app.command('investigate')
+def investigate(
+    distance_matrix: Annotated[
+        Optional[str],
+        typer.Option(
+            '--distance-matrix',
+            help='Path to ground truth distance matrix (default: data/naics_distance_matrix.parquet)',
+        ),
+    ] = None,
+    config_file: Annotated[
+        Optional[str],
+        typer.Option(
+            '--config',
+            help='Path to config file (default: conf/config.yaml)',
+        ),
+    ] = None,
+):
+    """
+    Investigate why hierarchy preservation correlations might be low.
+    
+    Analyzes ground truth distances, evaluation configuration, and provides
+    recommendations for improving hierarchy preservation metrics.
+    """
+    try:
+        dist_path = Path(distance_matrix) if distance_matrix else None
+        config_path = Path(config_file) if config_file else None
+        
+        result = investigate_hierarchy(
+            distance_matrix_path=dist_path,
+            config_path=config_path
+        )
+        
+        console.print('\n[bold green]Investigation complete![/bold green]\n')
+        
+    except Exception as e:
+        console.print(f'[bold red]Error:[/bold red] {e}')
+        raise typer.Exit(code=1)

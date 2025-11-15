@@ -17,8 +17,8 @@ dirs:
 
 # Data loading configuration
 data_loader:
-  batch_size: 4
-  num_workers: 0
+  batch_size: 8
+  num_workers: 4
   val_split: 0.05
   
   tokenization:
@@ -52,8 +52,8 @@ model:
     hidden_dim: 1024
     load_balancing_coef: 0.01
   
-  eval_sample_size: 500
-  eval_every_n_epochs: 1
+  eval_sample_size: 400
+  eval_every_n_epochs: 2
 
 # Loss configuration
 loss:
@@ -72,6 +72,6 @@ training:
     devices: 1
     precision: "16-mixed"
     gradient_clip_val: 1.0
-    accumulate_grad_batches: 4
+    accumulate_grad_batches: 2
     log_every_n_steps: 10
     val_check_interval: 1.0
