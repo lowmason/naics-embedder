@@ -24,7 +24,7 @@ from naics_embedder.data_generation.download_data import download_preprocess_dat
 from naics_embedder.data_loader.datamodule import NAICSDataModule
 from naics_embedder.model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.backend import get_device
-from naics_embedder.utils.config import Config, list_available_curricula, parse_override_value
+from naics_embedder.utils.config import ChainConfig, Config, list_available_curricula, parse_override_value
 from naics_embedder.utils.console import configure_logging
 
 # Set CUDA memory allocator configuration to reduce fragmentation
@@ -455,13 +455,20 @@ def train(
 @app.command('train-curriculum')
 def train_sequential(
     curricula: Annotated[
-        List[str],
+        Optional[List[str]],
         typer.Option(
             '--curricula',
             '-c',
-            help="List of curriculum configs (e.g., '01_stage,02_stage,03_stage')",
+            help="List of curriculum configs (e.g., '01_stage,02_stage,03_stage'). Ignored if --chain is provided.",
         ),
-    ] = ['01_stage', '02_stage', '03_stage', '04_stage', '05_stage'],
+    ] = None,
+    chain: Annotated[
+        Optional[str],
+        typer.Option(
+            '--chain',
+            help='Chain configuration file (e.g., "chain_default"). Overrides --curricula.',
+        ),
+    ] = None,
     config_file: Annotated[
         str,
         typer.Option(
@@ -480,8 +487,25 @@ def train_sequential(
     
     configure_logging('train_sequential.log')
     
-    console.rule('[bold green]Sequential Curriculum Training[/bold green]')
-    console.print(f'[bold]Stages to run:[/bold] {", ".join(curricula)}\n')
+    # Load chain configuration if provided
+    chain_config = None
+    if chain:
+        chain_path = Path('conf/text_curriculum') / f'{chain}.yaml'
+        if not chain_path.exists():
+            console.print(f'[bold red]Error:[/bold red] Chain config not found: {chain_path}')
+            raise typer.Exit(code=1)
+        
+        chain_config = ChainConfig.from_yaml(str(chain_path))
+        curricula = chain_config.get_stage_names()
+        console.rule(f'[bold green]Sequential Curriculum Training - {chain_config.chain_name}[/bold green]')
+        console.print(f'[bold]Chain:[/bold] {chain_config.chain_name}')
+        console.print(f'[bold]Stages to run:[/bold] {", ".join(curricula)}\n')
+    else:
+        # Use default curricula if not provided
+        if curricula is None:
+            curricula = ['01_stage', '02_stage', '03_stage', '04_stage', '05_stage']
+        console.rule('[bold green]Sequential Curriculum Training[/bold green]')
+        console.print(f'[bold]Stages to run:[/bold] {", ".join(curricula)}\n')
     
     last_checkpoint = None
     
@@ -494,6 +518,13 @@ def train_sequential(
 
             # Load configuration for this curriculum
             cfg = Config.from_yaml(config_file, curriculum_name=curriculum)
+            
+            # Apply chain-specific overrides if chain config is provided
+            if chain_config:
+                stage_overrides = chain_config.get_stage_overrides(curriculum)
+                if stage_overrides:
+                    logger.info(f'Applying chain overrides for {curriculum}: {stage_overrides}')
+                    cfg = cfg.override(stage_overrides)
             
             # Setup checkpoint directory for this stage
             stages = '-'.join(s.split('_')[0] for s in curricula)

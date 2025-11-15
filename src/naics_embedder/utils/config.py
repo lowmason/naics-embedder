@@ -886,6 +886,72 @@ class CurriculumConfig(BaseModel):
 
 
 # -------------------------------------------------------------------------------------------------
+# Chain Configuration (for sequential training with stage-specific overrides)
+# -------------------------------------------------------------------------------------------------
+
+class ChainStageConfig(BaseModel):
+    '''Configuration for a single stage in a training chain.'''
+    
+    name: str = Field(
+        description='Name of the curriculum stage (e.g., "01_stage")'
+    )
+    max_epochs: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description='Override max_epochs for this stage'
+    )
+    learning_rate: Optional[float] = Field(
+        default=None,
+        gt=0,
+        lt=1,
+        description='Override learning_rate for this stage'
+    )
+
+
+class ChainConfig(BaseModel):
+    '''Configuration for a training chain with multiple stages.'''
+    
+    chain_name: str = Field(
+        description='Name of the training chain'
+    )
+    stages: List[ChainStageConfig] = Field(
+        description='List of stages in the chain'
+    )
+    
+    @classmethod
+    def from_yaml(cls, yaml_path: str) -> 'ChainConfig':
+        '''Load chain configuration from YAML file.'''
+        
+        chain_file = Path(yaml_path)
+        if not chain_file.exists():
+            raise FileNotFoundError(f'Chain config not found: {yaml_path}')
+        
+        with open(chain_file, 'r') as f:
+            data = yaml.safe_load(f)
+        
+        if data is None:
+            raise ValueError(f'Chain config file is empty: {yaml_path}')
+        
+        return cls(**data)
+    
+    def get_stage_names(self) -> List[str]:
+        '''Get list of curriculum stage names in order.'''
+        return [stage.name for stage in self.stages]
+    
+    def get_stage_overrides(self, stage_name: str) -> Dict[str, Any]:
+        '''Get training overrides for a specific stage.'''
+        for stage in self.stages:
+            if stage.name == stage_name:
+                overrides = {}
+                if stage.max_epochs is not None:
+                    overrides['training.trainer.max_epochs'] = stage.max_epochs
+                if stage.learning_rate is not None:
+                    overrides['training.learning_rate'] = stage.learning_rate
+                return overrides
+        return {}
+
+
+# -------------------------------------------------------------------------------------------------
 # Main Configuration
 # -------------------------------------------------------------------------------------------------
 
