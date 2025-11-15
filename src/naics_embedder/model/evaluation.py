@@ -34,15 +34,16 @@ class EmbeddingEvaluator:
     def compute_pairwise_distances(
         self,
         embeddings: torch.Tensor,
-        metric: str = 'euclidean'
+        metric: str = 'euclidean',
+        curvature: float = 1.0
     ) -> torch.Tensor:
-        
         '''
         Compute pairwise distances between embeddings.
         
         Args:
-            embeddings: Tensor of shape (N, D) where N is number of embeddings
+            embeddings: Tensor of shape (N, D) for Euclidean or (N, D+1) for Lorentz
             metric: Distance metric ('euclidean', 'cosine', or 'lorentz')
+            curvature: Curvature parameter for Lorentz metric (default: 1.0)
             
         Returns:
             Distance matrix of shape (N, N)
@@ -63,7 +64,7 @@ class EmbeddingEvaluator:
             
         elif metric == 'lorentz':
             # Lorentzian distance on hyperboloid
-            distances = self._lorentz_distance_matrix(embeddings)
+            distances = self._lorentz_distance_matrix(embeddings, curvature=curvature)
             
         else:
             raise ValueError(f'Unknown metric: {metric}')
@@ -71,33 +72,37 @@ class EmbeddingEvaluator:
         return distances
     
     
-    def _lorentz_distance_matrix(self, embeddings: torch.Tensor) -> torch.Tensor:
-
+    def _lorentz_distance_matrix(
+        self, 
+        embeddings: torch.Tensor,
+        curvature: float = 1.0
+    ) -> torch.Tensor:
         '''
-        Compute pairwise Lorentzian distances.
+        Compute pairwise Lorentzian distances using fully vectorized operations.
         
         Args:
             embeddings: Hyperbolic embeddings of shape (N, D+1)
+            curvature: Curvature parameter c
             
         Returns:
             Distance matrix of shape (N, N)
         '''
-        
         N = embeddings.shape[0]
-        distances = torch.zeros(N, N, device=self.device)
+        embeddings = embeddings.to(self.device)
         
-        for i in range(N):
-            for j in range(i, N):
-                u = embeddings[i]
-                v = embeddings[j]
-                
-                # Lorentzian inner product: <u, v> = u_1*v_1 + ... - u_0*v_0
-                dot = torch.sum(u[1:] * v[1:]) - u[0] * v[0]
-                dot = torch.clamp(dot, max=-1.0 - 1e-5)
-                
-                dist = torch.acosh(-dot)
-                distances[i, j] = dist
-                distances[j, i] = dist
+        # Vectorized Lorentz dot product computation
+        # embeddings: (N, D+1)
+        u = embeddings.unsqueeze(1)  # (N, 1, D+1)
+        v = embeddings.unsqueeze(0)  # (1, N, D+1)
+        
+        # Compute Lorentz dot product: sum of spatial - time
+        uv = u * v  # (N, N, D+1)
+        dot_product = torch.sum(uv[:, :, 1:], dim=2) - uv[:, :, 0]  # (N, N)
+        
+        # Clamp and compute distance
+        clamped_dot = torch.clamp(dot_product, max=-1.0 - 1e-5)
+        sqrt_c = torch.sqrt(torch.tensor(curvature, device=embeddings.device))
+        distances = sqrt_c * torch.acosh(-clamped_dot)
         
         return distances
     

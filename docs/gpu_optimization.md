@@ -67,11 +67,11 @@ training:
   trainer:
     accumulate_grad_batches: 5  # Effective batch = 225
 
-# conf/curriculum/01_stage.yaml
+# conf/text_curriculum/01_stage.yaml
 n_positives: 32
 n_negatives: 24
 
-# conf/curriculum/02-05_stage.yaml  
+# conf/text_curriculum/02-05_stage.yaml  
 n_positives: 16
 n_negatives: 8
 ```
@@ -168,7 +168,7 @@ RuntimeError: CUDA out of memory. Tried to allocate X.XX GiB
 
 2. **Reduce negatives in early stages**
    ```bash
-   # Edit conf/curriculum/01_stage.yaml
+   # Edit conf/text_curriculum/01_stage.yaml
    n_negatives: 16  # Was 24
    ```
 
@@ -284,10 +284,10 @@ Edit configuration files directly:
 vim conf/config.yaml
 
 # Early stage curriculum
-vim conf/curriculum/01_stage.yaml
+vim conf/text_curriculum/01_stage.yaml
 
 # Later stages
-vim conf/curriculum/{02,03,04,05}_stage.yaml
+vim conf/text_curriculum/{02,03,04,05}_stage.yaml
 ```
 
 Key parameters:

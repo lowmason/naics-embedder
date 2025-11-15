@@ -101,33 +101,65 @@ class MixtureOfExperts(nn.Module):
         
         # ----- The local loss calculation is REMOVED -----
         
+        batch_size = x.shape[0]
+        
+        # Fully vectorized expert routing using batched tensor operations
+        # Expand input for each selected expert: (batch_size, top_k, input_dim)
+        x_expanded = x.unsqueeze(1).expand(-1, self.top_k, -1)  # (batch_size, top_k, input_dim)
+        x_flat = x_expanded.reshape(-1, self.input_dim)  # (batch_size * top_k, input_dim)
+        
+        # Flatten expert indices and gates
+        expert_indices_flat = top_k_indices.reshape(-1)  # (batch_size * top_k,)
+        gate_weights_flat = top_k_gates.reshape(-1, 1)  # (batch_size * top_k, 1)
+        
+        # Create batch indices for scatter operations
+        batch_indices = torch.arange(
+            batch_size, 
+            device=x.device
+        ).unsqueeze(1).expand(-1, self.top_k).reshape(-1)  # (batch_size * top_k,)
+        
+        # Group inputs by expert for efficient batched processing
+        # Sort by expert index to group all inputs for the same expert together
+        sorted_indices = torch.argsort(expert_indices_flat)
+        expert_indices_sorted = expert_indices_flat[sorted_indices]
+        x_sorted = x_flat[sorted_indices]
+        gate_weights_sorted = gate_weights_flat[sorted_indices]
+        batch_indices_sorted = batch_indices[sorted_indices]
+        
+        # Find unique experts and their boundaries for batched processing
+        # Use diff to find where expert indices change
+        expert_changes = torch.cat([
+            torch.tensor([True], device=x.device),
+            expert_indices_sorted[1:] != expert_indices_sorted[:-1],
+            torch.tensor([True], device=x.device)
+        ])
+        expert_boundaries = torch.where(expert_changes)[0]
+        
         # Initialize output
         output = torch.zeros_like(x)
         
-        # Process each expert
-        for i in range(self.num_experts):
-            # Find which batch items use this expert
-            expert_mask = (top_k_indices == i).any(dim=1)  # (batch_size,)
+        # Process each expert's inputs in a single batched forward pass
+        # This minimizes loop overhead by processing all inputs for each expert at once
+        for i in range(len(expert_boundaries) - 1):
+            start_idx = expert_boundaries[i]
+            end_idx = expert_boundaries[i + 1]
             
-            if expert_mask.any():
-                # Get inputs for this expert
-                expert_input = x[expert_mask]
+            if end_idx > start_idx:
+                expert_idx = expert_indices_sorted[start_idx].item()
                 
-                # Forward through expert
-                expert_output = self.experts[i](expert_input)
+                # Extract all inputs for this expert in one slice
+                expert_input = x_sorted[start_idx:end_idx]  # (n_items, input_dim)
                 
-                # Get gating weights for this expert
-                # Find position of expert i in top_k for each batch item
-                expert_positions = (top_k_indices[expert_mask] == i).float()
-                expert_gates = (
-                    top_k_gates[expert_mask] * expert_positions
-                ).sum(dim=1, keepdim=True)
+                # Single batched forward pass through the expert
+                expert_output = self.experts[expert_idx](expert_input)  # (n_items, input_dim)
                 
-                # Weight expert output by gate
-                weighted_output = expert_output * expert_gates
+                # Get corresponding gate weights and batch indices
+                expert_gates = gate_weights_sorted[start_idx:end_idx]  # (n_items, 1)
+                expert_batch_indices = batch_indices_sorted[start_idx:end_idx]  # (n_items,)
                 
-                # Add to output
-                output[expert_mask] += weighted_output
+                # Weight and accumulate using efficient scatter-add
+                weighted_output = expert_output * expert_gates  # (n_items, input_dim)
+                output.index_add_(0, expert_batch_indices, weighted_output)
         
         # Return materials for global loss calculation
         return output, gate_probs, top_k_indices

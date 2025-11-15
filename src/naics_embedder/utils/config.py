@@ -953,11 +953,11 @@ class Config(BaseModel):
         
         # Load curriculum if specified
         if curriculum_name:
-            curriculum_path = Path('conf/curriculum') / f'{curriculum_name}.yaml'
+            curriculum_path = Path('conf/text_curriculum') / f'{curriculum_name}.yaml'
             if not curriculum_path.exists():
                 raise FileNotFoundError(
                     f'Curriculum not found: {curriculum_path}\n'
-                    f'Available curricula: {list(Path("conf/curriculum").glob("*.yaml"))}'
+                    f'Available curricula: {list(Path("conf/text_curriculum").glob("*.yaml"))}'
                 )
             
             with open(curriculum_path, 'r') as f:
@@ -1066,7 +1066,7 @@ def list_available_curricula() -> List[str]:
 
     '''List all available curriculum configs.'''
     
-    curriculum_dir = Path('conf/curriculum')
+    curriculum_dir = Path('conf/text_curriculum')
     if not curriculum_dir.exists():
         return []
     

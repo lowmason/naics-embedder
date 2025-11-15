@@ -1,23 +1,3 @@
-#!/usr/bin/env python3
-"""
-GPU Memory Configuration Optimizer
-
-This script analyzes available GPU memory and suggests optimal training configurations
-to maximize GPU utilization while avoiding OOM errors.
-
-The script considers:
-- Available GPU memory
-- Model architecture (encoder + MoE + projection layers)
-- Training parameters (batch_size, n_positives, n_negatives, accumulate_grad_batches)
-- Memory overhead for optimizer states, gradients, and activations
-- Safety margin to prevent OOM errors
-
-Usage:
-    python scripts/optimize_gpu_config.py --gpu-memory 24  # For 24GB GPU
-    python scripts/optimize_gpu_config.py --auto             # Auto-detect GPU
-    python scripts/optimize_gpu_config.py --profile          # Run memory profiling
-"""
-
 import argparse
 import logging
 import sys
@@ -38,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelConfig:
-    """Model architecture configuration"""
-    base_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    '''Model architecture configuration'''
+    base_model_name: str = 'sentence-transformers/all-MiniLM-L6-v2'
     embedding_dim: int = 384  # MiniLM-L6-v2
     num_channels: int = 4  # title, description, excluded, examples
     max_length: int = 512
@@ -52,7 +32,7 @@ class ModelConfig:
 
 @dataclass
 class TrainingConfig:
-    """Training configuration"""
+    '''Training configuration'''
     batch_size: int = 4
     n_positives: int = 16
     n_negatives: int = 8
@@ -62,7 +42,7 @@ class TrainingConfig:
 
 @dataclass
 class MemoryEstimate:
-    """Breakdown of memory usage"""
+    '''Breakdown of memory usage'''
     model_params_mb: float
     optimizer_state_mb: float
     gradients_mb: float
@@ -86,7 +66,7 @@ class MemoryEstimate:
 
 
 def estimate_model_parameters(model_cfg: ModelConfig) -> int:
-    """
+    '''
     Estimate total number of trainable parameters.
     
     For LoRA-adapted models, we only train:
@@ -96,7 +76,7 @@ def estimate_model_parameters(model_cfg: ModelConfig) -> int:
     - Projection layers
     
     But we need to load the base model in memory for all channels.
-    """
+    '''
     # Base model parameters (full model loaded for each channel)
     # MiniLM-L6-v2 has ~22.7M params per instance
     base_model_params = 22_700_000
@@ -121,7 +101,13 @@ def estimate_model_parameters(model_cfg: ModelConfig) -> int:
     projection_params = input_dim * model_cfg.embedding_dim
     
     # Total parameters in memory (base models are frozen but still in memory)
-    total_params = total_base_params + total_lora_params + total_expert_params + gating_params + projection_params
+    total_params = (
+        total_base_params + 
+        total_lora_params + 
+        total_expert_params + 
+        gating_params + 
+        projection_params
+    )
     
     return total_params
 
@@ -130,7 +116,7 @@ def estimate_activation_memory(
     model_cfg: ModelConfig,
     train_cfg: TrainingConfig
 ) -> float:
-    """
+    '''
     Estimate activation memory per forward pass.
     
     Activations include intermediate tensors during forward pass:
@@ -139,7 +125,7 @@ def estimate_activation_memory(
     - MoE intermediate activations
     
     With gradient checkpointing, this is significantly reduced.
-    """
+    '''
     batch_size = train_cfg.batch_size
     n_total_samples = batch_size * (1 + 1 + train_cfg.n_negatives)  # anchor + positive + negatives
     
@@ -147,8 +133,8 @@ def estimate_activation_memory(
     # For transformer: multiple layers with attention and FFN
     # Approximate: 12 layers * (4 * hidden_dim + seq_len * hidden_dim) per channel
     num_layers = 6  # MiniLM-L6-v2
-    attention_activations = model_cfg.max_length * model_cfg.max_length * 12  # attention scores
-    hidden_activations = num_layers * model_cfg.max_length * model_cfg.embedding_dim * 4  # hidden states
+    attention_activations = model_cfg.max_length * model_cfg.max_length * 12
+    hidden_activations = num_layers * model_cfg.max_length * model_cfg.embedding_dim * 4  
     encoder_activations_per_sample = (
         model_cfg.num_channels * (attention_activations + hidden_activations)
     )
@@ -181,9 +167,9 @@ def estimate_batch_data_memory(
     model_cfg: ModelConfig,
     train_cfg: TrainingConfig
 ) -> float:
-    """
+    '''
     Estimate memory for storing batch data (input_ids and attention_mask).
-    """
+    '''
     batch_size = train_cfg.batch_size
     n_total_samples = batch_size * (1 + 1 + train_cfg.n_negatives)
     
@@ -202,9 +188,9 @@ def estimate_memory_usage(
     model_cfg: ModelConfig,
     train_cfg: TrainingConfig
 ) -> MemoryEstimate:
-    """
+    '''
     Estimate total GPU memory usage for training.
-    """
+    '''
     # Model parameters
     trainable_params = estimate_model_parameters(model_cfg)
     bytes_per_param = 2 if model_cfg.use_fp16 else 4
@@ -252,9 +238,9 @@ def estimate_memory_usage(
 # -------------------------------------------------------------------------------------------------
 
 def detect_gpu_memory() -> Optional[float]:
-    """Detect available GPU memory in GB."""
+    '''Detect available GPU memory in GB.'''
     if not torch.cuda.is_available():
-        logger.error("No CUDA-capable GPU detected")
+        logger.error('No CUDA-capable GPU detected')
         return None
     
     device = torch.cuda.current_device()
@@ -262,8 +248,8 @@ def detect_gpu_memory() -> Optional[float]:
     total_gb = total_memory / (1024 ** 3)
     
     gpu_name = torch.cuda.get_device_name(device)
-    logger.info(f"Detected GPU: {gpu_name}")
-    logger.info(f"Total Memory: {total_gb:.2f} GB")
+    logger.info(f'Detected GPU: {gpu_name}')
+    logger.info(f'Total Memory: {total_gb:.2f} GB')
     
     return total_gb
 
@@ -275,7 +261,7 @@ def find_optimal_batch_size(
     n_negatives: int,
     safety_margin: float = 0.85
 ) -> Tuple[int, MemoryEstimate]:
-    """
+    '''
     Binary search to find optimal batch size that fits in memory.
     
     Args:
@@ -287,7 +273,7 @@ def find_optimal_batch_size(
     
     Returns:
         Optimal batch size and memory estimate
-    """
+    '''
     target_memory_mb = available_memory_gb * 1024 * safety_margin
     
     # Binary search for batch size
@@ -331,25 +317,25 @@ def suggest_configurations(
     model_cfg: ModelConfig,
     target_effective_batch: int = 256
 ) -> List[Dict]:
-    """
+    '''
     Suggest multiple training configurations optimized for the available GPU memory.
     
     Strategies:
     1. Balanced: moderate batch size with moderate accumulation
     2. High throughput: larger batch size, less accumulation
     3. Memory efficient: small batch size, high accumulation
-    """
+    '''
     suggestions = []
     
     # Define different curriculum stage profiles
     stage_profiles = [
-        {"name": "01_stage (Early)", "n_positives": 32, "n_negatives": 24},
-        {"name": "02-05_stage (Later)", "n_positives": 16, "n_negatives": 8},
+        {'name': '01_stage (Early)', 'n_positives': 32, 'n_negatives': 24},
+        {'name': '02-05_stage (Later)', 'n_positives': 16, 'n_negatives': 8},
     ]
     
     for profile in stage_profiles:
-        n_pos = profile["n_positives"]
-        n_neg = profile["n_negatives"]
+        n_pos = profile['n_positives']
+        n_neg = profile['n_negatives']
         
         # Find optimal batch size for this configuration
         batch_size, estimate = find_optimal_batch_size(
@@ -364,14 +350,14 @@ def suggest_configurations(
         effective_batch = batch_size * accumulate_grad_batches
         
         suggestions.append({
-            "stage": profile["name"],
-            "batch_size": batch_size,
-            "n_positives": n_pos,
-            "n_negatives": n_neg,
-            "accumulate_grad_batches": accumulate_grad_batches,
-            "effective_batch_size": effective_batch,
-            "memory_estimate": estimate,
-            "memory_utilization": f"{(estimate.total_mb / (available_memory_gb * 1024)) * 100:.1f}%"
+            'stage': profile['name'],
+            'batch_size': batch_size,
+            'n_positives': n_pos,
+            'n_negatives': n_neg,
+            'accumulate_grad_batches': accumulate_grad_batches,
+            'effective_batch_size': effective_batch,
+            'memory_estimate': estimate,
+            'memory_utilization': f'{(estimate.total_mb / (available_memory_gb * 1024)) * 100:.1f}%'
         })
     
     return suggestions
@@ -381,8 +367,8 @@ def suggest_configurations(
 # Configuration file generation
 # -------------------------------------------------------------------------------------------------
 
-def load_current_config(config_path: str = "./conf/config.yaml") -> Dict:
-    """Load current configuration file."""
+def load_current_config(config_path: str = './conf/config.yaml') -> Dict:
+    '''Load current configuration file.'''
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
@@ -392,14 +378,14 @@ def update_config_file(
     updates: Dict,
     backup: bool = True
 ) -> None:
-    """Update configuration file with new values."""
+    '''Update configuration file with new values.'''
     config_path = Path(config_path)
     
     if backup and config_path.exists():
         backup_path = config_path.with_suffix('.yaml.backup')
         import shutil
         shutil.copy(config_path, backup_path)
-        logger.info(f"Backup created: {backup_path}")
+        logger.info(f'Backup created: {backup_path}')
     
     # Load current config
     with open(config_path, 'r') as f:
@@ -417,7 +403,7 @@ def update_config_file(
     with open(config_path, 'w') as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
     
-    logger.info(f"Configuration updated: {config_path}")
+    logger.info(f'Configuration updated: {config_path}')
 
 
 def update_curriculum_file(
@@ -426,7 +412,7 @@ def update_curriculum_file(
     n_negatives: int,
     backup: bool = True
 ) -> None:
-    """Update curriculum stage file with new sample counts."""
+    '''Update curriculum stage file with new sample counts.'''
     curriculum_path = Path(curriculum_path)
     
     if backup and curriculum_path.exists():
@@ -443,7 +429,7 @@ def update_curriculum_file(
     with open(curriculum_path, 'w') as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
     
-    logger.info(f"Curriculum updated: {curriculum_path}")
+    logger.info(f'Curriculum updated: {curriculum_path}')
 
 
 # -------------------------------------------------------------------------------------------------
@@ -454,15 +440,15 @@ def profile_memory_usage(
     model_cfg: ModelConfig,
     train_cfg: TrainingConfig
 ) -> Dict:
-    """
+    '''
     Profile actual memory usage by running a dummy training step.
     Requires GPU to be available.
-    """
+    '''
     if not torch.cuda.is_available():
-        logger.error("GPU required for memory profiling")
+        logger.error('GPU required for memory profiling')
         return {}
     
-    logger.info("Running memory profiling (this may take a minute)...")
+    logger.info('Running memory profiling (this may take a minute)...')
     
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.empty_cache()
@@ -566,14 +552,14 @@ def profile_memory_usage(
             'success': True
         }
         
-        logger.info(f"  Allocated: {allocated:.1f} MB")
-        logger.info(f"  Reserved:  {reserved:.1f} MB")
-        logger.info(f"  Peak:      {peak:.1f} MB")
+        logger.info(f'  Allocated: {allocated:.1f} MB')
+        logger.info(f'  Reserved:  {reserved:.1f} MB')
+        logger.info(f'  Peak:      {peak:.1f} MB')
         
         return profile_results
         
     except Exception as e:
-        logger.error(f"Memory profiling failed: {e}")
+        logger.error(f'Memory profiling failed: {e}')
         return {'success': False, 'error': str(e)}
     
     finally:
@@ -586,7 +572,7 @@ def profile_memory_usage(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Optimize training configuration for available GPU memory"
+        description='Optimize training configuration for available GPU memory'
     )
     parser.add_argument(
         '--gpu-memory',
@@ -630,28 +616,28 @@ def main():
             sys.exit(1)
     elif args.gpu_memory:
         gpu_memory_gb = args.gpu_memory
-        logger.info(f"Using specified GPU memory: {gpu_memory_gb:.2f} GB")
+        logger.info(f'Using specified GPU memory: {gpu_memory_gb:.2f} GB')
     else:
-        parser.error("Must specify either --gpu-memory or --auto")
+        parser.error('Must specify either --gpu-memory or --auto')
     
-    logger.info("")
-    logger.info("=" * 80)
-    logger.info("GPU Memory Configuration Optimizer")
-    logger.info("=" * 80)
+    logger.info('')
+    logger.info('=' * 80)
+    logger.info('GPU Memory Configuration Optimizer')
+    logger.info('=' * 80)
     
     # Model configuration
     model_cfg = ModelConfig()
-    logger.info(f"\nModel Configuration:")
-    logger.info(f"  Base Model: {model_cfg.base_model_name}")
-    logger.info(f"  Embedding Dim: {model_cfg.embedding_dim}")
-    logger.info(f"  Channels: {model_cfg.num_channels}")
-    logger.info(f"  LoRA Rank: {model_cfg.lora_r}")
-    logger.info(f"  MoE Experts: {model_cfg.num_experts}")
-    logger.info(f"  FP16: {model_cfg.use_fp16}")
+    logger.info('\nModel Configuration:')
+    logger.info(f'  Base Model: {model_cfg.base_model_name}')
+    logger.info(f'  Embedding Dim: {model_cfg.embedding_dim}')
+    logger.info(f'  Channels: {model_cfg.num_channels}')
+    logger.info(f'  LoRA Rank: {model_cfg.lora_r}')
+    logger.info(f'  MoE Experts: {model_cfg.num_experts}')
+    logger.info(f'  FP16: {model_cfg.use_fp16}')
     
     # Generate suggestions
-    logger.info(f"\nOptimizing for {gpu_memory_gb:.1f} GB GPU memory...")
-    logger.info(f"Target effective batch size: {args.target_effective_batch}")
+    logger.info(f'\nOptimizing for {gpu_memory_gb:.1f} GB GPU memory...')
+    logger.info(f'Target effective batch size: {args.target_effective_batch}')
     
     suggestions = suggest_configurations(
         gpu_memory_gb,
@@ -660,9 +646,9 @@ def main():
     )
     
     # Display suggestions
-    logger.info("\n" + "=" * 80)
-    logger.info("RECOMMENDED CONFIGURATIONS")
-    logger.info("=" * 80)
+    logger.info('\n' + '=' * 80)
+    logger.info('RECOMMENDED CONFIGURATIONS')
+    logger.info('=' * 80)
     
     for i, config in enumerate(suggestions, 1):
         logger.info(f"\n{'─' * 80}")
@@ -678,9 +664,9 @@ def main():
     
     # Memory profiling
     if args.profile:
-        logger.info("\n" + "=" * 80)
-        logger.info("MEMORY PROFILING")
-        logger.info("=" * 80)
+        logger.info('\n' + '=' * 80)
+        logger.info('MEMORY PROFILING')
+        logger.info('=' * 80)
         
         # Use the first suggested config
         best_config = suggestions[0]
@@ -698,16 +684,16 @@ def main():
             actual = profile_results['peak_mb']
             error = abs(actual - estimated) / actual * 100
             
-            logger.info(f"\nEstimate vs Actual:")
-            logger.info(f"  Estimated: {estimated:.1f} MB")
-            logger.info(f"  Actual:    {actual:.1f} MB")
-            logger.info(f"  Error:     {error:.1f}%")
+            logger.info('\nEstimate vs Actual:')
+            logger.info(f'  Estimated: {estimated:.1f} MB')
+            logger.info(f'  Actual:    {actual:.1f} MB')
+            logger.info(f'  Error:     {error:.1f}%')
     
     # Apply configuration
     if args.apply:
-        logger.info("\n" + "=" * 80)
-        logger.info("APPLYING CONFIGURATION")
-        logger.info("=" * 80)
+        logger.info('\n' + '=' * 80)
+        logger.info('APPLYING CONFIGURATION')
+        logger.info('=' * 80)
         
         # Use the first suggested config as the default
         config = suggestions[0]
@@ -723,7 +709,7 @@ def main():
             
             # Update curriculum files
             conf_dir = Path(args.config_path).parent
-            curriculum_dir = conf_dir / 'curriculum'
+            curriculum_dir = conf_dir / 'text_curriculum'
             
             # Update stage 01
             stage_01_path = curriculum_dir / '01_stage.yaml'
@@ -748,26 +734,29 @@ def main():
                             backup=True
                         )
             
-            logger.info("\n✓ Configuration files updated successfully!")
-            logger.info("  Backup files created with .backup extension")
+            logger.info('\n✓ Configuration files updated successfully!')
+            logger.info('  Backup files created with .backup extension')
             
         except Exception as e:
-            logger.error(f"\n✗ Failed to update configuration: {e}")
+            logger.error(f'\n✗ Failed to update configuration: {e}')
             sys.exit(1)
     
-    logger.info("\n" + "=" * 80)
-    logger.info("SUMMARY")
-    logger.info("=" * 80)
-    logger.info(f"GPU Memory: {gpu_memory_gb:.1f} GB")
+    logger.info('\n' + '=' * 80)
+    logger.info('SUMMARY')
+    logger.info('=' * 80)
+    logger.info(f'GPU Memory: {gpu_memory_gb:.1f} GB')
     logger.info(f"Recommended batch_size: {suggestions[0]['batch_size']}")
     logger.info(f"Recommended accumulate_grad_batches: {suggestions[0]['accumulate_grad_batches']}")
     logger.info(f"Effective batch size: {suggestions[0]['effective_batch_size']}")
     
     if not args.apply:
-        logger.info("\nTo apply these settings, run with --apply flag:")
-        logger.info(f"  python scripts/optimize_gpu_config.py --gpu-memory {gpu_memory_gb:.0f} --apply")
+        logger.info('\nTo apply these settings, run with --apply flag:')
+        logger.info(
+            '  python scripts/optimize_gpu_config.py'
+            f'--gpu-memory {gpu_memory_gb:.0f} --apply'
+        )
     
-    logger.info("")
+    logger.info('')
 
 
 if __name__ == '__main__':

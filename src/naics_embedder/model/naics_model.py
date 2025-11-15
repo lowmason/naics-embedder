@@ -18,6 +18,10 @@ from naics_embedder.model.evaluation import (
     HierarchyMetrics,
 )
 from naics_embedder.model.loss import HyperbolicInfoNCELoss
+from naics_embedder.model.hyperbolic import (
+    log_hyperbolic_diagnostics,
+    check_lorentz_manifold_validity
+)
 
 logger = logging.getLogger(__name__) 
 
@@ -61,7 +65,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
             lora_dropout=lora_dropout,
             num_experts=num_experts,
             top_k=top_k,
-            moe_hidden_dim=moe_hidden_dim
+            moe_hidden_dim=moe_hidden_dim,
+            curvature=curvature  # Pass curvature to encoder for hyperbolic projection
         )
         
         self.loss_fn = HyperbolicInfoNCELoss(
@@ -261,6 +266,149 @@ class NAICSContrastiveModel(pyl.LightningModule):
             unscaled_loss = num_experts * torch.sum(f * P)
             full_load_balancing_loss = self.load_balancing_coef * unscaled_loss
 
+            # Log MoE expert utilization metrics
+            # f_i: fraction of tokens routed to each expert
+            # P_i: average gating probability for each expert
+            if self.trainer.is_global_zero or not torch.distributed.is_initialized():
+                # Log per-expert utilization (f_i)
+                for i in range(num_experts):
+                    self.log(
+                        f'train/moe/expert_{i}_utilization',
+                        f[i].item(),
+                        batch_size=batch_size,
+                        on_step=False,  # Log per-epoch to reduce noise
+                        on_epoch=True
+                    )
+                
+                # Log per-expert gating probability (P_i)
+                for i in range(num_experts):
+                    self.log(
+                        f'train/moe/expert_{i}_gating_prob',
+                        P[i].item(),
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+                
+                # Log histogram of expert utilization (f_i)
+                # Only if TensorBoard logger is available
+                if hasattr(self.logger, 'experiment') and hasattr(self.logger.experiment, 'add_histogram'):
+                    try:
+                        self.logger.experiment.add_histogram(
+                            'train/moe/expert_utilization_hist',
+                            f,
+                            global_step=self.global_step
+                        )
+                        
+                        # Log histogram of gating probabilities (P_i)
+                        self.logger.experiment.add_histogram(
+                            'train/moe/gating_prob_hist',
+                            P,
+                            global_step=self.global_step
+                        )
+                    except Exception as e:
+                        logger.debug(f'Could not log histograms: {e}')
+                
+                # Log summary statistics for f_i
+                f_mean = f.mean().item()
+                f_std = f.std().item()
+                f_min = f.min().item()
+                f_max = f.max().item()
+                f_cv = (f_std / f_mean) if f_mean > 0 else 0.0  # Coefficient of variation
+                
+                self.log(
+                    'train/moe/utilization_mean',
+                    f_mean,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/moe/utilization_std',
+                    f_std,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/moe/utilization_cv',
+                    f_cv,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True  # Show in progress bar for quick monitoring
+                )
+                self.log(
+                    'train/moe/utilization_min',
+                    f_min,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/moe/utilization_max',
+                    f_max,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                
+                # Log summary statistics for P_i
+                P_mean = P.mean().item()
+                P_std = P.std().item()
+                P_min = P.min().item()
+                P_max = P.max().item()
+                P_cv = (P_std / P_mean) if P_mean > 0 else 0.0
+                
+                self.log(
+                    'train/moe/gating_prob_mean',
+                    P_mean,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/moe/gating_prob_std',
+                    P_std,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/moe/gating_prob_cv',
+                    P_cv,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/moe/gating_prob_min',
+                    P_min,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/moe/gating_prob_max',
+                    P_max,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                
+                # Log load balancing imbalance (lower is better, 0 = perfectly balanced)
+                # Ideal: f_i = 1/num_experts for all i, so std should be 0
+                ideal_utilization = 1.0 / num_experts
+                utilization_imbalance = torch.abs(f - ideal_utilization).mean().item()
+                self.log(
+                    'train/moe/utilization_imbalance',
+                    utilization_imbalance,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True
+                )
+
         total_loss = contrastive_loss + full_load_balancing_loss
 
         batch_size = batch['batch_size']
@@ -318,6 +466,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
         if 'anchor_code' in batch:
             for i, code in enumerate(batch['anchor_code']):
                 if code not in self.validation_embeddings:
+                    # Store hyperbolic embeddings (Lorentz model)
                     self.validation_embeddings[code] = anchor_emb[i].detach().cpu()
                     self.validation_codes.append(code)
         
@@ -359,7 +508,15 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 
                 with torch.no_grad():
                     anchor_output = self(batch['anchor'])
-                    embs = anchor_output['embedding'].cpu()
+                    # Use Euclidean embeddings for clustering (KMeans works in Euclidean space)
+                    # The encoder returns both 'embedding' (hyperbolic) and 'embedding_euc' (Euclidean)
+                    if 'embedding_euc' in anchor_output and anchor_output['embedding_euc'] is not None:
+                        embs = anchor_output['embedding_euc'].cpu()
+                    else:
+                        # Fallback: use hyperbolic embeddings (will project to Euclidean for KMeans)
+                        # Extract spatial coordinates (drop time coordinate)
+                        hyp_embs = anchor_output['embedding'].cpu()
+                        embs = hyp_embs[:, 1:]  # Remove time coordinate, keep spatial coordinates
                     all_embeddings.append(embs)
                     all_codes.extend(batch['anchor_code'])
             
@@ -419,7 +576,60 @@ class NAICSContrastiveModel(pyl.LightningModule):
             
             num_samples = len(embeddings)
             
-            stats = self.embedding_stats.compute_statistics(embeddings)
+            # Check manifold validity and log diagnostics
+            is_valid, lorentz_norms, violations = check_lorentz_manifold_validity(
+                embeddings, 
+                curvature=self.hparams.curvature
+            )
+            
+            # Log hyperbolic diagnostics
+            # Note: level_labels would require NAICS hierarchy level info - can be added later
+            diagnostics = log_hyperbolic_diagnostics(
+                embeddings,
+                curvature=self.hparams.curvature,
+                level_labels=None,  # TODO: Add NAICS level labels if available
+                logger_instance=logger
+            )
+            
+            # Log manifold validity metrics
+            self.log(
+                'val/manifold_valid',
+                float(is_valid),
+                batch_size=num_samples
+            )
+            self.log(
+                'val/lorentz_norm_mean',
+                diagnostics['lorentz_norm_mean'],
+                batch_size=num_samples
+            )
+            self.log(
+                'val/lorentz_norm_violation_max',
+                diagnostics['violation_max'],
+                batch_size=num_samples
+            )
+            self.log(
+                'val/hyperbolic_radius_mean',
+                diagnostics['radius_mean'],
+                batch_size=num_samples
+            )
+            self.log(
+                'val/hyperbolic_radius_std',
+                diagnostics['radius_std'],
+                batch_size=num_samples
+            )
+            
+            # Warn if manifold constraint is violated
+            if not is_valid:
+                logger.warning(
+                    f'⚠️  Hyperbolic embeddings violate manifold constraint! '
+                    f'Max violation: {diagnostics["violation_max"]:.6e}'
+                )
+            
+            # Compute statistics on Euclidean projection for compatibility
+            # (embedding_stats expects Euclidean embeddings)
+            # Use spatial coordinates (drop time coordinate) for Euclidean stats
+            embeddings_euc = embeddings[:, 1:]  # Remove time coordinate
+            stats = self.embedding_stats.compute_statistics(embeddings_euc)
             self.log(
                 'val/mean_norm', 
                 self._to_python_scalar(stats['mean_norm']), 
@@ -441,7 +651,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 batch_size=num_samples
             )
             
-            collapse = self.embedding_stats.check_collapse(embeddings)
+            # Check collapse on Euclidean projection
+            collapse = self.embedding_stats.check_collapse(embeddings_euc)
             self.log(
                 'val/variance_collapsed', 
                 self._to_python_scalar(collapse['variance_collapsed']), 
@@ -475,9 +686,11 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 batch_size=num_samples
             )
             
+            # Use Lorentzian distances for hyperbolic embeddings
             emb_dists = self.embedding_eval.compute_pairwise_distances(
                 embeddings,
-                metric='euclidean'
+                metric='lorentz',
+                curvature=self.hparams.curvature
             )
             
             cophenetic_result = self.hierarchy_metrics.cophenetic_correlation(

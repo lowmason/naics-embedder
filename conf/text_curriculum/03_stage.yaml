@@ -1,8 +1,4 @@
-# Stage 3: Hard Curriculum
-# Full difficulty with all negative types
-
-curriculum:
-  name: 03_stage
+name: 03_stage
 
 # Anchor filtering
 anchor_level: null

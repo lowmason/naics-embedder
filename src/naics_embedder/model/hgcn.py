@@ -28,7 +28,6 @@ from naics_embedder.utils.validation_metrics import compute_validation_metrics
 # Config
 # -------------------------------------------------------------------------------------------------
 
-
 @dataclass
 class Config:
     encodings_parquet: str = './output/hyperbolic_projection/encodings.parquet'
@@ -80,9 +79,8 @@ class Config:
 
 
 # -------------------------------------------------------------------------------------------------
-# PyG Hyperbolic Graph Convolution
+# PyTorch Geometric hyperbolic graph convolution (hgcn)
 # -------------------------------------------------------------------------------------------------
-
 
 class HyperbolicConvolution(MessagePassing):
 
@@ -129,7 +127,6 @@ class HyperbolicConvolution(MessagePassing):
 # -------------------------------------------------------------------------------------------------
 # HGCN model (stack of HyperbolicConvolution)
 # -------------------------------------------------------------------------------------------------
-
 
 class HGCN(nn.Module):
     def __init__(
@@ -716,6 +713,126 @@ def main():
 
     # Output directory cleanup / setup
     outdir = setup_directory(base_cfg.output_dir)
+
+    # Define curriculum
+    curriculum = {
+        1: {
+            'num_epochs': 10,
+            'n_positive_samples': 2560,
+            'lr': 5.0e-04,
+            'warmup_ratio': 0.30,
+            'temperature_start': 0.15,
+            'temperature_end': 0.12,
+            'k_total': 32,
+            'pct_hard': 0.00,
+            'pct_medium': 0.20,
+            'pct_easy': 0.65,
+            'pct_unrelated': 0.15,
+            'allowed_relations': ['child'],
+            'min_code_level': 2,
+            'max_code_level': 6,
+        },
+        2: {
+            'num_epochs': 12,
+            'n_positive_samples': 2048,
+            'lr': 2.5e-04,
+            'warmup_ratio': 0.25,
+            'temperature_start': 0.12,
+            'temperature_end': 0.10,
+            'k_total': 32,
+            'pct_excluded': 0.00,
+            'pct_hard': 0.05,
+            'pct_medium': 0.25,
+            'pct_easy': 0.55,
+            'pct_unrelated': 0.15,
+            'allowed_relations': ['child', 'sibling'],
+            'min_code_level': 2,
+            'max_code_level': 6,
+        },
+        3: {
+            'num_epochs': 10,
+            'n_positive_samples': 1536,
+            'lr': 1.25e-04,
+            'warmup_ratio': 0.20,
+            'temperature_start': 0.10,
+            'temperature_end': 0.095,
+            'k_total': 48,
+            'pct_excluded': 0.05,
+            'pct_hard': 0.15,
+            'pct_medium': 0.30,
+            'pct_easy': 0.40,
+            'pct_unrelated': 0.10,
+            'allowed_relations': ['child', 'sibling', 'grandchild', 'nephew/niece'],
+            'min_code_level': 3,
+            'max_code_level': 6,
+        },
+        4: {
+            'num_epochs': 10,
+            'n_positive_samples': 1024,
+            'lr': 7.5e-05,
+            'warmup_ratio': 0.15,
+            'temperature_start': 0.095,
+            'temperature_end': 0.09,
+            'k_total': 48,
+            'pct_excluded': 0.05,
+            'pct_hard': 0.30,
+            'pct_medium': 0.35,
+            'pct_easy': 0.30,
+            'pct_unrelated': 0.0,
+            'allowed_relations': [
+                'child',
+                'sibling',
+                'grandchild',
+                'great-grandchild',
+                'grand-nephew/niece',
+                'cousin',
+            ],
+            'min_code_level': 4,
+            'max_code_level': 6,
+        },
+        5: {
+            'num_epochs': 10,
+            'n_positive_samples': 768,
+            'lr': 3.75e-05,
+            'warmup_ratio': 0.15,
+            'temperature_start': 0.09,
+            'temperature_end': 0.085,
+            'k_total': 48,
+            'pct_excluded': 0.0,
+            'pct_hard': 0.35,
+            'pct_medium': 0.30,
+            'pct_easy': 0.30,
+            'pct_unrelated': 0.05,
+            'allowed_relations': [
+                'child',
+                'sibling',
+                'grandchild',
+                'great-grandchild',
+                'great-great-grandchild',
+                'nephew/niece',
+                'grand-nephew/niece',
+                'cousin',
+            ],
+            'min_code_level': 2,
+            'max_code_level': 6,
+        },
+        6: {
+            'num_epochs': 12,
+            'n_positive_samples': 256,
+            'lr': 5.0e-05,
+            'warmup_ratio': 0.30,
+            'temperature_start': 0.095,
+            'temperature_end': 0.090,
+            'k_total': 48,
+            'pct_excluded': 0.0,
+            'pct_hard': 0.15,
+            'pct_medium': 0.35,
+            'pct_easy': 0.45,
+            'pct_unrelated': 0.05,
+            'min_code_level': 2,
+            'max_code_level': 6,
+        },
+    }
 
     print('=' * 80)
     print('HGCN CURRICULUM TRAINING')

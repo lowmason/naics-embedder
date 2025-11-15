@@ -9,70 +9,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from naics_embedder.model.hyperbolic import LorentzDistance
+
 logger = logging.getLogger(__name__)
-
-
-# -------------------------------------------------------------------------------------------------
-# Hyperbolic projection 
-# -------------------------------------------------------------------------------------------------
-
-class HyperbolicProjection(nn.Module):
-    
-    def __init__(self, input_dim: int, curvature: float = 1.0):
-        super().__init__()
-        
-        self.input_dim = input_dim
-        self.c = curvature
-        
-        self.projection = nn.Linear(input_dim, input_dim + 1)
-    
-    def exp_map_zero(self, v: torch.Tensor) -> torch.Tensor:
-        
-        sqrt_c = torch.sqrt(torch.tensor(self.c, device=v.device))
-        norm_v = torch.norm(v, p=2, dim=1, keepdim=True)
-        norm_v = torch.clamp(norm_v, min=1e-8)
-        
-        sinh_term = torch.sinh(norm_v / sqrt_c)
-        
-        x0 = torch.cosh(norm_v / sqrt_c)
-        x_rest = (sinh_term * v) / norm_v
-        
-        return torch.cat([x0, x_rest], dim=1)
-    
-    def forward(self, euclidean_embedding: torch.Tensor) -> torch.Tensor:
-        
-        tangent_vec = self.projection(euclidean_embedding)
-        
-        hyperbolic_embedding = self.exp_map_zero(tangent_vec)
-        
-        return hyperbolic_embedding
-
-
-# -------------------------------------------------------------------------------------------------
-# Lorentz hyperboloid distance
-# -------------------------------------------------------------------------------------------------
-
-class LorentzDistance(nn.Module):
-    
-    def __init__(self, curvature: float = 1.0):
-        super().__init__()
-        self.c = curvature
-    
-    def lorentz_dot(self, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        
-        uv = u * v
-        return torch.sum(uv[:, 1:], dim=1) - uv[:, 0]
-    
-    def forward(self, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        
-        dot_product = self.lorentz_dot(u, v)
-        
-        clamped_dot = torch.clamp(dot_product, max=-1.0 - 1e-5)
-        
-        sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device))
-        dist = sqrt_c * torch.acosh(-clamped_dot)
-        
-        return dist
 
 
 # -------------------------------------------------------------------------------------------------
@@ -80,6 +19,12 @@ class LorentzDistance(nn.Module):
 # -------------------------------------------------------------------------------------------------
 
 class HyperbolicInfoNCELoss(nn.Module):
+    '''
+    Hyperbolic InfoNCE loss operating directly on Lorentz-model embeddings.
+    
+    The encoder now returns hyperbolic embeddings directly, so this loss function
+    works with them without additional projection.
+    '''
     
     def __init__(
         self,
@@ -90,8 +35,9 @@ class HyperbolicInfoNCELoss(nn.Module):
         super().__init__()
         
         self.temperature = temperature
+        self.curvature = curvature
         
-        self.hyperbolic_proj = HyperbolicProjection(embedding_dim, curvature)
+        # Use shared Lorentz distance computation
         self.lorentz_distance = LorentzDistance(curvature)
     
     def forward(
@@ -103,23 +49,41 @@ class HyperbolicInfoNCELoss(nn.Module):
         k_negatives: int,
         false_negative_mask: Optional[torch.Tensor] = None 
     ) -> torch.Tensor:
+        '''
+        Compute Hyperbolic InfoNCE loss.
         
-        anchor_hyp = self.hyperbolic_proj(anchor_emb)
-        positive_hyp = self.hyperbolic_proj(positive_emb)
-        negative_hyp = self.hyperbolic_proj(negative_embs)
+        Args:
+            anchor_emb: Anchor hyperbolic embeddings (batch_size, embedding_dim+1)
+            positive_emb: Positive hyperbolic embeddings (batch_size, embedding_dim+1)
+            negative_embs: Negative hyperbolic embeddings (batch_size * k_negatives, embedding_dim+1)
+            batch_size: Batch size
+            k_negatives: Number of negatives per anchor
+            false_negative_mask: Optional mask for false negatives (batch_size, k_negatives)
+        
+        Returns:
+            Loss scalar
+        '''
+        # Embeddings are already in hyperbolic space (Lorentz model)
+        anchor_hyp = anchor_emb
+        positive_hyp = positive_emb
+        negative_hyp = negative_embs
         
         pos_distances = self.lorentz_distance(anchor_hyp, positive_hyp)
         
-        # Compute negative distances
-        # Each anchor has exactly k_negatives negatives
-        neg_distances = []
-        for i in range(batch_size):
-            anchor_repeated = anchor_hyp[i:i+1].repeat(k_negatives, 1)
-            neg_batch = negative_hyp[i * k_negatives:(i + 1) * k_negatives]
-            neg_dist = self.lorentz_distance(anchor_repeated, neg_batch)
-            neg_distances.append(neg_dist)
+        # Compute negative distances using batched operations
+        # Reshape negative_hyp from (batch_size * k_negatives, embedding_dim+1)
+        # to (batch_size, k_negatives, embedding_dim+1)
+        negative_hyp_reshaped = negative_hyp.view(batch_size, k_negatives, -1)
         
-        neg_distances = torch.stack(neg_distances)
+        # Use batched forward to compute all anchor-negative distances at once
+        # anchor_hyp: (batch_size, embedding_dim+1) -> (batch_size, 1, embedding_dim+1)
+        #   via broadcasting
+        # negative_hyp_reshaped: (batch_size, k_negatives, embedding_dim+1)
+        # Result: (batch_size, k_negatives)
+        neg_distances = self.lorentz_distance.batched_forward(
+            anchor_hyp, 
+            negative_hyp_reshaped
+        )
         
         pos_similarities = -pos_distances / self.temperature
         neg_similarities = -neg_distances / self.temperature

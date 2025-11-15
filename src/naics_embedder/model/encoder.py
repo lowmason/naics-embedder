@@ -11,6 +11,7 @@ from peft import LoraConfig, get_peft_model
 from transformers import AutoModel
 
 from naics_embedder.model.moe import MixtureOfExperts
+from naics_embedder.model.hyperbolic import HyperbolicProjection
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,8 @@ class MultiChannelEncoder(nn.Module):
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
-        use_gradient_checkpointing: bool = True
+        use_gradient_checkpointing: bool = True,
+        curvature: float = 1.0
     ):
         super().__init__()
         
@@ -81,6 +83,14 @@ class MultiChannelEncoder(nn.Module):
             self.embedding_dim
         )
         
+        # Hyperbolic projection: maps Euclidean embeddings to Lorentz hyperboloid
+        # This ensures embeddings stay in hyperbolic space end-to-end
+        self.hyperbolic_proj = HyperbolicProjection(
+            input_dim=self.embedding_dim,
+            curvature=curvature
+        )
+        self.curvature = curvature
+        
         # Count trainable vs frozen parameters
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in self.parameters())
@@ -105,7 +115,11 @@ class MultiChannelEncoder(nn.Module):
                            Each channel has 'input_ids' and 'attention_mask'
         
         Returns:
-            Dict with 'embedding' and optional 'load_balancing_loss'
+            Dict with:
+                - 'embedding': Hyperbolic embedding in Lorentz model (batch_size, embedding_dim+1)
+                - 'embedding_euc': Euclidean embedding before projection (batch_size, embedding_dim) [optional]
+                - 'gate_probs': MoE gating probabilities
+                - 'top_k_indices': MoE top-k expert indices
         '''
         channel_embeddings = []
         
@@ -134,9 +148,15 @@ class MultiChannelEncoder(nn.Module):
         # Pass through MoE
         moe_output, gate_probs, top_k_indices = self.moe(combined)
         
-        output = self.moe_projection(moe_output)
+        # Project MoE output back to embedding_dim (Euclidean space)
+        embedding_euc = self.moe_projection(moe_output)  # (batch_size, embedding_dim)
+        
+        # Project to hyperbolic space (Lorentz model)
+        embedding_hyp = self.hyperbolic_proj(embedding_euc)  # (batch_size, embedding_dim+1)
+        
         return {
-            'embedding': output,
+            'embedding': embedding_hyp,  # Primary output: hyperbolic embedding
+            'embedding_euc': embedding_euc,  # Optional: Euclidean embedding for diagnostics
             'gate_probs': gate_probs,
             'top_k_indices': top_k_indices
         }
