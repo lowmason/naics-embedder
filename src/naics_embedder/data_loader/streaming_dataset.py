@@ -162,7 +162,7 @@ def create_streaming_generator(
         )
         .with_columns(
             sample_wgt=pl.mean_horizontal('relation_margin', 'distance_margin')
-                        .pow(-1)
+                         .pow(-1)
         )
         .select(
             anchors=pl.struct(
@@ -235,10 +235,7 @@ def create_streaming_generator(
             negatives=pl.col('negatives'),
             negatives_len=pl.col('negatives').len()
         )
-        .sort('anchors')
         .select(
-            batch=pl.col('anchors')
-                    .rank('dense'),
             anchors=pl.col('anchors'),
             positives=pl.col('positives'),
             negatives=pl.col('negatives'),
@@ -246,56 +243,40 @@ def create_streaming_generator(
         )
     )
 
-    # Create iterator and dictionary of dataframes by batch
-    df_dict = (
-        df
-        .sort('batch')
-        .partition_by('batch', include_key=False, as_dict=True)
-    )
+    logger.info(f'Number of anchors: {df.unnest("anchors").select("anchor_idx").unique().height: ,}')
+    logger.info(f'Number of anchors/positives: {df.height: ,}')
+    logger.info(f'Number of anchors/positives/negatives: {df.explode("negatives").height: ,}')
 
-    df_iter = [k[0] for k in df_dict.keys()]
-    df_dict = {k[0]: v for k, v in df_dict.items()}
-
-    # Log dataset statistics only at DEBUG level to reduce overhead
-    logger.debug(f'Number of anchors: {len(df_iter): ,}')
-    logger.debug(f'Number of anchors/positives: {df.height: ,}')
-    logger.debug(f'Number of anchors/positives/negatives: {df.explode("negatives").height: ,}')
-
-    for anchor in df_iter:
+    # Iterate by rows and yield dictionaries
+    for row in df.iter_rows(named=True):
         
-        anchor_iter = (
-            df_dict[anchor]
-            .iter_rows(named=True)
-        )
+        grouped = {}
+        key = (row['anchors']['anchor_idx'], row['positives']['positive_idx'])
 
-        for row in anchor_iter:
-            grouped = {}
-            key = (row['anchors']['anchor_idx'], row['positives']['positive_idx'])
+        negatives = []
+        for negative in row['negatives']:
+            negative_idx = negative['negative_idx']
+            negative_code = negative['negative_code']
+            relation_margin = negative['relation_margin']
+            distance_margin = negative['distance_margin']
 
-            negatives = []
-            for negative in row['negatives']:
-                negative_idx = negative['negative_idx']
-                negative_code = negative['negative_code']
-                relation_margin = negative['relation_margin']
-                distance_margin = negative['distance_margin']
+            negatives.append({
+                'negative_idx': negative_idx,
+                'negative_code': negative_code,
+                'relation_margin': relation_margin,
+                'distance_margin': distance_margin
+            })
 
-                negatives.append({
-                    'negative_idx': negative_idx,
-                    'negative_code': negative_code,
-                    'relation_margin': relation_margin,
-                    'distance_margin': distance_margin
-                })
+        if key not in grouped:
+            grouped[key] = {
+                'anchor_idx': row['anchors']['anchor_idx'],
+                'anchor_code': row['anchors']['anchor_code'],
+                'positive_idx': row['positives']['positive_idx'],
+                'positive_code': row['positives']['positive_code'],
+                'negatives': negatives
+            }
 
-            if key not in grouped:
-                grouped[key] = {
-                    'anchor_idx': row['anchors']['anchor_idx'],
-                    'anchor_code': row['anchors']['anchor_code'],
-                    'positive_idx': row['positives']['positive_idx'],
-                    'positive_code': row['positives']['positive_code'],
-                    'negatives': negatives
-                }
-
-            yield grouped[key]
+        yield grouped[key]
 
             
 # -------------------------------------------------------------------------------------------------

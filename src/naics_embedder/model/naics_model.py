@@ -365,7 +365,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
             
             all_embeddings = torch.cat(all_embeddings, dim=0).numpy()
             
-            n_clusters = self.hparams.fn_num_clusters
+            n_clusters = min((10 * (len(all_embeddings) // 20), self.hparams.fn_num_clusters))
+                    
             logger.info(
                 f'Clustering {len(all_embeddings)} embeddings into {n_clusters} clusters...'
             )
