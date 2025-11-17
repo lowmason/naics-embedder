@@ -201,150 +201,39 @@ project modules.
 
 ---
 
-## 8. Module API Documentation (Summary)
+## 8. Onboarding Guide
 
-### 8.1 `MultiChannelEncoder`
-
-**Purpose:** Encodes four NAICS text fields using transformer-based encoders.
-
-**Key Methods:**
-
-- `forward(batch) -> Dict[str, Tensor]`
-  - Returns per-channel embeddings and fused embedding.
-
-**Inputs:** tokenized text for each field.  
-**Outputs:** Euclidean embeddings prior to hyperbolic projection.
-
----
-
-### 8.2 `MixtureOfExperts`
-
-**Purpose:** Learns adaptive fusion of the four text channels.
-
-**Key Methods:**
-
-- `forward(x) -> (Tensor, Tensor, Tensor)`
-  - Returns fused vector, gating probabilities, and selected experts.
-
-**Notes:**
-
-- Implements Top-2 gating.
-- Auxiliary load-balancing loss computed separately.
-
----
-
-### 8.3 `HyperbolicProjection`
-
-**Purpose:** Maps Euclidean embeddings to the Lorentz hyperboloid.
-
-**Key Methods:**
-
-- `forward(x) -> Tensor`
-  - Applies the exponential map.
-
-**Notes:**
-
-- Supports configurable curvature.
-- Numerically stable norm clamping.
-
----
-
-### 8.4 `HyperbolicInfoNCELoss`
-
-**Purpose:** Contrastive learning in hyperbolic space.
-
-**Key Methods:**
-
-- `forward(anchor, pos, neg, mask=None)`
-  - Computes Lorentz-based InfoNCE.
-
-**Notes:**
-
-- Integrates false-negative elimination.
-- Uses Lorentz geodesic distance.
-
----
-
-### 8.5 `HGCN` (Graph Refinement)
-
-**Purpose:** Refines embeddings using NAICS parent–child graph.
-
-**Key Components:**
-
-- Hyperbolic graph convolution layers
-- Log-/exp-map transitions
-- Learnable curvature
-
-**Outputs:** Updated Lorentz-model embeddings.
-
----
-
-## 9. GPU Memory Optimization
-
-### 9.1 Overview
-
-The system includes tools to automatically optimize training configurations for your GPU:
-
-- **Auto-detection**: Automatically detects GPU memory
-- **Memory estimation**: Calculates optimal batch sizes and accumulation steps
-- **Configuration updates**: Applies settings to YAML config files
-
-### 9.2 Quick Start
-
-```bash
-# Check current configuration and memory usage
-uv run python scripts/show_current_config.py
-
-# Get optimal settings for your GPU
-uv run python scripts/optimize_gpu_config.py --auto
-
-# Apply recommended settings
-uv run python scripts/optimize_gpu_config.py --auto --apply
-```
-
-### 9.3 Common Configurations
-
-| GPU Model | Memory | Recommended batch_size | accumulate_grad_batches |
-|-----------|--------|------------------------|-------------------------|
-| RTX 6000 | 24 GB | 45 | 5 |
-| V100 | 32 GB | 64 | 4 |
-| A100 | 40 GB | 82 | 3 |
-| A100 | 80 GB | 128 | 2 |
-
-See [docs/gpu_optimization.md](docs/gpu_optimization.md) for detailed guidance.
-
----
-
-## 10. Onboarding Guide
-
-### 10.1 Training the Contrastive Model
+### 8.1 Training the Contrastive Model
 
 1. Prepare the NAICS dataset with four text channels.
-2. Optimize configuration for your GPU:
+
    ```bash
-   uv run python scripts/optimize_gpu_config.py --auto --apply
+   uv run naics-embedder data all
    ```
-3. Run training:
+
+2. Run training:
+
    ```bash
    uv run naics-embedder train --stage 01
    ```
-4. After convergence, extract Lorentz-model embeddings.
 
-### 10.2 Running HGCN Refinement
+### 8.2 Running HGCN Refinement
 
 1. Construct the NAICS parent–child graph.
-2. Load hyperbolic embeddings from Stage 3.
+2. Load hyperbolic embeddings from 8.1.2.
 3. Train the refinement model:
+
    ```bash
    uv run naics-embedder train-hgcn --config configs/hgcn.yaml
    ```
+
 4. Save refined embeddings for downstream tasks.
 
 ---
 
-## 10. Using the Final Embeddings
+## 9. Using the Final Embeddings
 
-### 10.1 Similarity Search
+### 9.1 Similarity Search
 
 Use Lorentzian distance:
 
@@ -354,11 +243,11 @@ dist = lorentz_distance(x, y)
 
 Lower values indicate closer hierarchical or semantic similarity.
 
-### 10.2 Visualization
+### 9.2 Visualization
 
 Project to tangent space or Poincaré ball for plotting.
 
-### 10.3 Downstream ML
+### 9.3 Downstream ML
 
 Final embeddings can be used as features for:
 
