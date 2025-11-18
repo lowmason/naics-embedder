@@ -49,7 +49,7 @@ model:
   moe:
     num_experts: 4
     top_k: 2
-    hidden_dim: 1024
+    hidden_dim: 768
     load_balancing_coef: 0.01
   
   eval_sample_size: 500  # Increased for more stable hierarchy metrics
