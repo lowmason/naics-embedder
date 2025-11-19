@@ -76,7 +76,7 @@ class DirConfig(BaseModel):
         description='Directory containing data files'
     )
     docs_dir: str = Field(
-        default='./data',
+        default='./doc',
         description='Directory containing data files'
     )
     log_dir: str = Field(

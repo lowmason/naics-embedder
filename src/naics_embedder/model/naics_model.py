@@ -2,9 +2,11 @@
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import json
 import logging
 import math
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
 import polars as pl
 import pytorch_lightning as pyl
@@ -117,6 +119,28 @@ class NAICSContrastiveModel(pyl.LightningModule):
         self.validation_codes = []
 
         self.code_to_pseudo_label: Dict[str, int] = {}
+        
+        # Initialize evaluation metrics history for JSON logging
+        self.evaluation_metrics_history: List[Dict] = []
+    
+    
+    def _get_metrics_file_path(self) -> Optional[Path]:
+        """Get the path to save evaluation metrics JSON file."""
+        if self.logger is None:
+            return None
+        
+        # Try to get log directory from logger
+        if hasattr(self.logger, 'log_dir') and self.logger.log_dir:
+            return Path(self.logger.log_dir) / 'evaluation_metrics.json'
+        elif hasattr(self.logger, 'save_dir'):
+            # Fallback for TensorBoardLogger
+            save_dir = getattr(self.logger, 'save_dir', None)
+            if save_dir:
+                version = getattr(self.logger, 'version', 0)
+                name = getattr(self.logger, 'name', 'default')
+                return Path(save_dir) / name / f'version_{version}' / 'evaluation_metrics.json'
+        
+        return None
     
     
     def _load_ground_truth_distances(self, distance_matrix_path: str):
@@ -917,7 +941,75 @@ class NAICSContrastiveModel(pyl.LightningModule):
                     )
                     
                     if epochs_since_start % self.hparams.fn_cluster_every_n_epochs == 0:
-                        self._update_pseudo_labels()            
+                        self._update_pseudo_labels()
+            
+            # Collect all evaluation metrics for JSON logging
+            # Get training/validation losses from callback_metrics if available
+            train_loss = None
+            train_contrastive_loss = None
+            val_loss = None
+            
+            if hasattr(self.trainer, 'callback_metrics'):
+                train_loss = self.trainer.callback_metrics.get('train/total_loss', None)
+                train_contrastive_loss = self.trainer.callback_metrics.get('train/contrastive_loss', None)
+                val_loss = self.trainer.callback_metrics.get('val/contrastive_loss', None)
+            
+            epoch_metrics = {
+                'epoch': self.current_epoch,
+                # Training metrics (from callback_metrics)
+                'train_loss': self._to_python_scalar(train_loss) if train_loss is not None else None,
+                'train_contrastive_loss': self._to_python_scalar(train_contrastive_loss) if train_contrastive_loss is not None else None,
+                # Validation metrics
+                'val_loss': self._to_python_scalar(val_loss) if val_loss is not None else None,
+                # Hyperbolic metrics
+                'hyperbolic_radius_mean': self._to_python_scalar(diagnostics['radius_mean']),
+                'hyperbolic_radius_std': self._to_python_scalar(diagnostics['radius_std']),
+                'lorentz_norm_mean': self._to_python_scalar(diagnostics['lorentz_norm_mean']),
+                'lorentz_norm_std': self._to_python_scalar(diagnostics['lorentz_norm_std']),
+                'lorentz_norm_violation_max': self._to_python_scalar(diagnostics['violation_max']),
+                'manifold_valid': bool(is_valid),
+                # Embedding statistics
+                'mean_norm': self._to_python_scalar(stats['mean_norm']),
+                'std_norm': self._to_python_scalar(stats['std_norm']),
+                'mean_pairwise_distance': self._to_python_scalar(stats['mean_pairwise_distance']),
+                'std_pairwise_distance': self._to_python_scalar(stats['std_pairwise_distance']),
+                # Collapse detection
+                'norm_cv': self._to_python_scalar(collapse['norm_cv']),
+                'distance_cv': self._to_python_scalar(collapse['distance_cv']),
+                'collapse_detected': bool(collapse['any_collapse']),
+                # Hierarchy preservation
+                'cophenetic_correlation': self._to_python_scalar(cophenetic_result['correlation']),
+                'cophenetic_n_pairs': int(cophenetic_result['n_pairs']),
+                'spearman_correlation': self._to_python_scalar(spearman_result['correlation']),
+                'spearman_n_pairs': int(spearman_result['n_pairs']),
+                # Ranking metrics
+                'ndcg@5': self._to_python_scalar(ndcg_result['ndcg@5']),
+                'ndcg@10': self._to_python_scalar(ndcg_result['ndcg@10']),
+                'ndcg@20': self._to_python_scalar(ndcg_result['ndcg@20']),
+                'ndcg@5_n_queries': int(ndcg_result['ndcg@5_n_queries']),
+                'ndcg@10_n_queries': int(ndcg_result['ndcg@10_n_queries']),
+                'ndcg@20_n_queries': int(ndcg_result['ndcg@20_n_queries']),
+                # Distortion metrics
+                'mean_distortion': self._to_python_scalar(distortion['mean_distortion']),
+                'std_distortion': self._to_python_scalar(distortion['std_distortion']),
+                'median_distortion': self._to_python_scalar(distortion['median_distortion']),
+                # Sample size
+                'num_samples': int(num_samples),
+            }
+            
+            # Add to history
+            self.evaluation_metrics_history.append(epoch_metrics)
+            
+            # Save to JSON file
+            metrics_file = self._get_metrics_file_path()
+            if metrics_file:
+                try:
+                    metrics_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(metrics_file, 'w') as f:
+                        json.dump(self.evaluation_metrics_history, f, indent=2)
+                    logger.debug(f'Saved evaluation metrics to {metrics_file}')
+                except Exception as e:
+                    logger.warning(f'Failed to save evaluation metrics to JSON: {e}')
                     
             logger.info(
                 f'Correlation metrics: \n'

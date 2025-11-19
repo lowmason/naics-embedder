@@ -52,8 +52,8 @@ model:
     hidden_dim: 768
     load_balancing_coef: 0.01
   
-  eval_sample_size: 500  # Increased for more stable hierarchy metrics
-  eval_every_n_epochs: 1  # Evaluate every epoch for better monitoring
+  eval_sample_size: 300  
+  eval_every_n_epochs: 1
 
 # Loss configuration
 loss:

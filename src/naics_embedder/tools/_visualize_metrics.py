@@ -3,8 +3,12 @@ Visualize training metrics from log files.
 """
 
 import re
+import sys
 from pathlib import Path
 from typing import List, Dict, Optional
+
+# Define project root
+project_root = Path(__file__).parent.parent.parent.parent
 
 try:
     import matplotlib
@@ -30,11 +34,26 @@ def parse_log_file(log_file: Path, stage: Optional[str] = None) -> List[Dict]:
     current_timestamp = None
     
     for i, line in enumerate(lines):
-        # Check if we're in the target stage
+        # Check if we're entering the target stage
         if stage and stage in line:
-            if 'Starting training' in line or 'Stage' in line:
+            # Look for "Using curriculum" to detect stage start
+            if 'Using curriculum' in line and stage in line:
                 in_target_stage = True
                 continue
+            # Also check for checkpoint paths that contain the stage name
+            elif 'checkpoint' in line.lower() and stage in line:
+                # This indicates we're in the stage
+                if not in_target_stage:
+                    in_target_stage = True
+                continue
+        
+        # Check if we're leaving the target stage (new stage starts)
+        if in_target_stage and stage:
+            # Look for a different stage starting
+            for other_stage in ['01_text', '02_text', '03_text', '04_text', '05_text']:
+                if other_stage != stage and 'Using curriculum' in line and other_stage in line:
+                    in_target_stage = False
+                    break
         
         if not in_target_stage and stage:
             continue
@@ -64,24 +83,42 @@ def parse_log_file(log_file: Path, stage: Optional[str] = None) -> List[Dict]:
                 })
             continue
         
-        # Extract evaluation complete metrics
-        eval_match = re.search(
-            r'Evaluation complete: cophenetic=([\d.-]+) \((\d+) pairs\), '
-            r'spearman=([\d.-]+), norm_cv=([\d.]+), dist_cv=([\d.]+), collapse=(\w+)',
+        # Extract cophenetic correlation
+        cophenetic_match = re.search(
+            r'Hierarchy preservation: cophenetic=([\d.-]+) \((\d+) pairs\)',
             line
         )
-        if eval_match and current_epoch is not None:
-            # Find the metric entry for this epoch
+        if cophenetic_match and current_epoch is not None:
             for m in metrics:
                 if m.get('epoch') == current_epoch:
                     m.update({
-                        'cophenetic': float(eval_match.group(1)),
-                        'n_pairs': int(eval_match.group(2)),
-                        'spearman': float(eval_match.group(3)),
-                        'norm_cv': float(eval_match.group(4)),
-                        'dist_cv': float(eval_match.group(5)),
-                        'collapse': eval_match.group(6) == 'True'
+                        'cophenetic': float(cophenetic_match.group(1)),
+                        'n_pairs': int(cophenetic_match.group(2))
                     })
+                    break
+        
+        # Extract Norm CV
+        norm_cv_match = re.search(r'Norm CV:\s+([\d.]+)', line)
+        if norm_cv_match and current_epoch is not None:
+            for m in metrics:
+                if m.get('epoch') == current_epoch:
+                    m['norm_cv'] = float(norm_cv_match.group(1))
+                    break
+        
+        # Extract Distance CV
+        dist_cv_match = re.search(r'Distance CV:\s+([\d.]+)', line)
+        if dist_cv_match and current_epoch is not None:
+            for m in metrics:
+                if m.get('epoch') == current_epoch:
+                    m['dist_cv'] = float(dist_cv_match.group(1))
+                    break
+        
+        # Extract Collapse
+        collapse_match = re.search(r'Collapse:\s+(\w+)', line)
+        if collapse_match and current_epoch is not None:
+            for m in metrics:
+                if m.get('epoch') == current_epoch:
+                    m['collapse'] = collapse_match.group(1) == 'True'
                     break
     
     # Sort by epoch
@@ -118,23 +155,27 @@ def create_visualizations(metrics: List[Dict], output_dir: Path, stage: str):
     ax1.grid(True, alpha=0.3)
     ax1.legend()
     
-    # 2. Hierarchy Preservation Metrics
+    # 2. Training and Validation Loss
     ax2 = plt.subplot(3, 2, 2)
-    cophenetic = [m.get('cophenetic', 0) for m in metrics if 'cophenetic' in m]
-    spearman = [m.get('spearman', 0) for m in metrics if 'spearman' in m]
-    epochs_corr = [m['epoch'] for m in metrics if 'cophenetic' in m]
+    train_loss = [m.get('train_loss', None) for m in metrics]
+    val_loss = [m.get('val_loss', None) for m in metrics]
+    epochs_loss = [m['epoch'] for m in metrics if 'train_loss' in m or 'val_loss' in m]
     
-    if epochs_corr:
-        ax2.plot(epochs_corr, cophenetic, 'g-o', label='Cophenetic', linewidth=2, markersize=6)
-        ax2.plot(epochs_corr, spearman, 'r-s', label='Spearman', linewidth=2, markersize=6)
-        ax2.axhline(y=0, color='k', linestyle='--', alpha=0.3)
-        ax2.axhline(y=0.7, color='g', linestyle='--', alpha=0.5, label='Target (0.7)')
+    if epochs_loss:
+        if any(l is not None for l in train_loss):
+            train_loss_clean = [l for l in train_loss if l is not None]
+            epochs_train = [e for e, l in zip(epochs_loss, train_loss) if l is not None]
+            ax2.plot(epochs_train, train_loss_clean, 'b-o', label='Train Loss', linewidth=2, markersize=6)
+        if any(l is not None for l in val_loss):
+            val_loss_clean = [l for l in val_loss if l is not None]
+            epochs_val = [e for e, l in zip(epochs_loss, val_loss) if l is not None]
+            ax2.plot(epochs_val, val_loss_clean, 'r-s', label='Val Loss', linewidth=2, markersize=6)
         ax2.set_xlabel('Epoch', fontsize=12)
-        ax2.set_ylabel('Correlation', fontsize=12)
-        ax2.set_title('Hierarchy Preservation Correlations', fontsize=14, fontweight='bold')
+        ax2.set_ylabel('Loss', fontsize=12)
+        ax2.set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
         ax2.grid(True, alpha=0.3)
         ax2.legend()
-        ax2.set_ylim([-0.5, 1.0])
+        ax2.set_yscale('log')
     
     # 3. Coefficient of Variation
     ax3 = plt.subplot(3, 2, 3)
@@ -151,16 +192,21 @@ def create_visualizations(metrics: List[Dict], output_dir: Path, stage: str):
         ax3.grid(True, alpha=0.3)
         ax3.legend()
     
-    # 4. Hyperbolic Radius vs Hierarchy Correlation
+    # 4. Hierarchy Preservation (Cophenetic)
     ax4 = plt.subplot(3, 2, 4)
+    cophenetic = [m.get('cophenetic', 0) for m in metrics if 'cophenetic' in m]
+    epochs_corr = [m['epoch'] for m in metrics if 'cophenetic' in m]
+    
     if epochs_corr and cophenetic:
-        scatter = ax4.scatter(radius_means[:len(cophenetic)], cophenetic, 
-                             c=epochs_corr, cmap='viridis', s=100, alpha=0.6)
-        ax4.set_xlabel('Hyperbolic Radius (mean)', fontsize=12)
+        ax4.plot(epochs_corr, cophenetic, 'g-o', label='Cophenetic', linewidth=2, markersize=6)
+        ax4.axhline(y=0, color='k', linestyle='--', alpha=0.3)
+        ax4.axhline(y=0.7, color='g', linestyle='--', alpha=0.5, label='Target (0.7)')
+        ax4.set_xlabel('Epoch', fontsize=12)
         ax4.set_ylabel('Cophenetic Correlation', fontsize=12)
-        ax4.set_title('Radius vs Hierarchy Preservation', fontsize=14, fontweight='bold')
+        ax4.set_title('Hierarchy Preservation', fontsize=14, fontweight='bold')
         ax4.grid(True, alpha=0.3)
-        plt.colorbar(scatter, ax=ax4, label='Epoch')
+        ax4.legend()
+        ax4.set_ylim([-0.5, 1.0])
     
     # 5. Radius Standard Deviation
     ax5 = plt.subplot(3, 2, 5)
@@ -183,13 +229,16 @@ def create_visualizations(metrics: List[Dict], output_dir: Path, stage: str):
           Mean: {latest.get('radius_mean', 0):.4f}
           Std:  {latest.get('radius_std', 0):.4f}
         
+        Loss:
+          Train: {latest.get('train_loss', 'N/A')}
+          Val:   {latest.get('val_loss', 'N/A')}
+        
         Hierarchy Preservation:
-          Cophenetic: {latest.get('cophenetic', 0):.4f}
-          Spearman:   {latest.get('spearman', 0):.4f}
+          Cophenetic: {f"{latest.get('cophenetic', 0):.4f}" if 'cophenetic' in latest and latest.get('cophenetic') is not None else 'N/A'}
         
         Diversity:
-          Norm CV:     {latest.get('norm_cv', 0):.4f}
-          Distance CV: {latest.get('dist_cv', 0):.4f}
+          Norm CV:     {f"{latest.get('norm_cv', 0):.4f}" if 'norm_cv' in latest and latest.get('norm_cv') is not None else 'N/A'}
+          Distance CV: {f"{latest.get('dist_cv', 0):.4f}" if 'dist_cv' in latest and latest.get('dist_cv') is not None else 'N/A'}
         
         Status:
           Collapse: {'Yes' if latest.get('collapse', False) else 'No'}
@@ -201,9 +250,10 @@ def create_visualizations(metrics: List[Dict], output_dir: Path, stage: str):
         TRENDS (Epoch {first.get('epoch', 'N/A')} → {latest.get('epoch', 'N/A')})
         
         Radius:      {first.get('radius_mean', 0):.4f} → {latest.get('radius_mean', 0):.4f}
-        Cophenetic:  {first.get('cophenetic', 0):.4f} → {latest.get('cophenetic', 0):.4f}
-        Spearman:    {first.get('spearman', 0):.4f} → {latest.get('spearman', 0):.4f}
-        Distance CV: {first.get('dist_cv', 0):.4f} → {latest.get('dist_cv', 0):.4f}
+        Cophenetic:  {(f"{first.get('cophenetic', 0):.4f}" if 'cophenetic' in first and first.get('cophenetic') is not None else 'N/A')} → {(f"{latest.get('cophenetic', 0):.4f}" if 'cophenetic' in latest and latest.get('cophenetic') is not None else 'N/A')}
+        Train Loss:  {first.get('train_loss', 'N/A')} → {latest.get('train_loss', 'N/A')}
+        Val Loss:    {first.get('val_loss', 'N/A')} → {latest.get('val_loss', 'N/A')}
+        Distance CV: {(f"{first.get('dist_cv', 0):.4f}" if 'dist_cv' in first and first.get('dist_cv') is not None else 'N/A')} → {(f"{latest.get('dist_cv', 0):.4f}" if 'dist_cv' in latest and latest.get('dist_cv') is not None else 'N/A')}
         """
             summary_text += trends
         
@@ -247,14 +297,32 @@ def print_analysis(metrics: List[Dict], stage: str):
         else:
             print(f"   ✓ Radius is in normal range (<10).")
     
+    # Loss Analysis
+    train_losses = [m.get('train_loss') for m in metrics if 'train_loss' in m and m.get('train_loss') is not None]
+    val_losses = [m.get('val_loss') for m in metrics if 'val_loss' in m and m.get('val_loss') is not None]
+    
+    if train_losses:
+        print(f"\n📉 TRAINING LOSS:")
+        print(f"   Initial: {train_losses[0]:.6f}")
+        print(f"   Latest:  {train_losses[-1]:.6f}")
+        print(f"   Change:  {train_losses[-1] - train_losses[0]:+.6f} ({((train_losses[-1]/train_losses[0] - 1) * 100):+.1f}%)")
+    
+    if val_losses:
+        print(f"\n📉 VALIDATION LOSS:")
+        print(f"   Initial: {val_losses[0]:.6f}")
+        print(f"   Latest:  {val_losses[-1]:.6f}")
+        print(f"   Change:  {val_losses[-1] - val_losses[0]:+.6f} ({((val_losses[-1]/val_losses[0] - 1) * 100):+.1f}%)")
+        if val_losses[-1] < val_losses[0]:
+            print(f"   ✓ Validation loss is decreasing - model is learning!")
+        else:
+            print(f"   ⚠️  Validation loss is increasing - may be overfitting")
+    
     # Hierarchy Preservation Analysis
     cophenetic = [m.get('cophenetic', 0) for m in metrics if 'cophenetic' in m]
-    spearman = [m.get('spearman', 0) for m in metrics if 'spearman' in m]
     
     if cophenetic:
         print(f"\n📈 HIERARCHY PRESERVATION:")
         print(f"   Cophenetic: {cophenetic[0]:.4f} → {cophenetic[-1]:.4f} ({cophenetic[-1] - cophenetic[0]:+.4f})")
-        print(f"   Spearman:   {spearman[0]:.4f} → {spearman[-1]:.4f} ({spearman[-1] - spearman[0]:+.4f})")
         
         if cophenetic[-1] > 0.7:
             print(f"   ✓ Excellent hierarchy preservation!")
@@ -344,16 +412,17 @@ def main():
     print("\n" + "=" * 90)
     print("METRICS SUMMARY TABLE")
     print("=" * 90)
-    print(f"{'Epoch':<8} {'Radius':<15} {'Cophenetic':<12} {'Spearman':<12} {'Dist CV':<10} {'Collapse':<10}")
+    print(f"{'Epoch':<8} {'Radius':<15} {'Train Loss':<12} {'Val Loss':<12} {'Cophenetic':<12} {'Dist CV':<10} {'Collapse':<10}")
     print("-" * 90)
     for m in metrics:
         epoch = m.get('epoch', 'N/A')
         radius = f"{m.get('radius_mean', 0):.2f}±{m.get('radius_std', 0):.2f}"
+        train_loss = f"{m.get('train_loss', 0):.6f}" if 'train_loss' in m and m.get('train_loss') is not None else 'N/A'
+        val_loss = f"{m.get('val_loss', 0):.6f}" if 'val_loss' in m and m.get('val_loss') is not None else 'N/A'
         cophenetic = f"{m.get('cophenetic', 0):.4f}" if 'cophenetic' in m else 'N/A'
-        spearman = f"{m.get('spearman', 0):.4f}" if 'spearman' in m else 'N/A'
         dist_cv = f"{m.get('dist_cv', 0):.4f}" if 'dist_cv' in m else 'N/A'
         collapse = 'Yes' if m.get('collapse', False) else 'No'
-        print(f"{epoch:<8} {radius:<15} {cophenetic:<12} {spearman:<12} {dist_cv:<10} {collapse:<10}")
+        print(f"{epoch:<8} {radius:<15} {train_loss:<12} {val_loss:<12} {cophenetic:<12} {dist_cv:<10} {collapse:<10}")
     print()
 
 

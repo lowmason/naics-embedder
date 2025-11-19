@@ -1,34 +1,17 @@
 # -------------------------------------------------------------------------------------------------
-# Imports
+# Main CLI Entry Point
 # -------------------------------------------------------------------------------------------------
 
 import logging
 import os
-import time
 import warnings
-from pathlib import Path
-from typing import List, Optional
 
-import pytorch_lightning as pyl
 import typer
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.loggers import TensorBoardLogger
 from rich.console import Console
 from rich.panel import Panel
-from typing_extensions import Annotated
 
-from naics_embedder.data_generation.compute_distances import calculate_pairwise_distances
-from naics_embedder.data_generation.compute_relations import calculate_pairwise_relations
-from naics_embedder.data_generation.create_triplets import generate_training_triplets
-from naics_embedder.data_generation.download_data import download_preprocess_data
-from naics_embedder.data_loader.datamodule import NAICSDataModule
-from naics_embedder.model.naics_model import NAICSContrastiveModel
-from naics_embedder.utils.backend import get_device
-from naics_embedder.utils.config import ChainConfig, Config, list_available_curricula, parse_override_value
-from naics_embedder.utils.console import configure_logging
-from naics_embedder.tools.config_tools import show_current_config
-from naics_embedder.tools.gpu_tools import optimize_gpu_config, detect_gpu_memory
-from naics_embedder.tools.metrics_tools import visualize_metrics, investigate_hierarchy
+# Import command groups from separate modules
+from naics_embedder.cli.commands import data, tools, training
 
 # Set CUDA memory allocator configuration to reduce fragmentation
 os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
@@ -78,7 +61,7 @@ warnings.filterwarnings(
 
 
 # -------------------------------------------------------------------------------------------------
-# Setup Typer App
+# Setup Main Typer App
 # -------------------------------------------------------------------------------------------------
 
 app = typer.Typer(
@@ -86,15 +69,19 @@ app = typer.Typer(
         '[bold cyan]NAICS Embedder[/bold cyan]\n\nText-enhanced Hyperbolic NAICS Embedding System',
         border_style='cyan',
         padding=(1, 2),
-    ) #type: ignore
+    )  # type: ignore
 )
-data_app = typer.Typer(help='Manage and generate project datasets.')
-app.add_typer(data_app, name='data')
 
-tools_app = typer.Typer(help='Utility tools for configuration, GPU optimization, and metrics analysis.')
-app.add_typer(tools_app, name='tools')
+# Add command groups (sub-apps)
+app.add_typer(data.app, name='data')
+app.add_typer(tools.app, name='tools')
+
+# Add training commands directly to main app
+app.command('train')(training.train)
+app.command('train-seq')(training.train_sequential)
 
 
+<<<<<<< Updated upstream
 # -------------------------------------------------------------------------------------------------
 # Data generation commands
 # -------------------------------------------------------------------------------------------------
@@ -1207,3 +1194,8 @@ def investigate(
     except Exception as e:
         console.print(f'[bold red]Error:[/bold red] {e}')
         raise typer.Exit(code=1)
+=======
+# Entry point
+if __name__ == '__main__':
+    app()
+>>>>>>> Stashed changes
