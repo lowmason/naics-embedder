@@ -74,6 +74,7 @@ dmypy.json
 # Data files
 archive/
 data/
+site/
 *.parquet
 *.cache
     
