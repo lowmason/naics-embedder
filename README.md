@@ -205,105 +205,59 @@ project modules.
 
 ### 8.0 Initial Setup
 
-After cloning the repository, run the setup script to configure git, zsh, oh-my-zsh, and Spaceship theme:
+1. Clone the repository:
 
-```bash
-./scripts/setup.sh
-```
-
-Or use the Makefile:
-
-```bash
-make setup
-```
-
-This will:
-- Configure git user.name and user.email (if not already set)
-- Install zsh (if not installed)
-- Install oh-my-zsh
-- Install Spaceship prompt theme
-- Configure `.zshrc` with Spaceship theme
-- Set zsh as your default shell
-- Set up project-specific git settings
-
-**Personal customizations:** Create `~/.zshrc.local` for your personal zsh customizations (aliases, functions, etc.). See `scripts/zshrc.local.example` for a template.
-
-**Alternative: Setting git config via environment variables**
-
-Instead of using `git config --global`, you can set git author/committer information using environment variables. This is useful for cloud environments where you want to configure git automatically when the instance is created.
-
-**Option 1: Add to your shell profile** (`~/.zshrc` or `~/.bashrc`):
-```bash
-export GIT_AUTHOR_NAME="Your Name"
-export GIT_AUTHOR_EMAIL="your.email@example.com"
-export GIT_COMMITTER_NAME="Your Name"
-export GIT_COMMITTER_EMAIL="your.email@example.com"
-```
-
-**Option 2: Use cloud-init/user-data scripts** (for automatic setup on instance creation):
-```yaml
-#cloud-config
-runcmd:
-  - echo 'export GIT_AUTHOR_NAME="Your Name"' >> /home/ubuntu/.zshrc
-  - echo 'export GIT_AUTHOR_EMAIL="your.email@example.com"' >> /home/ubuntu/.zshrc
-  - echo 'export GIT_COMMITTER_NAME="Your Name"' >> /home/ubuntu/.zshrc
-  - echo 'export GIT_COMMITTER_EMAIL="your.email@example.com"' >> /home/ubuntu/.zshrc
-```
-
-Git will automatically use these environment variables if they're set, and they take precedence over `git config` settings. This way, you don't need to run the setup script to configure git—it's already set when you log in.
-
-**For Lambda Labs (lambda.ai) instances:**
-
-Lambda Labs instances typically come with Ubuntu and basic tools pre-installed, but don't support cloud-init scripts. After connecting to your Lambda Labs instance:
-
-1. Clone the repository (if not already cloned):
    ```bash
-   git clone <your-repo-url>
+   git clone https://github.com/lowmason/naics-embedder.git
    cd naics-embedder
    ```
 
-2. Run the Lambda-specific setup script:
+2. Install uv:
+
    ```bash
-   ./scripts/lambda-setup.sh
-   ```
-   
-   Or use the Makefile:
-   ```bash
-   make lambda-setup
+   pip3 install uv
    ```
 
-   This script is identical to `setup.sh` but optimized for Lambda Labs' default Ubuntu environment.
+3. Install dependencies:
 
-3. Alternatively, you can use the standard setup script:
    ```bash
-   ./scripts/setup.sh
-   # or
-   make setup
+   uv synv
    ```
 
-Both scripts will install uv, configure git, set up zsh/oh-my-zsh/Spaceship, and prepare your environment.
-
-**Quick reference:**
-- `make setup` or `./scripts/setup.sh` - Standard setup for most environments
-- `make lambda-setup` or `./scripts/lambda-setup.sh` - Setup optimized for Lambda Labs
-- `make install` - Install project dependencies (requires uv)
-- `make help` - Show all available make targets
-
-### 8.1 Training the Contrastive Model
+### 8.1 Download and preprocess NAICS data
 
 1. Prepare the NAICS dataset with four text channels.
+
+   ```bash
+   uv run naics-embedder data preprocess
+   uv run naics-embedder data relations
+   uv run naics-embedder data distances
+   uv run naics-embedder data triplets
+   ```
+
+   Or:
 
    ```bash
    uv run naics-embedder data all
    ```
 
-2. Run training:
+### 8.2 Training the Contrastive Model
+
+1. Manual curriculum training:
 
    ```bash
-   uv run naics-embedder train --stage 01
+   uv run naics-embedder train --curriculum 01_text
+   uv run naics-embedder train --curriculum 02_text --ckpt-path ./checkpoints/01_text 
+   uv run naics-embedder train --curriculum 03_text --ckpt-path ./checkpoints/02_text
    ```
 
-### 8.2 Running HGCN Refinement
+   Or with one command:
+
+   ```bash
+   uv run naics-embedder train-curriculum --chain chain_text
+   ```
+
+### 8.3 Running HGCN Refinement
 
 1. Construct the NAICS parent–child graph.
 2. Load hyperbolic embeddings from 8.1.2.
