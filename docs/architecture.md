@@ -156,9 +156,9 @@ HyperbolicProjection(
 
 ### 4. Hyperbolic Contrastive Learning
 
-Contrastive learning is performed directly in hyperbolic space using **Lorentzian geodesic distances**.
+Contrastive learning is performed directly in hyperbolic space using **Decoupled Contrastive Learning (DCL)** with **Lorentzian geodesic distances**.
 
-#### Hyperbolic InfoNCE Loss
+#### Decoupled Contrastive Learning (DCL) Loss
 
 ```python
 HyperbolicInfoNCELoss(
@@ -167,6 +167,8 @@ HyperbolicInfoNCELoss(
     curvature=1.0
 )
 ```
+
+**Note**: Despite the class name, this loss function implements DCL rather than standard InfoNCE.
 
 **Distance Computation:**
 
@@ -184,23 +186,32 @@ where the Lorentz inner product is:
 
 **Loss Function:**
 
-Standard InfoNCE loss with hyperbolic distances:
+Decoupled Contrastive Learning (DCL) loss with hyperbolic distances:
 
 ```
-L = -log(exp(-d(anchor, positive) / τ) / Σᵢ exp(-d(anchor, negativeᵢ) / τ))
+pos_sim = -d(anchor, positive) / τ
+neg_sims = -d(anchor, negativeᵢ) / τ  for all i
+L = (-pos_sim + logsumexp(neg_sims)).mean()
 ```
 
 where `τ` is the temperature parameter (default: `0.07`).
+
+**Key Advantages of DCL:**
+
+- **Decoupled gradients**: Positive and negative terms are computed separately, improving gradient flow
+- **Numerical stability**: Uses `logsumexp` for stable computation of the negative term
+- **Flexibility**: Can yield negative loss values (unlike InfoNCE), which is expected behavior
 
 **False-Negative Mitigation:**
 
 A curriculum-based procedure removes semantically similar negatives:
 
 1. **Clustering**: Periodically cluster embeddings using KMeans (default: every 5 epochs after epoch 10)
+   - Safeguard ensures `n_clusters >= 1` to prevent KMeans errors
 2. **Masking**: Identify negatives sharing cluster label with anchor
-3. **Exclusion**: Mask these false negatives from the contrastive denominator
+3. **Exclusion**: Mask these false negatives with `-inf` in the negative similarities before `logsumexp`
 
-This prevents the model from incorrectly separating close hierarchical neighbors.
+This prevents the model from incorrectly separating close hierarchical neighbors. The masking is retained in the DCL formulation, ensuring false negatives do not contribute to the loss.
 
 ---
 
@@ -339,7 +350,7 @@ Batch: (anchors, positives, negatives)
     ↓
 [Apply False-Negative Mask] (if available)
     ↓
-[Hyperbolic InfoNCE Loss]
+[Decoupled Contrastive Learning (DCL) Loss]
     ↓
 [Additional Losses]
     ├─→ Hierarchy Preservation Loss
@@ -424,10 +435,12 @@ exp₀(v) = (cosh(||v||/√c), sinh(||v||/√c) * v/||v||)
 
 ### Contrastive Learning
 
-The InfoNCE loss maximizes agreement between anchor-positive pairs while minimizing agreement with negatives:
+The system uses **Decoupled Contrastive Learning (DCL)** loss, which decouples the positive and negative terms for improved gradient flow:
 
 ```
-L = -log(exp(sim(anchor, positive) / τ) / Σᵢ exp(sim(anchor, negativeᵢ) / τ))
+pos_sim = -d(anchor, positive) / τ
+neg_sims = [-d(anchor, negativeᵢ) / τ for all i]
+L = (-pos_sim + logsumexp(neg_sims)).mean()
 ```
 
 In hyperbolic space, similarity is defined as negative distance:
@@ -435,6 +448,13 @@ In hyperbolic space, similarity is defined as negative distance:
 ```
 sim(u, v) = -d(u, v)
 ```
+
+**Key Differences from InfoNCE:**
+
+- DCL computes `logsumexp(neg_sims)` directly rather than using the softmax normalization of InfoNCE
+- The positive term is simply `-pos_sim` rather than being part of a log-softmax
+- This decoupling provides better gradient flow and numerical stability
+- DCL loss can be negative (unlike InfoNCE), which is expected behavior
 
 ---
 
@@ -486,7 +506,7 @@ NAICSContrastiveModel
     │   ├─→ 4x LoRA-adapted Transformers
     │   ├─→ MixtureOfExperts
     │   └─→ HyperbolicProjection
-    ├─→ HyperbolicInfoNCELoss
+    ├─→ HyperbolicInfoNCELoss (implements DCL)
     ├─→ HierarchyPreservationLoss (optional)
     ├─→ LambdaRankLoss (optional)
     └─→ Evaluation Components

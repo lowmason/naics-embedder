@@ -818,6 +818,11 @@ class TrainingConfig(BaseModel):
         ge=0,
         description='Number of warmup steps'
     )
+    use_warmup_cosine: bool = Field(
+        default=False,
+        description='Use warmup + cosine decay scheduler instead of ReduceLROnPlateau. '
+                    'Beneficial for large training jobs with many epochs.'
+    )
     trainer: TrainerConfig = Field(
         default_factory=TrainerConfig,
         description='PyTorch Lightning Trainer config'

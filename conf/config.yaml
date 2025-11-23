@@ -68,6 +68,7 @@ training:
   learning_rate: 1e-4  # Reduced from 2e-4 to prevent radius instability
   weight_decay: 0.01
   warmup_steps: 500
+  use_warmup_cosine: false  # Set to true for large training jobs with many epochs
   
   trainer:
     max_epochs: 15  # Reduced to prevent unnecessary training

@@ -138,7 +138,6 @@ def get_distance(idx_code_i: Union[str, int], idx_code_j: Union[str, int]) -> fl
 # -------------------------------------------------------------------------------------------------
 
 def get_indices_codes(
-    parquet_path: str,
     return_type: Literal['codes', 'indices', 'code_to_idx', 'idx_to_code']
 ) -> Union[List[str], List[int], Dict[str, int], Dict[int, str]]:
 
@@ -160,7 +159,7 @@ def get_indices_codes(
     idx_code_iter = (
         pl
         .read_parquet(
-            parquet_path
+            './data/naics_descriptions.parquet'
         )
         .select('index', 'code')
         .iter_rows(named=True)

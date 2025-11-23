@@ -89,19 +89,24 @@ class HyperbolicInfoNCELoss(nn.Module):
         neg_similarities = -neg_distances / self.temperature
 
         if false_negative_mask is not None:
+            # Retain false negative masking (-inf on known false negatives)
             neg_similarities = neg_similarities.masked_fill(
                 false_negative_mask,
                 -torch.finfo(neg_similarities.dtype).max
             )
         
-        logits = torch.cat([
-            pos_similarities.unsqueeze(1),
-            neg_similarities
-        ], dim=1)
+        # Decoupled Contrastive Learning (DCL) loss
+        # pos_term = -pos_sim
+        # neg_term = logsumexp(neg_sims)
+        # loss = (pos_term + neg_term).mean()
+        pos_term = -pos_similarities  # (batch_size,)
         
-        labels = torch.zeros(batch_size, dtype=torch.long, device=logits.device)
+        # Compute logsumexp over negatives: log(sum(exp(neg_sims)))
+        # Use logsumexp for numerical stability
+        neg_term = torch.logsumexp(neg_similarities, dim=1)  # (batch_size,)
         
-        loss = F.cross_entropy(logits, labels)
+        # DCL loss: pos_term + neg_term
+        loss = (pos_term + neg_term).mean()
         
         return loss
 

@@ -26,6 +26,20 @@ def collate_fn(batch: List[Dict]) -> Dict:
     """Collate function to batch triplets for training."""
     channels = ['title', 'description', 'excluded', 'examples']
     
+    # Find maximum number of negatives in batch and pad shorter lists
+    max_negatives = max(len(item['negatives']) for item in batch) if batch else 0
+    if max_negatives == 0:
+        raise ValueError("Batch contains items with no negatives - cannot create training batch")
+    
+    for item in batch:
+        if len(item['negatives']) < max_negatives:
+            # Pad by repeating the last negative
+            last_negative = item['negatives'][-1] if item['negatives'] else None
+            if last_negative is None:
+                raise ValueError(f"Item has no negatives to pad from: {item.get('anchor_code', 'unknown')}")
+            padding_needed = max_negatives - len(item['negatives'])
+            item['negatives'].extend([last_negative] * padding_needed)
+    
     # Initialize batch dictionaries
     anchor_batch = {channel: {} for channel in channels}
     positive_batch = {channel: {} for channel in channels}
@@ -81,7 +95,7 @@ def collate_fn(batch: List[Dict]) -> Dict:
         'positive': positive_batch,
         'negatives': negatives_batch,
         'batch_size': len(batch),
-        'k_negatives': len(batch[0]['negatives']),
+        'k_negatives': max_negatives,  # Use max_negatives instead of assuming all have same length
         'anchor_code': anchor_codes,
         'positive_code': positive_codes,
         'negative_codes': negative_codes
