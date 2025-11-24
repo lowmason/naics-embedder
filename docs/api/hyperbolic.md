@@ -1,3 +1,3 @@
 # Hyperbolic API
 
-::: naics_embedder.model.hyperbolic
+::: naics_embedder.text_model.hyperbolic

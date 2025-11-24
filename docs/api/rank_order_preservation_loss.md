@@ -1,4 +1,4 @@
-# Rank Order Preservation Loss API
+# Rank Order Preservation Loss
 
-::: naics_embedder.model.loss.RankOrderPreservationLoss
-::: naics_embedder.model.loss.LambdaRankLoss
+::: naics_embedder.text_model.loss.RankOrderPreservationLoss
+::: naics_embedder.text_model.loss.LambdaRankLoss

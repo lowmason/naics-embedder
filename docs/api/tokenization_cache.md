@@ -1,4 +1,4 @@
 # Tokenization Cache API
 
-::: naics_embedder.data_loader.tokenization_cache
+::: naics_embedder.text_model.dataloader.tokenization_cache
 

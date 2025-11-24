@@ -13,24 +13,24 @@ import pytorch_lightning as pyl
 import torch
 import torch.distributed as dist
 
-from naics_embedder.model.curriculum import CurriculumScheduler
-from naics_embedder.model.hyperbolic_clustering import HyperbolicKMeans
-from naics_embedder.model.encoder import MultiChannelEncoder
-from naics_embedder.model.evaluation import (
+from naics_embedder.text_model.curriculum import CurriculumScheduler
+from naics_embedder.text_model.hyperbolic_clustering import HyperbolicKMeans
+from naics_embedder.text_model.encoder import MultiChannelEncoder
+from naics_embedder.text_model.evaluation import (
     EmbeddingEvaluator,
     EmbeddingStatistics,
     HierarchyMetrics,
 )
-from naics_embedder.model.hard_negative_mining import (
+from naics_embedder.text_model.hard_negative_mining import (
     LorentzianHardNegativeMiner,
     NormAdaptiveMargin,
     RouterGuidedNegativeMiner,
 )
-from naics_embedder.model.hyperbolic import (
+from naics_embedder.text_model.hyperbolic import (
     check_lorentz_manifold_validity,
     log_hyperbolic_diagnostics,
 )
-from naics_embedder.model.loss import HyperbolicInfoNCELoss
+from naics_embedder.text_model.loss import HyperbolicInfoNCELoss
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
         self.hierarchy_loss_fn = None
         hierarchy_weight = getattr(self.hparams, 'hierarchy_weight', 0.1)
         if self.ground_truth_distances is not None and self.code_to_idx is not None and hierarchy_weight > 0:
-            from naics_embedder.model.loss import HierarchyPreservationLoss
+            from naics_embedder.text_model.loss import HierarchyPreservationLoss
             self.hierarchy_loss_fn = HierarchyPreservationLoss(
                 tree_distances=self.ground_truth_distances,
                 code_to_idx=self.code_to_idx,
@@ -218,7 +218,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
         self.lambdarank_loss_fn = None
         rank_order_weight = getattr(self.hparams, 'rank_order_weight', 0.15)
         if self.ground_truth_distances is not None and self.code_to_idx is not None and rank_order_weight > 0:
-            from naics_embedder.model.loss import LambdaRankLoss
+            from naics_embedder.text_model.loss import LambdaRankLoss
             self.lambdarank_loss_fn = LambdaRankLoss(
                 tree_distances=self.ground_truth_distances,
                 code_to_idx=self.code_to_idx,
@@ -502,57 +502,57 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 global_batch_size, global_k_negatives, -1
             )
             
-                # Extract global negatives for all anchors (we'll use all of them for mining)
-                # But we only need to compute distances for local anchors
-                candidate_negatives_global = global_negative_emb_reshaped  # (global_batch_size, global_k_negatives, embedding_dim+1)
-                
-                # Memory Management (Issue #19):
-                # The global batch creates a similarity matrix of size:
-                # (batch_size, global_batch_size * global_k_negatives)
-                # Memory usage: batch_size * global_batch_size * global_k_negatives * 4 bytes (float32)
-                # Example: batch_size=32, world_size=4, k_negatives=24
-                #   -> global_batch_size=128, global_k_negatives=24
-                #   -> Matrix size: (32, 3072) = ~393KB per batch
-                #   -> Global negatives: (128*24, D+1) = ~(3072, 769) = ~9MB per GPU
-                # This is manageable for most GPUs, but should be monitored.
-                
-                # Log memory usage for monitoring
-                if batch_idx == 0:
-                    global_negatives_memory_mb = (
-                        global_negative_emb.numel() * global_negative_emb.element_size() / (1024 ** 2)
-                    )
-                    # Estimate similarity matrix memory
-                    similarity_matrix_memory_mb = (
-                        batch_size * global_batch_size * global_k_negatives * 4 / (1024 ** 2)
-                    )
-                    self.log(
-                        'train/global_batch/global_negatives_memory_mb',
-                        global_negatives_memory_mb,
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True
-                    )
-                    self.log(
-                        'train/global_batch/similarity_matrix_memory_mb',
-                        similarity_matrix_memory_mb,
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True
-                    )
-                    self.log(
-                        'train/global_batch/global_batch_size',
-                        global_batch_size,
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True
-                    )
-                    self.log(
-                        'train/global_batch/global_k_negatives',
-                        global_k_negatives,
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True
-                    )
+            # Extract global negatives for all anchors (we'll use all of them for mining)
+            # But we only need to compute distances for local anchors
+            candidate_negatives_global = global_negative_emb_reshaped  # (global_batch_size, global_k_negatives, embedding_dim+1)
+            
+            # Memory Management (Issue #19):
+            # The global batch creates a similarity matrix of size:
+            # (batch_size, global_batch_size * global_k_negatives)
+            # Memory usage: batch_size * global_batch_size * global_k_negatives * 4 bytes (float32)
+            # Example: batch_size=32, world_size=4, k_negatives=24
+            #   -> global_batch_size=128, global_k_negatives=24
+            #   -> Matrix size: (32, 3072) = ~393KB per batch
+            #   -> Global negatives: (128*24, D+1) = ~(3072, 769) = ~9MB per GPU
+            # This is manageable for most GPUs, but should be monitored.
+            
+            # Log memory usage for monitoring
+            if batch_idx == 0:
+                global_negatives_memory_mb = (
+                    global_negative_emb.numel() * global_negative_emb.element_size() / (1024 ** 2)
+                )
+                # Estimate similarity matrix memory
+                similarity_matrix_memory_mb = (
+                    batch_size * global_batch_size * global_k_negatives * 4 / (1024 ** 2)
+                )
+                self.log(
+                    'train/global_batch/global_negatives_memory_mb',
+                    global_negatives_memory_mb,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/global_batch/similarity_matrix_memory_mb',
+                    similarity_matrix_memory_mb,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/global_batch/global_batch_size',
+                    global_batch_size,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/global_batch/global_k_negatives',
+                    global_k_negatives,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
         else:
             # Single GPU or global batch disabled: use local negatives
             global_negative_emb_reshaped = None
@@ -1081,7 +1081,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 all_embeddings = torch.cat([anchor_emb, positive_emb])
                 
                 # Use the loss function's lorentz distance
-                from naics_embedder.model.hyperbolic import LorentzDistance
+                from naics_embedder.text_model.hyperbolic import LorentzDistance
                 lorentz_dist = LorentzDistance(curvature=self.hparams.curvature)
                 
                 hierarchy_loss = self.hierarchy_loss_fn(
@@ -1108,7 +1108,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
                     logger.debug('Skipping LambdaRank: negative_codes not available in batch')
                 else:
                     # Use the loss function's lorentz distance
-                    from naics_embedder.model.hyperbolic import LorentzDistance
+                    from naics_embedder.text_model.hyperbolic import LorentzDistance
                     lorentz_dist = LorentzDistance(curvature=self.hparams.curvature)
                     
                     lambdarank_loss = self.lambdarank_loss_fn(

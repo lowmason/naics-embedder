@@ -10,8 +10,8 @@ import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from transformers import AutoModel
 
-from naics_embedder.model.moe import MixtureOfExperts
-from naics_embedder.model.hyperbolic import HyperbolicProjection
+from naics_embedder.text_model.moe import MixtureOfExperts
+from naics_embedder.text_model.hyperbolic import HyperbolicProjection
 
 logger = logging.getLogger(__name__)
 

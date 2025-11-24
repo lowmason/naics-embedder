@@ -1,4 +1,4 @@
 # HGCN DataModule API
 
-::: naics_embedder.data_loader.hgcn_datamodule
+::: naics_embedder.graph_model.dataloader.hgcn_datamodule
 

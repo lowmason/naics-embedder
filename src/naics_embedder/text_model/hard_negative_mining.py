@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-from naics_embedder.model.hyperbolic import LorentzDistance
+from naics_embedder.text_model.hyperbolic import LorentzDistance
 
 logger = logging.getLogger(__name__)
 

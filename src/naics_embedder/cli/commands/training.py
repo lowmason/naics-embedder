@@ -18,9 +18,9 @@ from rich.console import Console
 from rich.panel import Panel
 from typing_extensions import Annotated
 
-from naics_embedder.data_loader.datamodule import NAICSDataModule
-from naics_embedder.data_loader.tokenization_cache import tokenization_cache
-from naics_embedder.model.naics_model import NAICSContrastiveModel
+from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
+from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
+from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.backend import get_device
 from naics_embedder.utils.config import (
     Config,
@@ -349,7 +349,7 @@ def train(
         logger.info('Loading configuration...')
         if curriculum_type == 'graph':
             # For graph training, use GraphConfig and hgcn module
-            from naics_embedder.model.hgcn import main as hgcn_main
+            from naics_embedder.graph_model.hgcn import main as hgcn_main
             from naics_embedder.utils.config import GraphConfig
             cfg = GraphConfig.from_yaml(config_file, curriculum_name=curriculum, curriculum_type='graph')
             # Call HGCN training directly

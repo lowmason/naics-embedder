@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from naics_embedder.model.hyperbolic import LorentzDistance, LorentzOps
+from naics_embedder.text_model.hyperbolic import LorentzDistance, LorentzOps
 
 logger = logging.getLogger(__name__)
 

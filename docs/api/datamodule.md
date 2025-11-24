@@ -1,4 +1,4 @@
 # DataModule API
 
-::: naics_embedder.data_loader.datamodule
+::: naics_embedder.text_model.dataloader.datamodule
 

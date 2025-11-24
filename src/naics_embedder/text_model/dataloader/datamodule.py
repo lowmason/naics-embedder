@@ -12,7 +12,7 @@ import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, IterableDataset
 
-from naics_embedder.data_loader.streaming_dataset import create_streaming_dataset, _get_final_cache_path, create_streaming_generator
+from naics_embedder.text_model.dataloader.streaming_dataset import create_streaming_dataset, _get_final_cache_path, create_streaming_generator
 from naics_embedder.utils.config import StreamingConfig, TokenizationConfig
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ class GeneratorDataset(IterableDataset):
             # Set tokenizer parallelism to false in each worker
             os.environ['TOKENIZERS_PARALLELISM'] = 'false'
             
-            from naics_embedder.data_loader.tokenization_cache import _load_tokenization_cache, tokenization_cache
+            from naics_embedder.text_model.dataloader.tokenization_cache import _load_tokenization_cache, tokenization_cache
             
             # Fast path: load cache directly (should already exist from prepare_data)
             cache_path = Path(self.tokenization_cfg.output_path)
@@ -276,7 +276,7 @@ class NAICSDataModule(LightningDataModule):
         """Build all caches before worker processes are spawned."""
         os.environ['TOKENIZERS_PARALLELISM'] = 'false'
         
-        from naics_embedder.data_loader.tokenization_cache import tokenization_cache
+        from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
         from naics_embedder.utils.utilities import get_indices_codes
         
         # Build tokenization cache

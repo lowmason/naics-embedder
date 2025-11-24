@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from naics_embedder.utils.backend import get_device
 
 if TYPE_CHECKING:
-    from naics_embedder.model.naics_model import NAICSContrastiveModel
+    from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 
 logger = logging.getLogger(__name__)
 

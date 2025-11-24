@@ -1,3 +1,3 @@
 # Encoder API
 
-::: naics_embedder.model.encoder
+::: naics_embedder.text_model.encoder

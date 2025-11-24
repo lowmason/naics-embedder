@@ -1,4 +1,4 @@
-# Hierarchy Preservation Loss API
+# Hierarchy Preservation Loss
 
-::: naics_embedder.model.loss.HierarchyPreservationLoss
+::: naics_embedder.text_model.loss.HierarchyPreservationLoss
 

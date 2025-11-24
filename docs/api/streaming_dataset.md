@@ -1,4 +1,4 @@
 # Streaming Dataset API
 
-::: naics_embedder.data_loader.streaming_dataset
+::: naics_embedder.text_model.dataloader.streaming_dataset
 

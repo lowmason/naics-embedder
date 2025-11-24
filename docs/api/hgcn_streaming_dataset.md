@@ -1,4 +1,4 @@
-# HGCN Streaming Dataset API
+# HGCN Streaming Dataset
 
-::: naics_embedder.data_loader.hgcn_streaming_dataset
+::: naics_embedder.graph_model.dataloader.hgcn_streaming_dataset
 

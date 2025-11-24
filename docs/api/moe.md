@@ -1,3 +1,3 @@
 # Mixture of Experts API
 
-::: naics_embedder.model.moe
+::: naics_embedder.text_model.moe

@@ -16,9 +16,9 @@ from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import add_self_loops
 
-from naics_embedder.data_loader.hgcn_datamodule import Config as LoaderCfg
-from naics_embedder.data_loader.hgcn_datamodule import create_dataloader
-from naics_embedder.model.hyperbolic import LorentzOps
+from naics_embedder.graph_model.dataloader.hgcn_datamodule import Config as LoaderCfg
+from naics_embedder.graph_model.dataloader.hgcn_datamodule import create_dataloader
+from naics_embedder.text_model.hyperbolic import LorentzOps
 from naics_embedder.utils.config import GraphConfig
 from naics_embedder.utils.utilities import pick_device, setup_directory
 from naics_embedder.utils.validation_metrics import compute_validation_metrics

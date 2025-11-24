@@ -7,7 +7,7 @@ from typing import Dict
 
 import torch
 
-from naics_embedder.model.hyperbolic import LorentzOps
+from naics_embedder.text_model.hyperbolic import LorentzOps
 
 logger = logging.getLogger(__name__)
 

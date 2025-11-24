@@ -1,4 +1,4 @@
 # Evaluation API
 
-::: naics_embedder.model.evaluation
+::: naics_embedder.text_model.evaluation
 
