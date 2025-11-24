@@ -543,7 +543,23 @@ class StreamingConfig(BaseModel):
         default=2125,
         gt=0,
         description='Maximum number of negatives per positive'
-    )        
+    )
+    
+    # Phase 1 sampling parameters
+    use_phase1_sampling: bool = Field(
+        default=False,
+        description='Use Phase 1 tree-distance based sampling (inverse weighting, sibling masking, exclusion mining)'
+    )
+    phase1_alpha: float = Field(
+        default=1.5,
+        gt=0.0,
+        description='Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α'
+    )
+    phase1_exclusion_weight: float = Field(
+        default=100.0,
+        gt=0.0,
+        description='High constant weight for excluded codes in Phase 1 sampling'
+    )
 
 
 class DataLoaderConfig(BaseModel):
@@ -817,6 +833,11 @@ class TrainingConfig(BaseModel):
         default=500,
         ge=0,
         description='Number of warmup steps'
+    )
+    use_warmup_cosine: bool = Field(
+        default=False,
+        description='Use warmup + cosine decay scheduler instead of ReduceLROnPlateau. '
+                    'Beneficial for large training jobs with many epochs.'
     )
     trainer: TrainerConfig = Field(
         default_factory=TrainerConfig,

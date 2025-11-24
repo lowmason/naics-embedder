@@ -10,7 +10,6 @@ from rich.console import Console
 from typing_extensions import Annotated
 
 from naics_embedder.tools.config_tools import show_current_config
-from naics_embedder.tools.gpu_tools import detect_gpu_memory, optimize_gpu_config
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
 from naics_embedder.utils.console import configure_logging
 
@@ -30,9 +29,9 @@ def config(
         ),
     ] = 'conf/config.yaml',
 ):
-    """
+    '''
     Display current training and curriculum configuration.
-    """
+    '''
     show_current_config(config_file)
 
 
@@ -74,11 +73,11 @@ def gpu(
         ),
     ] = 'conf/config.yaml',
 ):
-    """
+    '''
     Optimize training configuration for available GPU memory.
     
     Suggests optimal batch_size and accumulate_grad_batches based on your GPU.
-    """
+    '''
     configure_logging('gpu_config.log')
     
     if not auto and gpu_memory is None:
@@ -144,14 +143,14 @@ def visualize(
         ),
     ] = None,
 ):
-    """
+    '''
     Visualize training metrics from log files.
     
     Creates comprehensive visualizations and analysis of training metrics including:
     - Hyperbolic radius over time
     - Hierarchy preservation correlations
     - Embedding diversity metrics
-    """
+    '''
     try:
         log_path = Path(log_file) if log_file else None
         output_path = Path(output_dir) if output_dir else None
@@ -187,12 +186,12 @@ def investigate(
         ),
     ] = None,
 ):
-    """
+    '''
     Investigate why hierarchy preservation correlations might be low.
     
     Analyzes ground truth distances, evaluation configuration, and provides
     recommendations for improving hierarchy preservation metrics.
-    """
+    '''
     try:
         dist_path = Path(distance_matrix) if distance_matrix else None
         config_path = Path(config_file) if config_file else None

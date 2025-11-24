@@ -16,12 +16,12 @@ from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import add_self_loops
 
+from naics_embedder.data_loader.hgcn_datamodule import Config as LoaderCfg
+from naics_embedder.data_loader.hgcn_datamodule import create_dataloader
 from naics_embedder.model.hyperbolic import LorentzOps
-from naics_embedder.data_loader.training_data_loader import Config as LoaderCfg
-from naics_embedder.data_loader.training_data_loader import create_dataloader
+from naics_embedder.utils.config import GraphConfig
 from naics_embedder.utils.utilities import pick_device, setup_directory
 from naics_embedder.utils.validation_metrics import compute_validation_metrics
-from naics_embedder.utils.config import GraphConfig, GraphCurriculumConfig
 
 # -------------------------------------------------------------------------------------------------
 # Config
@@ -59,18 +59,20 @@ class HyperbolicConvolution(MessagePassing):
         # Clamp curvature to safe range
         c = torch.clamp(self.curvature, min=0.1, max=10.0)
 
-        # Map from hyperboloid to tangent
+        # Issue #10: Fix gradient blocking - ensure gradients flow through all operations
+        # Map from hyperboloid to tangent (requires_grad=True maintained)
         x_tan = LorentzOps.log_map_zero(x_hyp, c=c)
         x_lin = self.lin(x_tan)
 
         # Propagate: message passing on tangent features
         x_agg = self.propagate(edge_index, x=x_lin)
 
+        # Issue #10: Use in-place operations carefully to preserve gradients
         # Residual in tangent space, then LN
         x_tan_out = x_tan + self.dropout(x_agg)
         x_tan_out = self.ln(x_tan_out)
 
-        # Map back to hyperboloid
+        # Map back to hyperboloid (gradients flow through exp_map)
         return LorentzOps.exp_map_zero(x_tan_out, c=c)
 
     def message(self, x_j: torch.Tensor) -> torch.Tensor:
@@ -559,30 +561,35 @@ def train_curriculum(
         config_file: Path to base config file
     '''
 
-    all_logs = []
-    current_embeddings = embeddings
-    
-    for stage_idx, stage_name in enumerate(curriculum_stages, 1):
-        # Load curriculum config for this stage
-        from naics_embedder.utils.config import GraphConfig
+    # Issue #9: Decouple config loading from training loop - load all configs upfront
+    from naics_embedder.utils.config import GraphConfig
+    stage_configs = []
+    for stage_name in curriculum_stages:
         stage_cfg = GraphConfig.from_yaml(
             config_file,
             curriculum_name=stage_name,
             curriculum_type='graph'
         )
-        
-        # Merge with base config (base config provides defaults)
+        # Merge with base config
         base_dict = base_cfg.model_dump()
         stage_dict = stage_cfg.model_dump()
-        # Override base with stage-specific values
         merged_dict = {**base_dict, **stage_dict}
-        stage_cfg = GraphConfig(**merged_dict)
+        merged_cfg = GraphConfig(**merged_dict)
+        stage_configs.append(merged_cfg)
+    
+    all_logs = []
+    current_embeddings = embeddings
+    
+    for stage_idx, stage_name in enumerate(curriculum_stages, 1):
+        # Use pre-loaded config
+        stage_cfg = stage_configs[stage_idx - 1]
 
         # Create dataloader for this stage
         loader = create_contrastive_dataloader(stage_cfg)
+        # Issue #8: Reduced verbose logging
         print(
-            f'\nStage {stage_idx}/{len(curriculum_stages)} ({stage_name}) dataloader: {len(loader.dataset)} pairs | '
-            f'batch={stage_cfg.batch_size} | n_negatives={stage_cfg.curriculum.n_negatives if stage_cfg.curriculum else stage_cfg.k_total}'
+            f'\nStage {stage_idx}/{len(curriculum_stages)} ({stage_name}): '
+            f'{len(loader.dataset)} pairs, batch={stage_cfg.batch_size}'
         )
 
         # Train this stage

@@ -2,6 +2,7 @@
 nav:
   - Home: index.md
   - System Overview: architecture.md
+  - Advanced Features: features.md
   - Training Overview:
       - Text Training: text_training.md
       - HGCN Training: hgcn_training.md

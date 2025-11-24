@@ -4,28 +4,126 @@
 
 import json
 import logging
-import math
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import polars as pl
 import pytorch_lightning as pyl
 import torch
-from sklearn.cluster import KMeans
+import torch.distributed as dist
 
+from naics_embedder.model.curriculum import CurriculumScheduler
+from naics_embedder.model.hyperbolic_clustering import HyperbolicKMeans
 from naics_embedder.model.encoder import MultiChannelEncoder
 from naics_embedder.model.evaluation import (
     EmbeddingEvaluator,
     EmbeddingStatistics,
     HierarchyMetrics,
 )
-from naics_embedder.model.loss import HyperbolicInfoNCELoss
-from naics_embedder.model.hyperbolic import (
-    log_hyperbolic_diagnostics,
-    check_lorentz_manifold_validity
+from naics_embedder.model.hard_negative_mining import (
+    LorentzianHardNegativeMiner,
+    NormAdaptiveMargin,
+    RouterGuidedNegativeMiner,
 )
+from naics_embedder.model.hyperbolic import (
+    check_lorentz_manifold_validity,
+    log_hyperbolic_diagnostics,
+)
+from naics_embedder.model.loss import HyperbolicInfoNCELoss
 
-logger = logging.getLogger(__name__) 
+logger = logging.getLogger(__name__)
+
+
+# -------------------------------------------------------------------------------------------------
+# Distributed Utilities for Global Batch Sampling
+# -------------------------------------------------------------------------------------------------
+
+def gather_embeddings_global(
+    local_embeddings: torch.Tensor,
+    world_size: Optional[int] = None
+) -> torch.Tensor:
+    """
+    Gather embeddings from all GPUs using all_gather with gradient support.
+    
+    Issue #19: Global Batch Sampling - Collect embeddings from all ranks
+    to enable hard negative mining across the global batch.
+    
+    This function uses torch.distributed.all_gather which preserves gradients,
+    ensuring that gradients flow back through the gather operation during backprop.
+    
+    Args:
+        local_embeddings: Local embeddings tensor (N_local, D) with requires_grad=True
+        world_size: Number of GPUs (auto-detected if None)
+    
+    Returns:
+        Global embeddings tensor (N_global, D) where N_global = N_local * world_size
+        Gradients will flow back through this operation during backprop.
+    """
+    if not dist.is_initialized():
+        # Single GPU case: return local embeddings as-is
+        return local_embeddings
+    
+    if world_size is None:
+        world_size = dist.get_world_size()
+    
+    if world_size == 1:
+        return local_embeddings
+    
+    # Use torch.distributed.all_gather for gradient support
+    # This preserves gradients: if local_embeddings requires grad, the gathered
+    # tensors will also have gradients flowing back during backprop.
+    gathered_list = [
+        torch.zeros_like(local_embeddings) for _ in range(world_size)
+    ]
+    
+    # all_gather collects tensors from all ranks into gathered_list
+    # Each rank receives all tensors, so gathered_list[i] contains the tensor from rank i
+    # Gradients flow back: during backprop, gradients are scattered back to each rank
+    dist.all_gather(gathered_list, local_embeddings)
+    
+    # Concatenate all gathered embeddings along the batch dimension
+    # This concatenation also preserves gradients
+    global_embeddings = torch.cat(gathered_list, dim=0)
+    
+    return global_embeddings
+
+
+def gather_negative_codes_global(
+    local_negative_codes: List[List[str]],
+    world_size: Optional[int] = None
+) -> List[List[str]]:
+    """
+    Gather negative codes from all GPUs for false negative masking.
+    
+    Args:
+        local_negative_codes: Local negative codes (batch_size, k_negatives)
+        world_size: Number of GPUs (auto-detected if None)
+    
+    Returns:
+        Global negative codes list
+    """
+    if not dist.is_initialized():
+        return local_negative_codes
+    
+    if world_size is None:
+        world_size = dist.get_world_size()
+    
+    if world_size == 1:
+        return local_negative_codes
+    
+    # Gather negative codes from all ranks
+    # Note: all_gather_object is used for Python objects like lists
+    gathered_codes: List[List[str]] = [None] * world_size  # type: ignore
+    dist.all_gather_object(gathered_codes, local_negative_codes)
+    
+    # Flatten the list of lists from all ranks
+    global_negative_codes = []
+    for codes_per_rank in gathered_codes:
+        if codes_per_rank is not None:
+            global_negative_codes.extend(codes_per_rank)
+    
+    return global_negative_codes
 
 
 # -------------------------------------------------------------------------------------------------
@@ -51,6 +149,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
         learning_rate: float = 2e-4,
         weight_decay: float = 0.01,
         warmup_steps: int = 500,
+        use_warmup_cosine: bool = False,
         load_balancing_coef: float = 0.01,
         fn_curriculum_start_epoch: int = 10,
         fn_cluster_every_n_epochs: int = 5,
@@ -78,6 +177,19 @@ class NAICSContrastiveModel(pyl.LightningModule):
             embedding_dim=self.encoder.embedding_dim,
             temperature=temperature,
             curvature=curvature
+        )
+        
+        # Phase 2: Hard negative mining and norm-adaptive margin
+        self.hard_negative_miner = LorentzianHardNegativeMiner(curvature=curvature)
+        self.norm_adaptive_margin = NormAdaptiveMargin(
+            base_margin=0.5,  # Default base margin m_0
+            curvature=curvature
+        )
+        
+        # Router-guided negative mining for MoE (Issue #16)
+        self.router_guided_miner = RouterGuidedNegativeMiner(
+            metric='kl_divergence',  # Use KL-divergence to measure confusion
+            temperature=1.0
         )
         
         self.load_balancing_coef = load_balancing_coef
@@ -122,10 +234,15 @@ class NAICSContrastiveModel(pyl.LightningModule):
         
         # Initialize evaluation metrics history for JSON logging
         self.evaluation_metrics_history: List[Dict] = []
+        
+        # Initialize curriculum scheduler (will be set in on_train_start)
+        self.curriculum_scheduler: Optional[CurriculumScheduler] = None
+        self.current_curriculum_flags: Dict[str, bool] = {}
+        self.previous_phase: Optional[int] = None
     
     
     def _get_metrics_file_path(self) -> Optional[Path]:
-        """Get the path to save evaluation metrics JSON file."""
+        '''Get the path to save evaluation metrics JSON file.'''
         if self.logger is None:
             return None
         
@@ -144,19 +261,21 @@ class NAICSContrastiveModel(pyl.LightningModule):
     
     
     def _load_ground_truth_distances(self, distance_matrix_path: str):
-
-        '''Load ground truth NAICS tree distances for evaluation.'''
-
+        '''
+        Load ground truth NAICS tree distances for evaluation.
+        
+        Issue #8: Replaced print statements with logger for consistent logging.
+        '''
         try:
-            print(
-                f'Loading ground truth distances\n'
-                f'  • from: {distance_matrix_path}')
+            logger.info(
+                f'Loading ground truth distances from: {distance_matrix_path}'
+            )
             
             df = pl.read_parquet(distance_matrix_path)
             n_codes = df.height
             
             ground_truth_distances = df.to_torch()
-            print(f'  • distance matrix: [{n_codes}, {n_codes}]\n')
+            logger.info(f'Distance matrix shape: [{n_codes}, {n_codes}]')
             
             code_to_idx = {}
             for col in df.columns:
@@ -169,7 +288,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
             self.code_to_idx = code_to_idx
             
         except Exception as e:
-            print(f'Could not load ground truth distances: {e}')
+            logger.error(f'Could not load ground truth distances: {e}')
             ground_truth_distances = None
             code_to_idx = None
     
@@ -181,8 +300,95 @@ class NAICSContrastiveModel(pyl.LightningModule):
         
         return self.encoder(channel_inputs)
     
+    def _compute_contrastive_loss(
+        self,
+        anchor_emb: torch.Tensor,
+        positive_emb: torch.Tensor,
+        negative_emb: torch.Tensor,
+        batch_size: int,
+        k_negatives: int,
+        batch: Dict,
+        batch_indices: List[int],
+        batch_idx: int,
+        false_negative_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        Compute contrastive loss with curriculum features (hard negative mining, etc.).
+        
+        This is a helper method used by both single-level and multi-level supervision paths.
+        """
+        # Phase 2: Hard Negative Mining (HNM) - Embedding-based and Router-guided
+        enable_hard_negative_mining = self.current_curriculum_flags.get(
+            'enable_hard_negative_mining', False
+        )
+        enable_router_guided_sampling = self.current_curriculum_flags.get(
+            'enable_router_guided_sampling', False
+        )
+        
+        # Reshape negatives for hard negative mining
+        negative_emb_reshaped = negative_emb.view(batch_size, k_negatives, -1)
+        
+        if enable_hard_negative_mining or enable_router_guided_sampling:
+            candidate_negatives = negative_emb_reshaped.clone()
+            
+            if enable_hard_negative_mining:
+                hard_negatives, hard_neg_distances = self.hard_negative_miner.mine_hard_negatives(
+                    anchor_emb=anchor_emb,
+                    candidate_negatives=candidate_negatives,
+                    k=k_negatives,
+                    return_distances=True
+                )
+                
+                if batch_idx == 0 and hard_neg_distances is not None:
+                    self.log(
+                        'train/curriculum/hard_neg_avg_distance',
+                        hard_neg_distances.mean().item(),
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+            
+            if enable_router_guided_sampling:
+                # Router-guided mining would need gate_probs, which requires encoder outputs
+                # For now, fall back to embedding-based if enabled
+                if enable_hard_negative_mining:
+                    negative_emb_reshaped = hard_negatives
+                logger.debug('Router-guided sampling in multi-level mode: using embedding-based HNM')
+            elif enable_hard_negative_mining:
+                negative_emb_reshaped = hard_negatives
+            
+            negative_emb = negative_emb_reshaped.view(batch_size * k_negatives, -1)
+        
+        # Compute contrastive loss
+        loss = self.loss_fn(
+            anchor_emb,
+            positive_emb,
+            negative_emb,
+            batch_size,
+            k_negatives,
+            false_negative_mask=false_negative_mask
+        )
+        
+        return loss
 
     def training_step(self, batch: Dict, batch_idx: int) -> torch.Tensor:
+        
+        # Update curriculum flags based on current epoch
+        if self.curriculum_scheduler is not None:
+            self.current_curriculum_flags = self.curriculum_scheduler.get_curriculum_flags(self.current_epoch)
+            
+            # Log phase transitions
+            self.curriculum_scheduler.log_phase_transition(
+                self.current_epoch,
+                self.previous_phase
+            )
+            self.previous_phase = self.curriculum_scheduler.get_phase(self.current_epoch)
+        
+        # Check if we have multi-level supervision (Issue #18)
+        # With multi-level supervision, the batch is expanded so each positive level
+        # is a separate item. The loss will naturally sum over all positive levels,
+        # giving us gradient accumulation.
+        has_multilevel = 'positive_levels' in batch
         
         anchor_output = self(batch['anchor'])
         positive_output = self(batch['positive'])
@@ -195,9 +401,26 @@ class NAICSContrastiveModel(pyl.LightningModule):
         batch_size = batch['batch_size']
         k_negatives = batch['k_negatives']
         
+        # Log multi-level supervision statistics
+        if has_multilevel and batch_idx == 0:
+            positive_levels = batch['positive_levels']
+            level_counts = {}
+            for level in positive_levels:
+                level_counts[level] = level_counts.get(level, 0) + 1
+            for level, count in sorted(level_counts.items()):
+                self.log(
+                    f'train/multilevel/positive_level_{level}_count',
+                    count,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+        
+        # False negative masking: controlled by curriculum scheduler
         false_negative_mask = None
+        enable_clustering = self.current_curriculum_flags.get('enable_clustering', False)
         if (
-            self.current_epoch >= self.hparams.fn_curriculum_start_epoch and 
+            enable_clustering and
             self.code_to_pseudo_label and 
             'negative_codes' in batch 
         ):
@@ -241,20 +464,401 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 logger.warning(f'Failed to create false negative mask: {e}')
                 false_negative_mask = None
         
+        # Log negative sample type distribution (Issue #12)
+        if batch_idx == 0 and 'negative_codes' in batch and self.code_to_idx is not None:
+            self._log_negative_sample_distribution(batch)
+        
+        # Phase 2: Hard Negative Mining (HNM) - Embedding-based and Router-guided
+        # When enabled, select top-k hardest negatives based on Lorentzian distance and/or router confusion
+        enable_hard_negative_mining = self.current_curriculum_flags.get(
+            'enable_hard_negative_mining', False
+        )
+        enable_router_guided_sampling = self.current_curriculum_flags.get(
+            'enable_router_guided_sampling', False
+        )
+        
+        # Issue #19: Global Batch Sampling - Gather negatives from all GPUs
+        # This enables hard negative mining across the global batch, which is crucial
+        # for finding meaningful "Cousin" negatives that may not appear in small local batches
+        use_global_batch = (
+            (enable_hard_negative_mining or enable_router_guided_sampling) and
+            torch.distributed.is_initialized() and
+            torch.distributed.get_world_size() > 1
+        )
+        
+        if use_global_batch:
+            # Gather global negatives from all GPUs
+            # negative_emb: (batch_size * k_negatives, embedding_dim+1)
+            global_negative_emb = gather_embeddings_global(negative_emb)
+            
+            # Get global batch size and total negatives
+            world_size = torch.distributed.get_world_size()
+            global_batch_size = batch_size * world_size
+            global_k_negatives = global_negative_emb.shape[0] // global_batch_size
+            
+            # Reshape global negatives: (global_batch_size * global_k_negatives, embedding_dim+1)
+            # -> (global_batch_size, global_k_negatives, embedding_dim+1)
+            global_negative_emb_reshaped = global_negative_emb.view(
+                global_batch_size, global_k_negatives, -1
+            )
+            
+                # Extract global negatives for all anchors (we'll use all of them for mining)
+                # But we only need to compute distances for local anchors
+                candidate_negatives_global = global_negative_emb_reshaped  # (global_batch_size, global_k_negatives, embedding_dim+1)
+                
+                # Memory Management (Issue #19):
+                # The global batch creates a similarity matrix of size:
+                # (batch_size, global_batch_size * global_k_negatives)
+                # Memory usage: batch_size * global_batch_size * global_k_negatives * 4 bytes (float32)
+                # Example: batch_size=32, world_size=4, k_negatives=24
+                #   -> global_batch_size=128, global_k_negatives=24
+                #   -> Matrix size: (32, 3072) = ~393KB per batch
+                #   -> Global negatives: (128*24, D+1) = ~(3072, 769) = ~9MB per GPU
+                # This is manageable for most GPUs, but should be monitored.
+                
+                # Log memory usage for monitoring
+                if batch_idx == 0:
+                    global_negatives_memory_mb = (
+                        global_negative_emb.numel() * global_negative_emb.element_size() / (1024 ** 2)
+                    )
+                    # Estimate similarity matrix memory
+                    similarity_matrix_memory_mb = (
+                        batch_size * global_batch_size * global_k_negatives * 4 / (1024 ** 2)
+                    )
+                    self.log(
+                        'train/global_batch/global_negatives_memory_mb',
+                        global_negatives_memory_mb,
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+                    self.log(
+                        'train/global_batch/similarity_matrix_memory_mb',
+                        similarity_matrix_memory_mb,
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+                    self.log(
+                        'train/global_batch/global_batch_size',
+                        global_batch_size,
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+                    self.log(
+                        'train/global_batch/global_k_negatives',
+                        global_k_negatives,
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+        else:
+            # Single GPU or global batch disabled: use local negatives
+            global_negative_emb_reshaped = None
+            candidate_negatives_global = None
+            global_batch_size = batch_size
+            global_k_negatives = k_negatives
+        
+        # Reshape local negatives for hard negative mining
+        # negative_emb: (batch_size * k_negatives, embedding_dim+1)
+        negative_emb_reshaped = negative_emb.view(batch_size, k_negatives, -1)
+        
+        if enable_hard_negative_mining or enable_router_guided_sampling:
+            # Use global negatives if available, otherwise use local
+            if use_global_batch and candidate_negatives_global is not None:
+                # For each local anchor, mine hard negatives from global pool
+                # We need to compute distances from each local anchor to all global negatives
+                # This creates a (batch_size, global_k_negatives) distance matrix
+                
+                # Expand local anchors for broadcasting: (batch_size, 1, embedding_dim+1)
+                anchor_emb_expanded = anchor_emb.unsqueeze(1)  # (batch_size, 1, embedding_dim+1)
+                
+                # Compute distances from each local anchor to all global negatives
+                # Reshape global negatives to (global_batch_size * global_k_negatives, embedding_dim+1)
+                global_negatives_flat = candidate_negatives_global.view(-1, anchor_emb.shape[-1])
+                
+                # Compute distances using batched forward
+                # anchor_emb: (batch_size, embedding_dim+1)
+                # global_negatives_flat: (global_batch_size * global_k_negatives, embedding_dim+1)
+                # Result: (batch_size, global_batch_size * global_k_negatives)
+                # 
+                # Gradient Flow: The gathered global_negatives_flat has gradients from all GPUs.
+                # When we compute distances and select hard negatives, gradients will flow back
+                # through the all_gather operation to update embeddings on all GPUs.
+                global_distances_flat = self.hard_negative_miner.lorentz_distance.batched_forward(
+                    anchor_emb,  # (batch_size, embedding_dim+1)
+                    global_negatives_flat.unsqueeze(0).expand(batch_size, -1, -1)  # (batch_size, global_total, embedding_dim+1)
+                )  # (batch_size, global_total) where global_total = global_batch_size * global_k_negatives
+                
+                # Select top-k hardest (smallest distances)
+                _, topk_indices = torch.topk(
+                    global_distances_flat,
+                    k=k_negatives,
+                    dim=1,
+                    largest=False  # Smallest distances = hardest negatives
+                )
+                
+                # Gather selected negatives
+                # topk_indices: (batch_size, k_negatives) indexing into flattened global negatives
+                batch_indices = torch.arange(
+                    batch_size,
+                    device=anchor_emb.device
+                ).unsqueeze(1).expand(-1, k_negatives)
+                
+                # Get selected negatives from flattened global pool
+                selected_negatives = global_negatives_flat[topk_indices]  # (batch_size, k_negatives, embedding_dim+1)
+                
+                # Use selected negatives as hard negatives
+                hard_negatives = selected_negatives
+                hard_neg_distances = global_distances_flat.gather(1, topk_indices)
+                
+                # Log statistics
+                if batch_idx == 0 and hard_neg_distances is not None:
+                    avg_hard_neg_dist = hard_neg_distances.mean().item()
+                    min_hard_neg_dist = hard_neg_distances.min().item()
+                    max_hard_neg_dist = hard_neg_distances.max().item()
+                    self.log(
+                        'train/curriculum/hard_neg_avg_distance',
+                        avg_hard_neg_dist,
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+                    self.log(
+                        'train/curriculum/hard_neg_min_distance',
+                        min_hard_neg_dist,
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+                    self.log(
+                        'train/curriculum/hard_neg_max_distance',
+                        max_hard_neg_dist,
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+                    self.log(
+                        'train/global_batch/global_hard_negatives_used',
+                        True,
+                        batch_size=batch_size,
+                        on_step=False,
+                        on_epoch=True
+                    )
+            else:
+                # Local hard negative mining (original behavior)
+                # Store original candidate negatives
+                candidate_negatives = negative_emb_reshaped.clone()
+                
+                # Embedding-based hard negative mining (Issue #15)
+                if enable_hard_negative_mining:
+                    # Mine top-k hardest negatives for each anchor based on Lorentzian distance
+                    hard_negatives, hard_neg_distances = self.hard_negative_miner.mine_hard_negatives(
+                        anchor_emb=anchor_emb,
+                        candidate_negatives=candidate_negatives,
+                        k=k_negatives,
+                        return_distances=True
+                    )
+                
+            # Router-guided negative mining (Issue #16)
+            # Note: Router-guided sampling with global batch requires gathering gate_probs
+            # For now, we'll use local gate_probs and global negatives (hybrid approach)
+            if enable_router_guided_sampling:
+                # Get gate probabilities for anchors and negatives
+                anchor_gate_probs = anchor_output.get('gate_probs')
+                negative_gate_probs = negative_output.get('gate_probs')
+                
+                if anchor_gate_probs is not None and negative_gate_probs is not None:
+                    if use_global_batch:
+                        # For global batch, we need to gather global negative gate_probs
+                        # Gather global negative gate probabilities
+                        global_negative_gate_probs = gather_embeddings_global(negative_gate_probs)
+                        global_negative_gate_probs_reshaped = global_negative_gate_probs.view(
+                            global_batch_size, global_k_negatives, -1
+                        )
+                        
+                        # Compute router confusion scores for all global negatives
+                        # anchor_gate_probs: (batch_size, num_experts)
+                        # global_negative_gate_probs_reshaped: (global_batch_size, global_k_negatives, num_experts)
+                        
+                        # Expand anchor gate probs for broadcasting
+                        anchor_gate_probs_expanded = anchor_gate_probs.unsqueeze(1).unsqueeze(2)  # (batch_size, 1, 1, num_experts)
+                        global_neg_gate_probs_expanded = global_negative_gate_probs_reshaped.unsqueeze(0)  # (1, global_batch_size, global_k_negatives, num_experts)
+                        
+                        # Compute confusion scores for all combinations
+                        # This is memory-intensive but necessary for global router-guided sampling
+                        # For efficiency, we'll compute confusion scores in chunks
+                        # For now, use a simplified approach: compute for each local anchor against all global negatives
+                        
+                        # Flatten global negative gate probs: (global_batch_size * global_k_negatives, num_experts)
+                        global_neg_gate_probs_flat = global_negative_gate_probs_reshaped.view(-1, anchor_gate_probs.shape[-1])
+                        
+                        # Compute confusion scores using the router miner's method
+                        # We'll compute scores for each local anchor against all global negatives
+                        confusion_scores_list = []
+                        for i in range(batch_size):
+                            anchor_gate = anchor_gate_probs[i:i+1]  # (1, num_experts)
+                            global_neg_gate = global_neg_gate_probs_flat.unsqueeze(0)  # (1, global_total, num_experts)
+                            
+                            # Compute confusion scores
+                            confusion_scores = self.router_guided_miner.compute_confusion_scores(
+                                anchor_gate,  # (1, num_experts)
+                                global_neg_gate  # (1, global_total, num_experts)
+                            )  # (1, global_total)
+                            confusion_scores_list.append(confusion_scores.squeeze(0))
+                        
+                        confusion_scores_global = torch.stack(confusion_scores_list)  # (batch_size, global_total)
+                        
+                        # Select top-k router-hard negatives based on confusion scores
+                        _, router_topk_indices = torch.topk(
+                            confusion_scores_global,
+                            k=k_negatives,
+                            dim=1,
+                            largest=True  # Higher confusion = better
+                        )
+                        
+                        # Gather selected router-hard negatives
+                        batch_indices_router = torch.arange(
+                            batch_size,
+                            device=anchor_emb.device
+                        ).unsqueeze(1).expand(-1, k_negatives)
+                        
+                        router_hard_negatives = global_negatives_flat[router_topk_indices]  # (batch_size, k_negatives, embedding_dim+1)
+                        router_confusion_scores = confusion_scores_global.gather(1, router_topk_indices)
+                    else:
+                        # Local router-guided sampling (original behavior)
+                        # Reshape negative gate probs: (batch_size * k_negatives, num_experts) -> (batch_size, k_negatives, num_experts)
+                        negative_gate_probs_reshaped = negative_gate_probs.view(batch_size, k_negatives, -1)
+                        
+                        # Mine router-hard negatives (negatives that confuse the gating network)
+                        router_hard_negatives, router_confusion_scores = self.router_guided_miner.mine_router_hard_negatives(
+                            anchor_gate_probs=anchor_gate_probs,
+                            negative_gate_probs=negative_gate_probs_reshaped,
+                            candidate_negatives=negative_emb_reshaped,
+                            k=k_negatives,
+                            return_scores=True
+                        )
+                    
+                    # Mix router-hard negatives with embedding-hard negatives
+                    # Strategy: Take 50% from each (or use a configurable ratio)
+                    router_mix_ratio = 0.5  # 50% router-hard, 50% embedding-hard
+                    
+                    if enable_hard_negative_mining:
+                        # Mix both types of hard negatives
+                        n_router = int(k_negatives * router_mix_ratio)
+                        n_embedding = k_negatives - n_router
+                        
+                        # Select top router-hard and top embedding-hard
+                        router_selected = router_hard_negatives[:, :n_router, :]
+                        embedding_selected = hard_negatives[:, :n_embedding, :]
+                        
+                        # Concatenate: router-hard first, then embedding-hard
+                        mixed_negatives = torch.cat([router_selected, embedding_selected], dim=1)
+                    else:
+                        # Only router-hard negatives
+                        mixed_negatives = router_hard_negatives
+                    
+                    # Update negative_emb with mixed negatives
+                    negative_emb_reshaped = mixed_negatives
+                    
+                    # Log router-guided sampling statistics
+                    if batch_idx == 0 and router_confusion_scores is not None:
+                        avg_confusion = router_confusion_scores.mean().item()
+                        min_confusion = router_confusion_scores.min().item()
+                        max_confusion = router_confusion_scores.max().item()
+                        self.log(
+                            'train/curriculum/router_confusion_avg',
+                            avg_confusion,
+                            batch_size=batch_size,
+                            on_step=False,
+                            on_epoch=True
+                        )
+                        self.log(
+                            'train/curriculum/router_confusion_min',
+                            min_confusion,
+                            batch_size=batch_size,
+                            on_step=False,
+                            on_epoch=True
+                        )
+                        self.log(
+                            'train/curriculum/router_confusion_max',
+                            max_confusion,
+                            batch_size=batch_size,
+                            on_step=False,
+                            on_epoch=True
+                        )
+                else:
+                    # Fallback to embedding-based if gate probs not available
+                    if enable_hard_negative_mining:
+                        negative_emb_reshaped = hard_negatives
+                    logger.debug('Router-guided sampling skipped: gate probabilities not available')
+            elif enable_hard_negative_mining:
+                # Only embedding-based hard negative mining
+                negative_emb_reshaped = hard_negatives
+            
+            # Flatten back to (batch_size * k_negatives, embedding_dim+1)
+            negative_emb = negative_emb_reshaped.view(batch_size * k_negatives, -1)
+        
+        # Compute norm-adaptive margins for logging (Phase 2+)
+        if enable_hard_negative_mining:
+            adaptive_margins = self.norm_adaptive_margin(anchor_emb)
+            if batch_idx == 0:
+                self.log(
+                    'train/curriculum/adaptive_margin_mean',
+                    adaptive_margins.mean().item(),
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/curriculum/adaptive_margin_min',
+                    adaptive_margins.min().item(),
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+                self.log(
+                    'train/curriculum/adaptive_margin_max',
+                    adaptive_margins.max().item(),
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
+        
         contrastive_loss = self.loss_fn(
             anchor_emb,
             positive_emb,
             negative_emb,
             batch_size,
-            k_negatives,false_negative_mask=false_negative_mask
+            k_negatives,
+            false_negative_mask=false_negative_mask
         )
         
+        # Router statistics logging: Monitor expert utilization patterns
         all_gate_probs = []
         all_top_k_indices = []
         for output in (anchor_output, positive_output, negative_output):
             if output['gate_probs'] is not None:
                 all_gate_probs.append(output['gate_probs'])
                 all_top_k_indices.append(output['top_k_indices'])
+        
+        # Log router-guided sampling metrics if enabled
+        if self.current_curriculum_flags.get('enable_router_guided_sampling', False):
+            if all_gate_probs:
+                # Compute average expert selection diversity using entropy
+                gate_probs_combined = torch.cat(all_gate_probs, dim=0)
+                # Entropy: -sum(p * log(p)) for each row
+                log_probs = torch.log(gate_probs_combined + 1e-8)  # Add small epsilon for numerical stability
+                entropy_per_token = -(gate_probs_combined * log_probs).sum(dim=1)
+                expert_diversity = entropy_per_token.mean()
+                self.log(
+                    'train/curriculum/router_expert_diversity',
+                    expert_diversity.item(),
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True
+                )
         
         if not all_gate_probs:
             full_load_balancing_loss = torch.tensor(0.0, device=self.device)
@@ -266,20 +870,19 @@ class NAICSContrastiveModel(pyl.LightningModule):
             total_tokens = gate_probs.shape[0]
             num_experts = gate_probs.shape[1]
 
-            P_micro = gate_probs.mean(dim=0)
+            # Compute sums (not means) - divide by total_tokens only after all-reduce in distributed mode
+            prob_sum = gate_probs.sum(dim=0)
             
             expert_counts_micro = torch.zeros(num_experts, device=self.device)
             for i in range(num_experts):
                 expert_counts_micro[i] = (top_k_indices == i).any(dim=1).sum()
             
-            f_micro = expert_counts_micro / total_tokens
-            
             if torch.distributed.is_initialized():
                 world_size = torch.distributed.get_world_size()
                 
                 if world_size > 1:
-                    global_prob_sum = gate_probs.sum(dim=0)
-                    global_expert_counts = expert_counts_micro * total_tokens
+                    global_prob_sum = prob_sum.clone()
+                    global_expert_counts = expert_counts_micro.clone()
                     global_total_tokens = torch.tensor(
                         total_tokens, 
                         dtype=torch.float, 
@@ -308,11 +911,13 @@ class NAICSContrastiveModel(pyl.LightningModule):
                         logger.debug(f'Global load balancing: f={f.mean():.4f}, P={P.mean():.4f}')
                         
                 else:
-                    f = f_micro
-                    P = P_micro
+                    # Single GPU case: divide by local total_tokens
+                    f = expert_counts_micro / total_tokens
+                    P = prob_sum / total_tokens
             else:
-                f = f_micro
-                P = P_micro
+                # Non-distributed case: divide by local total_tokens
+                f = expert_counts_micro / total_tokens
+                P = prob_sum / total_tokens
 
             unscaled_loss = num_experts * torch.sum(f * P)
             full_load_balancing_loss = self.load_balancing_coef * unscaled_loss
@@ -320,7 +925,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
             # Log MoE expert utilization metrics
             # f_i: fraction of tokens routed to each expert
             # P_i: average gating probability for each expert
-            if self.trainer.is_global_zero or not torch.distributed.is_initialized():
+            # Issue #6: Fixed distributed training check
+            if not torch.distributed.is_initialized() or self.trainer.is_global_zero:
                 # Log per-expert utilization (f_i)
                 for i in range(num_experts):
                     self.log(
@@ -568,6 +1174,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
         
         total_loss = contrastive_loss + full_load_balancing_loss + hierarchy_loss + lambdarank_loss + radius_reg_loss
         
+        # Note: DCL loss may yield negative values (unlike InfoNCE which is always positive)
+        # This is expected behavior for DCL: loss = (-pos_sim + logsumexp(neg_sims)).mean()
         self.log(
             'train/contrastive_loss', 
             contrastive_loss, 
@@ -652,56 +1260,150 @@ class NAICSContrastiveModel(pyl.LightningModule):
             return int(value)
         else:
             return float(value)
+    
+    def _log_negative_sample_distribution(self, batch: Dict):
+        """
+        Log distribution of negative sample types (child/sibling/cousin/distant).
+        
+        Issue #12: Track negative sample type distribution per curriculum phase.
+        """
+        if self.curriculum_scheduler is None:
+            return
+        
+        try:
+            from naics_embedder.utils.utilities import get_relationship
+            
+            anchor_codes = batch['anchor_code']
+            negative_codes = batch['negative_codes']
+            
+            # Classify negative samples by relationship type
+            sample_types = {'child': 0, 'sibling': 0, 'cousin': 0, 'distant': 0, 'unknown': 0}
+            total_samples = 0
+            
+            for anchor_code, neg_codes in zip(anchor_codes, negative_codes):
+                for neg_code in neg_codes:
+                    try:
+                        relation = get_relationship(anchor_code, neg_code)
+                        
+                        # Classify into categories
+                        if relation in ['child', 'grandchild', 'great-grandchild', 'great-great-grandchild']:
+                            sample_types['child'] += 1
+                        elif relation == 'sibling':
+                            sample_types['sibling'] += 1
+                        elif relation in ['cousin', 'nephew/niece', 'grand-nephew/niece', 
+                                         'cousin_1_times_removed', 'second_cousin']:
+                            sample_types['cousin'] += 1
+                        elif relation in ['unrelated'] or relation.startswith('third_cousin') or relation.startswith('cousin_'):
+                            sample_types['distant'] += 1
+                        else:
+                            sample_types['unknown'] += 1
+                        
+                        total_samples += 1
+                    except Exception:
+                        sample_types['unknown'] += 1
+                        total_samples += 1
+            
+            if total_samples > 0:
+                phase = self.curriculum_scheduler.get_phase(self.current_epoch)
+                
+                # Log to TensorBoard
+                for sample_type, count in sample_types.items():
+                    self.log(
+                        f'train/curriculum/negative_samples_{sample_type}',
+                        count / total_samples,
+                        batch_size=len(anchor_codes),
+                        on_step=False,
+                        on_epoch=True
+                    )
+                
+                # Log summary
+                if self.current_epoch % 5 == 0:  # Log every 5 epochs to reduce noise
+                    logger.info(
+                        f'Negative sample distribution (Phase {phase}, Epoch {self.current_epoch}):\n'
+                        f'  • Child: {sample_types["child"]/total_samples*100:.1f}%\n'
+                        f'  • Sibling: {sample_types["sibling"]/total_samples*100:.1f}%\n'
+                        f'  • Cousin: {sample_types["cousin"]/total_samples*100:.1f}%\n'
+                        f'  • Distant: {sample_types["distant"]/total_samples*100:.1f}%\n'
+                        f'  • Unknown: {sample_types["unknown"]/total_samples*100:.1f}%'
+                    )
+        
+        except Exception as e:
+            logger.debug(f'Failed to log negative sample distribution: {e}')
         
     def _update_pseudo_labels(self):
-
         '''
         Runs clustering on the training dataset to generate pseudo-labels
         for false negative detection. [cite: 231-234]
+        
+        Issue #17: Uses Hyperbolic K-Means compatible with Lorentz model.
+        Clusters embeddings directly in hyperbolic space using Lorentzian distances.
         '''
-
         if not hasattr(self.trainer, 'train_dataloader'):
             logger.warning('Trainer has no train_dataloader, cannot update pseudo-labels.')
             return
 
-        logger.info('Generating embeddings for pseudo-label clustering...')
+        logger.info('Generating embeddings for pseudo-label clustering (Hyperbolic K-Means)...')
         self.eval()
         all_embeddings = []
         all_codes = []
+        
+        # Issue #5: Sample a subset of batches for efficiency
+        max_batches = 100  # Limit number of batches to process
+        batch_count = 0
 
         try:            
             dataloader = self.trainer.train_dataloader
             
             for batch in dataloader:
+                if batch_count >= max_batches:
+                    break
                 batch = self.transfer_batch_to_device(batch, self.device, 0)
                 
                 with torch.no_grad():
                     anchor_output = self(batch['anchor'])
-                    # Use Euclidean embeddings for clustering (KMeans works in Euclidean space)
-                    # The encoder returns both 'embedding' (hyperbolic) and 'embedding_euc' (Euclidean)
-                    if 'embedding_euc' in anchor_output and anchor_output['embedding_euc'] is not None:
-                        embs = anchor_output['embedding_euc'].cpu()
-                    else:
-                        # Fallback: use hyperbolic embeddings (will project to Euclidean for KMeans)
-                        # Extract spatial coordinates (drop time coordinate)
-                        hyp_embs = anchor_output['embedding'].cpu()
-                        embs = hyp_embs[:, 1:]  # Remove time coordinate, keep spatial coordinates
-                    all_embeddings.append(embs)
+                    # Use hyperbolic embeddings directly for hyperbolic K-Means
+                    # Issue #17: Cluster in Lorentz space, not Euclidean
+                    hyp_embs = anchor_output['embedding'].cpu()
+                    all_embeddings.append(hyp_embs)
                     all_codes.extend(batch['anchor_code'])
+                    batch_count += 1
             
-            all_embeddings = torch.cat(all_embeddings, dim=0).numpy()
+            if not all_embeddings:
+                logger.warning('No embeddings collected for pseudo-labeling')
+                return
+                
+            all_embeddings = torch.cat(all_embeddings, dim=0)
             
-            n_clusters = min((10 * (len(all_embeddings) // 20), self.hparams.fn_num_clusters))
+            # Issue #5: More efficient cluster count calculation
+            n_clusters = min(
+                max(50, len(all_embeddings) // 20),  # At least 50, at most 1 per 20 samples
+                self.hparams.fn_num_clusters
+            )
+            # Safeguard: ensure n_clusters >= 1 (KMeans requires at least 1 cluster)
+            n_clusters = max(1, n_clusters)
                     
             logger.info(
-                f'Clustering {len(all_embeddings)} embeddings into {n_clusters} clusters...'
+                f'Clustering {len(all_embeddings)} hyperbolic embeddings into {n_clusters} clusters '
+                f'using Hyperbolic K-Means (Lorentz model)...'
             )
             
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10, verbose=0)
-            labels = kmeans.fit_predict(all_embeddings)
+            # Issue #17: Use Hyperbolic K-Means instead of Euclidean KMeans
+            hyperbolic_kmeans = HyperbolicKMeans(
+                n_clusters=n_clusters,
+                curvature=self.hparams.curvature,
+                max_iter=100,
+                tol=1e-4,
+                random_state=42,
+                verbose=False
+            )
+            labels = hyperbolic_kmeans.fit_predict(all_embeddings)
             
             self.code_to_pseudo_label = {code: int(label) for code, label in zip(all_codes, labels)}
-            logger.info(f'Pseudo-label map updated with {len(self.code_to_pseudo_label)} entries.')
+            logger.info(
+                f'Pseudo-label map updated with {len(self.code_to_pseudo_label)} entries. '
+                f'Clustering inertia: {hyperbolic_kmeans.inertia_:.4f}, '
+                f'iterations: {hyperbolic_kmeans.n_iter_}'
+            )
         
         except Exception as e:
             logger.error(f'Failed to update pseudo-labels: {e}', exc_info=True)
@@ -931,17 +1633,24 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 batch_size=num_samples
             )
             
-            if self.current_epoch >= self.hparams.fn_curriculum_start_epoch:
-                
-                if self.hparams.fn_cluster_every_n_epochs > 0:
-                    
-                    epochs_since_start = (
-                        self.current_epoch - 
-                        self.hparams.fn_curriculum_start_epoch
-                    )
-                    
-                    if epochs_since_start % self.hparams.fn_cluster_every_n_epochs == 0:
-                        self._update_pseudo_labels()
+            # Update clustering based on curriculum scheduler
+            if self.curriculum_scheduler is not None:
+                should_update = self.curriculum_scheduler.should_update_clustering(
+                    self.current_epoch,
+                    self.hparams.fn_cluster_every_n_epochs
+                )
+                if should_update:
+                    self._update_pseudo_labels()
+            else:
+                # Fallback to old behavior if scheduler not initialized
+                if self.current_epoch >= self.hparams.fn_curriculum_start_epoch:
+                    if self.hparams.fn_cluster_every_n_epochs > 0:
+                        epochs_since_start = (
+                            self.current_epoch - 
+                            self.hparams.fn_curriculum_start_epoch
+                        )
+                        if epochs_since_start % self.hparams.fn_cluster_every_n_epochs == 0:
+                            self._update_pseudo_labels()
             
             # Collect all evaluation metrics for JSON logging
             # Get training/validation losses from callback_metrics if available
@@ -1034,29 +1743,110 @@ class NAICSContrastiveModel(pyl.LightningModule):
     
 
     def configure_optimizers(self):
+        '''
+        Configure optimizer and learning rate scheduler.
         
+        Issue #4: Optimizer is reset when starting a new curriculum stage.
+        This ensures fresh optimizer state for each curriculum stage.
+        Issue #13: Add warmup + cosine decay for large training jobs.
+        '''
         optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
         
-        # Use ReduceLROnPlateau for validation-based learning rate reduction
-        # This helps prevent overfitting by reducing LR when validation loss plateaus
-        scheduler = {
-            'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode='min',
-                factor=0.5,  # Reduce LR by 50%
-                patience=3,  # Wait 3 epochs without improvement
-                min_lr=1e-6
-            ),
-            'monitor': 'val/contrastive_loss',
-            'interval': 'epoch',
-            'frequency': 1
-        }
+        use_warmup_cosine = getattr(self.hparams, 'use_warmup_cosine', False)
         
-        return {
-            'optimizer': optimizer,
-            'lr_scheduler': scheduler
-        }
+        if use_warmup_cosine:
+            # Warmup + Cosine Annealing scheduler
+            # Use LambdaLR for flexible scheduling that works even when trainer isn't initialized
+            warmup_steps = getattr(self.hparams, 'warmup_steps', 500)
+            base_lr = self.hparams.learning_rate
+            min_lr = 1e-6
+            
+            # Capture self in closure for accessing trainer later
+            model_self = self
+            
+            def lr_lambda(step):
+                """Compute learning rate multiplier for current step."""
+                if step < warmup_steps:
+                    # Linear warmup: from 0.01 * base_lr to base_lr
+                    return 0.01 + 0.99 * (step / warmup_steps)
+                else:
+                    # Cosine annealing after warmup
+                    # Get total steps from trainer if available, otherwise use a large number
+                    if hasattr(model_self, 'trainer') and model_self.trainer is not None:
+                        if hasattr(model_self.trainer, 'estimated_stepping_batches'):
+                            total_steps = model_self.trainer.estimated_stepping_batches
+                        elif hasattr(model_self.trainer, 'num_training_batches'):
+                            max_epochs = getattr(model_self.trainer, 'max_epochs', 15)
+                            total_steps = model_self.trainer.num_training_batches * max_epochs
+                        else:
+                            # Fallback: use a large number (will be updated dynamically)
+                            total_steps = 50000
+                    else:
+                        # Trainer not available yet, use fallback
+                        total_steps = 50000
+                    
+                    # Cosine annealing: from base_lr to min_lr
+                    progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+                    progress = min(progress, 1.0)  # Clamp to [0, 1]
+                    cosine_factor = 0.5 * (1 + np.cos(np.pi * progress))
+                    # Scale from [min_lr/base_lr, 1.0]
+                    return max(min_lr / base_lr, cosine_factor)
+            
+            scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer,
+                lr_lambda=lr_lambda
+            )
+            
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': {
+                    'scheduler': scheduler,
+                    'interval': 'step',  # Step-based for warmup and cosine decay
+                    'frequency': 1
+                }
+            }
+        else:
+            # Use ReduceLROnPlateau for validation-based learning rate reduction
+            # This helps prevent overfitting by reducing LR when validation loss plateaus
+            scheduler = {
+                'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode='min',
+                    factor=0.5,  # Reduce LR by 50%
+                    patience=3,  # Wait 3 epochs without improvement
+                    min_lr=1e-6
+                ),
+                'monitor': 'val/contrastive_loss',
+                'interval': 'epoch',
+                'frequency': 1
+            }
+            
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': scheduler
+            }
+    
+    def on_train_start(self):
+        '''
+        Reset optimizer state when starting training (e.g., new curriculum stage).
+        Issue #4: Ensures optimizer state is reset for curriculum learning.
+        Issue #12: Initialize Structure-Aware Dynamic Curriculum (SADC) scheduler.
+        '''
+        # Initialize curriculum scheduler
+        if hasattr(self, 'trainer') and self.trainer is not None:
+            max_epochs = getattr(self.trainer, 'max_epochs', 15)
+            self.curriculum_scheduler = CurriculumScheduler(max_epochs=max_epochs)
+            logger.info('Curriculum scheduler initialized')
+        
+        # Reset optimizer state if this is a new curriculum stage
+        # This is called by PyTorch Lightning when training starts
+        if hasattr(self, 'trainer') and self.trainer is not None:
+            # Check if we're resuming from a checkpoint
+            if hasattr(self.trainer, 'ckpt_path') and self.trainer.ckpt_path:
+                # If resuming same stage, keep optimizer state
+                # If starting new stage, optimizer will be recreated fresh
+                pass

@@ -20,7 +20,7 @@ The system consists of four sequential stages:
 2. **Mixture-of-Experts (MoE) fusion** – adaptive fusion of the four embeddings using
    Top-2 gating.
 3. **Hyperbolic contrastive learning** – projection into Lorentz space and optimization with
-   hyperbolic InfoNCE.
+   Decoupled Contrastive Learning (DCL).
 4. **Hyperbolic Graph Convolutional Refinement (HGCN)** – structure-aware refinement using the
    explicit NAICS parent–child graph.
 
@@ -77,17 +77,23 @@ The fused Euclidean vector is mapped onto the hyperboloid:
 
 The result is a Lorentz embedding (E_hyp).
 
-### 4.2 Hyperbolic InfoNCE Loss
+### 4.2 Decoupled Contrastive Learning (DCL) Loss
 
-Contrastive learning is performed using **Lorentzian geodesic distance**:
+Contrastive learning is performed using **Decoupled Contrastive Learning (DCL)** with **Lorentzian geodesic distances**:
 
 d(u, v) = arcosh(-<u, v>_L)
+
+The DCL loss decouples the positive and negative terms:
+
+L = (-pos_sim + logsumexp(neg_sims)).mean()
+
+This formulation provides better gradient flow and numerical stability compared to standard InfoNCE.
 
 Negatives include:
 
 - unrelated codes,
 - hierarchically distant codes,
-- false negatives detected via periodic clustering.
+- false negatives detected via periodic clustering (masked with -inf).
 
 ### 4.3 False Negative Mitigation
 
@@ -184,7 +190,8 @@ project modules.
                 v
 +-------------------------------+
 | Hyperbolic Contrastive Loss   |
-| (Lorentz Distance + FN Mask)  |
+| (DCL + Lorentz Distance +    |
+|  False Negative Masking)     |
 +---------------+---------------+
                 |
                 v
