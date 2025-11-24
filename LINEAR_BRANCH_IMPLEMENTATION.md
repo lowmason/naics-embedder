@@ -205,3 +205,4 @@ def _descendants(
 - **Linear at level 5**: These are already at leaves, so we can't skip further - might need special handling
 - **Empty results**: Handle case where no linear branches exist
 
+

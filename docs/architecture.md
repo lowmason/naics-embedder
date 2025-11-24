@@ -202,16 +202,129 @@ where `τ` is the temperature parameter (default: `0.07`).
 - **Numerical stability**: Uses `logsumexp` for stable computation of the negative term
 - **Flexibility**: Can yield negative loss values (unlike InfoNCE), which is expected behavior
 
-**False-Negative Mitigation:**
+#### Hard Negative Mining (Issue #15)
+
+The system implements **Lorentzian Hard Negative Mining** to select the most challenging negatives for training. Instead of using randomly sampled negatives, the model selects negatives that are geometrically close to anchors in hyperbolic space.
+
+**Implementation:**
+
+```python
+LorentzianHardNegativeMiner(
+    curvature=1.0,
+    safety_epsilon=1e-5
+)
+```
+
+**Process:**
+
+1. For each anchor, compute Lorentzian distances to all candidate negatives
+2. Select top-k negatives with smallest distances (hardest negatives)
+3. Use these hard negatives in the contrastive loss
+
+**Benefits:**
+
+- **Better Learning Signal**: Hard negatives provide more informative gradients
+- **Faster Convergence**: Model learns to distinguish between similar codes more effectively
+- **Improved Representations**: Embeddings develop finer-grained distinctions
+
+#### Router-Guided Negative Mining (Issue #16)
+
+To prevent "Expert Collapse" in the MoE layer, the system implements **Router-Guided Negative Mining**. This selects negatives that confuse the gating network by assigning similar expert probabilities to anchors and negatives.
+
+**Implementation:**
+
+```python
+RouterGuidedNegativeMiner(
+    metric='kl_divergence',  # or 'cosine_similarity'
+    temperature=1.0
+)
+```
+
+**Process:**
+
+1. Compute gate probabilities for anchors and negatives
+2. Measure confusion using KL-divergence or cosine similarity
+3. Select negatives with highest confusion (most similar gate distributions)
+4. Mix router-hard negatives with embedding-hard negatives (default: 50/50)
+
+**Benefits:**
+
+- **Prevents Expert Collapse**: Ensures all experts are utilized effectively
+- **Diverse Negative Sampling**: Captures negatives that confuse the routing mechanism
+- **Better MoE Training**: Improves expert specialization and load balancing
+
+#### Global Batch Sampling (Issue #19)
+
+For distributed training, the system implements **Global Batch Sampling** to enable hard negative mining across all GPUs. This is crucial for finding meaningful "Cousin" negatives that may not appear in small local batches.
+
+**Implementation:**
+
+```python
+# Automatically enabled when:
+# - Distributed training is active (torch.distributed.is_initialized())
+# - Multiple GPUs available (world_size > 1)
+# - Hard negative mining or router-guided sampling is enabled
+```
+
+**Process:**
+
+1. **Gather Phase**: Collect negative embeddings from all GPUs using `torch.distributed.all_gather`
+2. **Distance Computation**: Compute distances from local anchors to all global negatives
+3. **Selection**: Select top-k hardest negatives from the global pool
+4. **Gradient Flow**: Gradients flow back through the all_gather operation to all GPUs
+
+**Memory Management:**
+
+- Global negatives: ~9MB per GPU (for batch_size=32, world_size=4, k_negatives=24)
+- Similarity matrix: ~393KB per batch
+- Automatically logged for monitoring: `train/global_batch/global_negatives_memory_mb`
+
+**Benefits:**
+
+- **Larger Negative Pool**: Access to negatives from all GPUs, not just local batch
+- **Better Hard Negatives**: More likely to find meaningful "Cousin" relationships
+- **Improved Training**: Higher quality negative samples lead to better representations
+
+#### False-Negative Mitigation
 
 A curriculum-based procedure removes semantically similar negatives:
 
-1. **Clustering**: Periodically cluster embeddings using KMeans (default: every 5 epochs after epoch 10)
-   - Safeguard ensures `n_clusters >= 1` to prevent KMeans errors
+1. **Clustering**: Periodically cluster embeddings using **Hyperbolic K-Means** (Issue #17)
+   - Clusters directly in Lorentz space using Lorentzian distances
+   - Default: every 5 epochs after epoch 10
+   - Default: 500 clusters (adaptive based on dataset size)
+   - Safeguard ensures `n_clusters >= 1` to prevent errors
 2. **Masking**: Identify negatives sharing cluster label with anchor
 3. **Exclusion**: Mask these false negatives with `-inf` in the negative similarities before `logsumexp`
 
+**Hyperbolic K-Means (Issue #17):**
+
+Unlike standard Euclidean K-Means, the system uses **Hyperbolic K-Means** that operates directly in Lorentz space:
+
+- Uses Lorentzian distances for cluster assignment
+- Updates cluster centroids in hyperbolic space
+- Preserves the geometric structure of embeddings
+
 This prevents the model from incorrectly separating close hierarchical neighbors. The masking is retained in the DCL formulation, ensuring false negatives do not contribute to the loss.
+
+#### Norm-Adaptive Margin
+
+The system implements **Norm-Adaptive Margins** that adapt to the hyperbolic radius of anchors:
+
+```
+m(a) = m₀ * sech(||a||_L)
+```
+
+where:
+- `m₀` is the base margin (default: 0.5)
+- `||a||_L` is the Lorentz norm (hyperbolic radius) of anchor `a`
+- `sech` is the hyperbolic secant function
+
+**Benefits:**
+
+- **Adaptive Difficulty**: Anchors near the leaf boundary (large norm) have smaller margins
+- **Geometric Awareness**: Margins adapt to the hyperbolic geometry
+- **Better Training**: More appropriate margins for different regions of hyperbolic space
 
 ---
 
@@ -344,9 +457,18 @@ Batch: (anchors, positives, negatives)
     ↓
 [Forward Pass] → Hyperbolic embeddings
     ↓
+[Global Batch Sampling] (if distributed + hard negative mining enabled)
+    ├─→ Gather negatives from all GPUs
+    └─→ Create global negative pool
+    ↓
+[Hard Negative Mining] (if enabled)
+    ├─→ Compute Lorentzian distances to all negatives
+    ├─→ Select top-k hardest negatives
+    └─→ (Optionally) Router-guided negative selection
+    ↓
 [Compute Distances]
     ├─→ Anchor-Positive distances
-    └─→ Anchor-Negative distances
+    └─→ Anchor-Negative distances (hard negatives)
     ↓
 [Apply False-Negative Mask] (if available)
     ↓
@@ -359,6 +481,8 @@ Batch: (anchors, positives, negatives)
     └─→ MoE Load Balancing Loss
     ↓
 [Total Loss] → Backpropagation
+    ↓
+[Gradient Flow] → Updates embeddings on all GPUs (if distributed)
 ```
 
 ---
@@ -388,14 +512,63 @@ Each stage:
 2. Trains with stage-specific curriculum
 3. Saves best checkpoint for next stage
 
+### Structure-Aware Dynamic Curriculum (SADC) (Issue #12)
+
+The system implements a **Structure-Aware Dynamic Curriculum** that progressively enables advanced training features based on training progress:
+
+**Curriculum Phases:**
+
+1. **Phase 0 (Early Training)**: Basic contrastive learning
+   - Standard negative sampling
+   - No hard negative mining
+   - No false negative masking
+
+2. **Phase 1 (Mid Training)**: Enhanced negative sampling
+   - Enable hard negative mining
+   - Enable false negative clustering
+   - Track negative sample type distribution
+
+3. **Phase 2 (Advanced Training)**: Advanced techniques
+   - Enable router-guided sampling
+   - Mix embedding-hard and router-hard negatives
+   - Full curriculum features active
+
+**Features:**
+
+- **Automatic Phase Transitions**: Phases activate based on epoch thresholds
+- **Negative Sample Tracking**: Logs distribution of negative types (child/sibling/cousin/distant)
+- **Smooth Progression**: Gradually introduces complexity as model improves
+
+### Multi-Level Supervision (Issue #18)
+
+The system supports **Multi-Level Supervision** where each anchor can have multiple positive examples at different hierarchy levels:
+
+**Implementation:**
+
+- Batch is expanded so each positive level is a separate training item
+- Loss naturally sums over all positive levels
+- Provides gradient accumulation across hierarchy levels
+
+**Benefits:**
+
+- **Rich Supervision**: Model learns from multiple positive relationships simultaneously
+- **Hierarchy Awareness**: Explicitly models relationships at different levels
+- **Better Representations**: Captures hierarchical structure more effectively
+
 ### False-Negative Curriculum
 
 After initial training (default: epoch 10), periodically:
 
 1. Generate embeddings for all codes
-2. Cluster embeddings using KMeans (default: 500 clusters)
+2. Cluster embeddings using **Hyperbolic K-Means** (Issue #17) in Lorentz space
 3. Update pseudo-labels based on cluster assignments
 4. Mask false negatives in subsequent training
+
+**Hyperbolic K-Means Clustering:**
+
+- Operates directly in Lorentz space using Lorentzian distances
+- More appropriate for hyperbolic embeddings than Euclidean K-Means
+- Preserves geometric structure during clustering
 
 ---
 
@@ -524,7 +697,41 @@ Key hyperparameters (see `conf/config.yaml`):
 - **Model**: `base_model_name`, `lora_r`, `lora_alpha`, `num_experts`, `top_k`
 - **Hyperbolic**: `curvature`, `temperature`
 - **Loss Weights**: `hierarchy_weight`, `rank_order_weight`, `radius_reg_weight`
-- **Training**: `learning_rate`, `weight_decay`, `warmup_steps`
+- **Training**: `learning_rate`, `weight_decay`, `warmup_steps`, `use_warmup_cosine`
 - **False Negatives**: `fn_curriculum_start_epoch`, `fn_cluster_every_n_epochs`, `fn_num_clusters`
+- **Distributed Training**: `training.trainer.devices` (number of GPUs)
+
+## Distributed Training
+
+The system supports multi-GPU distributed training with automatic global batch sampling:
+
+### Setup
+
+Configure the number of devices in `conf/config.yaml`:
+
+```yaml
+training:
+  trainer:
+    devices: 4  # Number of GPUs
+    accelerator: 'gpu'
+```
+
+### Global Batch Sampling
+
+When distributed training is enabled with hard negative mining:
+
+- **Automatic Activation**: Global batch sampling activates automatically
+- **Memory Efficient**: Monitors and logs VRAM usage
+- **Gradient Flow**: Gradients flow back through all_gather to all GPUs
+- **Better Negatives**: Access to negatives from all GPUs, not just local batch
+
+### Monitoring
+
+TensorBoard logs include:
+
+- `train/global_batch/global_negatives_memory_mb`: Memory usage for global negatives
+- `train/global_batch/similarity_matrix_memory_mb`: Memory usage for similarity matrix
+- `train/global_batch/global_batch_size`: Effective global batch size
+- `train/global_batch/global_k_negatives`: Number of negatives per anchor globally
 
 ---

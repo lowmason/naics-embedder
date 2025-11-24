@@ -395,6 +395,9 @@ uv run naics-embedder train \
 2. Increase gradient accumulation: `training.trainer.accumulate_grad_batches=8`
 3. Reduce number of positives/negatives in curriculum config
 4. Use mixed precision: `training.trainer.precision=16-mixed` (already default)
+5. **For Distributed Training**: Monitor global batch memory usage in TensorBoard
+   - Check `train/global_batch/global_negatives_memory_mb` metric
+   - If memory is high, reduce `n_negatives` in curriculum config
 
 ### Learning Rate Too High/Low
 
@@ -435,6 +438,63 @@ uv run naics-embedder train \
 
 ---
 
+## Distributed Training
+
+The system supports multi-GPU distributed training with automatic global batch sampling for improved hard negative mining.
+
+### Enabling Distributed Training
+
+Configure the number of GPUs in your config file:
+
+```yaml
+training:
+  trainer:
+    devices: 4  # Number of GPUs to use
+    accelerator: 'gpu'
+```
+
+Or override via command line:
+
+```bash
+uv run naics-embedder train \
+  --curriculum 01_text \
+  training.trainer.devices=4
+```
+
+### Global Batch Sampling
+
+When distributed training is enabled with hard negative mining, the system automatically:
+
+1. **Gathers negatives from all GPUs** using `torch.distributed.all_gather`
+2. **Selects hard negatives from the global pool** (not just local batch)
+3. **Preserves gradient flow** through the all_gather operation
+4. **Monitors memory usage** and logs metrics to TensorBoard
+
+**Benefits:**
+
+- **Larger Negative Pool**: Access to negatives from all GPUs
+- **Better Hard Negatives**: More likely to find meaningful "Cousin" relationships
+- **Improved Training**: Higher quality negative samples lead to better representations
+
+**Memory Considerations:**
+
+- Global negatives: ~9MB per GPU (for batch_size=32, world_size=4, k_negatives=24)
+- Similarity matrix: ~393KB per batch
+- Monitor via TensorBoard: `train/global_batch/global_negatives_memory_mb`
+
+### Monitoring Distributed Training
+
+TensorBoard provides metrics for distributed training:
+
+- `train/global_batch/global_batch_size`: Effective global batch size
+- `train/global_batch/global_k_negatives`: Number of negatives per anchor globally
+- `train/global_batch/global_negatives_memory_mb`: Memory usage for global negatives
+- `train/global_batch/similarity_matrix_memory_mb`: Memory usage for similarity matrix
+- `train/global_batch/global_hard_negatives_used`: Whether global hard negatives are active
+
+---
+
 ## Additional Resources
 
 - [Architecture Documentation](architecture.md) - Model architecture details
+- [API Documentation](api/) - Detailed API references for all components

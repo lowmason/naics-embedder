@@ -23,7 +23,12 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------------------------------------
 
 def collate_fn(batch: List[Dict]) -> Dict:
-    """Collate function to batch triplets for training."""
+    """Collate function to batch triplets for training.
+    
+    Supports multi-level supervision (Issue #18):
+    - Each item can have multiple positives (one per ancestor level)
+    - All positives for an anchor share the same negatives
+    """
     channels = ['title', 'description', 'excluded', 'examples']
     
     # Find maximum number of negatives in batch and pad shorter lists
@@ -40,6 +45,29 @@ def collate_fn(batch: List[Dict]) -> Dict:
             padding_needed = max_negatives - len(item['negatives'])
             item['negatives'].extend([last_negative] * padding_needed)
     
+    # Check if we have multi-level supervision (positives is a list)
+    has_multiple_positives = batch and 'positives' in batch[0] and isinstance(batch[0]['positives'], list)
+    
+    if has_multiple_positives:
+        # Multi-level supervision: expand batch to include all positives
+        expanded_batch = []
+        for item in batch:
+            anchor_embedding = item['anchor_embedding']
+            positives_list = item['positives']
+            negatives = item['negatives']
+            
+            # Create one entry per positive
+            for positive in positives_list:
+                expanded_batch.append({
+                    'anchor_embedding': anchor_embedding,
+                    'positive_embedding': positive['positive_embedding'],
+                    'negatives': negatives,
+                    'anchor_code': item['anchor_code'],
+                    'positive_code': positive['positive_code'],
+                    'positive_level': len(positive['positive_code'])  # Store level for logging
+                })
+        batch = expanded_batch
+    
     # Initialize batch dictionaries
     anchor_batch = {channel: {} for channel in channels}
     positive_batch = {channel: {} for channel in channels}
@@ -49,6 +77,7 @@ def collate_fn(batch: List[Dict]) -> Dict:
     anchor_codes = []
     positive_codes = []
     negative_codes = []
+    positive_levels = [] if has_multiple_positives else None
     
     # Process each channel
     for channel in channels:
@@ -89,17 +118,27 @@ def collate_fn(batch: List[Dict]) -> Dict:
         anchor_codes.append(item['anchor_code'])
         positive_codes.append(item['positive_code'])
         negative_codes.append([neg_dict['negative_code'] for neg_dict in item['negatives']])
+        if has_multiple_positives and 'positive_level' in item:
+            if positive_levels is None:
+                positive_levels = []
+            positive_levels.append(item['positive_level'])
     
-    return {
+    result = {
         'anchor': anchor_batch,
         'positive': positive_batch,
         'negatives': negatives_batch,
         'batch_size': len(batch),
-        'k_negatives': max_negatives,  # Use max_negatives instead of assuming all have same length
+        'k_negatives': max_negatives,
         'anchor_code': anchor_codes,
         'positive_code': positive_codes,
         'negative_codes': negative_codes
     }
+    
+    # Add positive_levels for multi-level supervision tracking
+    if positive_levels is not None:
+        result['positive_levels'] = positive_levels
+    
+    return result
 
 
 # -------------------------------------------------------------------------------------------------
@@ -252,8 +291,8 @@ class NAICSDataModule(LightningDataModule):
         
         if not codes_cache_path.exists():
             logger.info('Loading codes and indices for caching...')
-            codes = get_indices_codes(self.tokenization_cfg.descriptions_parquet, return_type='codes')
-            code_to_idx = get_indices_codes(self.tokenization_cfg.descriptions_parquet, return_type='code_to_idx')
+            codes = get_indices_codes('codes')
+            code_to_idx = get_indices_codes('code_to_idx')
             
             with open(codes_cache_path, 'wb') as f:
                 pickle.dump({'codes': codes, 'code_to_idx': code_to_idx}, f)
