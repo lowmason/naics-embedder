@@ -156,7 +156,9 @@ class NAICSContrastiveModel(pyl.LightningModule):
         fn_num_clusters: int = 500,
         distance_matrix_path: Optional[str] = None,
         eval_every_n_epochs: int = 1,
-        eval_sample_size: int = 500
+        eval_sample_size: int = 500,
+        tree_distance_alpha: float = 1.5,
+        base_margin: float = 0.5
     ):
         super().__init__()
         
@@ -182,7 +184,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
         # Phase 2: Hard negative mining and norm-adaptive margin
         self.hard_negative_miner = LorentzianHardNegativeMiner(curvature=curvature)
         self.norm_adaptive_margin = NormAdaptiveMargin(
-            base_margin=0.5,  # Default base margin m_0
+            base_margin=base_margin,
             curvature=curvature
         )
         
@@ -305,6 +307,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
         anchor_emb: torch.Tensor,
         positive_emb: torch.Tensor,
         negative_emb: torch.Tensor,
+        anchor_gate_probs: Optional[torch.Tensor] = None,
+        negative_gate_probs: Optional[torch.Tensor] = None,
         batch_size: int,
         k_negatives: int,
         batch: Dict,
@@ -349,11 +353,77 @@ class NAICSContrastiveModel(pyl.LightningModule):
                     )
             
             if enable_router_guided_sampling:
-                # Router-guided mining would need gate_probs, which requires encoder outputs
-                # For now, fall back to embedding-based if enabled
-                if enable_hard_negative_mining:
+                router_confusion_scores = None
+                if (
+                    anchor_gate_probs is not None and
+                    negative_gate_probs is not None
+                ):
+                    negative_gate_probs_reshaped = negative_gate_probs.view(
+                        batch_size, k_negatives, -1
+                    )
+
+                    router_hard_negatives, router_confusion_scores = self.router_guided_miner.mine_router_hard_negatives(
+                        anchor_gate_probs=anchor_gate_probs,
+                        negative_gate_probs=negative_gate_probs_reshaped,
+                        candidate_negatives=candidate_negatives,
+                        k=k_negatives,
+                        return_scores=True
+                    )
+
+                    router_mix_ratio = 0.5
+                    if enable_hard_negative_mining:
+                        n_router = int(k_negatives * router_mix_ratio)
+                        n_embedding = k_negatives - n_router
+                        router_selected = router_hard_negatives[:, :n_router, :]
+                        embedding_selected = hard_negatives[:, :n_embedding, :]
+                        negative_emb_reshaped = torch.cat(
+                            [router_selected, embedding_selected],
+                            dim=1
+                        )
+                    else:
+                        negative_emb_reshaped = router_hard_negatives
+
+                    if batch_idx == 0 and router_confusion_scores is not None:
+                        avg_confusion = router_confusion_scores.mean().item()
+                        min_confusion = router_confusion_scores.min().item()
+                        max_confusion = router_confusion_scores.max().item()
+                        self.log(
+                            'train/curriculum/router_confusion_mean',
+                            avg_confusion,
+                            batch_size=batch_size,
+                            on_step=False,
+                            on_epoch=True
+                        )
+                        self.log(
+                            'train/curriculum/router_confusion_avg',
+                            avg_confusion,
+                            batch_size=batch_size,
+                            on_step=False,
+                            on_epoch=True
+                        )
+                        self.log(
+                            'train/curriculum/router_confusion_min',
+                            min_confusion,
+                            batch_size=batch_size,
+                            on_step=False,
+                            on_epoch=True
+                        )
+                        self.log(
+                            'train/curriculum/router_confusion_max',
+                            max_confusion,
+                            batch_size=batch_size,
+                            on_step=False,
+                            on_epoch=True
+                        )
+                elif enable_hard_negative_mining:
                     negative_emb_reshaped = hard_negatives
-                logger.debug('Router-guided sampling in multi-level mode: using embedding-based HNM')
+                    logger.debug(
+                        'Router-guided sampling skipped: gate probabilities not available'
+                    )
+                else:
+                    logger.debug(
+                        'Router-guided sampling skipped: gate probabilities not available'
+                    )
             elif enable_hard_negative_mining:
                 negative_emb_reshaped = hard_negatives
             
@@ -366,7 +436,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
             negative_emb,
             batch_size,
             k_negatives,
-            false_negative_mask=false_negative_mask
+            false_negative_mask=false_negative_mask,
+            adaptive_margins=adaptive_margins
         )
         
         return loss
@@ -467,6 +538,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
         # Log negative sample type distribution (Issue #12)
         if batch_idx == 0 and 'negative_codes' in batch and self.code_to_idx is not None:
             self._log_negative_sample_distribution(batch)
+            self._log_negative_tree_distance_distribution(batch)
         
         # Phase 2: Hard Negative Mining (HNM) - Embedding-based and Router-guided
         # When enabled, select top-k hardest negatives based on Lorentzian distance and/or router confusion
@@ -671,61 +743,38 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 
                 if anchor_gate_probs is not None and negative_gate_probs is not None:
                     if use_global_batch:
-                        # For global batch, we need to gather global negative gate_probs
-                        # Gather global negative gate probabilities
+                        # Gather global negative gate probabilities to align with global negatives
                         global_negative_gate_probs = gather_embeddings_global(negative_gate_probs)
                         global_negative_gate_probs_reshaped = global_negative_gate_probs.view(
                             global_batch_size, global_k_negatives, -1
                         )
-                        
-                        # Compute router confusion scores for all global negatives
-                        # anchor_gate_probs: (batch_size, num_experts)
-                        # global_negative_gate_probs_reshaped: (global_batch_size, global_k_negatives, num_experts)
-                        
-                        # Expand anchor gate probs for broadcasting
-                        anchor_gate_probs_expanded = anchor_gate_probs.unsqueeze(1).unsqueeze(2)  # (batch_size, 1, 1, num_experts)
-                        global_neg_gate_probs_expanded = global_negative_gate_probs_reshaped.unsqueeze(0)  # (1, global_batch_size, global_k_negatives, num_experts)
-                        
-                        # Compute confusion scores for all combinations
-                        # This is memory-intensive but necessary for global router-guided sampling
-                        # For efficiency, we'll compute confusion scores in chunks
-                        # For now, use a simplified approach: compute for each local anchor against all global negatives
-                        
-                        # Flatten global negative gate probs: (global_batch_size * global_k_negatives, num_experts)
-                        global_neg_gate_probs_flat = global_negative_gate_probs_reshaped.view(-1, anchor_gate_probs.shape[-1])
-                        
-                        # Compute confusion scores using the router miner's method
-                        # We'll compute scores for each local anchor against all global negatives
-                        confusion_scores_list = []
-                        for i in range(batch_size):
-                            anchor_gate = anchor_gate_probs[i:i+1]  # (1, num_experts)
-                            global_neg_gate = global_neg_gate_probs_flat.unsqueeze(0)  # (1, global_total, num_experts)
-                            
-                            # Compute confusion scores
-                            confusion_scores = self.router_guided_miner.compute_confusion_scores(
-                                anchor_gate,  # (1, num_experts)
-                                global_neg_gate  # (1, global_total, num_experts)
-                            )  # (1, global_total)
-                            confusion_scores_list.append(confusion_scores.squeeze(0))
-                        
-                        confusion_scores_global = torch.stack(confusion_scores_list)  # (batch_size, global_total)
-                        
-                        # Select top-k router-hard negatives based on confusion scores
+                        # Flatten to (global_total, num_experts) then broadcast across anchors
+                        global_neg_gate_probs_flat = global_negative_gate_probs_reshaped.view(
+                            -1, anchor_gate_probs.shape[-1]
+                        )
+                        negative_gate_probs_expanded = (
+                            global_neg_gate_probs_flat
+                            .unsqueeze(0)
+                            .expand(batch_size, -1, -1)
+                        )
+
+                        confusion_scores_global = self.router_guided_miner.compute_confusion_scores(
+                            anchor_gate_probs,
+                            negative_gate_probs_expanded
+                        )  # (batch_size, global_total)
+
                         _, router_topk_indices = torch.topk(
                             confusion_scores_global,
                             k=k_negatives,
                             dim=1,
-                            largest=True  # Higher confusion = better
+                            largest=True
                         )
-                        
-                        # Gather selected router-hard negatives
-                        batch_indices_router = torch.arange(
-                            batch_size,
-                            device=anchor_emb.device
-                        ).unsqueeze(1).expand(-1, k_negatives)
-                        
-                        router_hard_negatives = global_negatives_flat[router_topk_indices]  # (batch_size, k_negatives, embedding_dim+1)
-                        router_confusion_scores = confusion_scores_global.gather(1, router_topk_indices)
+
+                        router_hard_negatives = global_negatives_flat[router_topk_indices]
+                        router_confusion_scores = confusion_scores_global.gather(
+                            1,
+                            router_topk_indices
+                        )
                     else:
                         # Local router-guided sampling (original behavior)
                         # Reshape negative gate probs: (batch_size * k_negatives, num_experts) -> (batch_size, k_negatives, num_experts)
@@ -768,7 +817,7 @@ class NAICSContrastiveModel(pyl.LightningModule):
                         min_confusion = router_confusion_scores.min().item()
                         max_confusion = router_confusion_scores.max().item()
                         self.log(
-                            'train/curriculum/router_confusion_avg',
+                            'train/curriculum/router_confusion_mean',
                             avg_confusion,
                             batch_size=batch_size,
                             on_step=False,
@@ -800,31 +849,29 @@ class NAICSContrastiveModel(pyl.LightningModule):
             # Flatten back to (batch_size * k_negatives, embedding_dim+1)
             negative_emb = negative_emb_reshaped.view(batch_size * k_negatives, -1)
         
-        # Compute norm-adaptive margins for logging (Phase 2+)
-        if enable_hard_negative_mining:
-            adaptive_margins = self.norm_adaptive_margin(anchor_emb)
-            if batch_idx == 0:
-                self.log(
-                    'train/curriculum/adaptive_margin_mean',
-                    adaptive_margins.mean().item(),
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True
-                )
-                self.log(
-                    'train/curriculum/adaptive_margin_min',
-                    adaptive_margins.min().item(),
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True
-                )
-                self.log(
-                    'train/curriculum/adaptive_margin_max',
-                    adaptive_margins.max().item(),
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True
-                )
+        adaptive_margins = self.norm_adaptive_margin(anchor_emb)
+        if batch_idx == 0:
+            self.log(
+                'train/curriculum/adaptive_margin_mean',
+                adaptive_margins.mean().item(),
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True
+            )
+            self.log(
+                'train/curriculum/adaptive_margin_min',
+                adaptive_margins.min().item(),
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True
+            )
+            self.log(
+                'train/curriculum/adaptive_margin_max',
+                adaptive_margins.max().item(),
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True
+            )
         
         contrastive_loss = self.loss_fn(
             anchor_emb,
@@ -1329,6 +1376,62 @@ class NAICSContrastiveModel(pyl.LightningModule):
         
         except Exception as e:
             logger.debug(f'Failed to log negative sample distribution: {e}')
+    
+    def _log_negative_tree_distance_distribution(self, batch: Dict):
+        '''
+        Log distribution of negative samples by tree distance bins.
+        
+        Issue #23: Track tree-distance categories to verify Phase 1 weighting.
+        '''
+        if self.ground_truth_distances is None or self.code_to_idx is None:
+            return
+        
+        try:
+            anchor_codes = batch['anchor_code']
+            negative_codes = batch['negative_codes']
+            
+            bins = {
+                'sibling_or_closer': 0,
+                'cousin': 0,
+                'distant': 0,
+                'unknown': 0
+            }
+            total = 0
+            
+            for anchor_code, neg_codes in zip(anchor_codes, negative_codes):
+                anchor_idx = self.code_to_idx.get(anchor_code)
+                if anchor_idx is None:
+                    continue
+                
+                for neg_code in neg_codes:
+                    neg_idx = self.code_to_idx.get(neg_code)
+                    if neg_idx is None:
+                        bins['unknown'] += 1
+                        total += 1
+                        continue
+                    
+                    distance = self.ground_truth_distances[anchor_idx, neg_idx].item()
+                    
+                    if distance <= 2.0:
+                        bins['sibling_or_closer'] += 1
+                    elif distance <= 4.0:
+                        bins['cousin'] += 1
+                    else:
+                        bins['distant'] += 1
+                    
+                    total += 1
+            
+            if total > 0:
+                for name, count in bins.items():
+                    self.log(
+                        f'train/curriculum/tree_distance_{name}',
+                        count / total,
+                        batch_size=len(anchor_codes),
+                        on_step=False,
+                        on_epoch=True
+                    )
+        except Exception as e:
+            logger.debug(f'Failed to log tree distance distribution: {e}')
         
     def _update_pseudo_labels(self):
         '''
@@ -1839,7 +1942,11 @@ class NAICSContrastiveModel(pyl.LightningModule):
         # Initialize curriculum scheduler
         if hasattr(self, 'trainer') and self.trainer is not None:
             max_epochs = getattr(self.trainer, 'max_epochs', 15)
-            self.curriculum_scheduler = CurriculumScheduler(max_epochs=max_epochs)
+            self.curriculum_scheduler = CurriculumScheduler(
+                max_epochs=max_epochs,
+                tree_distance_alpha=getattr(self.hparams, 'tree_distance_alpha', 1.5),
+                sibling_distance_threshold=2.0
+            )
             logger.info('Curriculum scheduler initialized')
         
         # Reset optimizer state if this is a new curriculum stage

@@ -87,11 +87,62 @@ def _join_sectors(code: str) -> str:
 
 def _sector_tree(sector: str, input_parquet: str) -> nx.DiGraph:
 
+    if sector == '31':
+        sector_list = ['31', '32', '33']
+
+    elif sector == '44':
+        sector_list = ['44', '45']
+
+    elif sector == '48':
+        sector_list = ['48', '49']
+
+    else:
+        sector_list = [sector]
+
     code_6 = _sector_codes(sector, input_parquet)
     code_5 = sorted(set(n[:5] for n in code_6))
     code_4 = sorted(set(n[:4] for n in code_6))
     code_3 = sorted(set(n[:3] for n in code_6))
     code_2 = sorted(set(n[:2] for n in code_6))
+
+    if not code_6:
+        sector_df = (
+            pl
+            .read_parquet(
+                input_parquet
+            )
+            .filter(
+                pl.col('code').str.slice(0, 2).is_in(sector_list)
+            )
+        )
+
+        codes = (
+            sector_df
+            .select('code')
+            .unique(maintain_order=True)
+            .get_column('code')
+            .to_list()
+        )
+
+        graph = nx.DiGraph()
+        graph.add_nodes_from(codes)
+
+        for code in codes:
+            if len(code) <= 2:
+                continue
+
+            parent = code[:-1]
+            parent = _join_sectors(parent) if len(parent) == 2 else parent
+
+            if parent in codes:
+                graph.add_edge(parent, code)
+
+        root = _join_sectors(sector)
+        if not graph.has_node(root):
+            graph.add_node(root)
+
+        return graph
+
     edge_list = []
     for c2 in code_2:
         s = _join_sectors(c2)
@@ -152,10 +203,9 @@ def _get_distance(
         return 0.0
 
     depth_i, depth_j = depths[i], depths[j]
-
     common_ancestor = _find_common_ancestor(i, j, ancestors)
     if common_ancestor is None:
-        return depths[i] + depths[j]
+        return float(depth_i + depth_j)
 
     depth_ancestor = depths[common_ancestor]
 
@@ -165,9 +215,10 @@ def _get_distance(
     )
 
     is_lineal = (i in ancestors[j]) or (j in ancestors[i])
-    lineal = 1 if is_lineal else 0
+    if is_lineal:
+        distance -= 0.5
 
-    return distance - 0.5 * lineal
+    return float(max(distance, 0.0))
 
     
 # -------------------------------------------------------------------------------------------------

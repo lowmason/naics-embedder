@@ -9,6 +9,7 @@ import pytest
 import torch
 
 from naics_embedder.text_model.hyperbolic import LorentzOps
+from naics_embedder.text_model.hard_negative_mining import NormAdaptiveMargin
 from naics_embedder.text_model.loss import (
     HierarchyPreservationLoss,
     HyperbolicInfoNCELoss,
@@ -96,8 +97,8 @@ class TestHyperbolicInfoNCELoss:
         close_positive_tan = anchor_tan + torch.randn_like(anchor_tan) * 0.1
         close_positive = LorentzOps.exp_map_zero(close_positive_tan, c=1.0)
 
-        # Far positive (large perturbation)
-        far_positive_tan = anchor_tan + torch.randn_like(anchor_tan) * 5.0
+        # Far positive (moderate perturbation to avoid numerical overflow)
+        far_positive_tan = anchor_tan + torch.randn_like(anchor_tan) * 2.0
         far_positive = LorentzOps.exp_map_zero(far_positive_tan, c=1.0)
 
         # Negatives
@@ -171,6 +172,57 @@ class TestHyperbolicInfoNCELoss:
         assert positive.grad is not None
         assert negatives.grad is not None
         assert torch.any(anchor.grad != 0)
+
+
+    def test_adaptive_margin_increases_contrastive_pressure(self, sample_triplet):
+
+        '''Adaptive margins should make negatives harder (higher loss).'''
+
+        anchor, positive, negatives, batch_size, k_negatives = sample_triplet
+
+        loss_fn = HyperbolicInfoNCELoss(embedding_dim=384, temperature=0.07, curvature=1.0)
+
+        adaptive_margins = torch.full((batch_size,), 0.5, device=anchor.device)
+
+        loss_nomargin = loss_fn(anchor, positive, negatives, batch_size, k_negatives)
+        loss_margin = loss_fn(
+            anchor,
+            positive,
+            negatives,
+            batch_size,
+            k_negatives,
+            adaptive_margins=adaptive_margins
+        )
+
+        assert loss_margin > loss_nomargin
+
+
+class TestNormAdaptiveMargin:
+
+    '''Tests for norm-adaptive margin computation.'''
+
+    def test_margin_decays_with_radius(self, test_device):
+
+        '''Margin should shrink as Lorentz norm grows.'''
+
+        miner = NormAdaptiveMargin(base_margin=1.0, curvature=1.0).to(test_device)
+
+        # Small norm (near origin)
+        anchor_small = LorentzOps.exp_map_zero(
+            torch.zeros(2, 385, device=test_device),
+            c=1.0
+        )
+
+        # Larger norm via scaled tangent
+        anchor_large = LorentzOps.exp_map_zero(
+            torch.ones(2, 385, device=test_device) * 2.0,
+            c=1.0
+        )
+
+        margin_small = miner(anchor_small)
+        margin_large = miner(anchor_large)
+
+        assert torch.all(margin_small > margin_large)
 
 
 # -------------------------------------------------------------------------------------------------

@@ -311,6 +311,22 @@ class TestDistanceComputation:
             assert d_12 == d_21
 
 
+    def test_lineal_distance_symmetric(self, sample_naics_data):
+
+        '''Test ancestor/descendant relationships are symmetric.'''
+        
+        tree = _sector_tree('31', sample_naics_data)
+        depths, ancestors, parents = _compute_tree_metadata(tree, '31')
+
+        for child, parent in parents.items():
+            if parent is not None:
+                d_pc = _get_distance(parent, child, depths, ancestors)
+                d_cp = _get_distance(child, parent, depths, ancestors)
+
+                assert d_pc == d_cp == 0.5
+                break
+
+
     def test_distance_parent_child(self, sample_naics_data):
 
         '''Test distance between parent and child.'''

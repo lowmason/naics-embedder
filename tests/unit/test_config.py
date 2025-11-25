@@ -5,6 +5,8 @@ Tests Pydantic config models, YAML loading, and validation.
 '''
 
 
+from pathlib import Path
+
 import pytest
 import yaml
 from pydantic import ValidationError
@@ -102,6 +104,14 @@ class TestDownloadConfig:
             DownloadConfig(output_parquet='12345')
 
 
+    def test_output_parquet_extension_validation(self):
+ 
+        '''Test that output_parquet must be a parquet file.'''
+ 
+        with pytest.raises(ValidationError):
+            DownloadConfig(output_parquet='./data/output.csv')
+
+
 # -------------------------------------------------------------------------------------------------
 # DistancesConfig Tests
 # -------------------------------------------------------------------------------------------------
@@ -126,13 +136,15 @@ class TestDistancesConfig:
         assert config.distance_matrix_parquet == './data/matrix.parquet'
 
 
-    def test_missing_required_field_raises_error(self):
+    def test_missing_required_field_uses_defaults(self):
 
-        '''Test that missing required field raises validation error.'''
+        '''Test that missing fields fall back to defaults.'''
 
-        with pytest.raises(ValidationError):
-            # Missing required fields
-            DistancesConfig()
+        config = DistancesConfig()
+
+        assert config.input_parquet == './data/naics_descriptions.parquet'
+        assert config.distances_parquet == './data/naics_distances.parquet'
+        assert config.distance_matrix_parquet == './data/naics_distance_matrix.parquet'
 
 
 # -------------------------------------------------------------------------------------------------
@@ -161,13 +173,13 @@ class TestLoadConfig:
             yaml.dump(config_data, f)
 
         # Load config
-        config = load_config(DirConfig, 'test_config.yaml')
+        config = load_config(DirConfig, yaml_path)
 
         assert config.checkpoint_dir == '/test/checkpoints'
         assert config.data_dir == '/test/data'
 
 
-    def test_load_with_conf_prefix(self, tmp_path):
+    def test_load_with_conf_prefix(self, tmp_path, monkeypatch):
 
         '''Test that conf/ prefix is added if not present.'''
 
@@ -178,6 +190,8 @@ class TestLoadConfig:
 
         with open(yaml_path, 'w') as f:
             yaml.dump(config_data, f)
+
+        monkeypatch.chdir(tmp_path)
 
         # Load without conf/ prefix
         config = load_config(DirConfig, 'test.yaml')
@@ -197,7 +211,7 @@ class TestLoadConfig:
         assert config.data_dir == './data'
 
 
-    def test_load_empty_yaml(self, tmp_path):
+    def test_load_empty_yaml(self, tmp_path, monkeypatch):
 
         '''Test loading empty YAML file uses defaults.'''
 
@@ -207,13 +221,15 @@ class TestLoadConfig:
         # Create empty file
         yaml_path.touch()
 
+        monkeypatch.chdir(tmp_path)
+
         config = load_config(DirConfig, 'empty.yaml')
 
         # Should use defaults
         assert config.checkpoint_dir == './checkpoints'
 
 
-    def test_load_partial_yaml(self, tmp_path):
+    def test_load_partial_yaml(self, tmp_path, monkeypatch):
 
         '''Test loading YAML with partial fields.'''
 
@@ -225,6 +241,8 @@ class TestLoadConfig:
         with open(yaml_path, 'w') as f:
             yaml.dump(config_data, f)
 
+        monkeypatch.chdir(tmp_path)
+
         config = load_config(DirConfig, 'partial.yaml')
 
         # Custom field
@@ -232,6 +250,25 @@ class TestLoadConfig:
         # Default fields
         assert config.data_dir == './data'
         assert config.log_dir == './logs'
+
+
+    def test_load_custom_relative_path(self, tmp_path, monkeypatch):
+
+        '''Test loading config from a relative path outside conf/.'''
+
+        yaml_path = tmp_path / 'custom' / 'dir' / 'custom.yaml'
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+
+        config_data = {'checkpoint_dir': '/custom/path'}
+
+        with open(yaml_path, 'w') as f:
+            yaml.dump(config_data, f)
+
+        monkeypatch.chdir(tmp_path)
+
+        config = load_config(DirConfig, 'custom/dir/custom.yaml')
+
+        assert config.checkpoint_dir == '/custom/path'
 
 
 # -------------------------------------------------------------------------------------------------
@@ -287,7 +324,7 @@ class TestConfigIntegration:
 
     '''Integration tests for configuration system.'''
 
-    def test_load_multiple_configs(self, tmp_path):
+    def test_load_multiple_configs(self, tmp_path, monkeypatch):
 
         '''Test loading multiple different config types.'''
 
@@ -304,6 +341,8 @@ class TestConfigIntegration:
         download_yaml = conf_dir / 'download.yaml'
         with open(download_yaml, 'w') as f:
             yaml.dump({'output_parquet': '/test/output.parquet'}, f)
+
+        monkeypatch.chdir(tmp_path)
 
         # Load both
         dir_config = load_config(DirConfig, 'dir.yaml')
@@ -354,7 +393,7 @@ class TestConfigErrorHandling:
 
     '''Test suite for configuration error handling.'''
 
-    def test_malformed_yaml(self, tmp_path):
+    def test_malformed_yaml(self, tmp_path, monkeypatch):
 
         '''Test handling of malformed YAML file.'''
 
@@ -365,12 +404,14 @@ class TestConfigErrorHandling:
         with open(yaml_path, 'w') as f:
             f.write('invalid: yaml: content: [')
 
+        monkeypatch.chdir(tmp_path)
+
         # Should handle gracefully (either raise or use defaults)
         with pytest.raises(Exception):
             load_config(DirConfig, 'malformed.yaml')
 
 
-    def test_yaml_with_invalid_structure(self, tmp_path):
+    def test_yaml_with_invalid_structure(self, tmp_path, monkeypatch):
 
         '''Test YAML with structure that doesn't match config model.'''
 
@@ -384,6 +425,8 @@ class TestConfigErrorHandling:
 
         with open(yaml_path, 'w') as f:
             yaml.dump(config_data, f)
+
+        monkeypatch.chdir(tmp_path)
 
         # Should raise validation error
         with pytest.raises(ValidationError):

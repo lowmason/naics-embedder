@@ -16,6 +16,15 @@ class CurriculumScheduler:
     '''
     Structure-Aware Dynamic Curriculum (SADC) scheduler that manages training phases.
     
+    Sampling responsibilities:
+    - Data layer (streaming_dataset.py): performs Phase 1 tree-distance weighting,
+      sibling masking, and explicit exclusion mining before batches reach the model.
+    - Model layer (naics_model.py): performs hard-negative mining (embedding/router-guided),
+      adaptive margins, false-negative masking, and curriculum flag control.
+    
+    This scheduler only decides *when* each mechanism is active via flags surfaced to the
+    dataloader and model.
+    
     Implements three-phase curriculum learning:
     1. Phase 1 (0-30%): Structural Initialization
        - Enforce symbolic tree constraints
@@ -35,7 +44,9 @@ class CurriculumScheduler:
         max_epochs: int,
         phase1_end: float = 0.3,
         phase2_end: float = 0.7,
-        phase3_end: float = 1.0
+        phase3_end: float = 1.0,
+        tree_distance_alpha: float = 1.5,
+        sibling_distance_threshold: float = 2.0
     ):
         '''
         Initialize curriculum scheduler.
@@ -45,11 +56,15 @@ class CurriculumScheduler:
             phase1_end: End of Phase 1 as fraction of max_epochs (default: 0.3)
             phase2_end: End of Phase 2 as fraction of max_epochs (default: 0.7)
             phase3_end: End of Phase 3 as fraction of max_epochs (default: 1.0)
+            tree_distance_alpha: Exponent for inverse tree-distance weighting
+            sibling_distance_threshold: Distance at or below which negatives are masked as siblings
         '''
         self.max_epochs = max_epochs
         self.phase1_end = phase1_end
         self.phase2_end = phase2_end
         self.phase3_end = phase3_end
+        self.tree_distance_alpha = tree_distance_alpha
+        self.sibling_distance_threshold = sibling_distance_threshold
         
         # Phase boundaries in epochs
         self.phase1_end_epoch = int(max_epochs * phase1_end)
@@ -177,27 +192,67 @@ class CurriculumScheduler:
         anchor_code: str,
         negative_codes: list,
         tree_distances: Optional[Dict] = None,
-        relations: Optional[Dict] = None
+        relations: Optional[Dict] = None,
+        use_tree_distance: bool = True,
+        mask_siblings: bool = True
     ) -> list:
         '''
         Get sampling weights for negative samples based on curriculum phase.
+        
+        Data-layer responsibility: This helper mirrors the Phase 1 logic used by the
+        streaming dataset to weight negatives by inverse tree distance and mask siblings.
+        It can be used for diagnostics or fallback sampling when the data layer does not
+        pre-weight negatives.
         
         Args:
             anchor_code: Anchor code
             negative_codes: List of negative codes
             tree_distances: Dictionary mapping (code1, code2) -> distance
             relations: Dictionary mapping (code1, code2) -> relation string
+            use_tree_distance: Whether to weight by inverse tree distance
+            mask_siblings: Whether to mask siblings (distance <= 2)
         
         Returns:
             List of sampling weights (normalized probabilities)
         '''
-        # Default: uniform weights
-        weights = [1.0] * len(negative_codes)
-        
-        # Phase 1: Weight by inverse tree distance
-        # This is handled in the streaming dataset generator
-        # Here we just return uniform weights as a placeholder
-        # The actual weighting happens in the data generation layer
-        
-        return weights
+        if not negative_codes:
+            return []
 
+        if tree_distances is None or not use_tree_distance:
+            # Default: uniform weights
+            weights = [1.0] * len(negative_codes)
+            total = sum(weights)
+            return [w / total for w in weights]
+
+        weights = []
+        for negative_code in negative_codes:
+            # Distance lookup is symmetric; try both orderings
+            distance = tree_distances.get((anchor_code, negative_code))
+            if distance is None:
+                distance = tree_distances.get((negative_code, anchor_code))
+
+            if distance is None:
+                # Fall back to a large distance when missing
+                distance = 10.0
+
+            # Mask siblings (distance ~=2). Keep ancestors/descendants (<2) available.
+            if mask_siblings and distance >= 2.0 and distance <= self.sibling_distance_threshold:
+                weights.append(0.0)
+                continue
+
+            # Inverse tree distance weighting
+            if distance > 0:
+                weights.append(1.0 / (distance ** self.tree_distance_alpha))
+            else:
+                weights.append(0.0)
+
+        total = sum(weights)
+        if total == 0:
+            # Avoid degenerate distributions by falling back to uniform
+            logger.warning(
+                f'All negative weights zero for anchor {anchor_code}; using uniform sampling'
+            )
+            uniform = 1.0 / len(negative_codes)
+            return [uniform] * len(negative_codes)
+
+        return [w / total for w in weights]

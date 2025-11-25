@@ -47,7 +47,8 @@ class HyperbolicInfoNCELoss(nn.Module):
         negative_embs: torch.Tensor,
         batch_size: int,
         k_negatives: int,
-        false_negative_mask: Optional[torch.Tensor] = None 
+        false_negative_mask: Optional[torch.Tensor] = None,
+        adaptive_margins: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         '''
         Compute Hyperbolic InfoNCE loss.
@@ -59,6 +60,7 @@ class HyperbolicInfoNCELoss(nn.Module):
             batch_size: Batch size
             k_negatives: Number of negatives per anchor
             false_negative_mask: Optional mask for false negatives (batch_size, k_negatives)
+            adaptive_margins: Optional per-anchor adaptive margins (batch_size,)
         
         Returns:
             Loss scalar
@@ -84,6 +86,13 @@ class HyperbolicInfoNCELoss(nn.Module):
             anchor_hyp, 
             negative_hyp_reshaped
         )
+
+        if adaptive_margins is not None:
+            # Subtract per-anchor margin from negative distances (triplet-style)
+            neg_distances = torch.clamp(
+                neg_distances - adaptive_margins.unsqueeze(1),
+                min=0.0
+            )
         
         pos_similarities = -pos_distances / self.temperature
         neg_similarities = -neg_distances / self.temperature

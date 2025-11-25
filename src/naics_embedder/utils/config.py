@@ -25,7 +25,7 @@ def load_config(config_class: Type[T], yaml_path: Union[str, Path]) -> T:
     
     Args:
         config_class: The Pydantic model class to instantiate
-        yaml_path: Path to YAML config file (relative to conf/ directory)
+        yaml_path: Path to YAML config file (absolute, relative, or under conf/)
         
     Returns:
         Instance of config_class with values from YAML
@@ -41,15 +41,15 @@ def load_config(config_class: Type[T], yaml_path: Union[str, Path]) -> T:
         search_paths.append(path)
     else:
         normalized = path.as_posix()
-        if normalized.startswith('conf/'):
-            search_paths.append(Path(normalized))
-        else:
+        search_paths.append(path)
+
+        if not normalized.startswith('conf/'):
             search_paths.append(Path('conf') / path)
-            search_paths.append(path)
     
     yaml_file: Optional[Path] = None
     for candidate in search_paths:
-        if candidate.exists():
+        candidate_path = candidate.expanduser()
+        if candidate_path.exists():
             yaml_file = candidate
             break
     

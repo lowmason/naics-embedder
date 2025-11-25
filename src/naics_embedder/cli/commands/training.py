@@ -453,6 +453,7 @@ def train(
                 checkpoint_path,
                 # Override learning rate if needed (checkpoint may have different LR)
                 learning_rate=cfg.training.learning_rate,
+                base_margin=cfg.loss.base_margin,
             )
             logger.info(f'Model loaded from checkpoint: {checkpoint_path}')
         else:
@@ -476,7 +477,8 @@ def train(
                 load_balancing_coef=cfg.model.moe.load_balancing_coef,
                 distance_matrix_path=cfg.data_loader.streaming.distance_matrix_parquet,
                 eval_every_n_epochs=cfg.model.eval_every_n_epochs,
-                eval_sample_size=cfg.model.eval_sample_size
+                eval_sample_size=cfg.model.eval_sample_size,
+                base_margin=cfg.loss.base_margin
             )
         
         # Setup callbacks

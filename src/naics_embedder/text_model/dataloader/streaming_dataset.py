@@ -374,7 +374,10 @@ def _load_distance_matrix(
     return distance_lookup
 
 
-def _load_excluded_codes(descriptions_path: str) -> Dict[str, Set[str]]:
+def _load_excluded_codes(
+    descriptions_path: str,
+    code_to_idx: Optional[Dict[str, int]] = None
+) -> Dict[str, Set[str]]:
     '''
     Load excluded codes from descriptions parquet.
     
@@ -393,13 +396,24 @@ def _load_excluded_codes(descriptions_path: str) -> Dict[str, Set[str]]:
     )
     
     excluded_map = {}
+    unknown_codes = 0
     for row in df.iter_rows(named=True):
         code = row['code']
         excluded_list = row['excluded_codes']
         if excluded_list:
-            excluded_map[code] = set(excluded_list)
+            filtered = set()
+            for ex_code in excluded_list:
+                if code_to_idx is not None and ex_code not in code_to_idx:
+                    unknown_codes += 1
+                    continue
+                filtered.add(ex_code)
+
+            if filtered:
+                excluded_map[code] = filtered
     
     logger.info(f'Loaded excluded codes for {len(excluded_map):,} codes')
+    if unknown_codes:
+        logger.warning(f'{unknown_codes:,} excluded codes not in taxonomy were ignored')
     return excluded_map
 
 
@@ -412,7 +426,7 @@ def _compute_phase1_weights(
     code_to_idx: Dict[str, int],
     alpha: float = 1.5,
     exclusion_weight: float = 100.0
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray]:
     '''
     Compute Phase 1 sampling weights for candidate negatives.
     
@@ -430,6 +444,7 @@ def _compute_phase1_weights(
         Array of sampling weights (unnormalized)
     '''
     weights = np.zeros(len(candidate_negatives))
+    excluded_mask = np.zeros(len(candidate_negatives), dtype=bool)
     
     for i, neg in enumerate(candidate_negatives):
         negative_code = neg['negative_code']
@@ -438,6 +453,7 @@ def _compute_phase1_weights(
         # Check if anchor excludes this negative
         if anchor_code in excluded_map and negative_code in excluded_map[anchor_code]:
             weights[i] = exclusion_weight
+            excluded_mask[i] = True
             continue
         
         # Get tree distance using code strings as keys
@@ -459,7 +475,7 @@ def _compute_phase1_weights(
         else:
             weights[i] = 0.0
     
-    return weights
+    return weights, excluded_mask
 
 
 def _sample_negatives_phase1(
@@ -495,8 +511,8 @@ def _sample_negatives_phase1(
     if len(candidate_negatives) == 0:
         return []
     
-    # Compute weights
-    weights = _compute_phase1_weights(
+    # Compute weights and exclusion flags
+    weights, excluded_mask = _compute_phase1_weights(
         anchor_code=anchor_code,
         anchor_idx=anchor_idx,
         candidate_negatives=candidate_negatives,
@@ -526,8 +542,22 @@ def _sample_negatives_phase1(
         replace=False,
         p=probabilities
     )
+
+    excluded_chosen = excluded_mask[sampled_indices].sum()
+    if n_sample > 0:
+        exclusion_ratio = excluded_chosen / n_sample
+        logger.info(
+            f'Anchor {anchor_code}: {exclusion_ratio:.2%} negatives from explicit exclusions '
+            f'({excluded_chosen}/{n_sample})'
+        )
     
-    return [candidate_negatives[i] for i in sampled_indices]
+    sampled = []
+    for idx in sampled_indices:
+        neg = dict(candidate_negatives[idx])
+        neg['explicit_exclusion'] = bool(excluded_mask[idx])
+        sampled.append(neg)
+    
+    return sampled
 
 
 # -------------------------------------------------------------------------------------------------
@@ -603,7 +633,7 @@ def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]
             code_to_idx,
             idx_to_code
         )
-        excluded_map = _load_excluded_codes(cfg.descriptions_parquet)
+        excluded_map = _load_excluded_codes(cfg.descriptions_parquet, code_to_idx)
     
     # Organize codes by level
     level_dict = defaultdict(list)
@@ -766,6 +796,13 @@ def create_streaming_dataset(
     - For 6-digit anchors, yields all ancestor positives (levels 5, 4, 3, 2)
     - Each positive uses the same set of negatives
     - Gradients are accumulated across all positive levels in training_step
+    
+    Sampling responsibilities:
+    - Applies Phase 1 sampling (inverse tree-distance weighting, sibling masking,
+      explicit exclusion prioritization) when `cfg.use_phase1_sampling` is enabled.
+    - Emits negatives with an `explicit_exclusion` flag for downstream logging/analysis.
+    - Model layer performs Phase 2/3 tasks (hard negative mining, router-guided sampling,
+      false-negative masking) after this iterator provides candidate negatives.
     '''
     
     # Load taxonomy and code mappings for ancestor lookup
@@ -858,7 +895,8 @@ def create_streaming_dataset(
                     'negative_code': negative_code,
                     'negative_embedding': negative_embedding,
                     'relation_margin': negative['relation_margin'],
-                    'distance_margin': negative['distance_margin']
+                    'distance_margin': negative['distance_margin'],
+                    'explicit_exclusion': negative.get('explicit_exclusion', False)
                 })
         
         yield {
