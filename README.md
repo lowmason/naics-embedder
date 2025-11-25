@@ -9,6 +9,7 @@ the NAICS taxonomy.
 The final output is a set of **Lorentz-model hyperbolic embeddings** suitable for similarity
 search, hierarchical modeling, graph-based reasoning, and downstream machine learning applications.
 
+[![docs](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml)
 ---
 
 ## 1. System Architecture Overview
