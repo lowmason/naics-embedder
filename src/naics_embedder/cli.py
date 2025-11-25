@@ -1,6 +1,9 @@
-# -------------------------------------------------------------------------------------------------
-# Main CLI Entry Point
-# -------------------------------------------------------------------------------------------------
+"""Top-level Typer application that wires together project subcommands.
+
+The module configures the global Typer instance and attaches command groups for
+data preparation, tooling, and training. Warnings from PyTorch Lightning are
+suppressed to keep CLI output focused on actionable information for users.
+"""
 
 import logging
 import os
@@ -10,19 +13,13 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-# Import command groups from separate modules
 from naics_embedder.cli.commands import data, tools, training
 
-# Set CUDA memory allocator configuration to reduce fragmentation
 os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
 
 console = Console()
 logger = logging.getLogger(__name__)
 
-
-# -------------------------------------------------------------------------------------------------
-# Suppress warnings
-# -------------------------------------------------------------------------------------------------
 
 warnings.filterwarnings(
     'ignore',
@@ -60,10 +57,6 @@ warnings.filterwarnings(
 )
 
 
-# -------------------------------------------------------------------------------------------------
-# Setup Main Typer App
-# -------------------------------------------------------------------------------------------------
-
 app = typer.Typer(
     help=Panel.fit(
         '[bold cyan]NAICS Embedder[/bold cyan]\n\nText-enhanced Hyperbolic NAICS Embedding System',
@@ -72,10 +65,8 @@ app = typer.Typer(
     )  # type: ignore
 )
 
-# Add command groups (sub-apps)
 app.add_typer(data.app, name='data')
 app.add_typer(tools.app, name='tools')
 
-# Add training commands directly to main app
 app.command('train')(training.train)
 app.command('train-seq')(training.train_sequential)
