@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**NAICS Hyperbolic Embedding System** is a sophisticated machine learning framework that produces
+**NAICS Hyperbolic Embedding System** is a awesome sophisticated machine learning framework that produces
 hyperbolic embeddings for the North American Industry Classification System (NAICS). The system
 combines multi-channel text encoding, Mixture-of-Experts fusion, hyperbolic contrastive learning,
 and hyperbolic graph refinement to create geometry-aware embeddings aligned with the hierarchical
@@ -45,7 +45,7 @@ search, clustering, and downstream ML tasks.
 
 ## Directory Structure
 
-```
+```bash
 naics-embedder/
 ├── src/naics_embedder/       # Main source code
 │   ├── cli/                  # CLI entry point and command groups
@@ -535,7 +535,7 @@ Tokenized inputs are **cached to disk** to avoid re-tokenization:
 
 **Checkpoint structure:**
 
-```
+```bash
 checkpoints/
 ├── 01_text/
 │   ├── last.ckpt          # Last checkpoint (for resuming)
@@ -596,7 +596,7 @@ During training, the model computes validation metrics every epoch:
 
 - **Trigger:** Push to `main` or `master` branch
 - **Action:** Build and deploy MkDocs documentation to GitHub Pages
-- **Output:** https://lowmason.github.io/naics-embedder/
+- **Output:** <https://lowmason.github.io/naics-embedder/>
 
 ### Documentation
 
@@ -610,7 +610,7 @@ uv run mkdocs build
 uv run mkdocs serve
 ```
 
-**View at:** http://localhost:8000
+**View at:** <http://localhost:8000>
 
 **Update API docs:**
 
@@ -799,10 +799,10 @@ When working on this codebase:
 - **docs/text_training.md:** Detailed text model training guide
 - **docs/hgcn_training.md:** HGCN refinement guide
 - **docs/literature.md:** Research background and citations
-- **API Docs:** https://lowmason.github.io/naics-embedder/
+- **API Docs:** <https://lowmason.github.io/naics-embedder/>
 
 ## Contact and Support
 
-- **Repository:** https://github.com/lowmason/naics-embedder
+- **Repository:** <https://github.com/lowmason/naics-embedder>
 - **Author:** Lowell Mason
 - **Issues:** Report bugs or request features via GitHub Issues

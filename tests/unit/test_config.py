@@ -4,18 +4,17 @@ Unit tests for configuration management.
 Tests Pydantic config models, YAML loading, and validation.
 '''
 
+
 import pytest
 import yaml
-from pathlib import Path
 from pydantic import ValidationError
 
 from naics_embedder.utils.config import (
     DirConfig,
-    DownloadConfig,
     DistancesConfig,
+    DownloadConfig,
     load_config,
 )
-
 
 # -------------------------------------------------------------------------------------------------
 # DirConfig Tests
@@ -23,10 +22,13 @@ from naics_embedder.utils.config import (
 
 @pytest.mark.unit
 class TestDirConfig:
+ 
     '''Test suite for directory configuration.'''
 
     def test_default_values(self):
+ 
         '''Test that DirConfig has correct default values.'''
+ 
         config = DirConfig()
 
         assert config.checkpoint_dir == './checkpoints'
@@ -36,8 +38,11 @@ class TestDirConfig:
         assert config.log_dir == './logs'
         assert config.output_dir == './outputs'
 
+
     def test_custom_values(self):
+ 
         '''Test that custom values override defaults.'''
+ 
         config = DirConfig(
             checkpoint_dir='/custom/checkpoints',
             data_dir='/custom/data',
@@ -48,8 +53,11 @@ class TestDirConfig:
         # Other fields should still have defaults
         assert config.conf_dir == './conf'
 
+
     def test_serialization(self):
+ 
         '''Test that config can be serialized to dict.'''
+ 
         config = DirConfig()
         config_dict = config.model_dump()
 
@@ -64,37 +72,49 @@ class TestDirConfig:
 
 @pytest.mark.unit
 class TestDownloadConfig:
+
     '''Test suite for download configuration.'''
 
-    def test_default_output_parquet(self):
+    def test_default_output_parquet(self) -> None:
+ 
         '''Test default output parquet path.'''
+ 
         config = DownloadConfig()
 
         assert config.output_parquet == './data/naics_descriptions.parquet'
 
+
     def test_custom_output_parquet(self):
+ 
         '''Test custom output parquet path.'''
+ 
         config = DownloadConfig(output_parquet='/custom/path/data.parquet')
 
         assert config.output_parquet == '/custom/path/data.parquet'
 
+
     def test_validation(self):
+ 
         '''Test that invalid configuration raises validation error.'''
+ 
         # output_parquet should be a string, not a number
         with pytest.raises(ValidationError):
-            DownloadConfig(output_parquet=12345)
+            DownloadConfig(output_parquet='12345')
 
 
 # -------------------------------------------------------------------------------------------------
 # DistancesConfig Tests
 # -------------------------------------------------------------------------------------------------
-
+ 
 @pytest.mark.unit
 class TestDistancesConfig:
+
     '''Test suite for distances configuration.'''
 
     def test_required_fields(self):
+    
         '''Test that config can be created with required fields.'''
+    
         config = DistancesConfig(
             input_parquet='./data/input.parquet',
             distances_parquet='./data/distances.parquet',
@@ -105,8 +125,11 @@ class TestDistancesConfig:
         assert config.distances_parquet == './data/distances.parquet'
         assert config.distance_matrix_parquet == './data/matrix.parquet'
 
+
     def test_missing_required_field_raises_error(self):
+
         '''Test that missing required field raises validation error.'''
+
         with pytest.raises(ValidationError):
             # Missing required fields
             DistancesConfig()
@@ -118,10 +141,13 @@ class TestDistancesConfig:
 
 @pytest.mark.unit
 class TestLoadConfig:
+
     '''Test suite for config loading function.'''
 
     def test_load_from_valid_yaml(self, tmp_path):
+
         '''Test loading config from valid YAML file.'''
+
         # Create temporary YAML file
         yaml_path = tmp_path / 'conf' / 'test_config.yaml'
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,8 +166,11 @@ class TestLoadConfig:
         assert config.checkpoint_dir == '/test/checkpoints'
         assert config.data_dir == '/test/data'
 
+
     def test_load_with_conf_prefix(self, tmp_path):
+
         '''Test that conf/ prefix is added if not present.'''
+
         yaml_path = tmp_path / 'conf' / 'test.yaml'
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -155,8 +184,11 @@ class TestLoadConfig:
 
         assert config.checkpoint_dir == '/test'
 
+
     def test_load_missing_file_uses_defaults(self, tmp_path):
+
         '''Test that missing file falls back to default values.'''
+
         # Try to load non-existent file
         config = load_config(DirConfig, 'nonexistent.yaml')
 
@@ -164,8 +196,11 @@ class TestLoadConfig:
         assert config.checkpoint_dir == './checkpoints'
         assert config.data_dir == './data'
 
+
     def test_load_empty_yaml(self, tmp_path):
+
         '''Test loading empty YAML file uses defaults.'''
+
         yaml_path = tmp_path / 'conf' / 'empty.yaml'
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -177,8 +212,11 @@ class TestLoadConfig:
         # Should use defaults
         assert config.checkpoint_dir == './checkpoints'
 
+
     def test_load_partial_yaml(self, tmp_path):
+
         '''Test loading YAML with partial fields.'''
+
         yaml_path = tmp_path / 'conf' / 'partial.yaml'
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -202,15 +240,21 @@ class TestLoadConfig:
 
 @pytest.mark.unit
 class TestConfigValidation:
+
     '''Test suite for configuration validation.'''
 
     def test_invalid_type_raises_error(self):
+
         '''Test that invalid field types raise validation errors.'''
+
         with pytest.raises(ValidationError):
             DirConfig(checkpoint_dir=12345)  # Should be string
 
+
     def test_extra_fields_allowed(self):
+
         '''Test behavior with extra fields.'''
+
         # Pydantic should ignore extra fields by default (or raise error if configured)
         config_dict = {
             'checkpoint_dir': './checkpoints',
@@ -222,8 +266,11 @@ class TestConfigValidation:
         config = DirConfig(**config_dict)
         assert config.checkpoint_dir == './checkpoints'
 
+
     def test_field_validation(self):
+
         '''Test that field validators work correctly.'''
+
         # This test depends on whether any validators are defined
         config = DirConfig(checkpoint_dir='  ./checkpoints  ')
 
@@ -237,10 +284,13 @@ class TestConfigValidation:
 
 @pytest.mark.unit
 class TestConfigIntegration:
+
     '''Integration tests for configuration system.'''
 
     def test_load_multiple_configs(self, tmp_path):
+
         '''Test loading multiple different config types.'''
+
         # Create directory
         conf_dir = tmp_path / 'conf'
         conf_dir.mkdir()
@@ -262,8 +312,11 @@ class TestConfigIntegration:
         assert dir_config.checkpoint_dir == '/test/checkpoints'
         assert download_config.output_parquet == '/test/output.parquet'
 
+
     def test_config_serialization_roundtrip(self):
+
         '''Test that config can be serialized and deserialized.'''
+
         original = DirConfig(
             checkpoint_dir='/test/checkpoints',
             data_dir='/test/data'
@@ -278,8 +331,11 @@ class TestConfigIntegration:
         assert restored.checkpoint_dir == original.checkpoint_dir
         assert restored.data_dir == original.data_dir
 
+
     def test_config_json_export(self):
+
         '''Test that config can be exported to JSON.'''
+
         config = DirConfig(checkpoint_dir='/test')
 
         json_str = config.model_dump_json()
@@ -295,10 +351,13 @@ class TestConfigIntegration:
 
 @pytest.mark.unit
 class TestConfigErrorHandling:
+
     '''Test suite for configuration error handling.'''
 
     def test_malformed_yaml(self, tmp_path):
+
         '''Test handling of malformed YAML file.'''
+
         yaml_path = tmp_path / 'conf' / 'malformed.yaml'
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -310,8 +369,11 @@ class TestConfigErrorHandling:
         with pytest.raises(Exception):
             load_config(DirConfig, 'malformed.yaml')
 
+
     def test_yaml_with_invalid_structure(self, tmp_path):
+
         '''Test YAML with structure that doesn't match config model.'''
+
         yaml_path = tmp_path / 'conf' / 'invalid_structure.yaml'
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -209,4 +209,4 @@ For questions about the test suite, see:
 
 - Main README: `/README.md`
 - CLAUDE.md: `/CLAUDE.md`
-- Issues: https://github.com/lowmason/naics-embedder/issues
+- Issues: <https://github.com/lowmason/naics-embedder/issues>
