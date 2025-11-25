@@ -148,6 +148,9 @@ def _get_distance(
     ancestors: Dict[str, List[str]]
 ) -> float:
 
+    if i == j:
+        return 0.0
+
     depth_i, depth_j = depths[i], depths[j]
 
     common_ancestor = _find_common_ancestor(i, j, ancestors)
@@ -161,9 +164,52 @@ def _get_distance(
         (depth_j - depth_ancestor)
     )
 
-    lineal = 1 if i in ancestors[j] else 0
+    is_lineal = (i in ancestors[j]) or (j in ancestors[i])
+    lineal = 1 if is_lineal else 0
 
     return distance - 0.5 * lineal
+
+    
+# -------------------------------------------------------------------------------------------------
+# Exclusions
+# -------------------------------------------------------------------------------------------------
+
+def _get_exclusions(distances_df: pl.DataFrame) -> pl.DataFrame:
+
+    descriptions_df = pl.read_parquet('./data/naics_descriptions.parquet')
+
+    codes = set(descriptions_df.get_column('code').unique().sort().to_list())
+
+    exclusions = (
+        descriptions_df.filter(pl.col('excluded').is_not_null())
+        .select(
+            code_i=pl.col('code'),
+            code_j=pl.col('excluded_codes'),
+        )
+        .explode('code_j')
+        .filter(pl.col('code_j').is_not_null(), pl.col('code_j').is_in(codes))
+        .join(
+            descriptions_df.select(code_j=pl.col('code')),
+            on='code_j',
+            how='inner',
+        )
+        .join(
+            distances_df.select(pl.col('code_i'), pl.col('code_j')),
+            on=['code_i', 'code_j'],
+            how='inner',
+        )
+        .select(
+            code_i=pl.col('code_i'),
+            code_j=pl.col('code_j'),
+            excluded=pl.lit(True),
+        )
+        .unique()
+        .sort('code_i', 'code_j')
+    )
+
+    print(f'Number of exclusions: {exclusions.height: ,}\n')
+
+    return exclusions
 
 
 # -------------------------------------------------------------------------------------------------
@@ -236,7 +282,7 @@ def _distance_stats(distances_df: pl.DataFrame):
 def calculate_pairwise_distances() -> pl.DataFrame:
     
     # Load configuration from YAML
-    cfg = load_config(DistancesConfig, 'data_generation/distances.yaml')
+    cfg = load_config(DistancesConfig, './data/distances.yaml')
 
     logger.info('Configuration:')
     logger.info(cfg.model_dump_json(indent=2))
@@ -294,7 +340,7 @@ def calculate_pairwise_distances() -> pl.DataFrame:
         )
     )
 
-    naics_distances = (
+    distances_df = (
         naics_i.join(
             naics_j, 
             how='cross'
@@ -329,30 +375,51 @@ def calculate_pairwise_distances() -> pl.DataFrame:
             pl.col('code_i'),
             pl.col('code_j'),
             distance=pl.col('distance')
-                       .fill_null(9.0)
+                       .fill_null(99.0)
         )
-        #.with_columns(
-        #    distance=pl.col('distance')
-        #               .rank('dense')
-        #)
+        .sort('idx_i', 'idx_j')
+    )
+
+    exclusions = _get_exclusions(distances_df)
+
+    distances_df = (
+        distances_df
+        .join(
+            exclusions,
+            on=['code_i', 'code_j'],
+            how='left'
+        ) 
+        .with_columns(
+            excluded=pl.col('excluded')
+                       .fill_null(False)
+        )
+        .select(
+            pl.col('idx_i'),
+            pl.col('idx_j'),
+            pl.col('code_i'),
+            pl.col('code_j'),
+            distance=pl.when(pl.col('excluded'))
+                       .then(pl.lit(0))
+                       .otherwise(pl.col('distance'))
+        )
         .sort('idx_i', 'idx_j')
     )
 
     (
-        naics_distances
+        distances_df
         .write_parquet(cfg.distances_parquet)
     )
 
-    #_distance_stats(naics_distances)   
+    _distance_stats(distances_df)   
 
     _parquet_stats(
-        parquet_df=naics_distances,
+        parquet_df=distances_df,
         message='NAICS pairwise distances written to',
         output_parquet=cfg.distances_parquet,
         logger=logger
     )
     
-    dist_matrix = _get_distance_matrix(naics_distances)
+    dist_matrix = _get_distance_matrix(distances_df)
 
     (
         dist_matrix
@@ -366,7 +433,7 @@ def calculate_pairwise_distances() -> pl.DataFrame:
         logger=logger
     )
 
-    return naics_distances
+    return distances_df
 
 
 # -------------------------------------------------------------------------------------------------

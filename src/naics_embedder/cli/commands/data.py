@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------------------------------
-# Data Generation Commands
+# Imports
 # -------------------------------------------------------------------------------------------------
 
 import typer
@@ -11,11 +11,18 @@ from naics_embedder.data.create_triplets import generate_training_triplets
 from naics_embedder.data.download_data import download_preprocess_data
 from naics_embedder.utils.console import configure_logging
 
+# -------------------------------------------------------------------------------------------------
+# Data generation sub-commands
+# -------------------------------------------------------------------------------------------------
+
 console = Console()
 
-# Create sub-app for data commands
 app = typer.Typer(help='Manage and generate project datasets.')
 
+
+# -------------------------------------------------------------------------------------------------
+# Download and preprocess data
+# -------------------------------------------------------------------------------------------------
 
 @app.command('preprocess')
 def preprocess():
@@ -34,6 +41,10 @@ def preprocess():
 
     console.print('\n[bold]Preprocessing complete.[/bold]\n')
 
+
+# -------------------------------------------------------------------------------------------------
+# Compute pairwise graph relationships
+# -------------------------------------------------------------------------------------------------
 
 @app.command('relations')
 def relations():
@@ -54,6 +65,10 @@ def relations():
     console.print('\n[bold]Relation computation complete.[/bold]\n')
 
 
+# -------------------------------------------------------------------------------------------------
+# Compute pairwise graph distances
+# -------------------------------------------------------------------------------------------------
+
 @app.command('distances')
 def distances():
 
@@ -73,6 +88,10 @@ def distances():
     console.print('\n[bold]Distance computation complete.[/bold]\n')
 
 
+# -------------------------------------------------------------------------------------------------
+# Generate training triplets
+# -------------------------------------------------------------------------------------------------
+
 @app.command('triplets')
 def triplets():
 
@@ -91,6 +110,10 @@ def triplets():
 
     console.print('\n[bold]Triplet generation complete.[/bold]\n')
 
+
+# -------------------------------------------------------------------------------------------------
+# Run full data generation pipeline
+# -------------------------------------------------------------------------------------------------
 
 @app.command('all')
 def all_data():

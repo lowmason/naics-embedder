@@ -693,7 +693,7 @@ def download_preprocess_data() -> pl.DataFrame:
     make_directories()
     
     # Load configuration from YAML
-    cfg = load_config(DownloadConfig, 'data_generation/download.yaml')
+    cfg = load_config(DownloadConfig, './data/download.yaml')
 
     logger.info('Configuration:')
     logger.info(cfg.model_dump_json(indent=2))

@@ -52,45 +52,6 @@ def _input_parquet_files(
 
 
 # -------------------------------------------------------------------------------------------------
-# Exclusions
-# -------------------------------------------------------------------------------------------------
-
-def _get_exclusions(descriptions_df: pl.DataFrame, distances_df: pl.DataFrame) -> pl.DataFrame:
-    codes = set(descriptions_df.get_column('code').unique().sort().to_list())
-
-    exclusions = (
-        descriptions_df.filter(pl.col('excluded').is_not_null())
-        .select(
-            positive_code=pl.col('code'),
-            negative_code=pl.col('excluded_codes'),
-        )
-        .explode('negative_code')
-        .filter(pl.col('negative_code').is_not_null(), pl.col('negative_code').is_in(codes))
-        .join(
-            descriptions_df.select(negative_code=pl.col('code')),
-            on='negative_code',
-            how='inner',
-        )
-        .join(
-            distances_df.select(positive_code=pl.col('code_i'), negative_code=pl.col('code_j')),
-            on=['positive_code', 'negative_code'],
-            how='inner',
-        )
-        .select(
-            positive_code=pl.col('positive_code'),
-            negative_code=pl.col('negative_code'),
-            excluded=pl.lit(True),
-        )
-        .unique()
-        .sort('positive_code', 'negative_code')
-    )
-
-    logger.info(f'Number of exclusions: {exclusions.height: ,}\n')
-
-    return exclusions
-
-
-# -------------------------------------------------------------------------------------------------
 # Distances
 # -------------------------------------------------------------------------------------------------
 
@@ -189,10 +150,7 @@ def _get_relations(
 # -------------------------------------------------------------------------------------------------
 
 
-def _get_pairs(
-        distances_df: pl.DataFrame, 
-        exclusions_df: pl.DataFrame
-) -> Tuple[pl.DataFrame, pl.DataFrame]:
+def _get_pairs(distances_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl.DataFrame]:
     
     positives = (
         distances_df.filter(pl.col('distance').ne(pl.col('distance').max()))
@@ -214,33 +172,11 @@ def _get_pairs(
             negative_code=pl.col('code_j'),
             distance=pl.col('distance'),
         )
-        .join(exclusions_df, on=['positive_code', 'negative_code'], how='left')
         .select(
             negative_idx=pl.col('negative_idx'),
             positive_code=pl.col('positive_code'),
-            negative_code=pl.col('negative_code'),
-            excluded=pl.col('excluded').fill_null(False)
+            negative_code=pl.col('negative_code')
         )
-        .with_columns(
-            un_1=pl.col('positive_code')
-                .str.slice(0, 2),
-            un_2=pl.col('negative_code')
-                .str.slice(0, 2)
-        )
-        .with_columns(
-            un_1=pl.when(pl.col('un_1').is_in(['31', '32', '33'])).then(pl.lit('31'))
-                .when(pl.col('un_1').is_in(['44', '45'])).then(pl.lit('44'))
-                .when(pl.col('un_1').is_in(['48', '49'])).then(pl.lit('48'))
-                .otherwise(pl.col('un_1')),
-            un_2=pl.when(pl.col('un_2').is_in(['31', '32', '33'])).then(pl.lit('31'))
-                .when(pl.col('un_2').is_in(['44', '45'])).then(pl.lit('44'))
-                .when(pl.col('un_2').is_in(['48', '49'])).then(pl.lit('48'))
-                .otherwise(pl.col('un_2'))
-        )
-        .with_columns(
-            unrelated=pl.col('un_1').ne(pl.col('un_2'))
-        )
-        .drop('un_1', 'un_2')
         .unique()
         .sort('positive_code', 'negative_code')
     )
@@ -287,58 +223,48 @@ def _get_triplets(
             how='inner', 
             on=['anchor_code', 'negative_code']
         )
+        .filter(
+            pl.col('positive_distance').gt(0.0)
+        )
         .with_columns(
-            positive_distance=pl.col('positive_distance').cast(pl.Int8),
-            negative_distance=pl.col('negative_distance').cast(pl.Int8)
+            unrelated=pl.max_horizontal(
+                pl.col('positive_distance'),
+                pl.col('negative_distance')
+            ).eq(99.0),
+            excluded=pl.min_horizontal(
+                pl.col('positive_distance'),
+                pl.col('negative_distance')
+            ).eq(0.0)
         )
         .with_columns(
             relation_margin=pl.col('negative_relation').sub(pl.col('positive_relation')),
             distance_margin=pl.col('negative_distance').sub(pl.col('positive_distance'))
         )
         .with_columns(
-            unrelated=pl.when(pl.col('excluded'))
-                        .then(pl.lit(False))
-                        .otherwise(pl.col('unrelated')),
-            relation_margin=pl.when(pl.col('excluded')).then(pl.lit(0.5))
-                            .when(pl.col('unrelated')).then(pl.lit(15))
-                            .otherwise(pl.col('relation_margin')),
-            distance_margin=pl.when(pl.col('excluded')).then(pl.lit(0.25))
-                            .when(
-                                pl.col('relation_margin').eq(1) & 
-                                pl.col('distance_margin').eq(-1)
-                            ).then(0.5)
-                            .when(
-                                pl.col('relation_margin').eq(1) & 
-                                pl.col('distance_margin').eq(0)
-                            ).then(0.75)
-                            .when(pl.col('unrelated')).then(pl.lit(15))
-                            .otherwise(pl.col('distance_margin'))
+            relation_margin=pl.when(pl.col('negative_distance').eq(0.0)).then(pl.lit(0.1))
+                            .when(pl.col('negative_distance').eq(99.0)).then(pl.lit(15.0))
+                            .otherwise(pl.col('relation_margin').cast(pl.Float64)),
+            distance_margin=pl.when(pl.col('negative_distance').eq(0.0)).then(pl.lit(0.1))
+                              .when(
+                                  pl.col('relation_margin').gt(0), 
+                                  pl.col('distance_margin').eq(0.0)
+                                ).then(0.3333)
+                              .when(
+                                  pl.col('relation_margin').gt(0), 
+                                  pl.col('distance_margin').eq(-0.5)
+                                ).then(0.6667)
+                              .when(pl.col('negative_distance').eq(99.0)).then(pl.lit(10.0))
+                              .otherwise(pl.col('distance_margin').cast(pl.Float64))
         )
         .filter(
             pl.col('relation_margin').gt(0),
             pl.col('distance_margin').gt(0)
         )
         .with_columns(
-            relation_margin=pl.col('relation_margin')
-                            .rank('dense')
-                            .replace({15: 100})
-                            .sub(1),
-            distance_margin=pl.col('distance_margin')
-                            .rank('dense')
-                            .replace({13: 100})
-                            .sub(1)
-        )
-        .with_columns(
-            margin=(
-                pl.col('relation_margin').mul(0.5) + 
-                pl.col('distance_margin').mul(0.5)
-            )
-            .rank('dense')
-            .sub(1)    
-        )
-        .with_columns(
-            margin=pl.when(pl.col('margin').eq(pl.col('margin').max())).then(99)
-                    .otherwise(pl.col('margin'))
+            margin=pl.sum_horizontal(
+                pl.col('relation_margin').mul(0.3333),
+                pl.col('distance_margin').mul(0.6667)
+            ).pow(-1)
         )
     )
 
@@ -389,7 +315,7 @@ def _get_triplets(
             'anchor_code', 'positive_code', 'negative_code',
             'anchor_level', 'positive_level', 'negative_level',
             'excluded', 'unrelated',
-            'relation_margin', 'distance_margin',
+            'relation_margin', 'distance_margin', 'margin',
             'positive_relation', 'negative_relation',
             'positive_distance', 'negative_distance'
         )
@@ -412,7 +338,7 @@ def _triplet_stats(triplets_df: pl.DataFrame):
 
     stats_df = (
         triplets_df
-        .group_by('excluded', 'unrelated', 'relation_margin', 'distance_margin')
+        .group_by('relation_margin', 'distance_margin', 'margin')
         .agg(
             cnt=pl.len(),
         )
@@ -422,13 +348,13 @@ def _triplet_stats(triplets_df: pl.DataFrame):
                   .mul(100)
         )
         .sort(
-            'excluded', 'unrelated', 'relation_margin', 'distance_margin', 
-            descending=[True, False, False, False]
+            'relation_margin', 'distance_margin', 'margin'
         )
     )
 
     rels = stats_df.get_column('relation_margin').unique().sort().to_list()
     dists = stats_df.get_column('distance_margin').unique().sort().to_list()
+    margin = stats_df.get_column('margin').unique().sort().to_list()
 
     logger.info(
         'Observed relation margins (differences in positive and negative relations): '
@@ -440,11 +366,16 @@ def _triplet_stats(triplets_df: pl.DataFrame):
         f'{", ".join(str(d) for d in dists)}\n'
     )
 
+    logger.info(
+        'Observed margin weights: '
+        f'{", ".join(str(m) for m in margin)}\n'
+    )
+
     _log_table(
         df=stats_df,
         title='Triplet Statistics',
         headers=[
-            'Margins:Excluded', 'Margins:Unrelated', 'Margins:Relation', 'Margins:Distance', 
+            'Margins:Relation', 'Margins:Distance', 'Margins:Weights'
             'cnt', 'pct'
         ],
         logger=logger,
@@ -459,7 +390,7 @@ def _triplet_stats(triplets_df: pl.DataFrame):
 def generate_training_triplets() -> pl.DataFrame:
     
     # Load configuration from YAML
-    cfg = load_config(TripletsConfig, 'data_generation/triplets.yaml')
+    cfg = load_config(TripletsConfig, './data/triplets.yaml')
 
     logger.info('Configuration:')
     logger.info(cfg.model_dump_json(indent=2))
@@ -472,14 +403,11 @@ def generate_training_triplets() -> pl.DataFrame:
         cfg.relations_parquet
     )
 
-    # Exclusions
-    exclusions = _get_exclusions(descriptions, distances)
-
     # All positive and negative distances
     positive_distances, negative_distances = _get_relations(relations, distances)
 
     # All positive and negative pairs
-    positives, negatives = _get_pairs(distances, exclusions)
+    positives, negatives = _get_pairs(distances)
 
     # Combine positives and negatives into triplets
     triplets_df = _get_triplets(positives, negatives, positive_distances, negative_distances)

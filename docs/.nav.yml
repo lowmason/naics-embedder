@@ -5,6 +5,7 @@ nav:
   - Training Overview:
       - Text Training: text_training.md
       - HGCN Training: hgcn_training.md
+      - Report: report.md
   - Usage: usage.md
   - API Reference:
       - CLI: api/cli.md
