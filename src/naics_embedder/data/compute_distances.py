@@ -148,6 +148,9 @@ def _get_distance(
     ancestors: Dict[str, List[str]]
 ) -> float:
 
+    if i == j:
+        return 0.0
+
     depth_i, depth_j = depths[i], depths[j]
 
     common_ancestor = _find_common_ancestor(i, j, ancestors)
@@ -161,7 +164,8 @@ def _get_distance(
         (depth_j - depth_ancestor)
     )
 
-    lineal = 1 if i in ancestors[j] else 0
+    is_lineal = (i in ancestors[j]) or (j in ancestors[i])
+    lineal = 1 if is_lineal else 0
 
     return distance - 0.5 * lineal
 

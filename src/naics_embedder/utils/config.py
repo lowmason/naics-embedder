@@ -4,7 +4,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -18,7 +18,7 @@ T = TypeVar('T', bound=BaseModel)
 # Generic Config Loader
 # -------------------------------------------------------------------------------------------------
 
-def load_config(config_class: Type[T], yaml_path: str) -> T:
+def load_config(config_class: Type[T], yaml_path: Union[str, Path]) -> T:
 
     '''
     Generic configuration loader for any Pydantic model.
@@ -34,14 +34,27 @@ def load_config(config_class: Type[T], yaml_path: str) -> T:
         cfg = load_config(DownloadConfig, 'data/download.yaml')
     '''
     
-    # Construct full path relative to conf/ directory
-    if not yaml_path.startswith('conf/'):
-        yaml_path = f'conf/{yaml_path}'
+    path = Path(yaml_path)
+    search_paths: List[Path] = []
     
-    yaml_file = Path(yaml_path)
+    if path.is_absolute():
+        search_paths.append(path)
+    else:
+        normalized = path.as_posix()
+        if normalized.startswith('conf/'):
+            search_paths.append(Path(normalized))
+        else:
+            search_paths.append(Path('conf') / path)
+            search_paths.append(path)
     
-    if not yaml_file.exists():
-        logger.warning(f'Config file not found: {yaml_path}, using defaults')
+    yaml_file: Optional[Path] = None
+    for candidate in search_paths:
+        if candidate.exists():
+            yaml_file = candidate
+            break
+    
+    if yaml_file is None:
+        logger.warning(f'Config file not found: {path}, using defaults')
         return config_class()
     
     with open(yaml_file, 'r') as f:
@@ -181,6 +194,14 @@ class DownloadConfig(BaseModel):
         default={'Code': 'code', 'Cross-Reference': 'excluded'},
         description='Column renames for exclusions'
     )
+    
+    @field_validator('output_parquet')
+    @classmethod
+    def validate_output_parquet(cls, value: str) -> str:
+        path = Path(value)
+        if path.suffix.lower() != '.parquet':
+            raise ValueError('output_parquet must point to a .parquet file')
+        return value
     
 
     @classmethod
