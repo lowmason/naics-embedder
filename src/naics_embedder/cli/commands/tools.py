@@ -36,11 +36,12 @@ def config(
         ),
     ] = 'conf/config.yaml',
 ):
+    """Display the current training and curriculum configuration.
 
-    '''
-    Display current training and curriculum configuration.
-    '''
-    
+    Args:
+        config_file: Path to the base YAML configuration file.
+    """
+
     configure_logging('tools_config.log')
 
     show_current_config(config_file)
@@ -74,33 +75,33 @@ def visualize(
         ),
     ] = None,
 ):
-    '''
-    Visualize training metrics from log files.
-    
-    Creates comprehensive visualizations and analysis of training metrics including:
-    - Hyperbolic radius over time
-    - Hierarchy preservation correlations
-    - Embedding diversity metrics
-    '''
-    
+    """Visualize training metrics from log files.
+
+    Args:
+        stage: Stage identifier used to filter metrics (for example ``02_text``).
+        log_file: Optional path to a training log file. Defaults to the
+            sequential training log when omitted.
+        output_dir: Optional directory where visualization files will be saved.
+    """
+
     configure_logging('tools_visualize.log')
-        
+
     try:
         log_path = Path(log_file) if log_file else None
         output_path = Path(output_dir) if output_dir else None
-        
+
         result = visualize_metrics(
             stage=stage,
             log_file=log_path,
             output_dir=output_path
         )
-        
+
         if result.get('output_file'):
             console.print(
                 '\n[bold green]✓[/bold green] Visualization saved to: '
                 f'[cyan]{result["output_file"]}[/cyan]\n'
             )
-        
+
     except Exception as e:
         console.print(f'[bold red]Error:[/bold red] {e}')
         raise typer.Exit(code=1)
@@ -127,28 +128,29 @@ def investigate(
         ),
     ] = None,
 ):
-    '''
-    Investigate why hierarchy preservation correlations might be low.
-    
-    Analyzes ground truth distances, evaluation configuration, and provides
-    recommendations for improving hierarchy preservation metrics.
-    '''
-    
+    """Analyze why hierarchy preservation correlations might be low.
+
+    Args:
+        distance_matrix: Optional path to the ground truth distance matrix
+            parquet. When omitted, the default from the configuration is used.
+        config_file: Optional path to an alternative configuration file.
+    """
+
     configure_logging('tools_investigate.log')
 
     try:
         dist_path = Path(distance_matrix) if distance_matrix else None
         config_path = Path(config_file) if config_file else None
-        
+
         result = investigate_hierarchy(
             distance_matrix_path=dist_path,
             config_path=config_path
         )
         for key, value in result.items():
             console.print(f'[bold green]{key}:[/bold green] {value}')
-            
+
         console.print('\n[bold green]Investigation complete![/bold green]\n')
-        
+
     except Exception as e:
         console.print(f'[bold red]Error:[/bold red] {e}')
         raise typer.Exit(code=1)

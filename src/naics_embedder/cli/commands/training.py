@@ -83,21 +83,25 @@ def generate_embeddings_from_checkpoint(
     output_path: Optional[str] = None,
     batch_size: int = 32
 ) -> str:
-    '''
-    Generate hyperbolic embeddings parquet file from a trained checkpoint.
+    """Generate hyperbolic embeddings parquet file from a trained checkpoint.
 
-    This function loads a trained model checkpoint, runs inference on all NAICS codes,
-    and saves the hyperbolic embeddings to a parquet file in the format expected by HGCN training.
+    Loads a trained model checkpoint, runs inference on all NAICS codes, and
+    writes the resulting embeddings to a parquet file compatible with HGCN
+    training.
 
     Args:
-        checkpoint_path: Path to the PyTorch Lightning checkpoint file
-        config: Config object with model and data paths
-        output_path: Optional output path for embeddings parquet. If None, uses default location.
-        batch_size: Batch size for inference
+        checkpoint_path: Filesystem path to the PyTorch Lightning checkpoint
+            that contains the trained contrastive model weights.
+        config: Project configuration containing data paths used for token
+            caching and parquet loading.
+        output_path: Optional path for the embeddings parquet. When omitted,
+            ``output/hyperbolic_projection/encodings.parquet`` is used.
+        batch_size: Batch size to use during inference to balance throughput
+            and memory usage.
 
     Returns:
-        Path to the generated embeddings parquet file
-    '''
+        str: Filesystem path to the generated embeddings parquet file.
+    """
     logger.info('=' * 80)
     logger.info('GENERATING EMBEDDINGS FROM CHECKPOINT')
     logger.info('=' * 80)
@@ -268,6 +272,17 @@ def train(
         ),
     ] = None,
 ):
+    """Train the text encoder with optional overrides and checkpoint resumption.
+
+    Args:
+        config_file: Path to the base YAML configuration file that describes
+            data, model, and training settings.
+        ckpt_path: Optional checkpoint path to resume training. Use ``last`` to
+            automatically pick up the latest checkpoint for the configured
+            experiment.
+        overrides: Optional list of key-value override strings such as
+            ``training.learning_rate=1e-4``.
+    """
 
     configure_logging('train.log')
 
@@ -673,14 +688,20 @@ def train_sequential(
         ),
     ] = None,
 ):
-    '''
-    Run sequential training with automatic checkpoint handoff.
+    """Run sequential training with automatic checkpoint handoff.
 
-    Trains through multiple stages, automatically loading the best checkpoint
-    from each stage as the initialization for the next stage.
+    The routine iterates over curriculum stages, loading the best checkpoint
+    from each stage as initialization for the next. This sequential flow is
+    preserved for backwards compatibility but is considered deprecated.
 
-    Note: This function is deprecated. Use dynamic curriculum training instead.
-    '''
+    Args:
+        num_stages: Number of training stages to run in sequence.
+        config_file: Path to the base configuration file used for all stages.
+        resume_from_checkpoint: Whether to resume from the last checkpoint of
+            the previous run when available.
+        overrides: Optional list of key-value override strings applied to every
+            stage configuration.
+    """
 
     configure_logging('train_sequential.log')
 
