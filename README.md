@@ -10,6 +10,7 @@ The final output is a set of **Lorentz-model hyperbolic embeddings** suitable fo
 search, hierarchical modeling, graph-based reasoning, and downstream machine learning applications.
 
 [![docs](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml)
+[![tests](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml)
 ---
 
 ## 1. System Architecture Overview
