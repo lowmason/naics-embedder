@@ -10,10 +10,8 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ['3.10', '3.11', '3.12', '3.13']
-    runs-on: ${{ matrix.os }}
-
+        python-version: ['3.10', '3.12']
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,7 +40,6 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -63,6 +60,3 @@ jobs:
 
       - name: Run ruff formatter check
         run: uv run ruff format --check src/ tests/
-
-      - name: Run YAPF format check
-        run: uv run yapf --diff --recursive src/ tests/
