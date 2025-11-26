@@ -5,8 +5,6 @@ Tests Pydantic config models, YAML loading, and validation.
 '''
 
 
-from pathlib import Path
-
 import pytest
 import yaml
 from pydantic import ValidationError
@@ -285,7 +283,7 @@ class TestConfigValidation:
         '''Test that invalid field types raise validation errors.'''
 
         with pytest.raises(ValidationError):
-            DirConfig(checkpoint_dir=12345)  # Should be string
+            DirConfig(checkpoint_dir=12345)  # pyright: ignore[reportArgumentType]
 
 
     def test_extra_fields_allowed(self):
