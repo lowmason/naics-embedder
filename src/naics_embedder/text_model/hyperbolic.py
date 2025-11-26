@@ -26,11 +26,12 @@ class HyperbolicProjection(nn.Module):
     - Constraint: -x₀² + x₁² + ... + xₙ² = -1/c (Lorentz inner product)
     '''
     
-    def __init__(self, input_dim: int, curvature: float = 1.0):
+    def __init__(self, input_dim: int, curvature: float = 1.0, max_norm: float = 2.0):
         super().__init__()
         
         self.input_dim = input_dim
         self.c = curvature
+        self.max_norm = max_norm  # Maximum tangent vector norm for numerical stability
         
         # Projection layer: maps Euclidean embedding to tangent space
         self.projection = nn.Linear(input_dim, input_dim + 1)
@@ -39,24 +40,37 @@ class HyperbolicProjection(nn.Module):
         '''
         Exponential map from tangent space at origin to Lorentz hyperboloid.
         
+        The output satisfies the Lorentz constraint: ||x_spatial||^2 - x0^2 = -1/c
+        
         Args:
             v: Tangent vector of shape (batch_size, input_dim + 1)
         
         Returns:
             Point on Lorentz hyperboloid of shape (batch_size, input_dim + 1)
         '''
-        sqrt_c = torch.sqrt(torch.tensor(self.c, device=v.device))
-        norm_v = torch.norm(v, p=2, dim=1, keepdim=True)
+        sqrt_c = torch.sqrt(torch.tensor(self.c, device=v.device, dtype=v.dtype))
+        
+        # Separate time and spatial components of the tangent vector
+        # Time component should be 0 for tangent at origin, but we ignore it
+        v_spatial = v[:, 1:]  # (batch_size, input_dim)
+        
+        # Compute norm of spatial part only
+        norm_v = torch.norm(v_spatial, p=2, dim=1, keepdim=True)
         norm_v = torch.clamp(norm_v, min=1e-8)
         
-        sinh_term = torch.sinh(norm_v / sqrt_c)
+        # Clamp the argument to sinh/cosh to avoid overflow (exp(88) is max for float32)
+        # Using max of 40 gives cosh(40) ~ 2.4e17 which is safe
+        theta = torch.clamp(sqrt_c * norm_v, max=40.0)
         
-        # Time coordinate (hyperbolic radius)
-        x0 = torch.cosh(norm_v / sqrt_c)
-        # Spatial coordinates
-        x_rest = (sinh_term * v) / norm_v
+        # Exponential map formula for Lorentz model with curvature c:
+        # x0 = (1/sqrt(c)) * cosh(sqrt(c) * ||v||)
+        # x_spatial = (1/sqrt(c)) * sinh(sqrt(c) * ||v||) / ||v|| * v
+        # This ensures: ||x_spatial||^2 - x0^2 = -1/c
+        x0 = torch.cosh(theta) / sqrt_c
+        sinh_term = torch.sinh(theta) / sqrt_c
+        x_spatial = (sinh_term / norm_v) * v_spatial
         
-        return torch.cat([x0, x_rest], dim=1)
+        return torch.cat([x0, x_spatial], dim=1)
     
     def forward(self, euclidean_embedding: torch.Tensor) -> torch.Tensor:
         '''
@@ -69,6 +83,18 @@ class HyperbolicProjection(nn.Module):
             Hyperbolic embedding in Lorentz model of shape (batch_size, input_dim + 1)
         '''
         tangent_vec = self.projection(euclidean_embedding)
+        
+        # Scale tangent vectors to limit hyperbolic radius for numerical stability
+        # Only scale the spatial components (index 1:)
+        spatial = tangent_vec[:, 1:]
+        norm = torch.norm(spatial, p=2, dim=1, keepdim=True)
+        scale = torch.where(
+            norm > self.max_norm,
+            self.max_norm / (norm + 1e-8),
+            torch.ones_like(norm)
+        )
+        tangent_vec = torch.cat([tangent_vec[:, :1], spatial * scale], dim=1)
+        
         hyperbolic_embedding = self.exp_map_zero(tangent_vec)
         return hyperbolic_embedding
 
@@ -118,11 +144,12 @@ class LorentzDistance(nn.Module):
         '''
         dot_product = self.lorentz_dot(u, v)
         
-        # Clamp to ensure valid arccosh argument
-        clamped_dot = torch.clamp(dot_product, max=-1.0 - 1e-5)
+        # Clamp to ensure valid arccosh argument (arccosh requires arg >= 1)
+        # For self-distance, dot_product = -1, so -dot_product = 1, giving arccosh(1) = 0
+        arccosh_arg = torch.clamp(-dot_product, min=1.0)
         
-        sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device))
-        dist = sqrt_c * torch.acosh(-clamped_dot)
+        sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device, dtype=u.dtype))
+        dist = sqrt_c * torch.acosh(arccosh_arg)
         
         return dist
     
@@ -151,10 +178,11 @@ class LorentzDistance(nn.Module):
         # Lorentz dot: sum of spatial components - time component
         dot_product = torch.sum(uv[:, :, 1:], dim=2) - uv[:, :, 0]  # (batch_size, k)
         
-        clamped_dot = torch.clamp(dot_product, max=-1.0 - 1e-5)
+        # Clamp to ensure valid arccosh argument (arccosh requires arg >= 1)
+        arccosh_arg = torch.clamp(-dot_product, min=1.0)
         
-        sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device))
-        dist = sqrt_c * torch.acosh(-clamped_dot)
+        sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device, dtype=u.dtype))
+        dist = sqrt_c * torch.acosh(arccosh_arg)
         
         return dist
 
@@ -196,7 +224,7 @@ def check_lorentz_manifold_validity(
     target_value = -1.0 / curvature
     violations = torch.abs(lorentz_norms - target_value)
     
-    is_valid = torch.all(violations < tolerance).item()
+    is_valid = bool(torch.all(violations < tolerance).item())
     
     return is_valid, lorentz_norms, violations
 
@@ -260,10 +288,12 @@ def log_hyperbolic_diagnostics(
     }
     
     # Log basic diagnostics
+    norm_mean = diagnostics['lorentz_norm_mean']
+    norm_std = diagnostics['lorentz_norm_std']
     logger_instance.info( 
         f'Hyperbolic Embedding Diagnostics:\n'
         f'  • Manifold valid: {is_valid}\n'
-        f'  • Lorentz norm: {diagnostics["lorentz_norm_mean"]:.6f} ± {diagnostics["lorentz_norm_std"]:.6f} '
+        f'  • Lorentz norm: {norm_mean:.6f} ± {norm_std:.6f} '
         f'(target: {-1.0/curvature:.6f})\n'
         f'  • Max violation: {diagnostics["violation_max"]:.6e}\n'
         f'  • Hyperbolic radius: {diagnostics["radius_mean"]:.4f} ± {diagnostics["radius_std"]:.4f}'
@@ -276,8 +306,10 @@ def log_hyperbolic_diagnostics(
         for level in unique_levels:
             level_mask = (level_labels == level)
             level_radii = radii[level_mask]
+            mean_val = level_radii.mean().item()
+            std_val = level_radii.std().item()
             logger_instance.info(
-                f'    Level {level.item()}: {level_radii.mean().item():.4f} ± {level_radii.std().item():.4f}'
+                f'    Level {level.item()}: {mean_val:.4f} ± {std_val:.4f}'
             )
     
     # Warn if manifold constraint is violated
@@ -305,16 +337,18 @@ class LorentzOps:
         '''
         Logarithmic map from hyperboloid to tangent space at origin.
         
-        Maps a point on the Lorentz hyperboloid to the tangent space at the origin (1, 0, ..., 0).
+        Maps a point on the Lorentz hyperboloid to the tangent space at the origin.
+        Inverse of exp_map_zero.
         
         Args:
             x_hyp: Point on hyperboloid, shape (batch_size, embedding_dim+1)
+                   Must satisfy ||x_spatial||^2 - x0^2 = -1/c
             c: Curvature parameter (default: 1.0)
         
         Returns:
             Tangent vector, shape (batch_size, embedding_dim+1)
         '''
-        sqrt_c = torch.sqrt(torch.tensor(c, device=x_hyp.device))
+        sqrt_c = torch.sqrt(torch.tensor(c, device=x_hyp.device, dtype=x_hyp.dtype))
         
         # Time coordinate (x0) and spatial coordinates (x1...xn)
         x0 = x_hyp[:, 0:1]  # (batch_size, 1)
@@ -324,18 +358,23 @@ class LorentzOps:
         norm_spatial = torch.norm(x_spatial, p=2, dim=1, keepdim=True)  # (batch_size, 1)
         norm_spatial = torch.clamp(norm_spatial, min=1e-8)
         
-        # Compute distance from origin
-        # For point (x0, x_spatial) on hyperboloid: x0^2 - ||x_spatial||^2 = 1/c
-        # Distance: d = sqrt(c) * arccosh(sqrt(c) * x0)
-        # For log map: v = (sqrt(c) * d / ||x_spatial||) * x_spatial
-        d = sqrt_c * torch.acosh(torch.clamp(sqrt_c * x0, min=1.0 + 1e-5))
+        # For the scaled hyperboloid, the origin is at (1/sqrt(c), 0, ..., 0)
+        # Distance from origin: d = (1/sqrt(c)) * arccosh(c * x0)
+        # where theta = sqrt(c) * ||v|| was used in exp_map
+        # So: theta = arccosh(sqrt(c) * x0)
+        theta = torch.acosh(torch.clamp(sqrt_c * x0, min=1.0 + 1e-5))
         
-        # Scale factor
-        scale = sqrt_c * d / norm_spatial
-        scale = torch.where(norm_spatial > 1e-8, scale, torch.zeros_like(scale))
+        # Scale factor to recover tangent vector
+        # v_spatial = theta / (sqrt(c) * ||x_spatial||) * x_spatial
+        # But ||x_spatial|| = sinh(theta) / sqrt(c), so:
+        # scale = theta / sinh(theta) when theta > 0
+        sinh_theta = torch.sinh(theta)
+        sinh_theta = torch.clamp(sinh_theta, min=1e-8)
+        scale = theta / sinh_theta
+        scale = torch.where(theta > 1e-8, scale, torch.ones_like(scale))
         
         # Tangent vector: time component is 0, spatial components are scaled
-        v_spatial = scale * x_spatial
+        v_spatial = scale * x_spatial * sqrt_c
         v_time = torch.zeros_like(x0)
         
         return torch.cat([v_time, v_spatial], dim=1)
@@ -346,6 +385,7 @@ class LorentzOps:
         Exponential map from tangent space at origin to hyperboloid.
         
         Maps a tangent vector at the origin to a point on the Lorentz hyperboloid.
+        The output satisfies the Lorentz constraint: ||x_spatial||^2 - x0^2 = -1/c
         
         Args:
             x_tan: Tangent vector, shape (batch_size, embedding_dim+1)
@@ -354,21 +394,25 @@ class LorentzOps:
         Returns:
             Point on hyperboloid, shape (batch_size, embedding_dim+1)
         '''
-        sqrt_c = torch.sqrt(torch.tensor(c, device=x_tan.device))
+        sqrt_c = torch.sqrt(torch.tensor(c, device=x_tan.device, dtype=x_tan.dtype))
         
         # Time component should be 0 for tangent at origin, but handle general case
-        v_time = x_tan[:, 0:1]  # (batch_size, 1)
         v_spatial = x_tan[:, 1:]  # (batch_size, embedding_dim)
         
         # Compute norm of tangent vector (spatial part)
         norm_v = torch.norm(v_spatial, p=2, dim=1, keepdim=True)  # (batch_size, 1)
         norm_v = torch.clamp(norm_v, min=1e-8)
         
-        # Exponential map formula
-        # x0 = cosh(sqrt(c) * ||v|| / sqrt(c)) = cosh(||v||)
-        # x_spatial = (sqrt(c) * sinh(||v||) / ||v||) * v
-        x0 = torch.cosh(norm_v / sqrt_c)
-        sinh_term = torch.sinh(norm_v / sqrt_c)
+        # Clamp the argument to sinh/cosh to avoid overflow (exp(88) is max for float32)
+        # Using max of 40 gives cosh(40) ~ 2.4e17 which is safe
+        theta = torch.clamp(sqrt_c * norm_v, max=40.0)
+        
+        # Exponential map formula for Lorentz model with curvature c:
+        # x0 = (1/sqrt(c)) * cosh(sqrt(c) * ||v||)
+        # x_spatial = (1/sqrt(c)) * sinh(sqrt(c) * ||v||) / ||v|| * v
+        # This ensures: ||x_spatial||^2 - x0^2 = -1/c
+        x0 = torch.cosh(theta) / sqrt_c
+        sinh_term = torch.sinh(theta) / sqrt_c
         x_spatial = (sinh_term / norm_v) * v_spatial
         
         return torch.cat([x0, x_spatial], dim=1)
@@ -390,11 +434,12 @@ class LorentzOps:
         uv = u * v
         dot_product = torch.sum(uv[:, 1:], dim=1) - uv[:, 0]
         
-        # Clamp to ensure valid arccosh argument
-        clamped_dot = torch.clamp(dot_product, max=-1.0 - 1e-5)
+        # Clamp to ensure valid arccosh argument (arccosh requires arg >= 1)
+        # For self-distance, dot_product = -1, so -dot_product = 1, giving arccosh(1) = 0
+        arccosh_arg = torch.clamp(-dot_product, min=1.0)
         
-        sqrt_c = torch.sqrt(torch.tensor(c, device=u.device))
-        dist = sqrt_c * torch.acosh(-clamped_dot)
+        sqrt_c = torch.sqrt(torch.tensor(c, device=u.device, dtype=u.dtype))
+        dist = sqrt_c * torch.acosh(arccosh_arg)
         
         return dist
 

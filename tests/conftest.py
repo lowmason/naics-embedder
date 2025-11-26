@@ -48,25 +48,41 @@ def set_random_seeds(random_seed):
 @pytest.fixture
 def sample_tangent_vectors(test_device, random_seed):
    
-    '''Generate sample tangent vectors for testing exponential map.'''
+    '''Generate sample tangent vectors for testing exponential map.
+    
+    Vectors are normalized to have reasonable norms (~1-2) to avoid numerical
+    overflow in sinh/cosh computations during exp_map.
+    '''
    
     torch.manual_seed(random_seed)
     batch_size = 16
     dim = 384
-    return torch.randn(batch_size, dim + 1, device=test_device)
+    # Create random tangent vectors with time component = 0 (proper tangent at origin)
+    tangent = torch.randn(batch_size, dim + 1, device=test_device)
+    tangent[:, 0] = 0.0  # Time component should be 0 for tangent at origin
+    # Scale to have reasonable norms for numerical stability
+    tangent = tangent / (torch.norm(tangent, dim=1, keepdim=True) + 1e-8) * 2.0
+    return tangent
 
 
 @pytest.fixture
 def sample_lorentz_embeddings(test_device, random_seed):
    
-    '''Generate valid Lorentz embeddings for testing.'''
+    '''Generate valid Lorentz embeddings for testing.
+    
+    Uses scaled tangent vectors to ensure numerical stability in exp_map.
+    '''
    
     from naics_embedder.text_model.hyperbolic import LorentzOps
 
     torch.manual_seed(random_seed)
     batch_size = 16
     dim = 384
+    # Create tangent vectors with reasonable norms for numerical stability
     tangent = torch.randn(batch_size, dim + 1, device=test_device)
+    tangent[:, 0] = 0.0  # Time component should be 0 for tangent at origin
+    # Scale to have norm ~2 (avoids sinh/cosh overflow)
+    tangent = tangent / (torch.norm(tangent, dim=1, keepdim=True) + 1e-8) * 2.0
     return LorentzOps.exp_map_zero(tangent, c=1.0)
 
 

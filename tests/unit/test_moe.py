@@ -188,23 +188,30 @@ class TestMixtureOfExperts:
     
         '''Test that batched processing gives consistent results.'''
     
+        # Put model in eval mode to disable dropout
+        moe_layer.eval()
+        
         # Process inputs individually vs. in batch
         inputs = torch.randn(4, 384 * 4, device=test_device)
 
-        # Batch processing
-        batch_output, _, _ = moe_layer(inputs)
+        with torch.no_grad():
+            # Batch processing
+            batch_output, _, _ = moe_layer(inputs)
 
-        # Individual processing
-        individual_outputs = []
-        for i in range(4):
-            single_input = inputs[i:i+1]
-            single_output, _, _ = moe_layer(single_input)
-            individual_outputs.append(single_output)
+            # Individual processing
+            individual_outputs = []
+            for i in range(4):
+                single_input = inputs[i:i+1]
+                single_output, _, _ = moe_layer(single_input)
+                individual_outputs.append(single_output)
 
-        individual_outputs = torch.cat(individual_outputs, dim=0)
+            individual_outputs = torch.cat(individual_outputs, dim=0)
 
-        # Results should be identical (MoE is deterministic given same weights)
+        # Results should be identical (MoE is deterministic in eval mode)
         assert torch.allclose(batch_output, individual_outputs, atol=1e-5)
+        
+        # Restore train mode
+        moe_layer.train()
 
 
     def test_expert_diversity(self, moe_layer, test_device):
