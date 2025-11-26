@@ -1,19 +1,14 @@
-# -------------------------------------------------------------------------------------------------
-# Imports and settings
-# -------------------------------------------------------------------------------------------------
-
 import logging
-import operator
-from collections import defaultdict
 from dataclasses import dataclass
-from functools import reduce
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
-import polars as pl
+import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, Dataset
+
+from naics_embedder.graph_model.dataloader.hgcn_streaming_dataset import load_streaming_triplets
+from naics_embedder.utils.config import GraphConfig, StreamingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -53,151 +48,60 @@ class Config:
 
     seed: int = 42
 
-# -------------------------------------------------------------------------------------------------
-# Utility functions
-# -------------------------------------------------------------------------------------------------
+def _infer_descriptions_path(encodings_parquet: str) -> str:
+    '''Infer descriptions parquet from the encodings path, falling back to defaults.'''
+    enc_path = Path(encodings_parquet).expanduser()
+    candidate = enc_path.parent.parent / 'naics_descriptions.parquet'
+    return str(candidate) if candidate.exists() else './data/naics_descriptions.parquet'
 
-def _get_config_dict(cfg: Config) -> Dict[str, Any]:
-    '''Extract relevant config values for filtering.'''
-    keep = [
-        'anchor_level',
-        'relation_margin',
-        'distance_margin',
-        'positive_level',
-        'positive_relation',
-        'positive_distance',
-        'negative_level',
-        'negative_relation',
-        'negative_distance',
-        'n_positive_samples',
-        'n_negatives',
-    ]
-
-    cfg_dict: Dict[str, Any] = {}
-    for k in keep:
-        v = getattr(cfg, k, None)
-        if v is not None:
-            cfg_dict[k] = v
-
-    return cfg_dict
-
-def _get_weighted_sample(
-    df: pl.DataFrame,
-    group_col: List[str],
-    weight_col: str,
-    n_samples: int,
-    seed: Optional[int] = None,
-) -> pl.DataFrame:
-    '''Apply weighted sampling using Gumbel-max trick.'''
-    rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
-
-    return (
-        df.with_columns(rnd=pl.Series('rnd', rng.uniform(size=df.height))).with_columns(
-            norm_wgt=pl.col(weight_col).truediv(pl.col(weight_col).sum().over(group_col))
-        ).with_columns(gm_sort=pl.col('rnd').log().mul(-1).truediv(pl.col('norm_wgt'))).sort(
-            'gm_sort'
-        ).group_by(group_col,
-                   maintain_order=True).head(n_samples).drop('rnd', 'norm_wgt', 'gm_sort')
+def _loader_cfg_from_graph(
+    cfg: GraphConfig,
+    descriptions_override: Optional[str] = None,
+) -> Config:
+    '''Derive loader config values from GraphConfig.'''
+    descriptions_path = descriptions_override or _infer_descriptions_path(cfg.encodings_parquet)
+    return Config(
+        training_pairs_path=cfg.training_pairs_path,
+        descriptions_parquet=descriptions_path,
+        batch_size=cfg.batch_size,
+        shuffle=cfg.shuffle,
+        num_workers=cfg.num_workers,
+        pin_memory=cfg.pin_memory,
+        n_positive_samples=cfg.n_positive_samples,
+        n_negatives=cfg.k_total,
+        anchor_level=None,
+        relation_margin=None,
+        distance_margin=None,
+        positive_level=None,
+        positive_relation=None,
+        positive_distance=None,
+        negative_level=None,
+        negative_relation=None,
+        negative_distance=None,
+        allowed_relations=cfg.allowed_relations,
+        min_code_level=cfg.min_code_level,
+        max_code_level=cfg.max_code_level,
+        seed=cfg.seed,
     )
 
-def _build_polars_query(cfg: Config, codes: List[str], code_to_idx: Dict[str, int]) -> pl.DataFrame:
-    '''Build and execute the Polars query to get triplets.'''
-    # Organize codes by level
-    level_dict = defaultdict(list)
-    for code in codes:
-        level_dict[len(code)].append(code)  # type: ignore
-
-    # Get list of dataset files
-    if cfg.anchor_level is not None:
-        dataset_files = []
-        for level in cfg.anchor_level:
-            for code in level_dict[level]:
-                idx = code_to_idx[code]
-                for pq_path in Path(f'{cfg.training_pairs_path}/anchor={idx}/').glob('*.parquet'):
-                    dataset_files.append(pq_path.as_posix())
-    else:
-        dataset_files = [str(p) for p in Path(cfg.training_pairs_path).glob('**/*.parquet')]
-
-    # Build filters
-    cfg_dict = _get_config_dict(cfg)
-    exprs = []
-    for k, v in cfg_dict.items():
-        if isinstance(v, list):
-            exprs.append(pl.col(k).is_in(v))
-        elif isinstance(v, bool):
-            exprs.append(pl.col(k).eq(v))
-
-    if not exprs:
-        exprs = [pl.col('anchor_idx').ge(0)]
-
-    filters = reduce(operator.and_, exprs)
-
-    # Build lazy query
-    logger.debug(f'Scanning {len(dataset_files)} parquet files...')
-    df_0 = pl.scan_parquet(dataset_files).filter(filters)
-
-    # Build query with sampled positives and weighted negatives
-    df_1 = (
-        df_0.with_columns(
-            relation_margin=pl.when(pl.col('excluded')).then(pl.col('relation_margin').add(1)
-                                                             ).otherwise(pl.col('relation_margin')),
-            distance_margin=pl.when(pl.col('excluded')).then(pl.col('distance_margin').add(1)
-                                                             ).otherwise(pl.col('distance_margin')),
-        ).with_columns(sample_wgt=pl.mean_horizontal('relation_margin', 'distance_margin').pow(-1)
-                       ).select(
-                           anchors=pl.struct(pl.col('anchor_idx'), pl.col('anchor_code')),
-                           positives=pl.struct(pl.col('positive_idx'), pl.col('positive_code')),
-                           negatives=pl.struct(
-                               pl.struct(
-                                   pl.col('negative_idx'),
-                                   pl.col('negative_code'),
-                                   pl.col('relation_margin'),
-                                   pl.col('distance_margin'),
-                               ).alias('negatives'),
-                               pl.col('sample_wgt'),
-                           ),
-                       ).group_by('anchors', 'positives').agg(negatives=pl.col('negatives')).select(
-                           anchors=pl.col('anchors'),
-                           positives_negatives=pl.struct(pl.col('positives'), pl.col('negatives')),
-                       ).group_by('anchors').agg(
-                           positives_negatives_len=pl.col('positives_negatives').len(),
-                           positives_negatives=pl.col('positives_negatives'),
-                       ).with_columns(
-                           positives_negatives_len=pl.min_horizontal(
-                               pl.col('positives_negatives_len'), pl.lit(cfg.n_positive_samples)
-                           )
-                       ).with_columns(
-                           positives_negatives=pl.col('positives_negatives').list.sample(
-                               pl.col('positives_negatives_len'), shuffle=True, seed=cfg.seed
-                           )
-                       ).drop('positives_negatives_len').explode('positives_negatives').unnest(
-                           'positives_negatives'
-                       ).explode('negatives').unnest('negatives')
+def _streaming_cfg_from_loader(cfg: Config) -> StreamingConfig:
+    '''Convert loader config into a StreamingConfig for cache materialization.'''
+    return StreamingConfig(
+        descriptions_parquet=cfg.descriptions_parquet,
+        triplets_parquet=cfg.training_pairs_path,
+        anchor_level=cfg.anchor_level,
+        relation_margin=cfg.relation_margin,
+        distance_margin=cfg.distance_margin,
+        positive_level=cfg.positive_level,
+        positive_relation=cfg.positive_relation,
+        positive_distance=cfg.positive_distance,
+        negative_level=cfg.negative_level,
+        negative_relation=cfg.negative_relation,
+        negative_distance=cfg.negative_distance,
+        n_positives=cfg.n_positive_samples,
+        n_negatives=cfg.n_negatives,
+        seed=cfg.seed,
     )
-
-    # Execute query
-    logger.info('Executing Polars query (this may take 30-60 seconds for large datasets)...')
-    df_1 = df_1.collect()
-    logger.info(f'✓ Polars query complete: {len(df_1)} rows')
-
-    return df_1
-
-def _apply_weighted_sampling(df_1: pl.DataFrame, cfg: Config) -> List[Dict]:
-    '''Apply weighted sampling and convert to list of dicts.'''
-    df = (
-        _get_weighted_sample(
-            df_1, ['anchors', 'positives'], 'sample_wgt', cfg.n_negatives, seed=cfg.seed
-        ).group_by('anchors', 'positives').agg(
-            negatives=pl.col('negatives'), negatives_len=pl.col('negatives').len()
-        ).select(
-            anchors=pl.col('anchors'),
-            positives=pl.col('positives'),
-            negatives=pl.col('negatives'),
-            negatives_len=pl.col('negatives_len'),
-        )
-    )
-
-    return df.to_dicts()
 
 # -------------------------------------------------------------------------------------------------
 # Dataset
@@ -253,42 +157,12 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         'negative_indices': negative_indices,
     }
 
-# -------------------------------------------------------------------------------------------------
-# Create dataloader
-# -------------------------------------------------------------------------------------------------
-
-def _load_codes_and_indices(descriptions_parquet: str) -> tuple[List[str], Dict[str, int]]:
-    '''Load codes and code_to_idx mapping from parquet file.'''
-    df_codes = pl.read_parquet(descriptions_parquet).select('index', 'code')
-    codes = df_codes['code'].to_list()
-    code_to_idx = {row['code']: row['index'] for row in df_codes.iter_rows(named=True)}
-    return codes, code_to_idx
-
 def create_dataloader(cfg: Config) -> DataLoader:
-    '''
-    Create a PyTorch DataLoader for graph training.
-
-    Uses weighted sampling by inverse of relation id (similar to streaming_dataset.py).
-
-    Args:
-        cfg: Configuration object
-
-    Returns:
-        DataLoader instance
-    '''
-    # Load codes and indices
-    codes, code_to_idx = _load_codes_and_indices(cfg.descriptions_parquet)
-
-    # Build Polars query
-    df_1 = _build_polars_query(cfg, codes, code_to_idx)
-
-    # Apply weighted sampling
-    data_list = _apply_weighted_sampling(df_1, cfg)
-
-    # Create dataset
+    '''Create a PyTorch DataLoader for graph training using the shared streaming cache.'''
+    streaming_cfg = _streaming_cfg_from_loader(cfg)
+    data_list = load_streaming_triplets(streaming_cfg)
     dataset = TripletDataset(data_list)
 
-    # Create dataloader
     dataloader = DataLoader(
         dataset,
         batch_size=cfg.batch_size,
@@ -304,3 +178,80 @@ def create_dataloader(cfg: Config) -> DataLoader:
     )
 
     return dataloader
+
+class HGCNDataModule(pl.LightningDataModule):
+    '''Lightning DataModule that materializes triplets once and reuses cached data.'''
+
+    def __init__(
+        self,
+        graph_cfg: GraphConfig,
+        *,
+        val_split: float = 0.05,
+        descriptions_parquet: Optional[str] = None,
+    ):
+        super().__init__()
+        self.graph_cfg = graph_cfg
+        self.val_split = max(0.0, min(0.9, val_split))
+        self.loader_cfg = _loader_cfg_from_graph(
+            graph_cfg, descriptions_override=descriptions_parquet
+        )
+        self._streaming_cfg = _streaming_cfg_from_loader(self.loader_cfg)
+        self._train_dataset: Optional[TripletDataset] = None
+        self._val_dataset: Optional[TripletDataset] = None
+
+    def prepare_data(self) -> None:
+        # Ensure the expensive Polars query runs once on rank 0.
+        load_streaming_triplets(self._streaming_cfg)
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        if self._train_dataset is not None and (
+            self._val_dataset is not None or self.val_split == 0
+        ):
+            return
+
+        data = load_streaming_triplets(self._streaming_cfg)
+        if self.val_split <= 0 or len(data) < 2:
+            train_data = data
+            val_data: Optional[List[Dict[str, Any]]] = None
+        else:
+            split_idx = int(len(data) * (1 - self.val_split))
+            split_idx = max(1, min(len(data) - 1, split_idx))
+            train_data = data[:split_idx]
+            val_data = data[split_idx:]
+
+        self._train_dataset = TripletDataset(train_data)
+        self._val_dataset = TripletDataset(val_data) if val_data else None
+
+        logger.info(
+            'Split triplets into %s train / %s val samples',
+            len(self._train_dataset),
+            len(self._val_dataset) if self._val_dataset else 0,
+        )
+
+    def train_dataloader(self) -> DataLoader:
+        if self._train_dataset is None:
+            raise RuntimeError(
+                'DataModule.setup() must be called before requesting train_dataloader.'
+            )
+
+        return DataLoader(
+            self._train_dataset,
+            batch_size=self.loader_cfg.batch_size,
+            shuffle=self.loader_cfg.shuffle,
+            num_workers=self.loader_cfg.num_workers,
+            pin_memory=self.loader_cfg.pin_memory,
+            collate_fn=collate_fn,
+        )
+
+    def val_dataloader(self) -> Optional[DataLoader]:
+        if self._val_dataset is None:
+            return None
+
+        return DataLoader(
+            self._val_dataset,
+            batch_size=self.loader_cfg.batch_size,
+            shuffle=False,
+            num_workers=self.loader_cfg.num_workers,
+            pin_memory=self.loader_cfg.pin_memory,
+            collate_fn=collate_fn,
+        )

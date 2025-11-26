@@ -23,6 +23,26 @@ logger = logging.getLogger(__name__)
 # Track which configurations have already been logged
 _logged_configs = set()
 
+def _log_dataset_stats(cfg: StreamingConfig, df_list: List[Dict], *, worker_id: str) -> None:
+    '''Log dataset statistics once per unique configuration.'''
+    config_id = (
+        f'{cfg.descriptions_parquet}_{cfg.triplets_parquet}_{cfg.anchor_level}_'
+        f'{cfg.n_positives}_{cfg.n_negatives}_{cfg.seed}'
+    )
+
+    if config_id in _logged_configs:
+        return
+
+    num_anchors = len(set(row['anchors']['anchor_idx'] for row in df_list))
+    num_positives = len(df_list)
+    num_negatives = sum(len(row['negatives']) for row in df_list)
+
+    logger.info(
+        f'{worker_id} Dataset stats — anchors: {num_anchors: ,}, '
+        f'positives: {num_positives: ,}, negatives: {num_negatives: ,}'
+    )
+    _logged_configs.add(config_id)
+
 # -------------------------------------------------------------------------------------------------
 # Cache utilities
 # -------------------------------------------------------------------------------------------------
@@ -262,24 +282,22 @@ def _apply_weighted_sampling(df_1: pl.DataFrame, cfg: StreamingConfig, worker_id
 # Triplet batch generator
 # -------------------------------------------------------------------------------------------------
 
-def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]:
-    '''Create a generator that yields triplets for training.'''
-    # Identify worker process
-    worker_info = None
-    try:
-        import torch
+def load_streaming_triplets(
+    cfg: StreamingConfig,
+    *,
+    worker_id: str = 'Main',
+    allow_cache_save: bool = True,
+    log_stats: bool = True,
+) -> List[Dict[str, Any]]:
+    '''
+    Materialize the cached streaming triplets for reuse outside of DataLoader workers.
 
-        worker_info = torch.utils.data.get_worker_info()
-    except Exception:
-        pass
-
-    worker_id = f'Worker {worker_info.id}' if worker_info else 'Main'
-
-    # Try to load final cache first
+    This helper ensures a single source of truth for the heavy Polars query so that
+    Lightning DataModules and legacy streaming generators share the same cache.
+    '''
     df_list = _load_final_cache(cfg)
 
     if df_list is None:
-        # Cache doesn't exist - need to build it
         logger.info(f'{worker_id} Final cache not found, building from scratch...')
 
         # Load codes and indices
@@ -291,30 +309,33 @@ def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]
         # Apply weighted sampling
         df_list = _apply_weighted_sampling(df_1, cfg, worker_id)
 
-        # Save final cache if we're in main process (prepare_data)
-        if worker_info is None:
+        if allow_cache_save:
             _save_final_cache(df_list, cfg)
 
-    # Log statistics (main process only, once per config)
-    if worker_info is None:
-        config_id = (
-            f'{cfg.descriptions_parquet}_{cfg.triplets_parquet}_{cfg.anchor_level}_'
-            f'{cfg.n_positives}_{cfg.n_negatives}_{cfg.seed}'
-        )
+    if log_stats:
+        _log_dataset_stats(cfg, df_list, worker_id=worker_id)
 
-        if config_id not in _logged_configs:
-            num_anchors = len(set(row['anchors']['anchor_idx'] for row in df_list))
-            num_positives = len(df_list)
-            num_negatives = sum(len(row['negatives']) for row in df_list)
+    return df_list
 
-            logger.info(
-                f'Number of anchors: {num_anchors: ,}, '
-                f'anchors/positives: {num_positives: ,}, '
-                f'anchors/positives/negatives: {num_negatives: ,}\n'
-            )
-            _logged_configs.add(config_id)
+def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]:
+    '''Create a generator that yields triplets for training.'''
+    worker_info = None
+    try:
+        import torch
 
-    # Iterate from list of dicts (no Polars involved)
+        worker_info = torch.utils.data.get_worker_info()
+    except Exception:
+        pass
+
+    worker_id = f'Worker {worker_info.id}' if worker_info else 'Main'
+
+    df_list = load_streaming_triplets(
+        cfg,
+        worker_id=worker_id,
+        allow_cache_save=worker_info is None,
+        log_stats=worker_info is None,
+    )
+
     for row in df_list:
         negatives = [
             {
