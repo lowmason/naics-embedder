@@ -20,6 +20,7 @@ from naics_embedder.text_model.evaluation import (
     EmbeddingStatistics,
     HierarchyMetrics,
 )
+from naics_embedder.text_model.false_negative_strategies import apply_false_negative_strategy
 from naics_embedder.text_model.hard_negative_mining import (
     LorentzianHardNegativeMiner,
     NormAdaptiveMargin,
@@ -31,6 +32,7 @@ from naics_embedder.text_model.hyperbolic import (
 )
 from naics_embedder.text_model.hyperbolic_clustering import HyperbolicKMeans
 from naics_embedder.text_model.loss import HyperbolicInfoNCELoss
+from naics_embedder.utils.config import AnnealConfig, FalseNegativeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +158,9 @@ class NAICSContrastiveModel(pyl.LightningModule):
         curriculum_phase2_end: float = 0.7,
         curriculum_phase3_end: float = 1.0,
         sibling_distance_threshold: float = 2.0,
+        curriculum_phase_mode: str = 'three_phase',
+        curriculum_anneal: Optional[Dict[str, float]] = None,
+        false_negative_config: Optional[Dict[str, float]] = None,
     ):
         super().__init__()
 
@@ -240,7 +245,16 @@ class NAICSContrastiveModel(pyl.LightningModule):
         # Initialize curriculum scheduler (will be set in on_train_start)
         self.curriculum_scheduler: Optional[CurriculumScheduler] = None
         self.current_curriculum_flags: Dict[str, bool] = {}
+        self.current_schedule_scalars: Dict[str, float] = {}
         self.previous_phase: Optional[int] = None
+        self.curriculum_anneal = curriculum_anneal
+        self.curriculum_phase_mode = curriculum_phase_mode
+        if false_negative_config is None:
+            self.false_negative_config = FalseNegativeConfig()
+        elif isinstance(false_negative_config, FalseNegativeConfig):
+            self.false_negative_config = false_negative_config
+        else:
+            self.false_negative_config = FalseNegativeConfig(**false_negative_config)
 
     def _get_metrics_file_path(self) -> Optional[Path]:
         '''Get the path to save evaluation metrics JSON file.'''
@@ -359,7 +373,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
                     )
                     router_hard_negatives, router_confusion_scores = router_result
 
-                    router_mix_ratio = 0.5
+                    router_mix_ratio = self.current_schedule_scalars.get('router_mix_ratio', 0.5)
+                    router_mix_ratio = max(0.0, min(1.0, router_mix_ratio))
                     if enable_hard_negative_mining:
                         n_router = int(k_negatives * router_mix_ratio)
                         n_embedding = k_negatives - n_router
@@ -432,10 +447,37 @@ class NAICSContrastiveModel(pyl.LightningModule):
             self.current_curriculum_flags = self.curriculum_scheduler.get_curriculum_flags(
                 self.current_epoch
             )
+            self.current_schedule_scalars = self.curriculum_scheduler.get_schedule_scalars(
+                self.current_epoch
+            )
 
             # Log phase transitions
             self.curriculum_scheduler.log_phase_transition(self.current_epoch, self.previous_phase)
             self.previous_phase = self.curriculum_scheduler.get_phase(self.current_epoch)
+        else:
+            self.current_schedule_scalars = {}
+
+        batch_size = batch['batch_size']
+
+        if batch_idx == 0 and self.current_schedule_scalars:
+            anneal_progress = self.current_schedule_scalars.get('anneal_progress')
+            if anneal_progress is not None:
+                self.log(
+                    'train/curriculum/anneal_progress',
+                    anneal_progress,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                )
+            tree_alpha = self.current_schedule_scalars.get('tree_distance_alpha')
+            if tree_alpha is not None:
+                self.log(
+                    'train/curriculum/tree_distance_alpha',
+                    tree_alpha,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                )
 
         # Check if we have multi-level supervision (Issue #18)
         # With multi-level supervision, the batch is expanded so each positive level
@@ -451,7 +493,6 @@ class NAICSContrastiveModel(pyl.LightningModule):
         positive_emb = positive_output['embedding']
         negative_emb = negative_output['embedding']
 
-        batch_size = batch['batch_size']
         k_negatives = batch['k_negatives']
 
         # Log multi-level supervision statistics
@@ -510,6 +551,46 @@ class NAICSContrastiveModel(pyl.LightningModule):
             except Exception as e:
                 logger.warning(f'Failed to create false negative mask: {e}')
                 false_negative_mask = None
+
+        # Log static sampling diagnostics if provided by dataloader
+        sampling_metadata = batch.get('sampling_metadata')
+        if sampling_metadata and sampling_metadata.get('strategy') == 'sans_static':
+            sampled_near = sampling_metadata.get('sampled_near', 0)
+            sampled_far = sampling_metadata.get('sampled_far', 0)
+            total_sampled = sampled_near + sampled_far
+
+            if total_sampled > 0:
+                near_pct = sampled_near / total_sampled
+                self.log(
+                    'train/sans_static/sample_near_pct',
+                    near_pct,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                )
+
+            candidates_near = sampling_metadata.get('candidates_near', 0)
+            candidates_far = sampling_metadata.get('candidates_far', 0)
+            total_candidates = candidates_near + candidates_far
+            if total_candidates > 0:
+                candidate_near_pct = candidates_near / total_candidates
+                self.log(
+                    'train/sans_static/candidate_near_pct',
+                    candidate_near_pct,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                )
+
+            effective_near_weight = sampling_metadata.get('avg_effective_near_weight')
+            if effective_near_weight is not None:
+                self.log(
+                    'train/sans_static/effective_near_weight',
+                    effective_near_weight,
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                )
 
         # Log negative sample type distribution (Issue #12)
         if batch_idx == 0 and 'negative_codes' in batch and self.code_to_idx is not None:
@@ -765,8 +846,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
                         )
 
                     # Mix router-hard negatives with embedding-hard negatives
-                    # Strategy: Take 50% from each (or use a configurable ratio)
-                    router_mix_ratio = 0.5  # 50% router-hard, 50% embedding-hard
+                    router_mix_ratio = self.current_schedule_scalars.get('router_mix_ratio', 0.5)
+                    router_mix_ratio = max(0.0, min(1.0, router_mix_ratio))
 
                     if enable_hard_negative_mining:
                         # Mix both types of hard negatives
@@ -824,28 +905,44 @@ class NAICSContrastiveModel(pyl.LightningModule):
             # Flatten back to (batch_size * k_negatives, embedding_dim+1)
             negative_emb = negative_emb_reshaped.view(batch_size * k_negatives, -1)
 
+        auxiliary_fn_loss: Optional[torch.Tensor] = None
+        fn_mask = false_negative_mask
+        if negative_emb_reshaped is not None and self.false_negative_config is not None:
+            fn_mask, auxiliary_fn_loss = apply_false_negative_strategy(
+                self.false_negative_config, anchor_emb, negative_emb_reshaped, false_negative_mask
+            )
+        false_negative_mask = fn_mask
+
         adaptive_margins = self.norm_adaptive_margin(anchor_emb)
+        adaptive_margin_mean_value = adaptive_margins.mean().item()
         if batch_idx == 0:
+            adaptive_margin_min_value = adaptive_margins.min().item()
+            adaptive_margin_max_value = adaptive_margins.max().item()
             self.log(
                 'train/curriculum/adaptive_margin_mean',
-                adaptive_margins.mean().item(),
+                adaptive_margin_mean_value,
                 batch_size=batch_size,
                 on_step=False,
                 on_epoch=True,
             )
             self.log(
                 'train/curriculum/adaptive_margin_min',
-                adaptive_margins.min().item(),
+                adaptive_margin_min_value,
                 batch_size=batch_size,
                 on_step=False,
                 on_epoch=True,
             )
             self.log(
                 'train/curriculum/adaptive_margin_max',
-                adaptive_margins.max().item(),
+                adaptive_margin_max_value,
                 batch_size=batch_size,
                 on_step=False,
                 on_epoch=True,
+            )
+
+        if self.curriculum_scheduler is not None:
+            self.curriculum_scheduler.update_metrics(
+                {'adaptive_margin_mean': adaptive_margin_mean_value}
             )
 
         contrastive_loss = self.loss_fn(
@@ -856,6 +953,9 @@ class NAICSContrastiveModel(pyl.LightningModule):
             k_negatives,
             false_negative_mask=false_negative_mask,
         )
+
+        if auxiliary_fn_loss is not None:
+            contrastive_loss = contrastive_loss + auxiliary_fn_loss
 
         # Router statistics logging: Monitor expert utilization patterns
         all_gate_probs = []
@@ -1905,6 +2005,9 @@ class NAICSContrastiveModel(pyl.LightningModule):
         # Initialize curriculum scheduler
         if hasattr(self, 'trainer') and self.trainer is not None:
             max_epochs = getattr(self.trainer, 'max_epochs', 15)
+            anneal_cfg = getattr(self.hparams, 'curriculum_anneal', None)
+            if anneal_cfg is not None and not isinstance(anneal_cfg, AnnealConfig):
+                anneal_cfg = AnnealConfig(**anneal_cfg)
             self.curriculum_scheduler = CurriculumScheduler(
                 max_epochs=max_epochs,
                 phase1_end=getattr(self.hparams, 'curriculum_phase1_end', 0.3),
@@ -1912,6 +2015,8 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 phase3_end=getattr(self.hparams, 'curriculum_phase3_end', 1.0),
                 tree_distance_alpha=getattr(self.hparams, 'tree_distance_alpha', 1.5),
                 sibling_distance_threshold=getattr(self.hparams, 'sibling_distance_threshold', 2.0),
+                phase_mode=getattr(self.hparams, 'curriculum_phase_mode', 'three_phase'),
+                anneal_config=anneal_cfg,
             )
             logger.info('Curriculum scheduler initialized')
 

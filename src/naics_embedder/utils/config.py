@@ -4,7 +4,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -363,7 +363,7 @@ class TripletsConfig(BaseModel):
         return cls(**data)
 
 class DataConfig(BaseModel):
-    '''Data generation configuration.'''
+    '''Data configuration.'''
 
     download: DownloadConfig = Field(
         default_factory=DownloadConfig, description='Download configuration'
@@ -498,6 +498,47 @@ class StreamingConfig(BaseModel):
         default=100.0,
         gt=0.0,
         description='High constant weight for excluded codes in Phase 1 sampling',
+    )
+
+class SansStaticConfig(BaseModel):
+    '''Configuration for static SANS-style sampling buckets.'''
+
+    near_distance_threshold: float = Field(
+        default=4.0,
+        ge=0.0,
+        description='Tree-distance threshold separating near vs far negatives',
+    )
+    near_bucket_weight: float = Field(
+        default=0.65,
+        ge=0.0,
+        description='Probability mass assigned to near negatives before normalization',
+    )
+    far_bucket_weight: float = Field(
+        default=0.35,
+        ge=0.0,
+        description='Probability mass assigned to far negatives before normalization',
+    )
+    default_distance: float = Field(
+        default=12.0,
+        ge=0.0,
+        description='Fallback tree distance when lookup data is missing',
+    )
+
+    @model_validator(mode='after')
+    def validate_bucket_weights(self) -> 'SansStaticConfig':
+        if self.near_bucket_weight + self.far_bucket_weight <= 0:
+            raise ValueError('near_bucket_weight + far_bucket_weight must be > 0')
+        return self
+
+class SamplingConfig(BaseModel):
+    '''Top-level sampling configuration (data layer strategies).'''
+
+    strategy: Literal['sadc', 'sans_static'] = Field(
+        default='sadc',
+        description='Sampling strategy for dataloader (dynamic SADC vs static SANS)',
+    )
+    sans_static: SansStaticConfig = Field(
+        default_factory=SansStaticConfig, description='Parameters for SANS baseline'
     )
 
 class DataLoaderConfig(BaseModel):
@@ -646,6 +687,42 @@ class TrainerConfig(BaseModel):
             raise ValueError(f'precision must be one of {valid}')
         return v
 
+class AnnealConfig(BaseModel):
+    '''Configuration for curriculum annealing schedules.'''
+
+    enabled: bool = Field(default=False, description='Enable continuous annealing schedule')
+    alpha_start: float = Field(
+        default=1.5, gt=0, description='Starting tree-distance exponent for Phase 1 weighting'
+    )
+    alpha_end: float = Field(
+        default=0.8, gt=0, description='Ending tree-distance exponent after annealing'
+    )
+    epochs: int = Field(default=50, gt=0, description='Number of epochs over which to anneal')
+    metric_name: Optional[str] = Field(
+        default=None,
+        description='Optional metric key; when satisfied, annealing completes immediately',
+    )
+    metric_threshold: Optional[float] = Field(
+        default=None,
+        description='Threshold for metric trigger (requires metric_name)',
+    )
+    metric_direction: Literal['above', 'below'] = Field(
+        default='below',
+        description='Interpret metric as reaching threshold when going "below" or "above" it',
+    )
+    router_mix_start: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description='Initial ratio of router-guided negatives during annealing',
+    )
+    router_mix_end: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description='Final ratio of router-guided negatives once annealing completes',
+    )
+
 class CurriculumConfig(BaseModel):
     '''Structure-Aware Dynamic Curriculum (SADC) scheduler configuration.'''
 
@@ -682,6 +759,13 @@ class CurriculumConfig(BaseModel):
     fn_num_clusters: int = Field(
         default=500, gt=0, description='Number of clusters used in false-negative elimination'
     )
+    phase_mode: Literal['three_phase', 'two_phase'] = Field(
+        default='three_phase',
+        description='Use legacy three-phase schedule or merge phases 2/3 into one stage',
+    )
+    anneal: AnnealConfig = Field(
+        default_factory=AnnealConfig, description='Continuous annealing schedule configuration'
+    )
 
     @model_validator(mode='after')
     def validate_phase_boundaries(self) -> 'CurriculumConfig':
@@ -692,6 +776,23 @@ class CurriculumConfig(BaseModel):
                 'Curriculum phases must satisfy phase1_end <= phase2_end <= phase3_end'
             )
         return self
+
+class FalseNegativeConfig(BaseModel):
+    '''Configuration for handling false negatives during training.'''
+
+    strategy: Literal['eliminate', 'attract', 'hybrid'] = Field(
+        default='eliminate',
+        description='False negative handling strategy (mask, attract, or hybrid)',
+    )
+    attraction_weight: float = Field(
+        default=0.1,
+        ge=0.0,
+        description='Weight of auxiliary attraction loss when strategy != eliminate',
+    )
+    attraction_metric: Literal['cosine', 'l2'] = Field(
+        default='cosine',
+        description='Metric used for attraction losses when strategy requires it',
+    )
 
 class TrainingConfig(BaseModel):
     '''Optimizer and training configuration.'''
@@ -834,9 +935,7 @@ class Config(BaseModel):
         description='Dynamic SADC curriculum scheduler configuration',
     )
     dirs: DirConfig = Field(default_factory=DirConfig, description='File system paths')
-    data: DataConfig = Field(
-        default_factory=DataConfig, description='Data generation configuration'
-    )
+    data: DataConfig = Field(default_factory=DataConfig, description='Data configuration')
     data_loader: DataLoaderConfig = Field(
         default_factory=DataLoaderConfig, description='Data loading configuration'
     )
@@ -846,6 +945,12 @@ class Config(BaseModel):
     loss: LossConfig = Field(default_factory=LossConfig, description='Loss function configuration')
     training: TrainingConfig = Field(
         default_factory=TrainingConfig, description='Training configuration'
+    )
+    sampling: SamplingConfig = Field(
+        default_factory=SamplingConfig, description='Sampling strategy configuration'
+    )
+    false_negatives: FalseNegativeConfig = Field(
+        default_factory=FalseNegativeConfig, description='False negative mitigation strategy'
     )
 
     @classmethod

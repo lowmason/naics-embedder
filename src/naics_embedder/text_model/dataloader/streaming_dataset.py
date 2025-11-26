@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 import numpy as np
 import polars as pl
 
-from naics_embedder.utils.config import StreamingConfig
+from naics_embedder.utils.config import SamplingConfig, SansStaticConfig, StreamingConfig
 from naics_embedder.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
@@ -42,9 +42,12 @@ def _taxonomy(codes_parquet: str) -> pl.DataFrame:
 def _anchors(triplets_parquet: str) -> pl.DataFrame:
     return (
         pl.read_parquet(triplets_parquet).select(
-            level=pl.col('anchor_level'), anchor=pl.col('anchor_code')
-        ).unique().sort(pl.col('level'),
-                        pl.col('anchor').cast(pl.UInt32))
+            level=pl.col('anchor_level'),
+            anchor=pl.col('anchor_code'),
+        ).unique().sort(
+            pl.col('level'),
+            pl.col('anchor').cast(pl.UInt32),
+        )
     )
 
 def _linear_skip(anchor: str, taxonomy: pl.DataFrame) -> List[str]:
@@ -90,10 +93,7 @@ def _descendants(anchors: pl.DataFrame, taxonomy: pl.DataFrame) -> pl.DataFrame:
 # Ancestors
 # -------------------------------------------------------------------------------------------------
 
-def _ancestors(
-    anchors: pl.DataFrame,
-    taxonomy: pl.DataFrame,
-) -> pl.DataFrame:
+def _ancestors(anchors: pl.DataFrame, taxonomy: pl.DataFrame) -> pl.DataFrame:
     return (
         anchors.filter(pl.col('level').eq(6)).join(
             taxonomy, left_on='anchor', right_on='code_6', how='inner'
@@ -111,10 +111,9 @@ def _ancestors(
             value_name='ancestor',
         ).with_columns(
             ancestor_level=pl.col('ancestor_level').str.slice(5, 1).cast(pl.Int8).add(-6).mul(-1)
-        ).sort('level', 'anchor',
-               'ancestor_level').group_by('level', 'anchor', maintain_order=True).agg(
-                   positive=pl.col('ancestor')
-               )
+        ).sort('level', 'anchor', 'ancestor_level').group_by(
+            'level', 'anchor', maintain_order=True
+        ).agg(positive=pl.col('ancestor'), )
     )
 
 def sample_positives(
@@ -453,6 +452,99 @@ def _sample_negatives_phase1(
 
     return sampled
 
+def _sample_negatives_sans_static(
+    anchor_code: str,
+    candidate_negatives: List[Dict[str, Any]],
+    n_negatives: int,
+    distance_lookup: Dict[Tuple[str, str], float],
+    sans_cfg: 'SansStaticConfig',
+    seed: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    '''
+    Sample negatives using static near/far buckets (SANS baseline).
+
+    Args:
+        anchor_code: Anchor code
+        candidate_negatives: Candidate negatives list
+        n_negatives: Number of negatives to sample
+        distance_lookup: Tree distance lookup (code pairs -> distance)
+        sans_cfg: SANS configuration parameters
+        seed: Optional RNG seed
+
+    Returns:
+        Tuple of sampled negatives and sampling metadata for diagnostics.
+    '''
+
+    metadata = {
+        'strategy': 'sans_static',
+        'candidates_near': 0,
+        'candidates_far': 0,
+        'sampled_near': 0,
+        'sampled_far': 0,
+        'effective_near_weight': 0.0,
+        'effective_far_weight': 0.0,
+    }
+
+    if not candidate_negatives:
+        return [], metadata
+
+    distances = []
+    for neg in candidate_negatives:
+        negative_code = neg['negative_code']
+        distance = distance_lookup.get((anchor_code, negative_code))
+        if distance is None:
+            distance = distance_lookup.get((negative_code, anchor_code), sans_cfg.default_distance)
+        distances.append(distance)
+
+    near_indices = [
+        idx for idx, dist in enumerate(distances) if dist <= sans_cfg.near_distance_threshold
+    ]
+    far_indices = [idx for idx in range(len(distances)) if idx not in near_indices]
+
+    metadata['candidates_near'] = len(near_indices)
+    metadata['candidates_far'] = len(far_indices)
+
+    near_weight = sans_cfg.near_bucket_weight
+    far_weight = sans_cfg.far_bucket_weight
+    total_candidates = len(candidate_negatives)
+
+    weights = np.zeros(total_candidates, dtype=np.float64)
+    bucket_weight_total = 0.0
+
+    if near_indices and near_weight > 0:
+        bucket_weight_total += near_weight
+        weights[near_indices] = near_weight / len(near_indices)
+    if far_indices and far_weight > 0:
+        bucket_weight_total += far_weight
+        weights[far_indices] = far_weight / len(far_indices)
+
+    if bucket_weight_total == 0:
+        weights[:] = 1.0 / total_candidates
+    else:
+        weights /= bucket_weight_total
+
+    metadata['effective_near_weight'] = float(weights[near_indices].sum()) if near_indices else 0.0
+    metadata['effective_far_weight'] = float(weights[far_indices].sum()) if far_indices else 0.0
+
+    rng = np.random.default_rng(seed)
+    n_sample = min(n_negatives, total_candidates)
+    sampled_indices = rng.choice(total_candidates, size=n_sample, replace=False, p=weights)
+
+    near_index_set = set(near_indices)
+
+    sampled = []
+    for idx in sampled_indices:
+        neg = dict(candidate_negatives[idx])
+        neg.setdefault('explicit_exclusion', False)
+        sampled.append(neg)
+
+        if idx in near_index_set:
+            metadata['sampled_near'] += 1
+        else:
+            metadata['sampled_far'] += 1
+
+    return sampled, metadata
+
 # -------------------------------------------------------------------------------------------------
 # Cache utilities
 # -------------------------------------------------------------------------------------------------
@@ -490,7 +582,8 @@ def _get_final_cache_path(cfg: StreamingConfig) -> Path:
 # Triplet batch generator
 # -------------------------------------------------------------------------------------------------
 
-def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]:
+def create_streaming_generator(cfg: StreamingConfig, sampling_cfg: Optional[SamplingConfig] = None
+                               ) -> Iterator[Dict[str, Any]]:
     '''Create a generator that yields triplets for training.'''
 
     # Identify worker process
@@ -514,17 +607,26 @@ def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]
     code_to_idx: Dict[str, int] = code_to_idx_dict  # type: ignore
     idx_to_code: Dict[int, str] = idx_to_code_dict  # type: ignore
 
-    # Load Phase 1 sampling data if needed
+    # Resolve sampling configuration
+    if sampling_cfg is None:
+        sampling_cfg = SamplingConfig()
+    sampling_strategy = sampling_cfg.strategy
+    sans_cfg: SansStaticConfig = sampling_cfg.sans_static
+
+    # Load Phase 1/SANS sampling data if needed
     distance_lookup: Optional[Dict[Tuple[str, str], float]] = None
     excluded_map: Optional[Dict[str, Set[str]]] = None
 
-    if cfg.use_phase1_sampling:
-        logger.info(
-            f'{worker_id} Phase 1 sampling enabled - loading distance matrix and excluded codes...'
-        )
+    requires_distance_lookup = cfg.use_phase1_sampling or sampling_strategy == 'sans_static'
+
+    if requires_distance_lookup:
+        logger.info(f'{worker_id} Loading tree distance matrix for sampling strategy...')
         distance_lookup = _load_distance_matrix(
             cfg.distance_matrix_parquet, code_to_idx, idx_to_code
         )
+
+    if cfg.use_phase1_sampling:
+        logger.info(f'{worker_id} Loading excluded codes for Phase 1 sampling...')
         excluded_map = _load_excluded_codes(cfg.descriptions_parquet, code_to_idx)
 
     # Organize codes by level
@@ -638,8 +740,19 @@ def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]
         positive_code = row['positive_code']
         candidate_negatives = row['candidate_negatives']
 
-        # Apply Phase 1 sampling if enabled
-        if cfg.use_phase1_sampling and distance_lookup is not None and excluded_map is not None:
+        sampling_metadata: Optional[Dict[str, Any]] = None
+
+        # Apply sampling strategy
+        if sampling_strategy == 'sans_static' and distance_lookup is not None:
+            sampled_negatives, sampling_metadata = _sample_negatives_sans_static(
+                anchor_code=anchor_code,
+                candidate_negatives=candidate_negatives,
+                n_negatives=cfg.n_negatives,
+                distance_lookup=distance_lookup,
+                sans_cfg=sans_cfg,
+                seed=cfg.seed,
+            )
+        elif cfg.use_phase1_sampling and distance_lookup is not None and excluded_map is not None:
             sampled_negatives = _sample_negatives_phase1(
                 anchor_code=anchor_code,
                 anchor_idx=anchor_idx,
@@ -659,6 +772,11 @@ def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]
             rng = random.Random(cfg.seed)
             n_sample = min(cfg.n_negatives, len(candidate_negatives))
             sampled_negatives = rng.sample(candidate_negatives, n_sample)
+            if sampling_strategy == 'sans_static':
+                logger.warning(
+                    'SANS static sampling requested but tree distances were unavailable; '
+                    'falling back to uniform sampling.'
+                )
 
         yield {
             'anchor_idx': anchor_idx,
@@ -666,14 +784,18 @@ def create_streaming_generator(cfg: StreamingConfig) -> Iterator[Dict[str, Any]]
             'positive_idx': positive_idx,
             'positive_code': positive_code,
             'negatives': sampled_negatives,
+            'sampling_metadata': sampling_metadata,
         }
 
 # -------------------------------------------------------------------------------------------------
 # Streaming dataset generator
 # -------------------------------------------------------------------------------------------------
 
-def create_streaming_dataset(token_cache: Dict[int, Dict[str, Any]],
-                             cfg: StreamingConfig) -> Iterator[Dict[str, Any]]:
+def create_streaming_dataset(
+    token_cache: Dict[int, Dict[str, Any]],
+    cfg: StreamingConfig,
+    sampling_cfg: Optional[SamplingConfig] = None,
+) -> Iterator[Dict[str, Any]]:
     '''Create streaming dataset that yields triplets with tokenized embeddings.
 
     For multi-level supervision (Issue #18):
@@ -694,7 +816,7 @@ def create_streaming_dataset(token_cache: Dict[int, Dict[str, Any]],
     taxonomy = _taxonomy(cfg.descriptions_parquet)
 
     # Get triplets iterator
-    triplets_iterator = create_streaming_generator(cfg)
+    triplets_iterator = create_streaming_generator(cfg, sampling_cfg)
 
     # Buffer triplets by anchor to collect all positives
     current_anchor: Optional[Tuple[int, str]] = None
@@ -778,6 +900,7 @@ def create_streaming_dataset(token_cache: Dict[int, Dict[str, Any]],
         # Process negatives for all positives (use the same negatives for all)
         # Get negatives from the first positive (they should be the same for all ancestor levels)
         negatives = []
+        sampling_metadata = triplets_list[0].get('sampling_metadata') if triplets_list else None
         if positives_list:
             for negative in positives_list[0]['negatives']:
                 negative_idx = negative['negative_idx']
@@ -798,13 +921,18 @@ def create_streaming_dataset(token_cache: Dict[int, Dict[str, Any]],
                     }
                 )
 
-        yield {
+        result = {
             'anchor_idx': anchor_idx,
             'anchor_code': anchor_code,
             'anchor_embedding': anchor_embedding,
             'positives': positives_list,  # List of positives (one per ancestor level)
             'negatives': negatives,
         }
+
+        if sampling_metadata:
+            result['sampling_metadata'] = sampling_metadata
+
+        yield result
 
     # Iterate through triplets and group by anchor
     for triplets in triplets_iterator:

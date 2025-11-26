@@ -265,12 +265,45 @@ The text encoder now uses the Structure-Aware Dynamic Curriculum (SADC) schedule
 progresses through three phases in a single run—structural initialization, geometric refinement,
 and false-negative mitigation—activating the appropriate sampling flags automatically.
 
+Need a simpler curriculum for ablations? Set `curriculum.phase_mode=two_phase` to merge Phase 3 into Phase 2, or enable the new annealing schedule from [Issue #44](https://github.com/lowmason/naics-embedder/issues/44) via:
+
+```yaml
+curriculum:
+  anneal:
+    enabled: true
+    alpha_start: 1.5
+    alpha_end: 0.8
+    epochs: 40
+```
+
+This gradually reduces the tree-distance exponent and increases router-guided mixing, and can optionally be triggered by the logged `adaptive_margin_mean` metric.
+
 Run training with your base config and optional overrides:
 
 ```bash
 uv run naics-embedder train --config conf/config.yaml \
   training.learning_rate=1e-4 training.trainer.max_epochs=15
 ```
+
+To compare against the static SANS baseline proposed in [Issue #43](https://github.com/lowmason/naics-embedder/issues/43), switch the data-layer sampler via:
+
+```bash
+uv run naics-embedder train sampling.strategy=sans_static \
+  sampling.sans_static.near_bucket_weight=0.7
+```
+
+This keeps the model-side curriculum intact while replacing Phase 1 tree-distance weighting with fixed near/far probabilities.
+
+To experiment with alternative false-negative treatments from [Issue #45](https://github.com/lowmason/naics-embedder/issues/45), tweak the new block:
+
+```yaml
+false_negatives:
+  strategy: hybrid
+  attraction_weight: 0.2
+  attraction_metric: l2
+```
+
+`eliminate` (default) masks suspected false negatives, `attract` keeps them but adds an auxiliary attraction loss, and `hybrid` does both.
 
 Key flags managed by SADC during training:
 

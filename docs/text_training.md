@@ -53,6 +53,11 @@ The scheduler runs three phases within a single training invocation:
 Phase boundaries are derived from the trainer's `max_epochs`. Flag transitions are logged to help
 verify when each mechanism is active.
 
+Two additional knobs were added for the experimentation tracks in [Issue #44](https://github.com/lowmason/naics-embedder/issues/44):
+
+- `curriculum.phase_mode=two_phase` merges Phase 3 behaviors into Phase 2 for a simpler two-stage schedule.
+- `curriculum.anneal.*` enables continuous schedules (e.g., annealing the tree-distance exponent or router mix ratio over `epochs` or when a metric threshold is reached).
+
 ---
 
 ## CLI Reference
@@ -100,6 +105,10 @@ This page clarifies the split between the streaming data pipeline and the model 
   - Inverse tree-distance weighting (`P(n) ∝ 1 / d_tree(a, n)^α`).
   - Sibling masking (`d_tree <= 2` set to zero).
   - Explicit exclusion mining (`excluded_codes` map) with high-priority weights and an `explicit_exclusion` flag on sampled negatives.
+- Static baseline (SANS):
+  - Set `sampling.strategy=sans_static` to replace the dynamic weighting with fixed near/far buckets.
+  - Configure bucket ratios under `sampling.sans_static` (e.g., `near_bucket_weight`, `near_distance_threshold`).
+  - The dataloader emits `sampling_metadata` so the model can log near/far percentages per batch, making it easier to benchmark against Issue [#43](https://github.com/lowmason/naics-embedder/issues/43).
 - Outputs:
   - Tokenized anchors/positives.
   - Negatives annotated with `relation_margin`, `distance_margin`, and `explicit_exclusion`.
@@ -114,6 +123,10 @@ This page clarifies the split between the streaming data pipeline and the model 
   - Norm-adaptive margins.
 - Phase 3 sampling:
   - False-negative masking via clustering/pseudo-labels.
+- False-negative strategy (`false_negatives.strategy`):
+  - `eliminate` masks pseudo-labeled false negatives (default).
+  - `attract` keeps them and applies an auxiliary attraction loss scaled by `attraction_weight`.
+  - `hybrid` combines both behaviors for higher precision at the cost of extra compute.
 - Logging:
   - Negative relationship distribution.
   - Tree-distance bins.

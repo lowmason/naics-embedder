@@ -11,7 +11,6 @@ public help output.
 '''
 
 import logging
-import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -28,11 +27,9 @@ from typing_extensions import Annotated
 from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
-from naics_embedder.utils.backend import get_device
 from naics_embedder.utils.config import (
     Config,
     TokenizationConfig,
-    parse_override_value,
 )
 from naics_embedder.utils.console import configure_logging
 from naics_embedder.utils.training import (
@@ -175,8 +172,8 @@ def generate_embeddings_from_checkpoint(
 
                 for channel in ['title', 'description', 'excluded', 'examples']:
                     channel_inputs[channel]['input_ids'].append(
-                        tokens[channel]['input_ids']
-                    )  # pyright: ignore[reportArgumentType]
+                        tokens[channel]['input_ids']  # pyright: ignore[reportArgumentType]
+                    )
                     channel_inputs[channel]['attention_mask'].append(
                         tokens[channel]['attention_mask']  # pyright: ignore[reportArgumentType]
                     )
@@ -418,6 +415,7 @@ def train(
             triplets_path=cfg.data_loader.streaming.triplets_parquet,
             tokenizer_name=cfg.data_loader.tokenization.tokenizer_name,
             streaming_config=cfg.data_loader.streaming.model_dump(),
+            sampling_config=cfg.sampling.model_dump(),
             batch_size=cfg.data_loader.batch_size,
             num_workers=cfg.data_loader.num_workers,
             val_split=cfg.data_loader.val_split,
@@ -479,9 +477,12 @@ def train(
                 curriculum_phase2_end=cfg.curriculum.phase2_end,
                 curriculum_phase3_end=cfg.curriculum.phase3_end,
                 sibling_distance_threshold=cfg.curriculum.sibling_distance_threshold,
+                curriculum_phase_mode=cfg.curriculum.phase_mode,
+                curriculum_anneal=cfg.curriculum.anneal.model_dump(),
                 fn_curriculum_start_epoch=cfg.curriculum.fn_curriculum_start_epoch,
                 fn_cluster_every_n_epochs=cfg.curriculum.fn_cluster_every_n_epochs,
                 fn_num_clusters=cfg.curriculum.fn_num_clusters,
+                false_negative_config=cfg.false_negatives.model_dump(),
             )
 
         # Setup callbacks
@@ -658,245 +659,3 @@ def train(
         logger.error(f'Training failed: {e}', exc_info=True)
         console.print(f'\n[bold red]✗ Training failed:[/bold red] {e}\n')
         raise typer.Exit(code=1)
-
-def train_sequential(
-    num_stages: Annotated[
-        int,
-        typer.Option(
-            '--num-stages',
-            '-n',
-            help='Number of training stages to run sequentially',
-        ),
-    ] = 3,
-    config_file: Annotated[
-        str,
-        typer.Option(
-            '--config',
-            help='Path to base config YAML file',
-        ),
-    ] = 'conf/config.yaml',
-    resume_from_checkpoint: Annotated[
-        bool,
-        typer.Option(
-            '--resume',
-            help='Resume from last checkpoint if available',
-        ),
-    ] = False,
-    legacy: Annotated[
-        bool,
-        typer.Option(
-            '--legacy',
-            help='Acknowledge use of deprecated sequential training workflow',
-        ),
-    ] = False,
-    overrides: Annotated[
-        Optional[List[str]],
-        typer.Argument(help="Config overrides (e.g., 'training.learning_rate=1e-4')"),
-    ] = None,
-):
-    '''
-    Deprecated legacy sequential training (unsupported).
-
-    The dynamic ``train`` command replaces manual curriculum stage lists. This
-    entry point remains for backwards compatibility only and requires
-    ``--legacy`` to acknowledge the unsupported workflow.
-
-    Args:
-        num_stages: Number of training stages to run in sequence.
-        config_file: Path to the base configuration file used for all stages.
-        resume_from_checkpoint: Whether to resume from the last checkpoint of
-            the previous run when available.
-        legacy: Flag to acknowledge using the deprecated sequential training
-            workflow. Required to proceed with sequential training.
-        overrides: Optional list of key-value override strings applied to every
-            stage configuration.
-
-    Example:
-        Run 3-stage sequential training (deprecated)::
-
-            $ uv run naics-embedder train-seq --legacy --num-stages 3
-
-    See Also:
-        Use ``train`` for the recommended SADC-based training workflow.
-    '''
-
-    configure_logging('train_sequential.log')
-
-    # Require --legacy flag to acknowledge deprecation
-    if not legacy:
-        console.print('\n[bold red]Sequential training is deprecated.[/bold red]')
-        console.print('\nThe sequential training workflow is maintained for backwards')
-        console.print('compatibility but is no longer recommended.')
-        console.print('\n[bold]Recommended:[/bold] Use the standard training command instead:')
-        console.print('  [cyan]uv run naics-embedder train[/cyan]')
-        console.print('\n[bold]To continue with deprecated sequential training:[/bold]')
-        console.print('  [cyan]uv run naics-embedder train-seq --legacy[/cyan]')
-        console.print(
-            '\nFor migration guidance, see: '
-            '[link]https://lowmason.github.io/naics-embedder/text_training[/link]\n'
-        )
-        raise typer.Exit(code=1)
-
-    console.rule('[bold cyan]Starting Sequential Training (Legacy)[/bold cyan]')
-    console.print('[yellow]⚠ Warning: Using deprecated sequential training workflow.[/yellow]')
-    console.print('[dim]Consider migrating to dynamic curriculum training.[/dim]\n')
-
-    console.print(f'[bold]Total stages:[/bold] {num_stages}\n')
-
-    last_checkpoint = None
-
-    # Train each stage
-    for i in range(1, num_stages + 1):
-        console.rule(f'[bold green]Stage {i}/{num_stages}[/bold green]')
-
-        # Generate curriculum identifier for this stage (e.g., "01_text", "02_text")
-        curriculum = f'{i:02d}_text'
-
-        try:
-            # Load config for this stage
-            cfg = Config.from_yaml(config_file)
-
-            # Apply overrides
-            if overrides:
-                override_dict = {}
-                for override in overrides:
-                    if '=' not in override:
-                        console.print(
-                            f'[yellow]Warning:[/yellow] Skipping invalid override: {override}'
-                        )
-                        continue
-                    key, value_str = override.split('=', 1)
-                    value = parse_override_value(value_str)
-                    override_dict[key] = value
-                cfg = cfg.override(override_dict)
-
-            # Create directories
-            Path(cfg.dirs.output_dir).mkdir(parents=True, exist_ok=True)
-            Path(cfg.dirs.checkpoint_dir).mkdir(parents=True, exist_ok=True)
-
-            # Initialize data module
-            datamodule = NAICSDataModule(cfg)  # pyright: ignore[reportArgumentType]
-
-            # Initialize model (load from checkpoint if available)
-            if last_checkpoint:
-                console.print(f'[cyan]Loading from previous stage: {last_checkpoint}[/cyan]')
-                model = NAICSContrastiveModel.load_from_checkpoint(
-                    last_checkpoint, cfg=cfg, strict=False
-                )
-            else:
-                model = NAICSContrastiveModel(cfg)  # pyright: ignore[reportArgumentType]
-
-            # Setup callbacks
-            checkpoint_callback = ModelCheckpoint(
-                dirpath=cfg.dirs.checkpoint_dir,
-                filename=f'{curriculum}-{{epoch:02d}}-{{val_loss:.4f}}',
-                monitor='val_loss',
-                mode='min',
-                save_top_k=3,
-                save_last=True,
-            )
-
-            early_stopping = EarlyStopping(
-                monitor='val_loss',
-                patience=cfg.training.trainer
-                .early_stopping_patience,  # pyright: ignore[reportAttributeAccessIssue]
-                mode='min',
-                verbose=True,
-            )
-
-            tb_logger = TensorBoardLogger(
-                save_dir=cfg.dirs.output_dir, name='tensorboard', version=curriculum
-            )
-
-            # Initialize trainer
-            trainer = pyl.Trainer(
-                max_epochs=cfg.training.trainer.max_epochs,
-                accelerator='gpu' if get_device() == 'cuda' else 'cpu',
-                devices=1,
-                precision='16-mixed',
-                gradient_clip_val=cfg.training.optimizer
-                .gradient_clip_val,  # pyright: ignore[reportAttributeAccessIssue]
-                accumulate_grad_batches=cfg.training.optimizer
-                .accumulate_grad_batches,  # pyright: ignore[reportAttributeAccessIssue]
-                log_every_n_steps=cfg.training.trainer.log_every_n_steps,
-                val_check_interval=cfg.training.trainer.val_check_interval,
-                callbacks=[checkpoint_callback, early_stopping],
-                logger=tb_logger,
-                default_root_dir=cfg.dirs.output_dir,
-            )
-
-            # Train this stage
-            console.print(f'\n[cyan]Training stage {curriculum}...[/cyan]\n')
-            trainer.fit(model, datamodule)
-
-            # Store checkpoint for next stage
-            last_checkpoint = checkpoint_callback.best_model_path
-
-            # Check if early stopping was triggered and get the best loss
-            early_stop_triggered = early_stopping.stopped_epoch > 0
-            best_loss = early_stopping.best_score if early_stopping.best_score is not None else None
-
-            if early_stop_triggered and best_loss is not None:
-                logger.info(
-                    f'Early stopping triggered at epoch {early_stopping.stopped_epoch} '
-                    f'with best loss: {best_loss:.6f}'
-                )
-
-            console.print(
-                f'\n[green]✓[/green] Stage {i} complete. '
-                f'Best checkpoint: [cyan]{last_checkpoint}[/cyan]\n'
-            )
-
-            # Print the loss that decided early stopping as the final metric
-            if best_loss is not None:
-                if early_stop_triggered:
-                    label = 'Final evaluation metric (early stopping)'
-                else:
-                    label = 'Final evaluation metric'
-                console.print(
-                    f'[bold]{label}:[/bold] [cyan]val/contrastive_loss = {best_loss:.6f}[/cyan]\n'
-                )
-                logger.info(f'{label}: val/contrastive_loss = {best_loss:.6f}')
-
-            # Brief pause between stages
-            if i < num_stages:
-                console.print('[dim]Preparing for next stage...[/dim]\n')
-                time.sleep(2)
-
-        except Exception as e:
-            logger.error(f'Stage {i} failed: {e}', exc_info=True)
-            console.print(f'\n[bold red]✗ Stage {i} failed:[/bold red] {e}\n')
-
-            if i < num_stages:
-                response = typer.prompt(f'Continue with next stage ({i + 1})? [y/N]', default='n')
-                if response.lower() != 'y':
-                    raise typer.Exit(code=1)
-            else:
-                raise typer.Exit(code=1)
-
-    console.rule('[bold green]Sequential Training Complete![/bold green]')
-    console.print(f'\n[bold]Final checkpoint:[/bold] [cyan]{last_checkpoint}[/cyan]\n')
-
-    # Prompt to generate embeddings for HGCN training
-    if last_checkpoint:
-        console.print('\n[bold cyan]Generate embeddings for HGCN training?[/bold cyan]')
-        generate_embeddings = typer.confirm(
-            f'Generate embeddings parquet file from final checkpoint ({Path(last_checkpoint).name})?',
-            default=False,
-        )
-
-        if generate_embeddings:
-            # Use the config from the last stage
-            final_cfg = Config.from_yaml(config_file)
-
-            logger.info('Generating embeddings from final checkpoint...')
-            embeddings_path = generate_embeddings_from_checkpoint(
-                checkpoint_path=last_checkpoint,
-                config=final_cfg,
-                output_path=None,  # Will use default location
-            )
-            console.print(
-                f'\n[bold green]✓ Embeddings generated successfully![/bold green]\n'
-                f'Embeddings saved to: [cyan]{embeddings_path}[/cyan]\n'
-                f'This file can be used for HGCN training.\n'
-            )

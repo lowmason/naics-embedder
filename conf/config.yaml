@@ -14,6 +14,30 @@ curriculum:
   fn_curriculum_start_epoch: 10  # Epoch to begin false-negative elimination
   fn_cluster_every_n_epochs: 5  # How often to refresh clustering during Phase 3
   fn_num_clusters: 500  # Number of clusters used for false-negative elimination
+  phase_mode: three_phase  # Options: three_phase, two_phase
+  anneal:
+    enabled: false
+    alpha_start: 1.5
+    alpha_end: 0.8
+    epochs: 50
+    metric_name: adaptive_margin_mean
+    metric_threshold: 0.35
+    metric_direction: below
+    router_mix_start: 0.3
+    router_mix_end: 0.5
+
+sampling:
+  strategy: sadc  # Options: sadc, sans_static
+  sans_static:
+    near_distance_threshold: 4.0
+    near_bucket_weight: 0.65
+    far_bucket_weight: 0.35
+    default_distance: 12.0
+
+false_negatives:
+  strategy: eliminate  # Options: eliminate, attract, hybrid
+  attraction_weight: 0.1
+  attraction_metric: cosine
 
 # Paths
 dirs:

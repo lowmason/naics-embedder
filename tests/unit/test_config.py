@@ -12,6 +12,7 @@ from naics_embedder.utils.config import (
     DirConfig,
     DistancesConfig,
     DownloadConfig,
+    SamplingConfig,
     load_config,
 )
 
@@ -368,3 +369,19 @@ class TestConfigErrorHandling:
         # Should raise validation error
         with pytest.raises(ValidationError):
             load_config(DirConfig, 'invalid_structure.yaml')
+
+@pytest.mark.unit
+class TestSamplingConfig:
+
+    def test_sampling_defaults(self):
+        cfg = SamplingConfig()
+
+        assert cfg.strategy == 'sadc'
+        assert cfg.sans_static.near_distance_threshold == 4.0
+
+    def test_invalid_bucket_weights_raise(self):
+        with pytest.raises(ValidationError):
+            SamplingConfig(sans_static={
+                'near_bucket_weight': 0.0,
+                'far_bucket_weight': 0.0,
+            })

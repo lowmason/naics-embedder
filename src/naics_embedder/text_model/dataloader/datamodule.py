@@ -17,7 +17,7 @@ from naics_embedder.text_model.dataloader.streaming_dataset import (
     create_streaming_dataset,
     create_streaming_generator,
 )
-from naics_embedder.utils.config import StreamingConfig, TokenizationConfig
+from naics_embedder.utils.config import SamplingConfig, StreamingConfig, TokenizationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,8 @@ def collate_fn(batch: List[Dict]) -> Dict:
                 raise ValueError(f'Item has no negatives to pad from: {anchor_code}')
             padding_needed = max_negatives - len(item['negatives'])
             item['negatives'].extend([last_negative] * padding_needed)
+
+    sampling_accumulator: Optional[Dict[str, Any]] = None
 
     # Check if we have multi-level supervision (positives is a list)
     has_multiple_positives = (
@@ -131,6 +133,32 @@ def collate_fn(batch: List[Dict]) -> Dict:
                 positive_levels = []
             positive_levels.append(item['positive_level'])
 
+        metadata = item.get('sampling_metadata')
+        if metadata:
+            if sampling_accumulator is None:
+                sampling_accumulator = {
+                    'strategy': metadata.get('strategy', 'unknown'),
+                    'candidates_near': 0,
+                    'candidates_far': 0,
+                    'sampled_near': 0,
+                    'sampled_far': 0,
+                    'effective_near_weight_sum': 0.0,
+                    'effective_far_weight_sum': 0.0,
+                    'records': 0,
+                }
+
+            sampling_accumulator['candidates_near'] += metadata.get('candidates_near', 0)
+            sampling_accumulator['candidates_far'] += metadata.get('candidates_far', 0)
+            sampling_accumulator['sampled_near'] += metadata.get('sampled_near', 0)
+            sampling_accumulator['sampled_far'] += metadata.get('sampled_far', 0)
+            sampling_accumulator['effective_near_weight_sum'] += metadata.get(
+                'effective_near_weight', 0.0
+            )
+            sampling_accumulator['effective_far_weight_sum'] += metadata.get(
+                'effective_far_weight', 0.0
+            )
+            sampling_accumulator['records'] += 1
+
     result = {
         'anchor': anchor_batch,
         'positive': positive_batch,
@@ -145,6 +173,14 @@ def collate_fn(batch: List[Dict]) -> Dict:
     # Add positive_levels for multi-level supervision tracking
     if positive_levels is not None:
         result['positive_levels'] = positive_levels
+
+    if sampling_accumulator and sampling_accumulator['records'] > 0:
+        records = sampling_accumulator.pop('records')
+        effective_near_avg = sampling_accumulator.pop('effective_near_weight_sum') / records
+        effective_far_avg = sampling_accumulator.pop('effective_far_weight_sum') / records
+        sampling_accumulator['avg_effective_near_weight'] = effective_near_avg
+        sampling_accumulator['avg_effective_far_weight'] = effective_far_avg
+        result['sampling_metadata'] = sampling_accumulator
 
     return result
 
@@ -214,7 +250,8 @@ class GeneratorDataset(IterableDataset):
         generator = self.generator_fn(token_cache, *self.args, **self.kwargs)
 
         if worker_info is None:
-            return generator
+            # Single worker: yield all items directly
+            yield from generator
         else:
             # Shard the generator efficiently
             # Each worker takes every num_workers-th item starting from worker_id
@@ -237,6 +274,7 @@ class NAICSDataModule(LightningDataModule):
         triplets_path: str = './data/naics_training_pairs',
         tokenizer_name: str = 'sentence-transformers/all-MiniLM-L6-v2',
         streaming_config: Optional[Dict] = None,
+        sampling_config: Optional[Dict] = None,
         batch_size: int = 32,
         num_workers: int = 4,
         seed: int = 42,
@@ -267,6 +305,13 @@ class NAICSDataModule(LightningDataModule):
             max_length=curriculum.max_length,
         )
 
+        if sampling_config is None:
+            self.sampling_cfg = SamplingConfig()
+        elif isinstance(sampling_config, SamplingConfig):
+            self.sampling_cfg = sampling_config
+        else:
+            self.sampling_cfg = SamplingConfig(**sampling_config)
+
         # Store streaming configs for use in prepare_data()
         self.train_streaming_cfg = curriculum
         self.val_streaming_cfg = val_curriculum
@@ -274,12 +319,12 @@ class NAICSDataModule(LightningDataModule):
         # Create datasets
         logger.info('  • Creating training dataset')
         self.train_dataset = GeneratorDataset(
-            create_streaming_dataset, self.tokenization_cfg, curriculum
+            create_streaming_dataset, self.tokenization_cfg, curriculum, self.sampling_cfg
         )
 
         logger.info('  • Creating validation dataset\n')
         self.val_dataset = GeneratorDataset(
-            create_streaming_dataset, self.tokenization_cfg, val_curriculum
+            create_streaming_dataset, self.tokenization_cfg, val_curriculum, self.sampling_cfg
         )
 
     def prepare_data(self):
@@ -311,10 +356,10 @@ class NAICSDataModule(LightningDataModule):
             logger.info('Codes/indices cache already exists')
 
         # Build streaming query caches (complete pipeline including weighted sampling)
-        self._build_streaming_cache(self.train_streaming_cfg, 'training')
-        self._build_streaming_cache(self.val_streaming_cfg, 'validation')
+        self._build_streaming_cache(self.train_streaming_cfg, 'training', self.sampling_cfg)
+        self._build_streaming_cache(self.val_streaming_cfg, 'validation', self.sampling_cfg)
 
-    def _build_streaming_cache(self, cfg: StreamingConfig, name: str):
+    def _build_streaming_cache(self, cfg: StreamingConfig, name: str, sampling_cfg: SamplingConfig):
         '''Build streaming query cache for a given config.'''
         logger.info(f'Preparing streaming query cache ({name}) in main process...')
         cache_path = _get_final_cache_path(cfg)
@@ -324,7 +369,7 @@ class NAICSDataModule(LightningDataModule):
             return
 
         logger.info(f'Building {name} streaming query cache (this may take 30-60 seconds)...')
-        gen = create_streaming_generator(cfg)
+        gen = create_streaming_generator(cfg, sampling_cfg)
 
         try:
             # Consume first item to trigger cache build

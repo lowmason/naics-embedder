@@ -5,6 +5,8 @@
 import logging
 from typing import Dict, Optional
 
+from naics_embedder.utils.config import AnnealConfig
+
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------------------------------
@@ -46,6 +48,8 @@ class CurriculumScheduler:
         phase3_end: float = 1.0,
         tree_distance_alpha: float = 1.5,
         sibling_distance_threshold: float = 2.0,
+        phase_mode: str = 'three_phase',
+        anneal_config: Optional[AnnealConfig] = None,
     ):
         '''
         Initialize curriculum scheduler.
@@ -64,6 +68,10 @@ class CurriculumScheduler:
         self.phase3_end = phase3_end
         self.tree_distance_alpha = tree_distance_alpha
         self.sibling_distance_threshold = sibling_distance_threshold
+        self.phase_mode = phase_mode
+        self.merge_phase3 = phase_mode == 'two_phase'
+        self.anneal_config = anneal_config or AnnealConfig()
+        self.latest_metrics: Dict[str, float] = {}
 
         # Phase boundaries in epochs
         self.phase1_end_epoch = int(max_epochs * phase1_end)
@@ -82,7 +90,8 @@ class CurriculumScheduler:
             f'({phase1_pct:.0f}-{phase2_pct:.0f}%)\n'
             f'  Phase 3 (False Negative Mitigation): '
             f'epochs {self.phase2_end_epoch + 1}-{self.phase3_end_epoch} '
-            f'({phase2_pct:.0f}-{phase3_pct:.0f}%)'
+            f'({phase2_pct:.0f}-{phase3_pct:.0f}%)\n'
+            f'  Mode: {self.phase_mode}'
         )
 
     def get_phase(self, current_epoch: int) -> int:
@@ -97,10 +106,13 @@ class CurriculumScheduler:
         '''
         if current_epoch <= self.phase1_end_epoch:
             return 1
-        elif current_epoch <= self.phase2_end_epoch:
+
+        if self.merge_phase3:
             return 2
-        else:
-            return 3
+
+        if current_epoch <= self.phase2_end_epoch:
+            return 2
+        return 3
 
     def get_epoch_progress(self, current_epoch: int) -> float:
         '''
@@ -137,7 +149,7 @@ class CurriculumScheduler:
             'mask_siblings': phase == 1,  # Phase 1 only
             'enable_hard_negative_mining': phase >= 2,  # Phase 2 and 3
             'enable_router_guided_sampling': phase >= 2,  # Phase 2 and 3
-            'enable_clustering': phase >= 3,  # Phase 3 only
+            'enable_clustering': phase >= (2 if self.merge_phase3 else 3),
         }
 
         return flags
@@ -154,6 +166,12 @@ class CurriculumScheduler:
             True if clustering should be updated
         '''
         phase = self.get_phase(current_epoch)
+        if self.merge_phase3:
+            if phase < 2:
+                return False
+            epochs_in_phase2 = max(0, current_epoch - self.phase1_end_epoch)
+            return epochs_in_phase2 % cluster_every_n_epochs == 0
+
         if phase < 3:
             return False  # Only update in Phase 3
 
@@ -180,6 +198,8 @@ class CurriculumScheduler:
                 2: 'Geometric Refinement',
                 3: 'False Negative Mitigation',
             }
+            if self.merge_phase3:
+                phase_names[2] = 'Geometric Refinement + FNE'
             progress_pct = self.get_epoch_progress(current_epoch) * 100
             logger.info(
                 f'\n{"=" * 80}\n'
@@ -193,6 +213,12 @@ class CurriculumScheduler:
             logger.info('Curriculum flags:')
             for flag_name, flag_value in flags.items():
                 logger.info(f'  • {flag_name}: {flag_value}')
+
+            scalars = self.get_schedule_scalars(current_epoch)
+            if scalars:
+                logger.info('Curriculum scalars:')
+                for scalar_name, scalar_value in scalars.items():
+                    logger.info(f'  • {scalar_name}: {scalar_value:.4f}')
             logger.info('')
 
     def get_negative_sample_weights(
@@ -264,3 +290,55 @@ class CurriculumScheduler:
             return [uniform] * len(negative_codes)
 
         return [w / total for w in weights]
+
+    def update_metrics(self, metrics: Dict[str, float]):
+        '''Store latest metrics for metric-triggered annealing.'''
+
+        self.latest_metrics.update(metrics)
+
+    def _anneal_progress(self, current_epoch: int) -> float:
+        '''Compute annealing progress between 0 and 1.'''
+
+        if not self.anneal_config.enabled:
+            return 0.0
+
+        progress = min(max(current_epoch, 0) / max(1, self.anneal_config.epochs), 1.0)
+
+        metric_name = self.anneal_config.metric_name
+        threshold = self.anneal_config.metric_threshold
+        if metric_name and threshold is not None:
+            metric_value = self.latest_metrics.get(metric_name)
+            if metric_value is not None:
+                if self.anneal_config.metric_direction == 'below':
+                    if metric_value <= threshold:
+                        return 1.0
+                else:
+                    if metric_value >= threshold:
+                        return 1.0
+
+        return progress
+
+    def get_schedule_scalars(self, current_epoch: int) -> Dict[str, float]:
+        '''
+        Return annealed scalar values (tree-distance alpha, router mix, etc.).
+        '''
+
+        scalars: Dict[str, float] = {}
+
+        if not self.anneal_config.enabled:
+            scalars['tree_distance_alpha'] = self.tree_distance_alpha
+            return scalars
+
+        progress = self._anneal_progress(current_epoch)
+        alpha_start = self.anneal_config.alpha_start
+        alpha_end = self.anneal_config.alpha_end
+        tree_alpha = alpha_start * (1 - progress) + alpha_end * progress
+        scalars['tree_distance_alpha'] = tree_alpha
+
+        mix_start = self.anneal_config.router_mix_start
+        mix_end = self.anneal_config.router_mix_end
+        router_mix = mix_start * (1 - progress) + mix_end * progress
+        scalars['router_mix_ratio'] = max(0.0, min(1.0, router_mix))
+        scalars['anneal_progress'] = progress
+
+        return scalars
