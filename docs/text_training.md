@@ -1,124 +1,171 @@
 # Training Guide
 
-This guide explains how to train the NAICS Hyperbolic Embedding System using the **Structure-Aware Dynamic Curriculum (SADC)**. The SADC scheduler automatically advances through curriculum phases—no manual stage lists or chain files are required.
+This guide explains how to train the NAICS Hyperbolic Embedding System with the dynamic Structure-Aware Dynamic Curriculum (SADC) scheduler. The current workflow uses a single configuration file (`conf/config.yaml`) to control model, data, trainer, and curriculum settings.
 
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Dynamic Curriculum Overview](#dynamic-curriculum-overview)
-3. [Running Training](#running-training)
-4. [Checkpointing and Resumption](#checkpointing-and-resumption)
-5. [Configuration Files](#configuration-files)
-6. [Troubleshooting](#troubleshooting)
+2. [Training Command](#training-command)
+3. [Dynamic SADC Schedule](#dynamic-sadc-schedule)
+4. [Resuming from Checkpoints](#resuming-from-checkpoints)
+5. [Configuration Reference](#configuration-reference)
+6. [Common Workflows](#common-workflows)
+7. [Troubleshooting](#troubleshooting)
+8. [Distributed Training](#distributed-training)
 
 ---
 
 ## Quick Start
 
-### Train with default settings
+Run the recommended dynamic curriculum training loop:
 
 ```bash
 uv run naics-embedder train
 ```
 
-### Resume the most recent run
+Inspect the active configuration, including SADC phase boundaries:
 
 ```bash
-uv run naics-embedder train --ckpt-path last
+uv run naics-embedder tools config
 ```
 
-### Apply overrides without editing config files
+Apply ad-hoc overrides without editing YAML:
 
 ```bash
 uv run naics-embedder train \
-  training.learning_rate=5e-5 \
-  training.trainer.max_epochs=20
+  training.learning_rate=1e-4 \
+  data_loader.batch_size=16 \
+  curriculum.phase2_end=0.65
 ```
 
 ---
 
-## Dynamic Curriculum Overview
+## Training Command
 
-The SADC scheduler controls sampling and mining behavior across the full run. It uses percentage-based phase boundaries derived from the configured `training.trainer.max_epochs`:
-
-1. **Phase 1 (0–30%): Structural Initialization**
-   - Masks sibling codes and weights negatives by inverse tree distance.
-   - Emphasizes structural signals before mining harder negatives.
-2. **Phase 2 (30–70%): Geometric Refinement**
-   - Enables Lorentzian hard-negative mining.
-   - Activates router-guided sampling for the Mixture-of-Experts encoder.
-3. **Phase 3 (70–100%): False Negative Mitigation**
-   - Turns on clustering-based false-negative elimination (FNE).
-
-Phase transitions are fully automatic; you do not need to enumerate stages or chains. Adjusting `training.trainer.max_epochs` changes when each phase ends, and model hyperparameters such as `tree_distance_alpha` can be overridden to tune structural weighting early in training.
-
----
-
-## Running Training
+The `train` command orchestrates data loading, dynamic curriculum scheduling, and model optimization. It reads `conf/config.yaml` and applies any command-line overrides.
 
 ```bash
 uv run naics-embedder train [OPTIONS] [OVERRIDES...]
 ```
 
-**Key options**
-- `--config PATH` — Path to the base config YAML file (default: `conf/config.yaml`).
-- `--ckpt-path PATH` — Checkpoint to resume from, or `"last"` to auto-detect the latest checkpoint.
-- `--skip-validation` — Skip pre-flight checks of data files and tokenization caches.
-- `OVERRIDES...` — Hydra-style overrides for any config value (e.g., `training.learning_rate=1e-4 data_loader.batch_size=8`).
+**Options**
 
-**Example workflows**
-- Run with validation disabled (useful for repeated experiments):
-  ```bash
-  uv run naics-embedder train --skip-validation
-  ```
-- Emphasize structural weighting by increasing `tree_distance_alpha` and extend training:
-  ```bash
-  uv run naics-embedder train \
-    training.trainer.max_epochs=24 \
-    model.tree_distance_alpha=2.0
-  ```
-- Resume from an explicit checkpoint path:
-  ```bash
-  uv run naics-embedder train --ckpt-path checkpoints/latest_run/last.ckpt
-  ```
+- `--config PATH` — Path to the base config (default: `conf/config.yaml`).
+- `--ckpt-path PATH` — Resume from a checkpoint (`last` auto-detects the latest checkpoint in `checkpoints/<experiment_name>`).
+- `--skip-validation` — Skip pre-flight validation of data files and tokenization cache.
+- `OVERRIDES...` — Dot-notation overrides (e.g., `training.learning_rate=5e-5 curriculum.phase1_end=0.25`).
 
-> **Legacy notice:** Static stage lists (`train-seq`, `train-curriculum`, chain configs) are deprecated and hidden. Use the dynamic `train` command instead.
+**Examples**
 
----
+```bash
+# Resume from the last checkpoint
+uv run naics-embedder train --ckpt-path last
 
-## Checkpointing and Resumption
+# Start fresh with a shorter run
+uv run naics-embedder train training.trainer.max_epochs=8
 
-- **Automatic saving:** Best and last checkpoints are written under `checkpoints/<experiment_name>/` based on the experiment name in the config.
-- **Resume detection:** `--ckpt-path last` finds the newest `last.ckpt` for the configured experiment. Provide an explicit path to resume from another run.
-- **Cross-run initialization:** When resuming from a different experiment, the model weights are loaded but training restarts fresh for the current experiment name.
+# Run with a different experiment name and output folder
+uv run naics-embedder train \
+  experiment_name=sadc_ablation \
+  dirs.output_dir=./outputs/ablation
+```
+
+> **Legacy sequential training**: The `train-seq` command is kept for historical multi-stage experiments. Modern runs should rely on the single dynamic SADC schedule.
 
 ---
 
-## Configuration Files
+## Dynamic SADC Schedule
 
-### Base configuration (`conf/config.yaml`)
+SADC is a three-phase scheduler embedded in `curriculum.*` fields within `conf/config.yaml`:
 
-The base config defines data paths, tokenizer settings, model hyperparameters (LoRA, MoE, curvature, adaptive margins), and trainer parameters. Override any field inline using the `OVERRIDES...` syntax shown above.
+- **Phase 1: Structural Initialization (`phase1_end`)**
+  - Masks siblings and weights negatives by inverse tree distance (`tree_distance_alpha`, `sibling_distance_threshold`).
+- **Phase 2: Geometric Refinement (`phase2_end`)**
+  - Enables Lorentzian hard-negative mining and router-guided sampling for the MoE encoder.
+- **Phase 3: False Negative Mitigation (`phase3_end`)**
+  - Activates clustering-based false-negative elimination, refreshed every `fn_cluster_every_n_epochs` epochs using `fn_num_clusters` clusters, starting at `fn_curriculum_start_epoch`.
 
-### Data dependencies
+Adjust these boundaries or cadences via YAML or command-line overrides to tailor the schedule to your run length.
 
-Training expects the parquet artifacts produced by the data pipeline:
-- `data/naics_descriptions.parquet`
-- `data/naics_training_pairs` (streaming dataset)
-- `data/naics_distances.parquet` and `data/naics_distance_matrix.parquet` for structural cues
+---
+
+## Resuming from Checkpoints
+
+Checkpoints are stored under `checkpoints/<experiment_name>/`.
+
+- **Auto-resume**: `--ckpt-path last` loads the most recent checkpoint for the configured experiment.
+- **Explicit path**: Point `--ckpt-path` to any `.ckpt` file to warm-start a new run.
+- **Fresh start**: Omit `--ckpt-path` to ignore existing checkpoints.
+
+---
+
+## Configuration Reference
+
+All settings live in `conf/config.yaml`:
+
+- **Experiment**: `experiment_name`, `seed`.
+- **Curriculum**: `curriculum.phase{1,2,3}_end`, `tree_distance_alpha`, `sibling_distance_threshold`, `fn_curriculum_start_epoch`, `fn_cluster_every_n_epochs`, `fn_num_clusters`.
+- **Paths**: `dirs.*` for data, logs, outputs, checkpoints, and docs.
+- **Data Loader**: Batch size, workers, validation split, and tokenization/streaming inputs.
+- **Model**: Base encoder, LoRA, and MoE settings; evaluation cadence.
+- **Loss**: Temperature, curvature, margins, and hierarchy/rank/radius regularization weights.
+- **Training**: Optimizer hyperparameters and Lightning trainer settings.
+
+Use `tools config` to render a condensed view of these values.
+
+---
+
+## Common Workflows
+
+**Complete data pipeline then train**
+
+```bash
+uv run naics-embedder data all
+uv run naics-embedder train
+```
+
+**Memory-aware tuning**
+
+```bash
+uv run naics-embedder tools gpu --auto
+uv run naics-embedder train data_loader.batch_size=<suggested>
+```
+
+**Adjust curriculum boundaries for shorter runs**
+
+```bash
+uv run naics-embedder train \
+  training.trainer.max_epochs=8 \
+  curriculum.phase1_end=0.2 \
+  curriculum.phase2_end=0.55
+```
 
 ---
 
 ## Troubleshooting
 
-### Checkpoint not found
-- Verify the file path or use `--ckpt-path last` to auto-detect the latest checkpoint.
-- Confirm the experiment name matches the directory under `checkpoints/`.
+- **Out of memory**: Lower `data_loader.batch_size`, increase `training.trainer.accumulate_grad_batches`, or reduce `fn_num_clusters` to lighten Phase 3 clustering.
+- **Slow convergence**: Shorten `fn_curriculum_start_epoch` so false-negative mitigation starts earlier; reduce `training.learning_rate` if loss oscillates.
+- **Scheduler transitions**: If phases feel too short or long, adjust `curriculum.phase*` boundaries so each phase covers the desired fraction of epochs.
 
-### Out of memory
-- Lower `data_loader.batch_size` or increase `training.trainer.accumulate_grad_batches`.
-- Reduce negatives per anchor via config overrides if memory pressure persists.
+---
 
-### Slow phase transitions
-- Shorten `training.trainer.max_epochs` to reach later SADC phases sooner.
-- Alternatively, raise `training.trainer.max_epochs` to spend more time in early phases when you need additional structural warmup.
+## Distributed Training
+
+Enable multi-GPU runs by updating the trainer configuration:
+
+```yaml
+training:
+  trainer:
+    devices: 4
+    accelerator: gpu
+    precision: "16-mixed"
+```
+
+Or via overrides:
+
+```bash
+uv run naics-embedder train training.trainer.devices=4 training.trainer.accelerator=gpu
+```
+
+When distributed training is active, the model gathers negatives across GPUs for richer hard-negative mining and logs memory metrics (`train/global_batch/*`) to TensorBoard.

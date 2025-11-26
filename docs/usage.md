@@ -82,7 +82,7 @@ uv run naics-embedder data all
 
 ### `tools config`
 
-Display current training and curriculum configuration.
+Display current training configuration, including the Structure-Aware Dynamic Curriculum (SADC) schedule.
 
 ```bash
 uv run naics-embedder tools config
@@ -151,7 +151,7 @@ uv run naics-embedder tools investigate
 
 ### `train`
 
-Train the dynamic Structure-Aware Dynamic Curriculum (SADC) workflow. The SADC scheduler automatically progresses through structural initialization, geometric refinement, and false-negative mitigation phases—no manual stage list is required.
+Train the text encoder with the dynamic SADC scheduler defined in `conf/config.yaml`.
 
 ```bash
 uv run naics-embedder train
@@ -159,26 +159,46 @@ uv run naics-embedder train
 
 **Options:**
 - `--config PATH` - Path to base config YAML file (default: `conf/config.yaml`)
-- `--ckpt-path PATH` - Path to checkpoint file to resume from, or `"last"` to auto-detect the latest checkpoint
-- `--skip-validation` - Skip pre-flight data/cache validation
-- `OVERRIDES...` - Config overrides (e.g., `training.learning_rate=1e-4 data_loader.batch_size=64`)
+- `--ckpt-path PATH` - Path to checkpoint file to resume from, or `"last"` to auto-detect the most recent checkpoint
+- `--skip-validation` - Skip pre-flight validation of data files and tokenization cache
+- `OVERRIDES...` - Config overrides (e.g., `training.learning_rate=1e-4 data_loader.batch_size=64 curriculum.phase2_end=0.65`)
 
 **Examples:**
 
 ```bash
-# Train with default SADC settings
+# Train with defaults
 uv run naics-embedder train
 
-# Resume from the latest checkpoint produced by SADC
+# Train with config overrides
+uv run naics-embedder train training.learning_rate=1e-4 data_loader.batch_size=32
+
+# Resume from last checkpoint
 uv run naics-embedder train --ckpt-path last
 
-# Adjust scheduler behavior via overrides (example: longer Phase 1 and lower learning rate)
-uv run naics-embedder train \
-  training.trainer.max_epochs=20 \
-  training.learning_rate=5e-5
+# Adjust the SADC schedule without editing YAML
+uv run naics-embedder train curriculum.phase1_end=0.25 curriculum.phase2_end=0.6
 ```
 
-> **Note:** The legacy `train-seq`/`train-curriculum` commands for static stage lists are hidden and unsupported. Use the dynamic `train` command instead.
+### `train-seq`
+
+Legacy sequential training retained for backward compatibility. The dynamic SADC scheduler replaces stage-based YAMLs; use this command only if you must reproduce an older multi-stage workflow.
+
+```bash
+uv run naics-embedder train-seq --legacy --num-stages 3
+```
+
+**Options:**
+- `--legacy` - Required acknowledgement to run the deprecated workflow
+- `--num-stages INT` - Number of sequential stages to execute
+- `--config PATH` - Path to base config YAML file (default: `conf/config.yaml`)
+- `OVERRIDES...` - Config overrides applied to every stage
+
+**Examples:**
+
+```bash
+# Reproduce a historical 3-stage run
+uv run naics-embedder train-seq --legacy --num-stages 3
+```
 
 ---
 
@@ -191,18 +211,18 @@ uv run naics-embedder train \
 uv run naics-embedder data all
 ```
 
-### Train with Dynamic SADC
+### Standard Training
 
 ```bash
-# Launch training with automatic SADC phase scheduling
+# Train with the default dynamic curriculum
 uv run naics-embedder train
 ```
 
-### Resume Training
+### Dynamic SADC Training
 
 ```bash
-# Continue from the latest checkpoint in the experiment directory
-uv run naics-embedder train --ckpt-path last
+# Train with the dynamic curriculum defined in conf/config.yaml
+uv run naics-embedder train
 ```
 
 ### View Configuration
@@ -239,12 +259,10 @@ uv run naics-embedder train --help
 
 ## Configuration Files
 
-The CLI uses configuration files located in the `conf/` directory:
+The CLI reads a single configuration in `conf/config.yaml`:
 
-- **Base Config:** `conf/config.yaml` - Main training configuration
-- **Text Curricula:** `conf/text_curriculum/*.yaml` - Text training curriculum stages
-- **Graph Curricula:** `conf/graph_curriculum/*.yaml` - Graph training curriculum stages
-- **Chain Configs:** `conf/text_curriculum/chain_text.yaml` - Sequential training chains
+- **Base Config:** Paths, model hyperparameters, and trainer settings
+- **Curriculum:** `curriculum.*` fields configure SADC phase boundaries and false-negative elimination cadence
 
 See the [Configuration Documentation](api/config.md) for details on configuration structure.
 
