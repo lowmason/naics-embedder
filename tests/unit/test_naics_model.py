@@ -274,7 +274,7 @@ class TestTrainingStep:
 
         # Initialize curriculum scheduler
         naics_model.curriculum_scheduler = CurriculumScheduler(
-            phase1_end_epoch=5, phase2_end_epoch=10, phase3_end_epoch=15
+            max_epochs=15, phase1_end=0.33, phase2_end=0.67, phase3_end=1.0
         )
 
         naics_model.train()
@@ -523,7 +523,7 @@ class TestCurriculumIntegration:
         from naics_embedder.text_model.curriculum import CurriculumScheduler
 
         naics_model.curriculum_scheduler = CurriculumScheduler(
-            phase1_end_epoch=5, phase2_end_epoch=10, phase3_end_epoch=15
+            max_epochs=15, phase1_end=0.33, phase2_end=0.67, phase3_end=1.0
         )
 
         # Set epoch to phase 2
@@ -541,7 +541,7 @@ class TestCurriculumIntegration:
         from naics_embedder.text_model.curriculum import CurriculumScheduler
 
         naics_model.curriculum_scheduler = CurriculumScheduler(
-            phase1_end_epoch=5, phase2_end_epoch=10, phase3_end_epoch=15
+            max_epochs=15, phase1_end=0.33, phase2_end=0.67, phase3_end=1.0
         )
 
         # Transition from phase 1 to phase 2

@@ -255,7 +255,8 @@ class HGCNLightningModule(pyl.LightningModule):
         )
 
         all_idx = torch.cat([anchors, positives, negatives.view(-1)]).unique()
-        l_lvl = level_radius_loss(emb_upd, all_idx, self.levels)
+        levels_tensor: torch.Tensor = self.levels  # type: ignore[assignment]
+        l_lvl = level_radius_loss(emb_upd, all_idx, levels_tensor)
 
         if self.model.learnable_loss_weights:
             w_trip, w_lvl, reg = self.model.get_loss_weights()  # type: ignore[misc]
@@ -304,7 +305,13 @@ class HGCNLightningModule(pyl.LightningModule):
                 prog_bar=(name == 'relation_accuracy'),
             )
 
-        self._val_epoch_metrics.append({k: float(v.detach().cpu()) for k, v in metrics.items()})
+        # metrics contains Tensors when as_tensors=True
+        self._val_epoch_metrics.append(
+            {
+                k: float(v.detach().cpu())
+                for k, v in metrics.items()  # type: ignore[union-attr]
+            }
+        )
 
     def on_train_epoch_end(self) -> None:
         if not self._train_losses:
@@ -398,7 +405,8 @@ def load_embeddings(parquet_path: str,
 
     embedding_cols = sorted(
         embedding_cols,
-        key=lambda name: int(name.replace('hyp_e', '')) if name.replace('hyp_e', '').isdigit() else name,
+        key=lambda name: int(name.replace('hyp_e', ''))
+        if name.replace('hyp_e', '').isdigit() else name,
     )
 
     emb = df.select(embedding_cols).to_torch(dtype=pl.Float32).to(device)
@@ -433,7 +441,7 @@ def save_outputs(
     final_emb: torch.Tensor,
     orig_df: pl.DataFrame,
     cfg: Config,
-    model: nn.Module,
+    model: HGCN,
     log: List[Dict[str, Any]],
 ) -> pl.DataFrame:
     emb_np = final_emb.detach().cpu().numpy()

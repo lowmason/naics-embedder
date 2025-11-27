@@ -82,7 +82,7 @@ def sample_tokenized_inputs_variable_length(test_device, batch_size=4):
 
         # Mask out some tokens to simulate variable length
         for i in range(batch_size):
-            seq_len = torch.randint(max_seq_length // 2, max_seq_length, (1,)).item()
+            seq_len = torch.randint(max_seq_length // 2, max_seq_length, (1, )).item()
             attention_mask[i, seq_len:] = 0
 
         inputs[channel] = {'input_ids': input_ids, 'attention_mask': attention_mask}
@@ -102,7 +102,7 @@ class TestEncoderInitialization:
 
         assert isinstance(encoder, nn.Module)
         assert encoder.channels == ['title', 'description', 'excluded', 'examples']
-        assert len(encoder.encoders) == 4
+        assert len(encoder.encoders) == 4  # type: ignore[arg-type]
         assert encoder.embedding_dim == 384  # all-MiniLM-L6-v2 hidden size
         assert encoder.curvature == encoder_config['curvature']
 
@@ -148,9 +148,7 @@ class TestEncoderInitialization:
             f'LoRA should reduce trainable params to < 50%, got {trainable_ratio:.2%}'
         )
 
-        logger.info(
-            f'Trainable: {trainable_params:,} / {total_params:,} ({trainable_ratio:.2%})'
-        )
+        logger.info(f'Trainable: {trainable_params:,} / {total_params:,} ({trainable_ratio:.2%})')
 
     def test_different_curvatures(self, encoder_config, test_device):
         '''Test encoder initialization with different curvature values.'''
@@ -214,8 +212,8 @@ class TestEncoderForwardPass:
             output = encoder(sample_tokenized_inputs)
 
         embedding_hyp = output['embedding']
-        is_valid = check_lorentz_manifold_validity(
-            embedding_hyp, curvature=encoder.curvature, tol=1e-4
+        is_valid, _, _ = check_lorentz_manifold_validity(
+            embedding_hyp, curvature=encoder.curvature, tolerance=1e-4
         )
 
         assert is_valid, 'Hyperbolic embeddings not on Lorentz manifold'
@@ -227,8 +225,10 @@ class TestEncoderForwardPass:
             output = encoder(sample_tokenized_inputs_variable_length)
 
         # Should still produce valid outputs
-        assert output['embedding'].shape[0] == (
-            sample_tokenized_inputs_variable_length['title']['input_ids'].shape[0]
+        assert (
+            output['embedding'].shape[0] == (
+                sample_tokenized_inputs_variable_length['title']['input_ids'].shape[0]
+            )
         )
         assert not torch.isnan(output['embedding']).any()
         assert not torch.isinf(output['embedding']).any()
@@ -242,9 +242,7 @@ class TestEncoderForwardPass:
         gate_probs = output['gate_probs']
         prob_sums = gate_probs.sum(dim=1)
 
-        torch.testing.assert_close(
-            prob_sums, torch.ones_like(prob_sums), rtol=1e-5, atol=1e-5
-        )
+        torch.testing.assert_close(prob_sums, torch.ones_like(prob_sums), rtol=1e-5, atol=1e-5)
 
     def test_top_k_indices_valid(self, encoder, sample_tokenized_inputs):
         '''Test that top-k expert indices are valid and unique per sample.'''
@@ -405,9 +403,7 @@ class TestGradientCheckpointing:
         loss.backward()
 
         # Gradients should still flow
-        has_grad = any(
-            p.grad is not None for p in encoder.parameters() if p.requires_grad
-        )
+        has_grad = any(p.grad is not None for p in encoder.parameters() if p.requires_grad)
         assert has_grad
 
 # -------------------------------------------------------------------------------------------------
@@ -509,6 +505,4 @@ class TestChannelIndependence:
             output_modified = encoder(modified_inputs)
 
         # Outputs should be different
-        assert not torch.allclose(
-            output_base['embedding'], output_modified['embedding'], atol=1e-4
-        )
+        assert not torch.allclose(output_base['embedding'], output_modified['embedding'], atol=1e-4)

@@ -34,10 +34,10 @@ class Config:
     # Curriculum filtering parameters
     anchor_level: Optional[List[int]] = None
     relation_margin: Optional[List[int]] = None
-    distance_margin: Optional[List[float]] = None
+    distance_margin: Optional[List[int]] = None
     positive_level: Optional[List[int]] = None
     positive_relation: Optional[List[int]] = None
-    positive_distance: Optional[List[float]] = None
+    positive_distance: Optional[List[int]] = None
     negative_level: Optional[List[int]] = None
     negative_relation: Optional[List[int]] = None
     negative_distance: Optional[List[int]] = None

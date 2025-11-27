@@ -42,7 +42,7 @@ performance benchmarking.
 
 ## Test Structure
 
-```
+```text
 tests/
 ├── unit/                      # Unit tests for individual components (15 files)
 │   ├── test_hyperbolic.py    # Hyperbolic geometry operations (CRITICAL) ✅
@@ -174,7 +174,7 @@ The following modules have comprehensive test coverage:
 
 #### Data Loading Pipeline
 
-10. **text_model/dataloader/tokenization_cache.py** ✅ - `test_tokenization_cache.py`
+1. **text_model/dataloader/tokenization_cache.py** ✅ - `test_tokenization_cache.py`
     - Cache building from descriptions
     - Cache save/load operations
     - File locking for multi-worker safety
@@ -182,13 +182,13 @@ The following modules have comprehensive test coverage:
     - get_tokens utility function
     - **Coverage: >70%**
 
-11. **text_model/dataloader/datamodule.py** ✅ - `test_datamodule.py`
+2. **text_model/dataloader/datamodule.py** ✅ - `test_datamodule.py`
     - collate_fn batching logic
     - Multi-level supervision expansion
     - GeneratorDataset worker sharding
     - **Coverage: >60%**
 
-12. **text_model/dataloader/streaming_dataset.py** ✅ - `test_streaming_dataset.py`
+3. **text_model/dataloader/streaming_dataset.py** ✅ - `test_streaming_dataset.py`
     - Taxonomy utilities
     - Ancestor/descendant generation
     - Matrix loading
@@ -197,13 +197,13 @@ The following modules have comprehensive test coverage:
 
 #### Configuration & Utilities
 
-13. **utils/config.py** ✅ - `test_config.py`
+1. **utils/config.py** ✅ - `test_config.py`
     - Pydantic configuration models
     - YAML loading and parsing
     - Configuration validation
     - **Coverage: >60%**
 
-14. **data/compute_distances.py** ✅ - `test_data_distances.py`
+2. **data/compute_distances.py** ✅ - `test_data_distances.py`
     - NAICS tree construction
     - Pairwise distance calculations
     - Distance matrix generation
@@ -365,7 +365,7 @@ This section provides specific test cases for each untested module.
 
 ### 1. Graph Model (HGCN) - `test_hgcn.py`
 
-**Priority: 🔴 CRITICAL**
+#### Priority: 🔴 CRITICAL
 
 ```python
 import pytest
@@ -452,7 +452,7 @@ class TestHGCNTraining:
 
 ### 2. Hyperbolic Clustering - `test_hyperbolic_clustering.py`
 
-**Priority: 🔴 CRITICAL**
+#### Priority: 🔴 CRITICAL
 
 ```python
 import pytest
@@ -506,7 +506,7 @@ class TestHyperbolicKMeans:
 
 ### 3. Training Utilities - `test_training_utils.py`
 
-**Priority: 🟡 MEDIUM**
+#### Priority: 🟡 MEDIUM
 
 ```python
 import pytest
@@ -575,7 +575,7 @@ class TestConfigOverrides:
 
 ### 4. Validation Utilities - `test_validation.py`
 
-**Priority: 🟡 MEDIUM**
+#### Priority: 🟡 MEDIUM
 
 ```python
 import pytest
@@ -644,7 +644,7 @@ class TestTrainingConfigValidation:
 
 ### 5. Data Generation Pipeline
 
-**Priority: 🟡 MEDIUM**
+#### Priority: 🟡 MEDIUM
 
 ```python
 # tests/unit/test_compute_relations.py
@@ -718,7 +718,7 @@ class TestDataPipelineIntegration:
 
 ### 6. Integration Tests
 
-**Priority: 🟡 MEDIUM**
+#### Priority: 🟡 MEDIUM
 
 ```python
 # tests/integration/test_text_model_training.py
@@ -764,7 +764,7 @@ class TestEndToEnd:
 
 ### 7. CLI Commands - `test_cli.py`
 
-**Priority: 🟢 LOW**
+#### Priority: 🟢 LOW
 
 ```python
 import pytest
@@ -854,20 +854,20 @@ uv run pytest tests/ --cov=src/naics_embedder.graph_model.hgcn --cov-report=term
 
 ### Coverage Improvement Roadmap
 
-**Phase 1: Critical Gaps (Weeks 1-2)**
+#### Phase 1: Critical Gaps (Weeks 1-2)
 
 - [ ] Add `test_hgcn.py` - Graph model testing
 - [ ] Add `test_hyperbolic_clustering.py` - Clustering validation
 - [ ] Target: Bring overall coverage to >50%
 
-**Phase 2: Important Gaps (Weeks 3-4)**
+#### Phase 2: Important Gaps (Weeks 3-4)
 
 - [ ] Add `test_training_utils.py` - Training utilities
 - [ ] Add `test_validation.py` - Validation utilities
 - [ ] Add `test_compute_relations.py` - Data relationships
 - [ ] Target: Bring overall coverage to >60%
 
-**Phase 3: Integration & Completeness (Weeks 5-6)**
+#### Phase 3: Integration & Completeness (Weeks 5-6)
 
 - [ ] Add integration tests for training loops
 - [ ] Add end-to-end pipeline tests
@@ -884,6 +884,7 @@ uv run pytest tests/ --cov=src/naics_embedder.graph_model.hgcn --cov-report=term
    - Example: Test that embeddings are on manifold, not the specific exp_map formula
 
 2. **Follow AAA Pattern** (Arrange, Act, Assert)
+
    ```python
    def test_hyperbolic_distance_is_positive(self):
        # Arrange: Set up test data
@@ -913,6 +914,7 @@ uv run pytest tests/ --cov=src/naics_embedder.graph_model.hgcn --cov-report=term
    - Invalid inputs (should raise appropriate errors)
 
 6. **Use Fixtures for Shared Setup**
+
    ```python
    @pytest.fixture
    def sample_embeddings():
@@ -925,6 +927,7 @@ uv run pytest tests/ --cov=src/naics_embedder.graph_model.hgcn --cov-report=term
 When testing hyperbolic geometry code:
 
 1. **Always Validate Manifold Constraints**
+
    ```python
    from naics_embedder.text_model.hyperbolic import check_lorentz_manifold_validity
 
@@ -946,6 +949,7 @@ When testing hyperbolic geometry code:
 ### Testing PyTorch Modules
 
 1. **Test Gradient Flow**
+
    ```python
    def test_gradients_flow_through_module(self):
        model = MyModule()
@@ -957,6 +961,7 @@ When testing hyperbolic geometry code:
    ```
 
 2. **Test with Deterministic Seeds**
+
    ```python
    import pytorch_lightning as pl
 
@@ -976,6 +981,7 @@ When testing hyperbolic geometry code:
 ### Testing Data Processing
 
 1. **Use Synthetic Data**
+
    ```python
    def test_data_loader_with_synthetic_data(self):
        # Create minimal synthetic dataset
@@ -988,6 +994,7 @@ When testing hyperbolic geometry code:
    ```
 
 2. **Test with tmp_path Fixture**
+
    ```python
    def test_cache_saving(self, tmp_path):
        cache_path = tmp_path / 'test.cache'
@@ -1264,7 +1271,7 @@ uv run pytest tests/ --benchmark-only
 5. 🟡 **`tests/unit/test_compute_relations.py`** - Data generation (366 lines untested)
 6. 🟡 **`tests/integration/test_*_training.py`** - Integration tests (none exist)
 
-**Total untested lines in critical modules: ~2,700 lines**
+Total untested lines in critical modules: ~2,700 lines
 
 ## Contact and Resources
 

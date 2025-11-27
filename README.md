@@ -1,3 +1,6 @@
+# NAICS Hyperbolic Embedding System
+
+<!-- markdownlint-disable MD013 -->
 [![CI](https://github.com/lowmason/naics-embedder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lowmason/naics-embedder/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/releases)
 [![License](https://img.shields.io/github/license/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/blob/main/LICENSE)
@@ -9,9 +12,9 @@
 [![Contributors](https://img.shields.io/github/contributors/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/graphs/contributors)
 [![Repo size](https://img.shields.io/github/repo-size/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder)
 [![Top language](https://img.shields.io/github/languages/top/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder)
----
+<!-- markdownlint-enable MD013 -->
 
-# NAICS Hyperbolic Embedding System
+---
 
 This project implements a unified hyperbolic representation learning framework for the
 **North American Industry Classification System (NAICS)**. The system combines multi-channel text
@@ -90,7 +93,8 @@ The result is a Lorentz embedding (E_hyp).
 
 ### 4.2 Decoupled Contrastive Learning (DCL) Loss
 
-Contrastive learning is performed using **Decoupled Contrastive Learning (DCL)** with **Lorentzian geodesic distances**:
+Contrastive learning is performed using **Decoupled Contrastive Learning (DCL)** with
+**Lorentzian geodesic distances**:
 
 d(u, v) = arcosh(-<u, v>_L)
 
@@ -265,7 +269,9 @@ The text encoder now uses the Structure-Aware Dynamic Curriculum (SADC) schedule
 progresses through three phases in a single run—structural initialization, geometric refinement,
 and false-negative mitigation—activating the appropriate sampling flags automatically.
 
-Need a simpler curriculum for ablations? Set `curriculum.phase_mode=two_phase` to merge Phase 3 into Phase 2, or enable the new annealing schedule from [Issue #44](https://github.com/lowmason/naics-embedder/issues/44) via:
+Need a simpler curriculum for ablations? Set `curriculum.phase_mode=two_phase` to merge
+Phase 3 into Phase 2, or enable the new annealing schedule from
+[Issue #44](https://github.com/lowmason/naics-embedder/issues/44) via:
 
 ```yaml
 curriculum:
@@ -276,7 +282,8 @@ curriculum:
     epochs: 40
 ```
 
-This gradually reduces the tree-distance exponent and increases router-guided mixing, and can optionally be triggered by the logged `adaptive_margin_mean` metric.
+This gradually reduces the tree-distance exponent and increases router-guided mixing, and
+can optionally be triggered by the logged `adaptive_margin_mean` metric.
 
 Run training with your base config and optional overrides:
 
@@ -285,16 +292,20 @@ uv run naics-embedder train --config conf/config.yaml \
   training.learning_rate=1e-4 training.trainer.max_epochs=15
 ```
 
-To compare against the static SANS baseline proposed in [Issue #43](https://github.com/lowmason/naics-embedder/issues/43), switch the data-layer sampler via:
+To compare against the static SANS baseline proposed in
+[Issue #43](https://github.com/lowmason/naics-embedder/issues/43), switch the data-layer
+sampler via:
 
 ```bash
 uv run naics-embedder train sampling.strategy=sans_static \
   sampling.sans_static.near_bucket_weight=0.7
 ```
 
-This keeps the model-side curriculum intact while replacing Phase 1 tree-distance weighting with fixed near/far probabilities.
+This keeps the model-side curriculum intact while replacing Phase 1 tree-distance weighting
+with fixed near/far probabilities.
 
-To experiment with alternative false-negative treatments from [Issue #45](https://github.com/lowmason/naics-embedder/issues/45), tweak the new block:
+To experiment with alternative false-negative treatments from
+[Issue #45](https://github.com/lowmason/naics-embedder/issues/45), tweak the new block:
 
 ```yaml
 false_negatives:
@@ -303,7 +314,8 @@ false_negatives:
   attraction_metric: l2
 ```
 
-`eliminate` (default) masks suspected false negatives, `attract` keeps them but adds an auxiliary attraction loss, and `hybrid` does both.
+`eliminate` (default) masks suspected false negatives, `attract` keeps them but adds an
+auxiliary attraction loss, and `hybrid` does both.
 
 Key flags managed by SADC during training:
 

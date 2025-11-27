@@ -13,6 +13,7 @@ def test_eliminate_strategy_leaves_mask_untouched():
 
     updated_mask, aux_loss = apply_false_negative_strategy(config, anchors, negatives, mask)
 
+    assert updated_mask is not None
     assert torch.equal(updated_mask, mask)
     assert aux_loss is None
 

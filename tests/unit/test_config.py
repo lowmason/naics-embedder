@@ -13,6 +13,7 @@ from naics_embedder.utils.config import (
     DistancesConfig,
     DownloadConfig,
     SamplingConfig,
+    SansStaticConfig,
     load_config,
 )
 
@@ -247,7 +248,7 @@ class TestConfigValidation:
         '''Test that invalid field types raise validation errors.'''
 
         with pytest.raises(ValidationError):
-            DirConfig(checkpoint_dir=12345)  # Should be string
+            DirConfig(checkpoint_dir=12345)  # type: ignore[arg-type]  # Should be string
 
     def test_extra_fields_allowed(self):
         '''Test behavior with extra fields.'''
@@ -381,7 +382,9 @@ class TestSamplingConfig:
 
     def test_invalid_bucket_weights_raise(self):
         with pytest.raises(ValidationError):
-            SamplingConfig(sans_static={
-                'near_bucket_weight': 0.0,
-                'far_bucket_weight': 0.0,
-            })
+            SamplingConfig(
+                sans_static=SansStaticConfig(
+                    near_bucket_weight=0.0,
+                    far_bucket_weight=0.0,
+                )
+            )

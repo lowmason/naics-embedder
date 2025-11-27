@@ -5,7 +5,6 @@ nav:
   - Training Overview:
       - Text Training: text_training.md
       - HGCN Training: hgcn_training.md
-      - Report: report.md
   - Usage: 
       - Quickstart: quickstart.md
       - Usage: usage.md

@@ -3,7 +3,7 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
-from typing import Dict
+from typing import Dict, Union
 
 import torch
 
@@ -24,7 +24,7 @@ def compute_validation_metrics(
     top_k: int = 1,
     *,
     as_tensors: bool = False,
-) -> Dict[str, float]:
+) -> Union[Dict[str, float], Dict[str, torch.Tensor]]:
     '''Compute validation metrics for hyperbolic embeddings.
 
     Args:
@@ -64,9 +64,8 @@ def compute_validation_metrics(
     relation_accuracy = (positive_dist.unsqueeze(1) < negative_dist).all(dim=1).float().mean()
 
     closest_negatives = torch.topk(negative_dist, k=effective_top_k, dim=1, largest=False).values
-    top_k_relation_accuracy = (
-        positive_dist.unsqueeze(1) < closest_negatives
-    ).all(dim=1).float().mean()
+    top_k_relation_accuracy = (positive_dist.unsqueeze(1)
+                               < closest_negatives).all(dim=1).float().mean()
 
     all_dists_per_anchor = torch.cat([positive_dist.unsqueeze(1), negative_dist], dim=1)
     order = torch.argsort(all_dists_per_anchor, dim=1)
