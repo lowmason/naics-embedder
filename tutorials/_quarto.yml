@@ -1,0 +1,56 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: 'NAICS Embedder Tutorials'
+  site-url: https://lowmason.github.io/naics-embedder/tutorials/
+  repo-url: https://github.com/lowmason/naics-embedder
+  repo-actions: [edit, issue]
+
+  navbar:
+    background: dark
+    left:
+      - text: Tutorials
+        href: index.qmd
+      - text: '← API Docs'
+        href: https://lowmason.github.io/naics-embedder/
+
+    right:
+      - icon: github
+        href: https://github.com/lowmason/naics-embedder
+
+  sidebar:
+    style: docked
+    search: true
+    contents:
+      - section: 'Getting Started'
+        contents:
+          - 01-quickstart.qmd
+      - section: 'Concepts'
+        contents:
+          - 02-understanding-hyperbolic.qmd
+      - section: 'Training'
+        contents:
+          - 03-training-walkthrough.qmd
+      - section: 'Analysis'
+        contents:
+          - 04-embedding-visualization.qmd
+          - 05-evaluation-metrics.qmd
+
+format:
+  html:
+    theme:
+      dark: darkly
+      light: flatly
+    css: styles.css
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    code-tools: true
+    code-copy: true
+    highlight-style: github-dark
+
+execute:
+  freeze: auto  # Only re-render when source changes
+  cache: true

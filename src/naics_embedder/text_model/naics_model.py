@@ -4,8 +4,9 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
@@ -120,6 +121,13 @@ def gather_negative_codes_global(
             global_negative_codes.extend(codes_per_rank)
 
     return global_negative_codes
+
+@dataclass
+class GlobalNegativeContext:
+    negatives_reshaped: torch.Tensor
+    negatives_flat: torch.Tensor
+    global_batch_size: int
+    global_k_negatives: int
 
 # -------------------------------------------------------------------------------------------------
 # Main NAICS Contrastive Learning Model: combining encoder, loss, MoE, and hyperbolic projections
@@ -441,479 +449,484 @@ class NAICSContrastiveModel(pyl.LightningModule):
 
         return loss
 
-    def training_step(self, batch: Dict, batch_idx: int) -> torch.Tensor:
-        # Update curriculum flags based on current epoch
-        if self.curriculum_scheduler is not None:
-            self.current_curriculum_flags = self.curriculum_scheduler.get_curriculum_flags(
-                self.current_epoch
-            )
-            self.current_schedule_scalars = self.curriculum_scheduler.get_schedule_scalars(
-                self.current_epoch
-            )
-
-            # Log phase transitions
-            self.curriculum_scheduler.log_phase_transition(self.current_epoch, self.previous_phase)
-            self.previous_phase = self.curriculum_scheduler.get_phase(self.current_epoch)
-        else:
+    def _update_curriculum_state(self, batch_idx: int, batch_size: int) -> None:
+        if self.curriculum_scheduler is None:
+            self.current_curriculum_flags = {}
             self.current_schedule_scalars = {}
+            return
 
-        batch_size = batch['batch_size']
+        self.current_curriculum_flags = self.curriculum_scheduler.get_curriculum_flags(
+            self.current_epoch
+        )
+        self.current_schedule_scalars = self.curriculum_scheduler.get_schedule_scalars(
+            self.current_epoch
+        )
 
-        if batch_idx == 0 and self.current_schedule_scalars:
-            anneal_progress = self.current_schedule_scalars.get('anneal_progress')
-            if anneal_progress is not None:
-                self.log(
-                    'train/curriculum/anneal_progress',
-                    anneal_progress,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-            tree_alpha = self.current_schedule_scalars.get('tree_distance_alpha')
-            if tree_alpha is not None:
-                self.log(
-                    'train/curriculum/tree_distance_alpha',
-                    tree_alpha,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
+        self.curriculum_scheduler.log_phase_transition(self.current_epoch, self.previous_phase)
+        self.previous_phase = self.curriculum_scheduler.get_phase(self.current_epoch)
 
-        # Check if we have multi-level supervision (Issue #18)
-        # With multi-level supervision, the batch is expanded so each positive level
-        # is a separate item. The loss will naturally sum over all positive levels,
-        # giving us gradient accumulation.
-        has_multilevel = 'positive_levels' in batch
+        if batch_idx != 0 or not self.current_schedule_scalars:
+            return
 
+        anneal_progress = self.current_schedule_scalars.get('anneal_progress')
+        if anneal_progress is not None:
+            self.log(
+                'train/curriculum/anneal_progress',
+                anneal_progress,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+
+        tree_alpha = self.current_schedule_scalars.get('tree_distance_alpha')
+        if tree_alpha is not None:
+            self.log(
+                'train/curriculum/tree_distance_alpha',
+                tree_alpha,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+
+    def _forward_batch(self, batch: Dict) -> List[Dict[str, torch.Tensor]]:
         anchor_output = self(batch['anchor'])
         positive_output = self(batch['positive'])
         negative_output = self(batch['negatives'])
+        return [anchor_output, positive_output, negative_output]
 
-        anchor_emb = anchor_output['embedding']
-        positive_emb = positive_output['embedding']
-        negative_emb = negative_output['embedding']
+    def _log_multilevel_supervision_stats(
+        self, batch: Dict, batch_idx: int, batch_size: int
+    ) -> None:
+        if 'positive_levels' not in batch or batch_idx != 0:
+            return
 
-        k_negatives = batch['k_negatives']
+        level_counts: Dict[str, int] = {}
+        for level in batch['positive_levels']:
+            level_counts[level] = level_counts.get(level, 0) + 1
 
-        # Log multi-level supervision statistics
-        if has_multilevel and batch_idx == 0:
-            positive_levels = batch['positive_levels']
-            level_counts = {}
-            for level in positive_levels:
-                level_counts[level] = level_counts.get(level, 0) + 1
-            for level, count in sorted(level_counts.items()):
-                self.log(
-                    f'train/multilevel/positive_level_{level}_count',
-                    count,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
+        for level, count in sorted(level_counts.items()):
+            self.log(
+                f'train/multilevel/positive_level_{level}_count',
+                count,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
 
-        # False negative masking: controlled by curriculum scheduler
-        false_negative_mask = None
+    def _build_false_negative_mask(self, batch: Dict, batch_size: int) -> Optional[torch.Tensor]:
         enable_clustering = self.current_curriculum_flags.get('enable_clustering', False)
-        if enable_clustering and self.code_to_pseudo_label and 'negative_codes' in batch:
-            try:
-                assert_conds = [
-                    isinstance(batch['negative_codes'], list),
-                    len(batch['negative_codes']) == batch_size,
-                    all(isinstance(codes, list) for codes in batch['negative_codes']),
-                ]
-                assert_messages = [
-                    'negative_codes must be a list',
-                    f"Expected {batch_size} groups, got {len(batch['negative_codes'])}",
-                    'Each entry must be a list of codes',
-                ]
+        if not (
+            enable_clustering and self.code_to_pseudo_label and 'negative_codes' in batch
+            and 'anchor_code' in batch
+        ):
+            return None
 
-                for cond, msg in zip(assert_conds, assert_messages):
-                    assert cond, msg
+        try:
+            assert isinstance(batch['negative_codes'], list), 'negative_codes must be a list'
+            assert len(batch['negative_codes']) == batch_size, (
+                f"Expected {batch_size} groups, got {len(batch['negative_codes'])}"
+            )
+            assert all(isinstance(codes, list) for codes in batch['negative_codes']), (
+                'Each entry must be a list of codes'
+            )
 
-                anchor_labels = torch.tensor(
-                    [self.code_to_pseudo_label.get(code, -1) for code in batch['anchor_code']],
-                    device=self.device,
-                )
+            anchor_labels = torch.tensor(
+                [self.code_to_pseudo_label.get(code, -1) for code in batch['anchor_code']],
+                device=self.device,
+            )
 
-                neg_labels = torch.tensor(
-                    [
-                        [self.code_to_pseudo_label.get(code, -2) for code in neg_codes_for_anchor]
-                        for neg_codes_for_anchor in batch['negative_codes']
-                    ],
-                    device=self.device,
-                )
+            neg_labels = torch.tensor(
+                [
+                    [self.code_to_pseudo_label.get(code, -2) for code in neg_codes_for_anchor]
+                    for neg_codes_for_anchor in batch['negative_codes']
+                ],
+                device=self.device,
+            )
 
-                false_negative_mask = anchor_labels.unsqueeze(1) == neg_labels
+            false_negative_mask = anchor_labels.unsqueeze(1) == neg_labels
+            valid_anchor_mask = (anchor_labels > -1).unsqueeze(1)
+            valid_neg_mask = neg_labels > -2
 
-                valid_anchor_mask = (anchor_labels > -1).unsqueeze(1)
-                valid_neg_mask = neg_labels > -2
-                false_negative_mask = false_negative_mask & valid_anchor_mask & valid_neg_mask
+            return false_negative_mask & valid_anchor_mask & valid_neg_mask
+        except Exception as exc:
+            logger.warning(f'Failed to create false negative mask: {exc}')
+            return None
 
-            except Exception as e:
-                logger.warning(f'Failed to create false negative mask: {e}')
-                false_negative_mask = None
-
-        # Log static sampling diagnostics if provided by dataloader
+    def _log_sampling_metadata(self, batch: Dict, batch_size: int) -> None:
         sampling_metadata = batch.get('sampling_metadata')
-        if sampling_metadata and sampling_metadata.get('strategy') == 'sans_static':
-            sampled_near = sampling_metadata.get('sampled_near', 0)
-            sampled_far = sampling_metadata.get('sampled_far', 0)
-            total_sampled = sampled_near + sampled_far
+        if not sampling_metadata or sampling_metadata.get('strategy') != 'sans_static':
+            return
 
-            if total_sampled > 0:
-                near_pct = sampled_near / total_sampled
-                self.log(
-                    'train/sans_static/sample_near_pct',
-                    near_pct,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-
-            candidates_near = sampling_metadata.get('candidates_near', 0)
-            candidates_far = sampling_metadata.get('candidates_far', 0)
-            total_candidates = candidates_near + candidates_far
-            if total_candidates > 0:
-                candidate_near_pct = candidates_near / total_candidates
-                self.log(
-                    'train/sans_static/candidate_near_pct',
-                    candidate_near_pct,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-
-            effective_near_weight = sampling_metadata.get('avg_effective_near_weight')
-            if effective_near_weight is not None:
-                self.log(
-                    'train/sans_static/effective_near_weight',
-                    effective_near_weight,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-
-        # Log negative sample type distribution (Issue #12)
-        if batch_idx == 0 and 'negative_codes' in batch and self.code_to_idx is not None:
-            self._log_negative_sample_distribution(batch)
-            self._log_negative_tree_distance_distribution(batch)
-
-        # Phase 2: Hard Negative Mining (HNM) - Embedding-based and Router-guided
-        # When enabled, select top-k hardest negatives based on Lorentzian distance
-        # and/or router confusion
-        enable_hard_negative_mining = self.current_curriculum_flags.get(
-            'enable_hard_negative_mining', False
-        )
-        enable_router_guided_sampling = self.current_curriculum_flags.get(
-            'enable_router_guided_sampling', False
-        )
-
-        # Issue #19: Global Batch Sampling - Gather negatives from all GPUs
-        # This enables hard negative mining across the global batch, which is crucial
-        # for finding meaningful "Cousin" negatives that may not appear in small local batches
-        use_global_batch = (
-            (enable_hard_negative_mining or enable_router_guided_sampling)
-            and torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1
-        )
-
-        if use_global_batch:
-            # Gather global negatives from all GPUs
-            # negative_emb: (batch_size * k_negatives, embedding_dim+1)
-            global_negative_emb = gather_embeddings_global(negative_emb)
-
-            # Get global batch size and total negatives
-            world_size = torch.distributed.get_world_size()
-            global_batch_size = batch_size * world_size
-            global_k_negatives = global_negative_emb.shape[0] // global_batch_size
-
-            # Reshape global negatives: (global_batch_size * global_k_negatives, embedding_dim+1)
-            # -> (global_batch_size, global_k_negatives, embedding_dim+1)
-            global_negative_emb_reshaped = global_negative_emb.view(
-                global_batch_size, global_k_negatives, -1
+        sampled_near = sampling_metadata.get('sampled_near', 0)
+        sampled_far = sampling_metadata.get('sampled_far', 0)
+        total_sampled = sampled_near + sampled_far
+        if total_sampled > 0:
+            near_pct = sampled_near / total_sampled
+            self.log(
+                'train/sans_static/sample_near_pct',
+                near_pct,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
             )
 
-            # Extract global negatives for all anchors (we'll use all of them for mining)
-            # But we only need to compute distances for local anchors
-            # Shape: (global_batch_size, global_k_negatives, embedding_dim+1)
-            candidate_negatives_global = global_negative_emb_reshaped
+        candidates_near = sampling_metadata.get('candidates_near', 0)
+        candidates_far = sampling_metadata.get('candidates_far', 0)
+        total_candidates = candidates_near + candidates_far
+        if total_candidates > 0:
+            candidate_near_pct = candidates_near / total_candidates
+            self.log(
+                'train/sans_static/candidate_near_pct',
+                candidate_near_pct,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
 
-            # Memory Management (Issue #19):
-            # The global batch creates a similarity matrix of size:
-            # (batch_size, global_batch_size * global_k_negatives)
-            # Memory usage: batch_size * global_batch_size * global_k_negatives * 4 bytes (float32)
-            # Example: batch_size=32, world_size=4, k_negatives=24
-            #   -> global_batch_size=128, global_k_negatives=24
-            #   -> Matrix size: (32, 3072) = ~393KB per batch
-            #   -> Global negatives: (128*24, D+1) = ~(3072, 769) = ~9MB per GPU
-            # This is manageable for most GPUs, but should be monitored.
+        effective_near_weight = sampling_metadata.get('avg_effective_near_weight')
+        if effective_near_weight is not None:
+            self.log(
+                'train/sans_static/effective_near_weight',
+                effective_near_weight,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
 
-            # Log memory usage for monitoring
-            if batch_idx == 0:
-                global_negatives_memory_mb = (
-                    global_negative_emb.numel() * global_negative_emb.element_size() / (1024**2)
-                )
-                # Estimate similarity matrix memory
-                similarity_matrix_memory_mb = (
-                    batch_size * global_batch_size * global_k_negatives * 4 / (1024**2)
-                )
-                self.log(
-                    'train/global_batch/global_negatives_memory_mb',
-                    global_negatives_memory_mb,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/global_batch/similarity_matrix_memory_mb',
-                    similarity_matrix_memory_mb,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/global_batch/global_batch_size',
-                    global_batch_size,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/global_batch/global_k_negatives',
-                    global_k_negatives,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
+    def _log_negative_sample_stats_if_needed(self, batch: Dict, batch_idx: int) -> None:
+        if batch_idx != 0 or 'negative_codes' not in batch:
+            return
+        self._log_negative_sample_distribution(batch)
+        self._log_negative_tree_distance_distribution(batch)
+
+    def _should_use_global_batch(self, enable_hnm: bool, enable_router: bool) -> bool:
+        if not (enable_hnm or enable_router):
+            return False
+        if not torch.distributed.is_initialized():
+            return False
+        return torch.distributed.get_world_size() > 1
+
+    def _log_global_batch_stats(
+        self,
+        global_negative_emb: torch.Tensor,
+        batch_size: int,
+        global_batch_size: int,
+        global_k_negatives: int,
+    ) -> None:
+        global_negatives_memory_mb = (
+            global_negative_emb.numel() * global_negative_emb.element_size() / (1024**2)
+        )
+        similarity_matrix_memory_mb = batch_size * global_batch_size * global_k_negatives * 4 / (
+            1024**2
+        )
+        self.log(
+            'train/global_batch/global_negatives_memory_mb',
+            global_negatives_memory_mb,
+            batch_size=batch_size,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            'train/global_batch/similarity_matrix_memory_mb',
+            similarity_matrix_memory_mb,
+            batch_size=batch_size,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            'train/global_batch/global_batch_size',
+            global_batch_size,
+            batch_size=batch_size,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            'train/global_batch/global_k_negatives',
+            global_k_negatives,
+            batch_size=batch_size,
+            on_step=False,
+            on_epoch=True,
+        )
+
+    def _gather_global_negative_pool(
+        self,
+        negative_emb: torch.Tensor,
+        batch_size: int,
+        k_negatives: int,
+        batch_idx: int,
+    ) -> Optional[GlobalNegativeContext]:
+        if not torch.distributed.is_initialized():
+            return None
+
+        global_negative_emb = gather_embeddings_global(negative_emb)
+        world_size = torch.distributed.get_world_size()
+        global_batch_size = batch_size * world_size
+        if global_batch_size == 0:
+            return None
+
+        global_k_negatives = global_negative_emb.shape[0] // global_batch_size
+        reshaped = global_negative_emb.view(global_batch_size, global_k_negatives, -1)
+        flat = reshaped.view(-1, global_negative_emb.shape[-1])
+
+        if batch_idx == 0:
+            self._log_global_batch_stats(
+                global_negative_emb, batch_size, global_batch_size, global_k_negatives
+            )
+
+        return GlobalNegativeContext(
+            negatives_reshaped=reshaped,
+            negatives_flat=flat,
+            global_batch_size=global_batch_size,
+            global_k_negatives=global_k_negatives,
+        )
+
+    def _log_hard_negative_stats(
+        self,
+        hard_neg_distances: Optional[torch.Tensor],
+        batch_idx: int,
+        batch_size: int,
+        used_global_batch: bool,
+    ) -> None:
+        if hard_neg_distances is None or batch_idx != 0:
+            return
+
+        avg_hard_neg_dist = hard_neg_distances.mean().item()
+        min_hard_neg_dist = hard_neg_distances.min().item()
+        max_hard_neg_dist = hard_neg_distances.max().item()
+        self.log(
+            'train/curriculum/hard_neg_avg_distance',
+            avg_hard_neg_dist,
+            batch_size=batch_size,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            'train/curriculum/hard_neg_min_distance',
+            min_hard_neg_dist,
+            batch_size=batch_size,
+            on_step=False,
+            on_epoch=True,
+        )
+        self.log(
+            'train/curriculum/hard_neg_max_distance',
+            max_hard_neg_dist,
+            batch_size=batch_size,
+            on_step=False,
+            on_epoch=True,
+        )
+        if used_global_batch:
+            self.log(
+                'train/global_batch/global_hard_negatives_used',
+                True,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+
+    def _perform_hard_negative_mining(
+        self,
+        anchor_emb: torch.Tensor,
+        negative_emb_reshaped: torch.Tensor,
+        k_negatives: int,
+        batch_size: int,
+        batch_idx: int,
+        global_context: Optional[GlobalNegativeContext],
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        if global_context is not None:
+            expanded = global_context.negatives_flat.unsqueeze(0).expand(batch_size, -1, -1)
+            global_distances_flat = self.hard_negative_miner.lorentz_distance.batched_forward(
+                anchor_emb,
+                expanded,
+            )
+            _, topk_indices = torch.topk(
+                global_distances_flat,
+                k=k_negatives,
+                dim=1,
+                largest=False,
+            )
+            hard_negatives = global_context.negatives_flat[topk_indices]
+            hard_neg_distances = global_distances_flat.gather(1, topk_indices)
+            self._log_hard_negative_stats(
+                hard_neg_distances, batch_idx, batch_size, used_global_batch=True
+            )
+            return hard_negatives, hard_neg_distances
+
+        candidate_negatives = negative_emb_reshaped.clone()
+        hard_negatives, hard_neg_distances = self.hard_negative_miner.mine_hard_negatives(
+            anchor_emb=anchor_emb,
+            candidate_negatives=candidate_negatives,
+            k=k_negatives,
+            return_distances=True,
+        )
+        self._log_hard_negative_stats(
+            hard_neg_distances, batch_idx, batch_size, used_global_batch=False
+        )
+        return hard_negatives, hard_neg_distances
+
+    def _apply_router_guided_sampling(
+        self,
+        anchor_output: Dict[str, torch.Tensor],
+        negative_output: Dict[str, torch.Tensor],
+        negative_emb_reshaped: torch.Tensor,
+        hard_negatives: Optional[torch.Tensor],
+        batch_size: int,
+        k_negatives: int,
+        batch_idx: int,
+        global_context: Optional[GlobalNegativeContext],
+    ) -> torch.Tensor:
+        anchor_gate_probs = anchor_output.get('gate_probs')
+        negative_gate_probs = negative_output.get('gate_probs')
+        if anchor_gate_probs is None or negative_gate_probs is None:
+            if hard_negatives is not None:
+                return hard_negatives
+            logger.debug('Router-guided sampling skipped: gate probabilities not available')
+            return negative_emb_reshaped
+
+        if global_context is not None:
+            global_negative_gate_probs = gather_embeddings_global(negative_gate_probs)
+            global_negative_gate_probs_reshaped = global_negative_gate_probs.view(
+                global_context.global_batch_size, global_context.global_k_negatives, -1
+            )
+            global_neg_gate_probs_flat = global_negative_gate_probs_reshaped.view(
+                -1, anchor_gate_probs.shape[-1]
+            )
+            negative_gate_probs_expanded = global_neg_gate_probs_flat.unsqueeze(0).expand(
+                batch_size, -1, -1
+            )
+            confusion_scores = self.router_guided_miner.compute_confusion_scores(
+                anchor_gate_probs, negative_gate_probs_expanded
+            )
+            _, router_topk_indices = torch.topk(
+                confusion_scores,
+                k=k_negatives,
+                dim=1,
+                largest=True,
+            )
+            router_hard_negatives = global_context.negatives_flat[router_topk_indices]
+            router_confusion_scores = confusion_scores.gather(1, router_topk_indices)
         else:
-            # Single GPU or global batch disabled: use local negatives
-            global_negative_emb_reshaped = None
-            candidate_negatives_global = None
-            global_batch_size = batch_size
-            global_k_negatives = k_negatives
-
-        # Reshape local negatives for hard negative mining
-        # negative_emb: (batch_size * k_negatives, embedding_dim+1)
-        negative_emb_reshaped = negative_emb.view(batch_size, k_negatives, -1)
-
-        if enable_hard_negative_mining or enable_router_guided_sampling:
-            # Use global negatives if available, otherwise use local
-            if use_global_batch and candidate_negatives_global is not None:
-                # For each local anchor, mine hard negatives from global pool
-                # We need to compute distances from each local anchor to all global negatives
-                # This creates a (batch_size, global_k_negatives) distance matrix
-
-                # Compute distances from each local anchor to all global negatives
-                # Reshape global negatives to
-                # (global_batch_size * global_k_negatives, embedding_dim+1)
-                global_negatives_flat = candidate_negatives_global.view(-1, anchor_emb.shape[-1])
-
-                # Compute distances using batched forward
-                # anchor_emb: (batch_size, embedding_dim+1)
-                # global_negatives_flat: (global_batch_size * global_k_negatives, embedding_dim+1)
-                # Result: (batch_size, global_batch_size * global_k_negatives)
-                #
-                # Gradient Flow: The gathered global_negatives_flat has gradients from all GPUs.
-                # When we compute distances and select hard negatives, gradients will flow back
-                # through the all_gather operation to update embeddings on all GPUs.
-                # Shape: (batch_size, global_total, embedding_dim+1)
-                global_negatives_expanded = global_negatives_flat.unsqueeze(0).expand(
-                    batch_size, -1, -1
-                )
-                # Result: (batch_size, global_total)
-                # where global_total = global_batch_size * global_k_negatives
-                global_distances_flat = self.hard_negative_miner.lorentz_distance.batched_forward(
-                    anchor_emb,  # (batch_size, embedding_dim+1)
-                    global_negatives_expanded,
-                )
-
-                # Select top-k hardest (smallest distances)
-                _, topk_indices = torch.topk(
-                    global_distances_flat,
+            negative_gate_probs_local = negative_gate_probs.view(batch_size, k_negatives, -1)
+            router_hard_negatives, router_confusion_scores = (
+                self.router_guided_miner.mine_router_hard_negatives(
+                    anchor_gate_probs=anchor_gate_probs,
+                    negative_gate_probs=negative_gate_probs_local,
+                    candidate_negatives=negative_emb_reshaped,
                     k=k_negatives,
-                    dim=1,
-                    largest=False,  # Smallest distances = hardest negatives
+                    return_scores=True,
                 )
-
-                # Gather selected negatives
-                # Get selected negatives from flattened global pool
-                # Shape: (batch_size, k_negatives, embedding_dim+1)
-                selected_negatives = global_negatives_flat[topk_indices]
-
-                # Use selected negatives as hard negatives
-                hard_negatives = selected_negatives
-                hard_neg_distances = global_distances_flat.gather(1, topk_indices)
-
-                # Log statistics
-                if batch_idx == 0 and hard_neg_distances is not None:
-                    avg_hard_neg_dist = hard_neg_distances.mean().item()
-                    min_hard_neg_dist = hard_neg_distances.min().item()
-                    max_hard_neg_dist = hard_neg_distances.max().item()
-                    self.log(
-                        'train/curriculum/hard_neg_avg_distance',
-                        avg_hard_neg_dist,
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True,
-                    )
-                    self.log(
-                        'train/curriculum/hard_neg_min_distance',
-                        min_hard_neg_dist,
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True,
-                    )
-                    self.log(
-                        'train/curriculum/hard_neg_max_distance',
-                        max_hard_neg_dist,
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True,
-                    )
-                    self.log(
-                        'train/global_batch/global_hard_negatives_used',
-                        True,
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True,
-                    )
-            else:
-                # Local hard negative mining (original behavior)
-                # Store original candidate negatives
-                candidate_negatives = negative_emb_reshaped.clone()
-
-                # Embedding-based hard negative mining (Issue #15)
-                if enable_hard_negative_mining:
-                    # Mine top-k hardest negatives for each anchor based on Lorentzian distance
-                    hard_negatives, hard_neg_distances = self.hard_negative_miner.mine_hard_negatives(
-                        anchor_emb=anchor_emb,
-                        candidate_negatives=candidate_negatives,
-                        k=k_negatives,
-                        return_distances=True,
-                    )
-
-            # Router-guided negative mining (Issue #16)
-            # Note: Router-guided sampling with global batch requires gathering gate_probs
-            # For now, we'll use local gate_probs and global negatives (hybrid approach)
-            if enable_router_guided_sampling:
-                # Get gate probabilities for anchors and negatives
-                anchor_gate_probs = anchor_output.get('gate_probs')
-                negative_gate_probs = negative_output.get('gate_probs')
-
-                if anchor_gate_probs is not None and negative_gate_probs is not None:
-                    if use_global_batch:
-                        # Gather global negative gate probabilities to align with global negatives
-                        global_negative_gate_probs = gather_embeddings_global(negative_gate_probs)
-                        global_negative_gate_probs_reshaped = global_negative_gate_probs.view(
-                            global_batch_size, global_k_negatives, -1
-                        )
-                        # Flatten to (global_total, num_experts) then broadcast across anchors
-                        global_neg_gate_probs_flat = global_negative_gate_probs_reshaped.view(
-                            -1, anchor_gate_probs.shape[-1]
-                        )
-                        negative_gate_probs_expanded = global_neg_gate_probs_flat.unsqueeze(
-                            0
-                        ).expand(batch_size, -1, -1)
-
-                        confusion_scores_global = self.router_guided_miner.compute_confusion_scores(
-                            anchor_gate_probs, negative_gate_probs_expanded
-                        )  # (batch_size, global_total)
-
-                        _, router_topk_indices = torch.topk(
-                            confusion_scores_global, k=k_negatives, dim=1, largest=True
-                        )
-
-                        router_hard_negatives = global_negatives_flat[router_topk_indices]
-                        router_confusion_scores = confusion_scores_global.gather(
-                            1, router_topk_indices
-                        )
-                    else:
-                        # Local router-guided sampling (original behavior)
-                        # Reshape negative gate probs:
-                        # (batch_size * k_negatives, num_experts) ->
-                        # (batch_size, k_negatives, num_experts)
-                        negative_gate_probs_reshaped = negative_gate_probs.view(
-                            batch_size, k_negatives, -1
-                        )
-
-                        # Mine router-hard negatives (negatives that confuse the gating network)
-                        router_hard_negatives, router_confusion_scores = (
-                            self.router_guided_miner.mine_router_hard_negatives(
-                                anchor_gate_probs=anchor_gate_probs,
-                                negative_gate_probs=negative_gate_probs_reshaped,
-                                candidate_negatives=negative_emb_reshaped,
-                                k=k_negatives,
-                                return_scores=True,
-                            )
-                        )
-
-                    # Mix router-hard negatives with embedding-hard negatives
-                    router_mix_ratio = self.current_schedule_scalars.get('router_mix_ratio', 0.5)
-                    router_mix_ratio = max(0.0, min(1.0, router_mix_ratio))
-
-                    if enable_hard_negative_mining:
-                        # Mix both types of hard negatives
-                        n_router = int(k_negatives * router_mix_ratio)
-                        n_embedding = k_negatives - n_router
-
-                        # Select top router-hard and top embedding-hard
-                        router_selected = router_hard_negatives[:, :n_router, :]
-                        embedding_selected = hard_negatives[:, :n_embedding, :]
-
-                        # Concatenate: router-hard first, then embedding-hard
-                        mixed_negatives = torch.cat([router_selected, embedding_selected], dim=1)
-                    else:
-                        # Only router-hard negatives
-                        mixed_negatives = router_hard_negatives
-
-                    # Update negative_emb with mixed negatives
-                    negative_emb_reshaped = mixed_negatives
-
-                    # Log router-guided sampling statistics
-                    if batch_idx == 0 and router_confusion_scores is not None:
-                        avg_confusion = router_confusion_scores.mean().item()
-                        min_confusion = router_confusion_scores.min().item()
-                        max_confusion = router_confusion_scores.max().item()
-                        self.log(
-                            'train/curriculum/router_confusion_mean',
-                            avg_confusion,
-                            batch_size=batch_size,
-                            on_step=False,
-                            on_epoch=True,
-                        )
-                        self.log(
-                            'train/curriculum/router_confusion_min',
-                            min_confusion,
-                            batch_size=batch_size,
-                            on_step=False,
-                            on_epoch=True,
-                        )
-                        self.log(
-                            'train/curriculum/router_confusion_max',
-                            max_confusion,
-                            batch_size=batch_size,
-                            on_step=False,
-                            on_epoch=True,
-                        )
-                else:
-                    # Fallback to embedding-based if gate probs not available
-                    if enable_hard_negative_mining:
-                        negative_emb_reshaped = hard_negatives
-                    logger.debug('Router-guided sampling skipped: gate probabilities not available')
-            elif enable_hard_negative_mining:
-                # Only embedding-based hard negative mining
-                negative_emb_reshaped = hard_negatives
-
-            # Flatten back to (batch_size * k_negatives, embedding_dim+1)
-            negative_emb = negative_emb_reshaped.view(batch_size * k_negatives, -1)
-
-        auxiliary_fn_loss: Optional[torch.Tensor] = None
-        fn_mask = false_negative_mask
-        if negative_emb_reshaped is not None and self.false_negative_config is not None:
-            fn_mask, auxiliary_fn_loss = apply_false_negative_strategy(
-                self.false_negative_config, anchor_emb, negative_emb_reshaped, false_negative_mask
             )
-        false_negative_mask = fn_mask
 
-        adaptive_margins = self.norm_adaptive_margin(anchor_emb)
+        router_mix_ratio = self.current_schedule_scalars.get('router_mix_ratio', 0.5)
+        router_mix_ratio = max(0.0, min(1.0, router_mix_ratio))
+
+        if hard_negatives is not None:
+            n_router = int(k_negatives * router_mix_ratio)
+            n_embedding = k_negatives - n_router
+            router_selected = router_hard_negatives[:, :n_router, :]
+            embedding_selected = hard_negatives[:, :n_embedding, :]
+            mixed_negatives = torch.cat([router_selected, embedding_selected], dim=1)
+        else:
+            mixed_negatives = router_hard_negatives
+
+        if batch_idx == 0 and router_confusion_scores is not None:
+            avg_confusion = router_confusion_scores.mean().item()
+            min_confusion = router_confusion_scores.min().item()
+            max_confusion = router_confusion_scores.max().item()
+            self.log(
+                'train/curriculum/router_confusion_mean',
+                avg_confusion,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/curriculum/router_confusion_min',
+                min_confusion,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/curriculum/router_confusion_max',
+                max_confusion,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+
+        return mixed_negatives
+
+    def _prepare_negative_embeddings(
+        self,
+        anchor_output: Dict[str, torch.Tensor],
+        negative_output: Dict[str, torch.Tensor],
+        anchor_emb: torch.Tensor,
+        negative_emb: torch.Tensor,
+        batch_size: int,
+        k_negatives: int,
+        batch_idx: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        enable_hnm = self.current_curriculum_flags.get('enable_hard_negative_mining', False)
+        enable_router = self.current_curriculum_flags.get('enable_router_guided_sampling', False)
+        use_global_batch = self._should_use_global_batch(enable_hnm, enable_router)
+
+        global_context = None
+        if use_global_batch:
+            global_context = self._gather_global_negative_pool(
+                negative_emb, batch_size, k_negatives, batch_idx
+            )
+
+        negative_emb_reshaped = negative_emb.view(batch_size, k_negatives, -1)
+        hard_negatives: Optional[torch.Tensor] = None
+
+        if enable_hnm:
+            hard_negatives, _ = self._perform_hard_negative_mining(
+                anchor_emb,
+                negative_emb_reshaped,
+                k_negatives,
+                batch_size,
+                batch_idx,
+                global_context,
+            )
+            negative_emb_reshaped = hard_negatives
+
+        if enable_router:
+            negative_emb_reshaped = self._apply_router_guided_sampling(
+                anchor_output,
+                negative_output,
+                negative_emb_reshaped,
+                hard_negatives,
+                batch_size,
+                k_negatives,
+                batch_idx,
+                global_context,
+            )
+        elif enable_hnm and hard_negatives is not None:
+            negative_emb_reshaped = hard_negatives
+
+        negative_emb = negative_emb_reshaped.view(batch_size * k_negatives, -1)
+        return negative_emb, negative_emb_reshaped
+
+    def _apply_false_negative_strategy_wrapper(
+        self,
+        anchor_emb: torch.Tensor,
+        negative_emb_reshaped: torch.Tensor,
+        false_negative_mask: Optional[torch.Tensor],
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if self.false_negative_config is None or negative_emb_reshaped is None:
+            return false_negative_mask, None
+
+        fn_mask, auxiliary_fn_loss = apply_false_negative_strategy(
+            self.false_negative_config,
+            anchor_emb,
+            negative_emb_reshaped,
+            false_negative_mask,
+        )
+        return fn_mask, auxiliary_fn_loss
+
+    def _log_adaptive_margin_stats(
+        self, adaptive_margins: torch.Tensor, batch_idx: int, batch_size: int
+    ) -> None:
         adaptive_margin_mean_value = adaptive_margins.mean().item()
         if batch_idx == 0:
             adaptive_margin_min_value = adaptive_margins.min().item()
@@ -945,6 +958,381 @@ class NAICSContrastiveModel(pyl.LightningModule):
                 {'adaptive_margin_mean': adaptive_margin_mean_value}
             )
 
+    def _collect_gate_outputs(self, outputs: List[Dict[str, torch.Tensor]]
+                              ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        gate_probs_list: List[torch.Tensor] = []
+        topk_indices_list: List[torch.Tensor] = []
+        for output in outputs:
+            gate_probs = output.get('gate_probs')
+            top_k_indices = output.get('top_k_indices')
+            if gate_probs is not None and top_k_indices is not None:
+                gate_probs_list.append(gate_probs)
+                topk_indices_list.append(top_k_indices)
+        return gate_probs_list, topk_indices_list
+
+    def _log_router_diversity(self, gate_probs_list: List[torch.Tensor], batch_size: int) -> None:
+        if not gate_probs_list or not self.current_curriculum_flags.get(
+            'enable_router_guided_sampling', False
+        ):
+            return
+
+        gate_probs_combined = torch.cat(gate_probs_list, dim=0)
+        log_probs = torch.log(gate_probs_combined + 1e-8)
+        entropy_per_token = -(gate_probs_combined * log_probs).sum(dim=1)
+        expert_diversity = entropy_per_token.mean()
+        self.log(
+            'train/curriculum/router_expert_diversity',
+            expert_diversity.item(),
+            batch_size=batch_size,
+            on_step=False,
+            on_epoch=True,
+        )
+
+    def _compute_load_balancing_loss(
+        self,
+        gate_probs_list: List[torch.Tensor],
+        topk_indices_list: List[torch.Tensor],
+        batch_size: int,
+    ) -> torch.Tensor:
+        if not gate_probs_list:
+            return torch.tensor(0.0, device=self.device)
+
+        gate_probs = torch.cat(gate_probs_list, dim=0)
+        top_k_indices = torch.cat(topk_indices_list, dim=0)
+        total_tokens = gate_probs.shape[0]
+        num_experts = gate_probs.shape[1]
+
+        prob_sum = gate_probs.sum(dim=0)
+        expert_counts_micro = torch.zeros(num_experts, device=self.device)
+        for i in range(num_experts):
+            expert_counts_micro[i] = (top_k_indices == i).any(dim=1).sum()
+
+        if torch.distributed.is_initialized():
+            world_size = torch.distributed.get_world_size()
+            if world_size > 1:
+                global_prob_sum = prob_sum.clone()
+                global_expert_counts = expert_counts_micro.clone()
+                global_total_tokens = torch.tensor(
+                    total_tokens, dtype=torch.float, device=self.device
+                )
+                torch.distributed.all_reduce(global_prob_sum, op=torch.distributed.ReduceOp.SUM)
+                torch.distributed.all_reduce(
+                    global_expert_counts, op=torch.distributed.ReduceOp.SUM
+                )
+                torch.distributed.all_reduce(global_total_tokens, op=torch.distributed.ReduceOp.SUM)
+                global_total_tokens_safe = torch.clamp(global_total_tokens, min=1.0)
+                f = global_expert_counts / global_total_tokens_safe
+                P = global_prob_sum / global_total_tokens_safe
+                if self.trainer.is_global_zero:
+                    logger.debug(f'Global load balancing: f={f.mean():.4f}, P={P.mean():.4f}')
+            else:
+                f = expert_counts_micro / total_tokens
+                P = prob_sum / total_tokens
+        else:
+            f = expert_counts_micro / total_tokens
+            P = prob_sum / total_tokens
+
+        unscaled_loss = num_experts * torch.sum(f * P)
+        full_load_balancing_loss = self.load_balancing_coef * unscaled_loss
+
+        if (
+            not torch.distributed.is_initialized() or not hasattr(self.trainer, 'is_global_zero')
+            or self.trainer.is_global_zero
+        ):
+            for i in range(num_experts):
+                self.log(
+                    f'train/moe/expert_{i}_utilization',
+                    f[i].item(),
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                )
+                self.log(
+                    f'train/moe/expert_{i}_gating_prob',
+                    P[i].item(),
+                    batch_size=batch_size,
+                    on_step=False,
+                    on_epoch=True,
+                )
+
+            experiment = getattr(
+                self.logger, 'experiment', None
+            ) if self.logger is not None else None
+            if experiment is not None and hasattr(experiment, 'add_histogram'):
+                try:
+                    experiment.add_histogram(
+                        'train/moe/expert_utilization_hist', f, global_step=self.global_step
+                    )
+                    experiment.add_histogram(
+                        'train/moe/gating_prob_hist', P, global_step=self.global_step
+                    )
+                except Exception as exc:
+                    logger.debug(f'Could not log histograms: {exc}')
+
+            f_mean = f.mean().item()
+            f_std = f.std().item()
+            f_min = f.min().item()
+            f_max = f.max().item()
+            f_cv = (f_std / f_mean) if f_mean > 0 else 0.0
+
+            self.log(
+                'train/moe/utilization_mean',
+                f_mean,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/moe/utilization_std',
+                f_std,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/moe/utilization_cv',
+                f_cv,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+            )
+            self.log(
+                'train/moe/utilization_min',
+                f_min,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/moe/utilization_max',
+                f_max,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+
+            P_mean = P.mean().item()
+            P_std = P.std().item()
+            P_min = P.min().item()
+            P_max = P.max().item()
+            P_cv = (P_std / P_mean) if P_mean > 0 else 0.0
+
+            self.log(
+                'train/moe/gating_prob_mean',
+                P_mean,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/moe/gating_prob_std',
+                P_std,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/moe/gating_prob_cv',
+                P_cv,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/moe/gating_prob_min',
+                P_min,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                'train/moe/gating_prob_max',
+                P_max,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
+
+            ideal_utilization = 1.0 / num_experts
+            utilization_imbalance = torch.abs(f - ideal_utilization).mean().item()
+            self.log(
+                'train/moe/utilization_imbalance',
+                utilization_imbalance,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+            )
+
+        return full_load_balancing_loss
+
+    def _compute_hierarchy_loss(
+        self,
+        anchor_emb: torch.Tensor,
+        positive_emb: torch.Tensor,
+        batch: Dict,
+        batch_size: int,
+    ) -> torch.Tensor:
+        if self.hierarchy_loss_fn is None or 'anchor_code' not in batch:
+            return torch.tensor(0.0, device=self.device)
+
+        try:
+            all_codes = batch['anchor_code'].copy()
+            if 'positive_code' in batch:
+                all_codes.extend(batch['positive_code'])
+            else:
+                all_codes.extend(batch['anchor_code'])
+
+            all_embeddings = torch.cat([anchor_emb, positive_emb])
+            from naics_embedder.text_model.hyperbolic import LorentzDistance
+
+            curvature = getattr(self.hparams, 'curvature', 1.0)
+            lorentz_dist = LorentzDistance(curvature=curvature)
+
+            hierarchy_loss = self.hierarchy_loss_fn(
+                all_embeddings, all_codes, lambda x, y: lorentz_dist(x, y)
+            )
+
+            self.log('train/hierarchy_loss', hierarchy_loss, batch_size=batch_size)
+            return hierarchy_loss
+        except Exception as exc:
+            logger.warning(f'Failed to compute hierarchy loss: {exc}')
+            return torch.tensor(0.0, device=self.device)
+
+    def _compute_lambdarank_loss(
+        self,
+        anchor_emb: torch.Tensor,
+        positive_emb: torch.Tensor,
+        negative_emb: torch.Tensor,
+        batch: Dict,
+        batch_size: int,
+        k_negatives: int,
+    ) -> torch.Tensor:
+        if self.lambdarank_loss_fn is None or 'anchor_code' not in batch or 'positive_code' not in batch:
+            return torch.tensor(0.0, device=self.device)
+
+        try:
+            negative_codes = batch.get('negative_codes', [])
+            if not negative_codes or len(negative_codes) != batch_size:
+                logger.debug('Skipping LambdaRank: negative_codes not available in batch')
+                return torch.tensor(0.0, device=self.device)
+
+            from naics_embedder.text_model.hyperbolic import LorentzDistance
+
+            curvature = getattr(self.hparams, 'curvature', 1.0)
+            lorentz_dist = LorentzDistance(curvature=curvature)
+
+            lambdarank_loss = self.lambdarank_loss_fn(
+                anchor_emb,
+                positive_emb,
+                negative_emb,
+                batch['anchor_code'],
+                batch['positive_code'],
+                negative_codes,
+                lambda x, y: lorentz_dist(x, y),
+                batch_size,
+                k_negatives,
+            )
+            self.log('train/lambdarank_loss', lambdarank_loss, batch_size=batch_size)
+            return lambdarank_loss
+        except Exception as exc:
+            logger.warning(f'Failed to compute LambdaRank loss: {exc}')
+            import traceback
+
+            logger.debug(traceback.format_exc())
+            return torch.tensor(0.0, device=self.device)
+
+    def _compute_radius_regularization(
+        self,
+        anchor_emb: torch.Tensor,
+        positive_emb: torch.Tensor,
+        negative_emb: torch.Tensor,
+        batch_size: int,
+    ) -> torch.Tensor:
+        radius_reg_weight = getattr(self.hparams, 'radius_reg_weight', 0.0)
+        if radius_reg_weight <= 0:
+            return torch.tensor(0.0, device=self.device)
+
+        all_embeddings = torch.cat([anchor_emb, positive_emb, negative_emb])
+        x0 = all_embeddings[:, 0]
+        curvature = getattr(self.hparams, 'curvature', 1.0)
+        radius_squared = torch.clamp(x0**2 - 1.0 / curvature, min=0.0)
+        radius = torch.sqrt(radius_squared + 1e-8)
+
+        radius_threshold = 10.0
+        excess_radius = torch.clamp(radius - radius_threshold, min=0.0)
+        radius_reg_loss = radius_reg_weight * torch.mean(excess_radius**2)
+
+        self.log('train/radius_reg_loss', radius_reg_loss, batch_size=batch_size)
+        self.log('train/mean_radius', radius.mean(), batch_size=batch_size)
+        self.log('train/max_radius', radius.max(), batch_size=batch_size)
+        return radius_reg_loss
+
+    def _log_loss_breakdown(
+        self,
+        contrastive_loss: torch.Tensor,
+        load_balancing_loss: torch.Tensor,
+        hierarchy_loss: torch.Tensor,
+        lambdarank_loss: torch.Tensor,
+        radius_reg_loss: torch.Tensor,
+        total_loss: torch.Tensor,
+        batch_size: int,
+    ) -> None:
+        self.log('train/contrastive_loss', contrastive_loss, prog_bar=True, batch_size=batch_size)
+        self.log(
+            'train/load_balancing_loss',
+            load_balancing_loss,
+            prog_bar=True,
+            batch_size=batch_size,
+        )
+        if hierarchy_loss.item() > 0:
+            self.log('train/hierarchy_loss', hierarchy_loss, prog_bar=False, batch_size=batch_size)
+        if lambdarank_loss.item() > 0:
+            self.log(
+                'train/lambdarank_loss', lambdarank_loss, prog_bar=False, batch_size=batch_size
+            )
+        if radius_reg_loss.item() > 0:
+            self.log(
+                'train/radius_reg_loss', radius_reg_loss, prog_bar=False, batch_size=batch_size
+            )
+        self.log('train/total_loss', total_loss, prog_bar=True, batch_size=batch_size)
+
+    def training_step(self, batch: Dict, batch_idx: int) -> torch.Tensor:
+        batch_size = batch['batch_size']
+        k_negatives = batch['k_negatives']
+
+        self._update_curriculum_state(batch_idx, batch_size)
+
+        anchor_output, positive_output, negative_output = self._forward_batch(batch)
+        anchor_emb = anchor_output['embedding']
+        positive_emb = positive_output['embedding']
+        negative_emb = negative_output['embedding']
+
+        self._log_multilevel_supervision_stats(batch, batch_idx, batch_size)
+        false_negative_mask = self._build_false_negative_mask(batch, batch_size)
+        self._log_sampling_metadata(batch, batch_size)
+        self._log_negative_sample_stats_if_needed(batch, batch_idx)
+
+        negative_emb, negative_emb_reshaped = self._prepare_negative_embeddings(
+            anchor_output,
+            negative_output,
+            anchor_emb,
+            negative_emb,
+            batch_size,
+            k_negatives,
+            batch_idx,
+        )
+
+        false_negative_mask, auxiliary_fn_loss = self._apply_false_negative_strategy_wrapper(
+            anchor_emb,
+            negative_emb_reshaped,
+            false_negative_mask,
+        )
+
+        adaptive_margins = self.norm_adaptive_margin(anchor_emb)
+        self._log_adaptive_margin_stats(adaptive_margins, batch_idx, batch_size)
+
         contrastive_loss = self.loss_fn(
             anchor_emb,
             positive_emb,
@@ -957,352 +1345,46 @@ class NAICSContrastiveModel(pyl.LightningModule):
         if auxiliary_fn_loss is not None:
             contrastive_loss = contrastive_loss + auxiliary_fn_loss
 
-        # Router statistics logging: Monitor expert utilization patterns
-        all_gate_probs = []
-        all_top_k_indices = []
-        for output in (anchor_output, positive_output, negative_output):
-            if output['gate_probs'] is not None:
-                all_gate_probs.append(output['gate_probs'])
-                all_top_k_indices.append(output['top_k_indices'])
+        gate_probs_list, topk_indices_list = self._collect_gate_outputs(
+            [anchor_output, positive_output, negative_output]
+        )
+        self._log_router_diversity(gate_probs_list, batch_size)
+        full_load_balancing_loss = self._compute_load_balancing_loss(
+            gate_probs_list,
+            topk_indices_list,
+            batch_size,
+        )
 
-        # Log router-guided sampling metrics if enabled
-        if self.current_curriculum_flags.get('enable_router_guided_sampling', False):
-            if all_gate_probs:
-                # Compute average expert selection diversity using entropy
-                gate_probs_combined = torch.cat(all_gate_probs, dim=0)
-                # Entropy: -sum(p * log(p)) for each row
-                # Add small epsilon for numerical stability
-                log_probs = torch.log(gate_probs_combined + 1e-8)
-                entropy_per_token = -(gate_probs_combined * log_probs).sum(dim=1)
-                expert_diversity = entropy_per_token.mean()
-                self.log(
-                    'train/curriculum/router_expert_diversity',
-                    expert_diversity.item(),
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-
-        if not all_gate_probs:
-            full_load_balancing_loss = torch.tensor(0.0, device=self.device)
-
-        else:
-            gate_probs = torch.cat(all_gate_probs, dim=0)
-            top_k_indices = torch.cat(all_top_k_indices, dim=0)
-
-            total_tokens = gate_probs.shape[0]
-            num_experts = gate_probs.shape[1]
-
-            # Compute sums (not means) - divide by total_tokens only after
-            # all-reduce in distributed mode
-            prob_sum = gate_probs.sum(dim=0)
-
-            expert_counts_micro = torch.zeros(num_experts, device=self.device)
-            for i in range(num_experts):
-                expert_counts_micro[i] = (top_k_indices == i).any(dim=1).sum()
-
-            if torch.distributed.is_initialized():
-                world_size = torch.distributed.get_world_size()
-
-                if world_size > 1:
-                    global_prob_sum = prob_sum.clone()
-                    global_expert_counts = expert_counts_micro.clone()
-                    global_total_tokens = torch.tensor(
-                        total_tokens, dtype=torch.float, device=self.device
-                    )
-
-                    torch.distributed.all_reduce(global_prob_sum, op=torch.distributed.ReduceOp.SUM)
-                    torch.distributed.all_reduce(
-                        global_expert_counts, op=torch.distributed.ReduceOp.SUM
-                    )
-                    torch.distributed.all_reduce(
-                        global_total_tokens, op=torch.distributed.ReduceOp.SUM
-                    )
-
-                    global_total_tokens_safe = torch.clamp(global_total_tokens, min=1.0)
-
-                    f = global_expert_counts / global_total_tokens_safe
-                    P = global_prob_sum / global_total_tokens_safe
-
-                    if self.trainer.is_global_zero:
-                        logger.debug(f'Global load balancing: f={f.mean():.4f}, P={P.mean():.4f}')
-
-                else:
-                    # Single GPU case: divide by local total_tokens
-                    f = expert_counts_micro / total_tokens
-                    P = prob_sum / total_tokens
-            else:
-                # Non-distributed case: divide by local total_tokens
-                f = expert_counts_micro / total_tokens
-                P = prob_sum / total_tokens
-
-            unscaled_loss = num_experts * torch.sum(f * P)
-            full_load_balancing_loss = self.load_balancing_coef * unscaled_loss
-
-            # Log MoE expert utilization metrics
-            # f_i: fraction of tokens routed to each expert
-            # P_i: average gating probability for each expert
-            # Issue #6: Fixed distributed training check
-            if not torch.distributed.is_initialized() or self.trainer.is_global_zero:
-                # Log per-expert utilization (f_i)
-                for i in range(num_experts):
-                    self.log(
-                        f'train/moe/expert_{i}_utilization',
-                        f[i].item(),
-                        batch_size=batch_size,
-                        on_step=False,  # Log per-epoch to reduce noise
-                        on_epoch=True,
-                    )
-
-                # Log per-expert gating probability (P_i)
-                for i in range(num_experts):
-                    self.log(
-                        f'train/moe/expert_{i}_gating_prob',
-                        P[i].item(),
-                        batch_size=batch_size,
-                        on_step=False,
-                        on_epoch=True,
-                    )
-
-                # Log histogram of expert utilization (f_i)
-                # Only if TensorBoard logger is available
-                if (
-                    self.logger is not None and hasattr(self.logger, 'experiment')
-                    and self.logger.experiment is not None  # type: ignore[attr-defined]
-                ):
-                    experiment = self.logger.experiment  # type: ignore[attr-defined]
-                    if hasattr(experiment, 'add_histogram'):
-                        try:
-                            experiment.add_histogram(
-                                'train/moe/expert_utilization_hist',
-                                f,
-                                global_step=self.global_step
-                            )
-
-                            # Log histogram of gating probabilities (P_i)
-                            experiment.add_histogram(
-                                'train/moe/gating_prob_hist', P, global_step=self.global_step
-                            )
-                        except Exception as e:
-                            logger.debug(f'Could not log histograms: {e}')
-
-                # Log summary statistics for f_i
-                f_mean = f.mean().item()
-                f_std = f.std().item()
-                f_min = f.min().item()
-                f_max = f.max().item()
-                f_cv = (f_std / f_mean) if f_mean > 0 else 0.0  # Coefficient of variation
-
-                self.log(
-                    'train/moe/utilization_mean',
-                    f_mean,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/moe/utilization_std',
-                    f_std,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/moe/utilization_cv',
-                    f_cv,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                    prog_bar=True,  # Show in progress bar for quick monitoring
-                )
-                self.log(
-                    'train/moe/utilization_min',
-                    f_min,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/moe/utilization_max',
-                    f_max,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-
-                # Log summary statistics for P_i
-                P_mean = P.mean().item()
-                P_std = P.std().item()
-                P_min = P.min().item()
-                P_max = P.max().item()
-                P_cv = (P_std / P_mean) if P_mean > 0 else 0.0
-
-                self.log(
-                    'train/moe/gating_prob_mean',
-                    P_mean,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/moe/gating_prob_std',
-                    P_std,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/moe/gating_prob_cv',
-                    P_cv,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/moe/gating_prob_min',
-                    P_min,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-                self.log(
-                    'train/moe/gating_prob_max',
-                    P_max,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                )
-
-                # Log load balancing imbalance (lower is better, 0 = perfectly balanced)
-                # Ideal: f_i = 1/num_experts for all i, so std should be 0
-                ideal_utilization = 1.0 / num_experts
-                utilization_imbalance = torch.abs(f - ideal_utilization).mean().item()
-                self.log(
-                    'train/moe/utilization_imbalance',
-                    utilization_imbalance,
-                    batch_size=batch_size,
-                    on_step=False,
-                    on_epoch=True,
-                    prog_bar=True,
-                )
-
-        # Add hierarchy preservation loss if available
-        hierarchy_loss = torch.tensor(0.0, device=self.device)
-        if self.hierarchy_loss_fn is not None and 'anchor_code' in batch:
-            try:
-                # Get all codes and embeddings in batch
-                all_codes = batch['anchor_code'].copy()
-                if 'positive_code' in batch:
-                    all_codes.extend(batch['positive_code'])
-                else:
-                    # If no positive codes, duplicate anchor codes
-                    all_codes.extend(batch['anchor_code'])
-
-                all_embeddings = torch.cat([anchor_emb, positive_emb])
-
-                # Use the loss function's lorentz distance
-                from naics_embedder.text_model.hyperbolic import LorentzDistance
-
-                curvature = getattr(self.hparams, 'curvature', 1.0)
-                lorentz_dist = LorentzDistance(curvature=curvature)
-
-                hierarchy_loss = self.hierarchy_loss_fn(
-                    all_embeddings, all_codes, lambda x, y: lorentz_dist(x, y)
-                )
-
-                self.log('train/hierarchy_loss', hierarchy_loss, batch_size=batch_size)
-            except Exception as e:
-                logger.warning(f'Failed to compute hierarchy loss: {e}')
-
-        # Add LambdaRank loss for global ranking (1 positive + k negatives per anchor)
-        lambdarank_loss = torch.tensor(0.0, device=self.device)
-        if self.lambdarank_loss_fn is not None and 'anchor_code' in batch and 'positive_code' in batch:
-            try:
-                # Get codes from batch
-                anchor_codes = batch['anchor_code']
-                positive_codes = batch['positive_code']
-                negative_codes = batch.get('negative_codes', [])
-
-                # If negative_codes not in batch, we can't compute LambdaRank
-                if not negative_codes or len(negative_codes) != batch_size:
-                    logger.debug('Skipping LambdaRank: negative_codes not available in batch')
-                else:
-                    # Use the loss function's lorentz distance
-                    from naics_embedder.text_model.hyperbolic import LorentzDistance
-
-                    curvature = getattr(self.hparams, 'curvature', 1.0)
-                    lorentz_dist = LorentzDistance(curvature=curvature)
-
-                    lambdarank_loss = self.lambdarank_loss_fn(
-                        anchor_emb,
-                        positive_emb,
-                        negative_emb,
-                        anchor_codes,
-                        positive_codes,
-                        negative_codes,
-                        lambda x, y: lorentz_dist(x, y),
-                        batch_size,
-                        k_negatives,
-                    )
-
-                    self.log('train/lambdarank_loss', lambdarank_loss, batch_size=batch_size)
-            except Exception as e:
-                logger.warning(f'Failed to compute LambdaRank loss: {e}')
-                import traceback
-
-                logger.debug(traceback.format_exc())
-
-        # Add radius regularization to prevent hyperbolic radius instability
-        radius_reg_loss = torch.tensor(0.0, device=self.device)
-        radius_reg_weight = getattr(self.hparams, 'radius_reg_weight', 0.0)
-        if radius_reg_weight > 0:
-            # Compute hyperbolic radius for all embeddings in batch
-            # Radius = sqrt(x0^2 - 1) where x0 is the time component
-            # We want to penalize large radii to keep embeddings near origin
-            all_embeddings = torch.cat([anchor_emb, positive_emb, negative_emb])
-            x0 = all_embeddings[:, 0]  # Time component
-            # Compute radius: r = sqrt(x0^2 - 1/c) for curvature c
-            # For c=1: r = sqrt(x0^2 - 1)
-            c = getattr(self.hparams, 'curvature', 1.0)
-            radius_squared = torch.clamp(x0**2 - 1.0 / c, min=0.0)
-            radius = torch.sqrt(radius_squared + 1e-8)  # Add small epsilon for stability
-
-            # Penalize radii larger than a threshold (e.g., 10)
-            # Use a smooth penalty: max(0, radius - threshold)^2
-            radius_threshold = 10.0
-            excess_radius = torch.clamp(radius - radius_threshold, min=0.0)
-            radius_reg_loss = radius_reg_weight * torch.mean(excess_radius**2)
-
-            self.log(
-                'train/radius_reg_loss', radius_reg_loss, prog_bar=False, batch_size=batch_size
-            )
-            # Also log mean radius for monitoring
-            self.log('train/mean_radius', radius.mean(), prog_bar=False, batch_size=batch_size)
-            self.log('train/max_radius', radius.max(), prog_bar=False, batch_size=batch_size)
-
-        batch_size = batch['batch_size']
+        hierarchy_loss = self._compute_hierarchy_loss(anchor_emb, positive_emb, batch, batch_size)
+        lambdarank_loss = self._compute_lambdarank_loss(
+            anchor_emb,
+            positive_emb,
+            negative_emb,
+            batch,
+            batch_size,
+            k_negatives,
+        )
+        radius_reg_loss = self._compute_radius_regularization(
+            anchor_emb,
+            positive_emb,
+            negative_emb,
+            batch_size,
+        )
 
         total_loss = (
             contrastive_loss + full_load_balancing_loss + hierarchy_loss + lambdarank_loss +
             radius_reg_loss
         )
 
-        # Note: DCL loss may yield negative values (unlike InfoNCE which is always positive)
-        # This is expected behavior for DCL: loss = (-pos_sim + logsumexp(neg_sims)).mean()
-        self.log('train/contrastive_loss', contrastive_loss, prog_bar=True, batch_size=batch_size)
-        self.log(
-            'train/load_balancing_loss',
+        self._log_loss_breakdown(
+            contrastive_loss,
             full_load_balancing_loss,
-            prog_bar=True,
-            batch_size=batch_size,
+            hierarchy_loss,
+            lambdarank_loss,
+            radius_reg_loss,
+            total_loss,
+            batch_size,
         )
-        if hierarchy_loss.item() > 0:
-            self.log('train/hierarchy_loss', hierarchy_loss, prog_bar=False, batch_size=batch_size)
-        if lambdarank_loss.item() > 0:
-            self.log(
-                'train/lambdarank_loss', lambdarank_loss, prog_bar=False, batch_size=batch_size
-            )
-        self.log('train/total_loss', total_loss, prog_bar=True, batch_size=batch_size)
 
         return total_loss
 

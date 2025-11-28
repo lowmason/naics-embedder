@@ -126,11 +126,27 @@ class TripletDataset(Dataset):
         negative_indices = torch.tensor(
             [neg['negative_idx'] for neg in negatives], dtype=torch.long
         )
+        negative_relations = torch.tensor(
+            [neg.get('negative_relation', -1) for neg in negatives], dtype=torch.long
+        )
+        negative_distances = torch.tensor(
+            [float(neg.get('negative_distance', 0.0)) for neg in negatives], dtype=torch.float32
+        )
+        negative_relation_margins = torch.tensor(
+            [float(neg.get('relation_margin', 0.0)) for neg in negatives], dtype=torch.float32
+        )
+        negative_distance_margins = torch.tensor(
+            [float(neg.get('distance_margin', 0.0)) for neg in negatives], dtype=torch.float32
+        )
 
         return {
             'anchor_idx': anchor_idx,
             'positive_idx': positive_idx,
             'negative_indices': negative_indices,
+            'negative_relation_ids': negative_relations,
+            'negative_distances': negative_distances,
+            'negative_relation_margins': negative_relation_margins,
+            'negative_distance_margins': negative_distance_margins,
         }
 
 def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
@@ -153,10 +169,38 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
 
     negative_indices = torch.stack(negative_indices)
 
+    def _pad_and_stack(key: str, pad_value: float = 0.0, dtype: torch.dtype = torch.float32):
+        tensors = []
+        for item in batch:
+            values = item[key]
+            if values.numel() == 0:
+                values = torch.full((1, ), pad_value, dtype=dtype)
+            if len(values) < max_negatives:
+                padding = values[-1:].repeat(max_negatives - len(values))
+                values = torch.cat([values, padding])
+            tensors.append(values)
+        stacked = torch.stack(tensors)
+        if stacked.dtype != dtype:
+            stacked = stacked.to(dtype)
+        return stacked
+
+    negative_relation_ids = _pad_and_stack('negative_relation_ids', pad_value=-1, dtype=torch.long)
+    negative_distances = _pad_and_stack('negative_distances', pad_value=0.0, dtype=torch.float32)
+    negative_relation_margins = _pad_and_stack(
+        'negative_relation_margins', pad_value=0.0, dtype=torch.float32
+    )
+    negative_distance_margins = _pad_and_stack(
+        'negative_distance_margins', pad_value=0.0, dtype=torch.float32
+    )
+
     return {
         'anchor_idx': anchor_idx,
         'positive_idx': positive_idx,
         'negative_indices': negative_indices,
+        'negative_relation_ids': negative_relation_ids,
+        'negative_distances': negative_distances,
+        'negative_relation_margins': negative_relation_margins,
+        'negative_distance_margins': negative_distance_margins,
     }
 
 def create_dataloader(cfg: Config) -> DataLoader:

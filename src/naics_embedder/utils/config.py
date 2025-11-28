@@ -869,6 +869,80 @@ class GraphConfig(BaseModel):
     w_triplet: float = Field(default=1.0, ge=0, description='Triplet loss weight')
     w_per_level: float = Field(default=0.5, ge=0, description='Level loss weight')
 
+    # Edge-aware convolution parameters
+    edge_relations: List[str] = Field(
+        default_factory=lambda: ['child', 'grandchild', 'great-grandchild', 'sibling'],
+        description='Relation names to keep when building the graph edges',
+    )
+    edge_relation_weights: Dict[str, float] = Field(
+        default_factory=lambda: {
+            'child': 1.0,
+            'sibling': 0.85,
+            'grandchild': 0.7,
+            'great-grandchild': 0.5,
+            'great-great-grandchild': 0.35,
+        },
+        description='Per-relation weighting applied during message passing',
+    )
+    edge_attention_hidden_dim: int = Field(
+        default=64, gt=0, description='Hidden dimension for edge attention MLP'
+    )
+    edge_sibling_boost: float = Field(
+        default=0.15,
+        description='Additive attention bonus applied to sibling edges',
+    )
+
+    # Curriculum / adaptive sampling
+    curriculum_enabled: bool = Field(default=True, description='Enable curriculum scheduling')
+    curriculum_cache_dir: str = Field(
+        default='./data/curriculum_cache',
+        description='Directory containing curriculum preprocessing artifacts',
+    )
+    curriculum_warmup_epochs: int = Field(
+        default=2, ge=0, description='Number of epochs using warmup curriculum filters'
+    )
+    curriculum_margin_warmup_scale: float = Field(
+        default=0.5, gt=0, description='Margin scaling factor during warmup phase'
+    )
+    hard_negative_start_epoch: int = Field(
+        default=4,
+        ge=0,
+        description='Epoch to enable hard-negative mining and full graph exposure',
+    )
+    hard_negative_fraction: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description='Fraction of negatives to treat as hard examples',
+    )
+    hard_negative_temperature: float = Field(
+        default=0.5, gt=0.0, description='Temperature for hard-negative weighting softmax'
+    )
+
+    # Adaptive margin
+    use_adaptive_margin: bool = Field(default=True, description='Enable adaptive margin scaling')
+    adaptive_margin_alpha: float = Field(
+        default=0.5,
+        ge=0.0,
+        description='Scale applied to adaptive margin adjustments',
+    )
+    adaptive_margin_min: float = Field(
+        default=0.4, gt=0.0, description='Minimum allowable adaptive margin'
+    )
+    adaptive_margin_max: float = Field(
+        default=2.0, gt=0.0, description='Maximum allowable adaptive margin'
+    )
+    adaptive_margin_norm_scale: float = Field(
+        default=6.0,
+        gt=0.0,
+        description='Normalization constant for anchor norm based margin adjustment',
+    )
+    adaptive_margin_distance_scale: float = Field(
+        default=4.0,
+        gt=0.0,
+        description='Normalization constant for distance-based margin adjustment',
+    )
+
     # Data sampling parameters (legacy, not used in weighted sampling)
     k_total: int = Field(default=48, gt=0, description='Total number of negatives to sample')
     pct_excluded: float = Field(

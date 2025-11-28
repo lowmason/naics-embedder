@@ -226,6 +226,8 @@ def _build_polars_query(
                                pl.struct(
                                    pl.col('negative_idx'),
                                    pl.col('negative_code'),
+                                   pl.col('negative_relation'),
+                                   pl.col('negative_distance'),
                                    pl.col('relation_margin'),
                                    pl.col('distance_margin'),
                                ).alias('negatives'),
