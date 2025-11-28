@@ -27,34 +27,32 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Run tests with coverage
-        run: uv run pytest tests/ -v --cov=src/naics_embedder --cov-report=xml --cov-report=term
+      - name: Run tests with coverage (generate coverage.xml)
+        # We explicitly ask for xml:coverage.xml to guarantee the filename and location
+        run: uv run pytest tests/ -v --cov=src/naics_embedder --cov-report=xml:coverage.xml --cov-report=term
+
+      - name: Show coverage file for debugging
+        # This step makes it obvious in the Action logs whether coverage.xml was produced
+        run: |
+          echo "Working directory: $(pwd)"
+          ls -la
+          if [ -f coverage.xml ]; then
+            echo "coverage.xml exists - showing head..."
+            head -n 50 coverage.xml || true
+          else
+            echo "coverage.xml NOT FOUND"
+            exit 1
+          fi
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          file: ./coverage.xml
+          # Use 'files' which is supported by v4 and points to the explicit xml produced above
+          files: ./coverage.xml
           flags: unittests
           name: codecov-umbrella
-          fail_ci_if_error: false
-
-  lint:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install uv
-        run: pip install uv
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Run ruff linter
-        run: uv run ruff check --fix src/ tests/
+          # During debugging set to true so failures are visible; revert to false once working
+          fail_ci_if_error: true
+        env:
+          # If your repository is private or your Codecov setup needs a token, set CODECOV_TOKEN in repo secrets
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN || '' }}
