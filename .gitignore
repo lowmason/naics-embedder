@@ -75,6 +75,8 @@ dmypy.json
 archive/
 /data/
 site/
+/reports/
+/README_files/
 *.parquet
 *.cache
     
@@ -89,3 +91,12 @@ lightning_logs/
 # OS-specific
 .DS_Store
 Thumbs.db
+
+.gitignore
+.gitconfig
+.markdownlint.jsonc
+.pre-commit-config.yaml
+.pre-commit-setup.md
+scratch.ipynb
+uv.lock
+.vscode/
