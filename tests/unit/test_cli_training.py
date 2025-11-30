@@ -85,7 +85,7 @@ def training_env(monkeypatch, tmp_path):
         def load_from_checkpoint(cls, path, **kwargs):
             instance = cls(**kwargs)
             instance.loaded_from_ckpt = True
-            instance.ckpt_path = path
+            instance.ckpt_path = path  # pyright: ignore[reportAttributeAccessIssue]
             return instance
 
     monkeypatch.setattr(training, 'NAICSContrastiveModel', DummyModel)

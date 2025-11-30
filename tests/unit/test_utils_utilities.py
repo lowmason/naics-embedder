@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Dict, cast
 
 import httpx
 import pytest
@@ -29,14 +30,14 @@ def test_make_directories_creates_all(tmp_path):
 
 @pytest.mark.unit
 def test_map_relationships_returns_both_mappings():
-    forward = map_relationships('child')
-    reverse = map_relationships(1)
+    forward = cast(Dict[str, int], map_relationships('child'))
+    reverse = cast(Dict[int, str], map_relationships(1))
 
     assert forward['child'] == 1
     assert reverse[1] == 'child'
 
     with pytest.raises(ValueError):
-        map_relationships(1.5)
+        map_relationships(1.5)  # type: ignore[arg-type]
 
 @pytest.mark.unit
 def test_download_with_retry_succeeds_after_retry(monkeypatch):
