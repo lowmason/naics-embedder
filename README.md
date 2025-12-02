@@ -1,67 +1,61 @@
 # NAICS Hyperbolic Embedding System
 
 <!-- markdownlint-disable MD013 -->
-[![License](https://img.shields.io/github/license/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/blob/main/LICENSE)
-[![Documentation](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml)
-[![Tests](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml)
-[![Coverage](https://codecov.io/gh/lowmason/naics-embedder/branch/main/graph/badge.svg)](https://github.com/lowmason/naics-embedder/main/graph)
-[![Issues](https://img.shields.io/github/issues/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/issues)
-[![Last Commit](https://img.shields.io/github/last-commit/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/commits/main)
-[![Contributors](https://img.shields.io/github/contributors/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/graphs/contributors)
-[![Repo size](https://img.shields.io/github/repo-size/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder)
-[![Top language](https://img.shields.io/github/languages/top/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder)
 
----
+[![License](https://img.shields.io/github/license/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/blob/main/LICENSE) [![Documentation](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml) [![Tests](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml) [![Coverage](https://codecov.io/gh/lowmason/naics-embedder/branch/main/graph/badge.svg)](https://github.com/lowmason/naics-embedder/main/graph) [![Issues](https://img.shields.io/github/issues/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/issues) [![Last Commit](https://img.shields.io/github/last-commit/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/commits/main) [![Contributors](https://img.shields.io/github/contributors/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/graphs/contributors) [![Repo size](https://img.shields.io/github/repo-size/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder) [![Top language](https://img.shields.io/github/languages/top/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder)
+
+------------------------------------------------------------------------
 
 This project implements a unified hyperbolic representation learning framework for the **North American Industry Classification System (NAICS)**. The system combines multi-channel text encoding, Mixture-of-Experts fusion, hyperbolic contrastive learning, and a hyperbolic graph refinement stage to produce geometry-aware embeddings aligned with the hierarchical structure of the NAICS taxonomy.
 
 The final output is a set of **Lorentz-model hyperbolic embeddings** suitable for similarity search, hierarchical modeling, graph-based reasoning, and downstream machine learning applications.
 
+------------------------------------------------------------------------
+
 ## 1. System Architecture Overview
 
 The system consists of four sequential stages:
 
-1. **Multi-channel text encoding** – independent transformer-based encoders for title, description, examples, and exclusions.
-2. **Mixture-of-Experts (MoE) fusion** – adaptive fusion of the four embeddings using Top-2 gating.
-3. **Hyperbolic contrastive learning** – projection into Lorentz space and optimization with Decoupled Contrastive Learning (DCL).
-4. **Hyperbolic Graph Convolutional Refinement (HGCN)** – structure-aware refinement using the explicit NAICS parent–child graph.
+1.  **Multi-channel text encoding** – independent transformer-based encoders for title, description, examples, and exclusions.
+2.  **Mixture-of-Experts (MoE) fusion** – adaptive fusion of the four embeddings using Top-2 gating.
+3.  **Hyperbolic contrastive learning** – projection into Lorentz space and optimization with Decoupled Contrastive Learning (DCL).
+4.  **Hyperbolic Graph Convolutional Refinement (HGCN)** – structure-aware refinement using the explicit NAICS parent–child graph.
 
 Each stage is designed to preserve or enhance the hierarchical geometry of NAICS codes.
 
----
+------------------------------------------------------------------------
 
 ## 2. Stage 1 — Multi-Channel Text Encoding
 
 Each NAICS code includes four distinct text fields:
 
-- Title: Short code name (Concise category identification)
-- Description: Detailed explanation of what the code encompasses (Rich semantic content)
-- Examples: Representative businesses in this category (Concrete instantiations)
-- Excluded: Codes explicitly NOT in this category (Disambiguation and boundaries)
+-   Title: Short code name ⟶ Concise category identification
+-   Description: Detailed explanation of what the code encompasses ⟶ Rich semantic content
+-   Examples: Representative businesses in this category ⟶ Concrete instantiations
+-   Excluded: Codes explicitly NOT in this category ⟶ Disambiguation and boundaries
 
-Each field is processed independently using a transformer encoder (LoRA-adapted). This produces
-four Euclidean embeddings:
+Each field is processed independently using a transformer encoder (LoRA-adapted). This produces four Euclidean embeddings:
 
-- Title: (Embedding_title)
-- Description: (Embedding_description)
-- Examples: Embedding_examples)
-- Excluded: (Embedding_excluded)
+-   Title: (Embedding_title)
+-   Description: (Embedding_description)
+-   Examples: Embedding_examples)
+-   Excluded: (Embedding_excluded)
 
 These embeddings serve as inputs to the fusion stage.
 
----
+------------------------------------------------------------------------
 
 ## 3. Stage 2 — Mixture-of-Experts Fusion (Top-2 Gating)
 
 The four channel embeddings are concatenated and passed into a **Mixture-of-Experts (MoE)** module. Key components include:
 
-- Top-2 gating to route each input to the two most relevant experts.
-- Feed-forward expert networks that learn specialized fusion behaviors.
-- Auxiliary load-balancing loss to ensure even expert utilization across batches.
+-   Top-2 gating to route each input to the two most relevant experts.
+-   Feed-forward expert networks that learn specialized fusion behaviors.
+-   Auxiliary load-balancing loss to ensure even expert utilization across batches.
 
 This produces a single fused Euclidean embedding (E_fused) per NAICS code.
 
----
+------------------------------------------------------------------------
 
 ## 4. Stage 3 — Hyperbolic Contrastive Learning (Lorentz Model)
 
@@ -71,18 +65,17 @@ To align the latent space with the hierarchical structure of NAICS, embeddings a
 
 The fused Euclidean vector is mapped onto the hyperboloid:
 
-- Uses exponential map at the origin
-- Supports learned or fixed curvature
-- Ensures numerical stability
+-   Uses exponential map at the origin
+-   Supports learned or fixed curvature
+-   Ensures numerical stability
 
 The result is a Lorentz embedding (E_hyp).
 
 ### 4.2 Decoupled Contrastive Learning (DCL) Loss
 
-Contrastive learning is performed using **Decoupled Contrastive Learning (DCL)** with
-**Lorentzian geodesic distances**:
+Contrastive learning is performed using **Decoupled Contrastive Learning (DCL)** with **Lorentzian geodesic distances**:
 
-d(u, v) = arcosh(-<u, v>_L)
+d(u, v) = arcosh(-\<u, v\>\_L)
 
 The DCL loss decouples the positive and negative terms:
 
@@ -92,27 +85,26 @@ This formulation provides better gradient flow and numerical stability compared 
 
 Negatives include:
 
-- unrelated codes,
-- hierarchically distant codes,
-- false negatives detected via periodic clustering (masked with -inf).
+-   unrelated codes,
+-   hierarchically distant codes,
+-   false negatives detected via periodic clustering (masked with -inf).
 
 ### 4.3 False Negative Mitigation
 
 A curriculum-based procedure removes semantically similar negatives once the embedding space stabilizes:
 
-1. Generate embeddings for the dataset.
-2. Cluster embeddings (e.g., via KMeans).
-3. Identify negatives sharing the cluster label with the anchor.
-4. Exclude these from the contrastive denominator.
+1.  Generate embeddings for the dataset.
+2.  Cluster embeddings (e.g., via KMeans).
+3.  Identify negatives sharing the cluster label with the anchor.
+4.  Exclude these from the contrastive denominator.
 
 This prevents the model from incorrectly separating close hierarchical neighbors.
 
----
+------------------------------------------------------------------------
 
 ## 5. Stage 4 — Hyperbolic Graph Convolutional Refinement (HGCN)
 
-To fully integrate the explicit hierarchical relationships of NAICS, the system applies a
-**Hyperbolic Graph Convolutional Network** as a refinement stage.
+To fully integrate the explicit hierarchical relationships of NAICS, the system applies a **Hyperbolic Graph Convolutional Network** as a refinement stage.
 
 ### 5.1 Graph Structure
 
@@ -122,10 +114,10 @@ Nodes represent NAICS codes, and edges represent parent–child relationships in
 
 The refinement module includes:
 
-- Two hyperbolic graph convolutional layers
-- Tangent-space aggregation and message passing
-- Learnable curvature shared across layers
-- Exponential and logarithmic maps for manifold transitions
+-   Two hyperbolic graph convolutional layers
+-   Tangent-space aggregation and message passing
+-   Learnable curvature shared across layers
+-   Exponential and logarithmic maps for manifold transitions
 
 ### 5.3 Refinement Objectives
 
@@ -135,8 +127,8 @@ The model optimizes a combined loss:
 
 Ensures that:
 
-- anchor–positive distance < anchor–negative distance
-- distances use Lorentz geodesics
+-   anchor–positive distance \< anchor–negative distance
+-   distances use Lorentz geodesics
 
 #### b. Per-Level Radial Regularization
 
@@ -146,33 +138,18 @@ This aligns global and local geometric structure with the NAICS taxonomy.
 
 ### 5.4 Validation Metrics
 
-To ensure graph refinement does not erode the global structure captured by the text model, Stage 4 now
-logs the same hierarchy-aware metrics introduced earlier in the pipeline (per
-[Issue #70](https://github.com/lowmason/naics-embedder/issues/70)):
+To ensure graph refinement does not erode the global structure captured by the text model, the same hierarchy-aware metrics introduced earlier in the pipeline are logged:
 
-- Cophenetic correlation + pair counts
-- Spearman correlation
-- NDCG@K (configurable list, default `5/10/20`)
-- Hyperbolic distortion statistics
-
-Metrics require the tree-distance matrix (`data/naics_distance_matrix.parquet`). Configure frequency
-and K-values via the new GraphConfig fields:
-
-| Key | Purpose |
-| --- | --- |
-| `distance_matrix_parquet` | Path to the NAICS tree-distance matrix used for validation. |
-| `full_eval_frequency` | Run the expensive metrics every _N_ optimizer steps (default `1`, i.e., once per validation epoch). |
-| `ndcg_k_values` | List of cutoffs to log for NDCG. |
-
-If the distance matrix is unavailable, HGCN gracefully falls back to the lightweight triplet metrics.
+-   Cophenetic correlation + pair counts
+-   Spearman correlation
+-   NDCG\@K (configurable list, default `5/10/20`)
+-   Hyperbolic distortion statistics
 
 ### 5.5 Pre/Post Verification
 
-[Issue #67](https://github.com/lowmason/naics-embedder/issues/67) adds a CI-friendly command that
-compares Stage 3 (pre-HGCN) and Stage 4 embeddings to ensure the refinement step preserves global
-structure while improving local parent retrieval:
+To ensure the refinement step preserves global structure while improving local parent retrieval, use the following command:
 
-```bash
+``` bash
 uv run naics-embedder tools verify-stage4 \
   --pre ./output/hyperbolic_projection/encodings.parquet \
   --post ./output/hgcn/encodings.parquet \
@@ -180,36 +157,27 @@ uv run naics-embedder tools verify-stage4 \
   --relations ./data/naics_relations.parquet
 ```
 
-The verifier reports cophenetic correlation, NDCG@K, and parent-retrieval accuracy deltas and fails
-when degradation exceeds the configurable thresholds (`--max-cophenetic-drop`, `--max-ndcg-drop`,
-`--min-local-improvement`, `--parent-top-k`). Integrate this command into your pipeline to guarantee that Stage 4 only
-ships when it demonstrably preserves the global NAICS hierarchy.
+The verifier reports cophenetic correlation, NDCG\@K, and parent-retrieval accuracy deltas and fails when degradation exceeds the configurable thresholds (`--max-cophenetic-drop`, `--max-ndcg-drop`, `--min-local-improvement`, `--parent-top-k`). Integrate this command into your pipeline to guarantee that Stage 4 only ships when it demonstrably preserves the global NAICS hierarchy.
 
----
+------------------------------------------------------------------------
 
 ## 6. Final Output
 
 Upon completion of all four stages, the system produces:
 
-- High-fidelity hyperbolic embeddings in Lorentz space
-- Representations consistent with both text semantics and hierarchical relationships
-- Embeddings suitable for:
-  - hierarchical search and retrieval
-  - clustering and visualization
-  - downstream machine learning tasks
-  - graph-based analytics
+-   High-fidelity hyperbolic embeddings in Lorentz space
+-   Representations consistent with both text semantics and hierarchical relationships
+-   Embeddings suitable for:
+    -   hierarchical search and retrieval
+    -   clustering and visualization
+    -   downstream machine learning tasks
+    -   graph-based analytics
 
----
+------------------------------------------------------------------------
 
-This README provides a formal overview of the architecture, methodology, and geometric principles
-underlying the NAICS embedding system. Further implementation details are available within the
-project modules.
+## 7. Architecture Diagram
 
----
-
-## 7. Architecture Diagram (Textual)
-
-```text
+``` text
 +-------------------------------+
 |  Multi-Channel Text Encoder   |
 |  (Title / Desc / Examples /   |
@@ -248,125 +216,67 @@ project modules.
 +-------------------------------+
 ```
 
----
+------------------------------------------------------------------------
 
 ## 8. Onboarding Guide
 
 ### 8.0 Initial Setup
 
-1. Clone the repository:
+Clone the repository:
 
-   ```bash
-   git clone https://github.com/lowmason/naics-embedder.git
-   cd naics-embedder
-   ```
+``` bash
+git clone https://github.com/lowmason/naics-embedder.git
+cd naics-embedder
+```
 
-2. Install uv:
+Install uv:
 
-   ```bash
-   pip3 install uv
-   ```
+``` bash
+pip3 install uv
+```
 
-3. Install dependencies:
+Install dependencies:
 
-   ```bash
-   uv synv
-   ```
+``` bash
+uv synv
+```
 
 ### 8.1 Download and preprocess NAICS data
 
-1. Prepare the NAICS dataset with four text channels.
+Prepare the NAICS dataset with four text channels.
 
-   ```bash
-   uv run naics-embedder data preprocess
-   uv run naics-embedder data relations
-   uv run naics-embedder data distances
-   uv run naics-embedder data triplets
-   ```
+``` bash
+uv run naics-embedder data preprocess
+uv run naics-embedder data relations
+uv run naics-embedder data distances
+uv run naics-embedder data triplets
+```
 
-   Or:
+Or:
 
-   ```bash
-   uv run naics-embedder data all
-   ```
+``` bash
+uv run naics-embedder data all
+```
 
 ### 8.2 Training the Contrastive Model
 
-The text encoder now uses the Structure-Aware Dynamic Curriculum (SADC) scheduler by default. It
-progresses through three phases in a single run—structural initialization, geometric refinement,
-and false-negative mitigation—activating the appropriate sampling flags automatically.
+The text encoder uses the Structure-Aware Dynamic Curriculum (SADC) scheduler by default. It progresses through three phases in a single run—structural initialization, geometric refinement, and false-negative mitigation—activating the appropriate sampling flags automatically.
 
-Need a simpler curriculum for ablations? Set `curriculum.phase_mode=two_phase` to merge
-Phase 3 into Phase 2, or enable the new annealing schedule from
-[Issue #44](https://github.com/lowmason/naics-embedder/issues/44) via:
+Run training with the base config:
 
-```yaml
-curriculum:
-  anneal:
-    enabled: true
-    alpha_start: 1.5
-    alpha_end: 0.8
-    epochs: 40
+``` bash
+uv run naics-embedder train --config conf/config.yaml 
 ```
-
-This gradually reduces the tree-distance exponent and increases router-guided mixing, and
-can optionally be triggered by the logged `adaptive_margin_mean` metric.
-
-Run training with your base config and optional overrides:
-
-```bash
-uv run naics-embedder train --config conf/config.yaml \
-  training.learning_rate=1e-4 training.trainer.max_epochs=15
-```
-
-To compare against the static SANS baseline proposed in
-[Issue #43](https://github.com/lowmason/naics-embedder/issues/43), switch the data-layer
-sampler via:
-
-```bash
-uv run naics-embedder train sampling.strategy=sans_static \
-  sampling.sans_static.near_bucket_weight=0.7
-```
-
-This keeps the model-side curriculum intact while replacing Phase 1 tree-distance weighting
-with fixed near/far probabilities.
-
-To experiment with alternative false-negative treatments from
-[Issue #45](https://github.com/lowmason/naics-embedder/issues/45), tweak the new block:
-
-```yaml
-false_negatives:
-  strategy: hybrid
-  attraction_weight: 0.2
-  attraction_metric: l2
-```
-
-`eliminate` (default) masks suspected false negatives, `attract` keeps them but adds an
-auxiliary attraction loss, and `hybrid` does both.
-
-Key flags managed by SADC during training:
-
-- Tree-distance weighting and sibling masking during structural initialization
-- Router-guided and hard-negative mining during geometric refinement
-- Clustering-driven false-negative elimination in the final phase
-
-**Migrating from legacy stage files:** The old multi-file curriculum chains are retired. Use the
-single `train` command with overrides instead of stage-by-stage invocations. The deprecated
-`train-seq --legacy` remains for backward compatibility but is no longer required for SADC.
 
 ### 8.3 Running HGCN Refinement
 
-1. Construct the NAICS parent–child graph.
-2. Load hyperbolic embeddings from 8.1.2.
-3. Train the refinement model:
+Train the refinement model:
 
-   ```bash
-   uv run naics-embedder train-hgcn --config configs/hgcn.yaml
-   ```
+``` bash
+uv run naics-embedder train-hgcn --config configs/hgcn.yaml
+```
 
-4. Save refined embeddings for downstream tasks.
-
----
+------------------------------------------------------------------------
 
 ## 9. Using the Final Embeddings
 
@@ -374,7 +284,7 @@ single `train` command with overrides instead of stage-by-stage invocations. The
 
 Use Lorentzian distance:
 
-```python
+``` python
 dist = lorentz_distance(x, y)
 ```
 
@@ -388,8 +298,8 @@ Project to tangent space or Poincaré ball for plotting.
 
 Final embeddings can be used as features for:
 
-- classification models,
-- clustering algorithms (in hyperbolic or tangent space),
-- retrieval and recommendation systems.
+-   classification models,
+-   clustering algorithms (in hyperbolic or tangent space),
+-   retrieval and recommendation systems.
 
----
+------------------------------------------------------------------------
