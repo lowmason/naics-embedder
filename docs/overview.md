@@ -188,6 +188,41 @@ x_rest = (sinh(||v|| / √c) · v) / ||v||
 
 The fused Euclidean embedding is projected onto the hyperboloid via a linear projection followed by the exponential map at the origin. The projection adds the time coordinate dimension (embedding_dim → embedding_dim + 1) and ensures points satisfy the Lorentz constraint through numerically stable clamping.
 
+### Hyperbolic Utilities (utils/hyperbolic.py)
+
+The system provides high-level abstractions for hyperbolic geometry through the `utils/hyperbolic` module:
+
+**LorentzManifold:** Extended Lorentz operations with validation and projection.
+
+- `minkowski_dot`: Minkowski inner product ⟨x, y⟩_L
+- `lorentz_norm_squared`: Squared Lorentz norm ⟨x, x⟩_L
+- `project_to_hyperboloid`: Ensures constraint ⟨x, x⟩_L = -1/c
+- `check_on_manifold`: Validates points lie on hyperboloid
+- `exp_map_zero` / `log_map_zero`: Maps between tangent space and manifold
+- `distance`: Geodesic distance computation
+- `parallel_transport`: Transport tangent vectors between points
+
+**CurvatureManager:** Phase-aware curvature management.
+
+| Phase | Curvature | Behavior |
+|-------|-----------|----------|
+| Phase 1 | Fixed high (2.0) | Anchoring structure |
+| Phases 2-4 | Learnable | Adapts to data |
+
+**ManifoldAdapter:** Wrapper for consistent hyperbolic operations with automatic projection and validation.
+
+```python
+from naics_embedder.utils.hyperbolic import ManifoldAdapter, CurvatureConfig
+
+adapter = ManifoldAdapter(
+    curvature_config=CurvatureConfig(phase1_curvature=2.0),
+    validate_manifold=True,
+    auto_project=True,
+)
+adapter.set_phase(2)  # Enable learnable curvature
+x_hyp = adapter.to_hyperboloid(tangent_vectors)
+```
+
 ---
 
 ## 6. Contrastive Learning Framework
@@ -482,17 +517,68 @@ The system monitors and logs VRAM usage for distributed operations:
 
 | Module | Location | Purpose |
 |--------|----------|---------|
-| `NAICSContrastiveModel` | `text_model/naics_model.py` | Main Lightning module |
+| `NAICSContrastiveModel` | `text_model/naics_model.py` | Main Lightning module (mixin-based) |
 | `MultiChannelEncoder` | `text_model/encoder.py` | 4-channel text encoding |
 | `MixtureOfExperts` | `text_model/moe.py` | MoE fusion layer |
 | `HyperbolicProjection` | `text_model/hyperbolic.py` | Lorentz projection |
 | `LorentzDistance` | `text_model/hyperbolic.py` | Geodesic distance |
+| `LorentzOps` | `text_model/hyperbolic.py` | Static utility class for Lorentz operations |
 | `HyperbolicInfoNCELoss` | `text_model/loss.py` | DCL implementation |
 | `HierarchyPreservationLoss` | `text_model/loss.py` | Tree alignment loss |
 | `LambdaRankLoss` | `text_model/loss.py` | Ranking loss |
 | `CurriculumScheduler` | `text_model/curriculum.py` | SADC phase management |
 | `HyperbolicKMeans` | `text_model/hyperbolic_clustering.py` | Lorentz clustering |
 | `LorentzianHardNegativeMiner` | `text_model/hard_negative_mining.py` | HNM in hyperbolic space |
+| `RouterGuidedNegativeMiner` | `text_model/hard_negative_mining.py` | Router-confusion mining |
+| `NormAdaptiveMargin` | `text_model/hard_negative_mining.py` | Sech-based adaptive margins |
+
+### Model Mixins
+
+The `NAICSContrastiveModel` is decomposed into functional mixins for maintainability:
+
+| Mixin | Location | Purpose |
+|-------|----------|---------|
+| `DistributedMixin` | `text_model/mixins/distributed.py` | Global batch sampling for multi-GPU |
+| `LossMixin` | `text_model/mixins/loss.py` | Loss computation (hierarchy, LambdaRank, radius) |
+| `CurriculumMixin` | `text_model/mixins/curriculum.py` | Hard negative mining, router-guided sampling |
+| `LoggingMixin` | `text_model/mixins/logging.py` | Training and validation metric logging |
+| `ValidationMixin` | `text_model/mixins/validation.py` | Validation step and evaluation logic |
+| `OptimizerMixin` | `text_model/mixins/optimizer.py` | Optimizer and scheduler configuration |
+
+### torch.compile Support
+
+Core hyperbolic operations are optimized using PyTorch 2.0+ `torch.compile` for improved throughput via kernel fusion:
+
+| Module | Location | Purpose |
+|--------|----------|---------|
+| `CompileConfig` | `utils/compile.py` | Compile mode and backend configuration |
+| `CompiledLorentzOps` | `utils/compile.py` | Drop-in compiled replacement for LorentzOps |
+| `maybe_compile` | `utils/compile.py` | Conditional compilation decorator |
+
+**Compiled operations:**
+
+- `compiled_exp_map_zero`: Exponential map from tangent space to hyperboloid
+- `compiled_log_map_zero`: Logarithmic map from hyperboloid to tangent space
+- `compiled_lorentz_distance`: Geodesic distance computation
+- `compiled_minkowski_dot`: Minkowski inner product
+- `compiled_project_to_hyperboloid`: Projection onto Lorentz manifold
+
+**Configuration:**
+
+```python
+from naics_embedder.utils.compile import CompileConfig, set_compile_config
+
+# Configure compile behavior
+config = CompileConfig(
+    enabled=True,               # Enable torch.compile (requires PyTorch 2.0+)
+    mode='reduce-overhead',     # Best for small tensors and repeated calls
+    backend='inductor',         # Default, best performance
+    dynamic=True,               # Support varying batch sizes
+)
+set_compile_config(config)
+```
+
+Compilation can be disabled via environment variable: `NAICS_DISABLE_COMPILE=1`
 
 ### Default Hyperparameters
 

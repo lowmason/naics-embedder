@@ -116,11 +116,24 @@ This page clarifies the split between the streaming data pipeline and the model 
 
 ### Model Layer (NAICSContrastiveModel)
 
+The model is decomposed into functional **mixins** for maintainability:
+
+| Mixin | Responsibility |
+|-------|----------------|
+| `DistributedMixin` | Global batch sampling utilities for multi-GPU training |
+| `LossMixin` | Hierarchy loss, LambdaRank loss, radius regularization |
+| `CurriculumMixin` | Hard negative mining, router-guided sampling logic |
+| `LoggingMixin` | Training and validation metric logging |
+| `ValidationMixin` | Validation step and evaluation metrics |
+| `OptimizerMixin` | Optimizer and scheduler configuration |
+
+**Curriculum-driven behavior:**
+
 - Reads curriculum flags from `CurriculumScheduler`.
 - Phase 2+ sampling:
   - Embedding-based hard negative mining (Lorentzian distance).
   - Router-guided negative mining (gate confusion).
-  - Norm-adaptive margins.
+  - Norm-adaptive margins via `NormAdaptiveMargin` (sech-based decay).
 - Phase 3 sampling:
   - False-negative masking via clustering/pseudo-labels.
 - False-negative strategy (`false_negatives.strategy`):
@@ -154,9 +167,51 @@ static curriculum files.
 
 ---
 
+## Performance Optimization
+
+### torch.compile Support
+
+Core Lorentz operations are optimized using PyTorch 2.0+ `torch.compile` for improved throughput:
+
+- **Exponential/Logarithmic maps** — Fused element-wise operations
+- **Distance computations** — Compiled Lorentzian distance
+- **MoE gating** — Compiled softmax operations
+- **Hard negative mining** — Compiled norm and margin computations
+
+Compilation is **enabled by default** when PyTorch 2.0+ is available. Configure via:
+
+```python
+from naics_embedder.utils.compile import CompileConfig, set_compile_config
+
+set_compile_config(CompileConfig(
+    enabled=True,
+    mode='reduce-overhead',  # Best for small tensors / repeated calls
+    dynamic=True,            # Support varying batch sizes
+))
+```
+
+**Disable compilation** via environment variable:
+
+```bash
+NAICS_DISABLE_COMPILE=1 uv run naics-embedder train
+```
+
+**Benchmark compiled vs eager operations:**
+
+```python
+from naics_embedder.utils.compile import benchmark_compile_speedup
+
+results = benchmark_compile_speedup(batch_size=256, embedding_dim=768)
+print(f"exp_map speedup: {results['exp_map']['speedup']:.2f}x")
+print(f"distance speedup: {results['lorentz_distance']['speedup']:.2f}x")
+```
+
+---
+
 ## Troubleshooting
 
 - **Dataset checks** — Use `uv run naics-embedder tools config` to confirm paths before training.
 - **Flag visibility** — Curriculum phase transitions and flag values are emitted in training logs.
 - **Memory pressure** — Lower `data_loader.batch_size` or increase `accumulate_grad_batches` via
   overrides.
+- **Compile issues** — If torch.compile causes problems, disable with `NAICS_DISABLE_COMPILE=1`.

@@ -1,5 +1,6 @@
 # -------------------------------------------------------------------------------------------------
 # Imports and settings
+# With torch.compile support for fused gating operations
 # -------------------------------------------------------------------------------------------------
 
 import logging
@@ -10,6 +11,36 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
+
+# Import compile utilities
+try:
+    from naics_embedder.utils.compile import maybe_compile
+
+    _COMPILE_AVAILABLE = True
+except ImportError:
+    _COMPILE_AVAILABLE = False
+
+    def maybe_compile(*args, **kwargs):  # type: ignore[misc]
+        '''Fallback decorator when compile module not available.'''
+
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+# -------------------------------------------------------------------------------------------------
+# Compiled core operations for MoE
+# -------------------------------------------------------------------------------------------------
+
+@maybe_compile(mode='reduce-overhead')
+def _moe_gate_softmax(gate_logits: torch.Tensor) -> torch.Tensor:
+    '''Compiled gating softmax computation.'''
+    return F.softmax(gate_logits, dim=1)
+
+@maybe_compile(mode='reduce-overhead')
+def _moe_topk_gates(top_k_logits: torch.Tensor) -> torch.Tensor:
+    '''Compiled top-k softmax computation.'''
+    return F.softmax(top_k_logits, dim=1)
 
 # -------------------------------------------------------------------------------------------------
 # Mixture of Experts (MoE) Layer
@@ -71,6 +102,8 @@ class MixtureOfExperts(nn.Module):
         '''
         Forward pass through MoE layer.
 
+        Uses compiled operations for gating when torch.compile is enabled.
+
         Args:
             x: Input tensor of shape (batch_size, input_dim)
 
@@ -81,15 +114,15 @@ class MixtureOfExperts(nn.Module):
                 - Top-k indices of shape (batch_size, top_k)
         '''
 
-        # Compute gating scores for all experts
+        # Compute gating scores for all experts (compiled softmax)
         gate_logits = self.gate(x)  # (batch_size, num_experts)
-        gate_probs = F.softmax(gate_logits, dim=1)  # (batch_size, num_experts)
+        gate_probs = _moe_gate_softmax(gate_logits)  # (batch_size, num_experts)
 
         # Select top-k experts
         top_k_logits, top_k_indices = torch.topk(gate_logits, self.top_k, dim=1)
 
-        # Compute gating weights with softmax over top-k
-        top_k_gates = F.softmax(top_k_logits, dim=1)  # (batch_size, top_k)
+        # Compute gating weights with softmax over top-k (compiled)
+        top_k_gates = _moe_topk_gates(top_k_logits)  # (batch_size, top_k)
 
         # ----- The local loss calculation is REMOVED -----
 

@@ -66,12 +66,19 @@ naics-embedder/
 │   │   └── create_triplets.py     # Create contrastive training triplets
 │   ├── text_model/           # Stage 1-3: Text encoding and contrastive learning
 │   │   ├── encoder.py        # Multi-channel LoRA encoder
-│   │   ├── moe.py            # Mixture-of-Experts implementation
-│   │   ├── hyperbolic.py     # Lorentz ops, exponential/log maps
-│   │   ├── naics_model.py    # PyTorch Lightning module (2,030 lines) ⭐
+│   │   ├── moe.py            # Mixture-of-Experts (with torch.compile)
+│   │   ├── hyperbolic.py     # Lorentz ops (with torch.compile)
+│   │   ├── naics_model.py    # PyTorch Lightning module (mixin-based) ⭐
+│   │   ├── mixins/           # ⭐ Functional mixins for NAICSContrastiveModel
+│   │   │   ├── distributed.py   # Global batch sampling for multi-GPU
+│   │   │   ├── loss.py          # Hierarchy, LambdaRank, radius losses
+│   │   │   ├── curriculum.py    # Hard negative mining, router sampling
+│   │   │   ├── logging.py       # Training/validation metric logging
+│   │   │   ├── validation.py    # Validation step and evaluation
+│   │   │   └── optimizer.py     # Optimizer and scheduler config
 │   │   ├── loss.py           # DCL loss, hierarchy loss, rank-order loss
 │   │   ├── curriculum.py     # Structure-Aware Dynamic Curriculum
-│   │   ├── hard_negative_mining.py    # Hard negative mining strategies
+│   │   ├── hard_negative_mining.py    # Hard negative mining (with torch.compile)
 │   │   ├── hyperbolic_clustering.py   # False negative clustering
 │   │   ├── false_negative_strategies.py  # FN strategy configuration
 │   │   ├── evaluation.py     # Embedding evaluation metrics
@@ -99,9 +106,10 @@ naics-embedder/
 │   │   └── _investigate_hierarchy.py  # Hierarchy investigation
 │   └── utils/                # Backend utilities, config, console
 │       ├── backend.py        # Device selection, GPU memory detection
+│       ├── compile.py        # ⭐ torch.compile config and CompiledLorentzOps
 │       ├── config.py         # Pydantic config models (1,042 lines) ⭐
 │       ├── console.py        # Rich console logging, table formatting
-│       ├── hyperbolic.py     # LorentzManifold, CurvatureManager
+│       ├── hyperbolic.py     # LorentzManifold, CurvatureManager, ManifoldAdapter
 │       ├── training.py       # Hardware detection, checkpoint resolution
 │       ├── validation.py     # Data & config validation system
 │       ├── warnings.py       # Centralized warning management
@@ -193,10 +201,17 @@ The system implements **two levels** of hyperbolic geometry support:
 
 **Manifold Abstraction (`utils/hyperbolic.py`):**
 
-- `LorentzManifold` class - High-level manifold interface
-- `CurvatureManager` - Learnable or fixed curvature management
-- `ManifoldAdapter` - Compatibility layer for different hyperbolic implementations
+- `LorentzManifold` class - High-level manifold interface with parallel transport
+- `CurvatureManager` - Phase-aware learnable or fixed curvature management
+- `ManifoldAdapter` - Wrapper with auto-projection and validation
 - `validate_hyperbolic_embeddings` - Numerical validation utilities
+
+**torch.compile Support (`utils/compile.py`):**
+
+- `CompiledLorentzOps` - Drop-in replacement with fused operations
+- `maybe_compile` decorator - Conditional compilation based on config
+- `CompileConfig` - Mode, backend, and dynamic shape settings
+- Compiled ops: exp/log maps, distance, Minkowski dot, projection
 
 ### 2. Multi-Channel Architecture
 
@@ -214,8 +229,28 @@ channel-specific semantics.
 
 - **Top-k Gating:** Routes each input to the top-k most relevant experts (k=2)
 - **Load Balancing:** Auxiliary loss ensures even expert utilization
-- **Implementation:** `text_model/moe.py`
+- **Implementation:** `text_model/moe.py` (with torch.compile for gating ops)
 - **Purpose:** Learns adaptive fusion of the 4 channel embeddings
+
+### 3.5. Model Mixin Architecture
+
+The `NAICSContrastiveModel` is decomposed into **functional mixins** for maintainability:
+
+| Mixin | Location | Responsibility |
+|-------|----------|----------------|
+| `DistributedMixin` | `mixins/distributed.py` | Global batch sampling, `all_gather` utilities |
+| `LossMixin` | `mixins/loss.py` | Hierarchy loss, LambdaRank, radius regularization |
+| `CurriculumMixin` | `mixins/curriculum.py` | Hard negative mining, router-guided sampling |
+| `LoggingMixin` | `mixins/logging.py` | Training/validation metric logging |
+| `ValidationMixin` | `mixins/validation.py` | Validation step, embedding evaluation |
+| `OptimizerMixin` | `mixins/optimizer.py` | Optimizer and LR scheduler configuration |
+
+**Benefits:**
+
+- Separation of concerns for easier testing and debugging
+- Each mixin can be modified independently
+- Clear ownership of functionality
+- Reduced file size for the main model class
 
 ### 4. Dynamic Structure-Aware Curriculum Learning (SADC)
 
@@ -708,6 +743,49 @@ training:
 
 **Benefits:** ~2x speedup and ~50% memory reduction on modern GPUs.
 
+### 3.5. torch.compile Optimization
+
+Core Lorentz operations use **PyTorch 2.0+ torch.compile** for kernel fusion:
+
+```python
+from naics_embedder.utils.compile import (
+    CompileConfig,
+    set_compile_config,
+    CompiledLorentzOps,
+    benchmark_compile_speedup,
+)
+
+# Configure compile behavior
+set_compile_config(CompileConfig(
+    enabled=True,               # Default: True if PyTorch 2.0+
+    mode='reduce-overhead',     # Best for repeated small ops
+    backend='inductor',         # Default, best performance
+    dynamic=True,               # Support varying batch sizes
+))
+
+# Use compiled operations
+ops = CompiledLorentzOps.get_instance()
+x_hyp = ops.exp_map_zero(tangent_vectors, c=1.0)
+
+# Benchmark speedup
+results = benchmark_compile_speedup(batch_size=256)
+print(f"Speedup: {results['exp_map']['speedup']:.2f}x")
+```
+
+**Disable via environment variable:**
+
+```bash
+NAICS_DISABLE_COMPILE=1 uv run naics-embedder train
+```
+
+**Compiled operations:**
+
+- `compiled_exp_map_zero`, `compiled_log_map_zero`
+- `compiled_lorentz_distance`, `compiled_minkowski_dot`
+- `compiled_project_to_hyperboloid`
+- MoE gating softmax operations
+- Hard negative mining margin computations
+
 ### 4. Streaming Datasets
 
 Data is loaded via **streaming Polars datasets** to handle large-scale data efficiently:
@@ -1125,6 +1203,15 @@ When working on this codebase:
 
 ## Architecture Decision Records
 
+### Why Mixin-Based Model Architecture?
+
+The `NAICSContrastiveModel` uses **functional mixins** rather than a monolithic class:
+
+- **Separation of concerns** - Each mixin handles one aspect (loss, logging, validation, etc.)
+- **Testability** - Individual mixins can be unit tested in isolation
+- **Maintainability** - Changes to logging don't risk breaking loss computation
+- **Readability** - Smaller, focused files instead of one 2000+ line file
+
 ### Why Two Hyperbolic Implementations?
 
 - **`text_model/hyperbolic.py`** - Low-level operations used during text model training
@@ -1133,6 +1220,13 @@ When working on this codebase:
 
 This separation allows the text model to use optimized operations while providing a clean
 interface for other components.
+
+### Why torch.compile?
+
+- **Kernel fusion** - Multiple element-wise ops fused into single GPU kernel
+- **Reduced memory bandwidth** - Fewer intermediate tensors
+- **Automatic optimization** - PyTorch's inductor backend handles low-level tuning
+- **Conditional** - Falls back gracefully on PyTorch <2.0 or when disabled
 
 ### Why Pydantic + YAML (not pure Hydra)?
 

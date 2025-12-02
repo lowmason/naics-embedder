@@ -1,6 +1,7 @@
 # -------------------------------------------------------------------------------------------------
 # Hyperbolic Geometry Utilities
 # Shared module for hyperbolic embeddings, distances, and manifold operations
+# With optional torch.compile support for fused operations
 # -------------------------------------------------------------------------------------------------
 
 import logging
@@ -10,6 +11,53 @@ import torch
 import torch.nn as nn
 
 logger = logging.getLogger(__name__)
+
+# Import compile utilities
+try:
+    from naics_embedder.utils.compile import maybe_compile
+
+    _COMPILE_AVAILABLE = True
+except ImportError:
+    _COMPILE_AVAILABLE = False
+
+    def maybe_compile(*args, **kwargs):  # type: ignore[misc]
+        '''Fallback decorator when compile module not available.'''
+
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+# -------------------------------------------------------------------------------------------------
+# Compiled core operations for hyperbolic geometry
+# -------------------------------------------------------------------------------------------------
+
+@maybe_compile(mode='reduce-overhead')
+def _exp_map_zero_compiled(v_spatial: torch.Tensor, sqrt_c: torch.Tensor) -> torch.Tensor:
+    '''Core exponential map computation - highly fusible element-wise ops.'''
+    norm_v = torch.norm(v_spatial, p=2, dim=1, keepdim=True)
+    norm_v = torch.clamp(norm_v, min=1e-8)
+    theta = torch.clamp(sqrt_c * norm_v, max=40.0)
+    x0 = torch.cosh(theta) / sqrt_c
+    sinh_term = torch.sinh(theta) / sqrt_c
+    x_spatial = (sinh_term / norm_v) * v_spatial
+    return torch.cat([x0, x_spatial], dim=1)
+
+@maybe_compile(mode='reduce-overhead')
+def _lorentz_dot_compiled(uv: torch.Tensor) -> torch.Tensor:
+    '''Core Lorentz inner product - element-wise ops.'''
+    return torch.sum(uv[:, 1:], dim=1) - uv[:, 0]
+
+@maybe_compile(mode='reduce-overhead')
+def _lorentz_distance_compiled(dot_product: torch.Tensor, sqrt_c: torch.Tensor) -> torch.Tensor:
+    '''Core Lorentz distance computation.'''
+    arccosh_arg = torch.clamp(-dot_product, min=1.0)
+    return sqrt_c * torch.acosh(arccosh_arg)
+
+@maybe_compile(mode='reduce-overhead')
+def _batched_lorentz_dot_compiled(uv: torch.Tensor) -> torch.Tensor:
+    '''Core batched Lorentz inner product.'''
+    return torch.sum(uv[:, :, 1:], dim=2) - uv[:, :, 0]
 
 # -------------------------------------------------------------------------------------------------
 # Hyperbolic Projection to Lorentz Model
@@ -41,6 +89,8 @@ class HyperbolicProjection(nn.Module):
 
         The output satisfies the Lorentz constraint: ||x_spatial||^2 - x0^2 = -1/c
 
+        Uses compiled operations when torch.compile is enabled.
+
         Args:
             v: Tangent vector of shape (batch_size, input_dim + 1)
 
@@ -48,28 +98,8 @@ class HyperbolicProjection(nn.Module):
             Point on Lorentz hyperboloid of shape (batch_size, input_dim + 1)
         '''
         sqrt_c = torch.sqrt(torch.tensor(self.c, device=v.device, dtype=v.dtype))
-
-        # Separate time and spatial components of the tangent vector
-        # Time component should be 0 for tangent at origin, but we ignore it
         v_spatial = v[:, 1:]  # (batch_size, input_dim)
-
-        # Compute norm of spatial part only
-        norm_v = torch.norm(v_spatial, p=2, dim=1, keepdim=True)
-        norm_v = torch.clamp(norm_v, min=1e-8)
-
-        # Clamp the argument to sinh/cosh to avoid overflow (exp(88) is max for float32)
-        # Using max of 40 gives cosh(40) ~ 2.4e17 which is safe
-        theta = torch.clamp(sqrt_c * norm_v, max=40.0)
-
-        # Exponential map formula for Lorentz model with curvature c:
-        # x0 = (1/sqrt(c)) * cosh(sqrt(c) * ||v||)
-        # x_spatial = (1/sqrt(c)) * sinh(sqrt(c) * ||v||) / ||v|| * v
-        # This ensures: ||x_spatial||^2 - x0^2 = -1/c
-        x0 = torch.cosh(theta) / sqrt_c
-        sinh_term = torch.sinh(theta) / sqrt_c
-        x_spatial = (sinh_term / norm_v) * v_spatial
-
-        return torch.cat([x0, x_spatial], dim=1)
+        return _exp_map_zero_compiled(v_spatial, sqrt_c)
 
     def forward(self, euclidean_embedding: torch.Tensor) -> torch.Tensor:
         '''
@@ -117,6 +147,8 @@ class LorentzDistance(nn.Module):
         '''
         Compute Lorentz inner product: ⟨u, v⟩_L = Σᵢ uᵢvᵢ - u₀v₀
 
+        Uses compiled operations when torch.compile is enabled.
+
         Args:
             u: First point on hyperboloid, shape (batch_size, embedding_dim+1)
             v: Second point on hyperboloid, shape (batch_size, embedding_dim+1)
@@ -125,11 +157,13 @@ class LorentzDistance(nn.Module):
             Lorentz inner products, shape (batch_size,)
         '''
         uv = u * v
-        return torch.sum(uv[:, 1:], dim=1) - uv[:, 0]
+        return _lorentz_dot_compiled(uv)
 
     def forward(self, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         '''
         Compute Lorentzian distance between two points.
+
+        Uses compiled operations when torch.compile is enabled.
 
         Args:
             u: First point on hyperboloid, shape (batch_size, embedding_dim+1)
@@ -138,20 +172,16 @@ class LorentzDistance(nn.Module):
         Returns:
             Distances, shape (batch_size,)
         '''
-        dot_product = self.lorentz_dot(u, v)
-
-        # Clamp to ensure valid arccosh argument (arccosh requires arg >= 1)
-        # For self-distance, dot_product = -1, so -dot_product = 1, giving arccosh(1) = 0
-        arccosh_arg = torch.clamp(-dot_product, min=1.0)
-
+        uv = u * v
+        dot_product = _lorentz_dot_compiled(uv)
         sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device, dtype=u.dtype))
-        dist = sqrt_c * torch.acosh(arccosh_arg)
-
-        return dist
+        return _lorentz_distance_compiled(dot_product, sqrt_c)
 
     def batched_forward(self, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         '''
         Batched Lorentz distance computation with broadcasting support.
+
+        Uses compiled operations when torch.compile is enabled.
 
         Args:
             u: Tensor of shape (batch_size, 1, embedding_dim+1) or (batch_size, embedding_dim+1)
@@ -164,11 +194,9 @@ class LorentzDistance(nn.Module):
         if u.dim() == 2:
             u = u.unsqueeze(1)  # (batch_size, 1, embedding_dim+1)
 
-        # Compute batched Lorentz dot product
+        # Compute batched Lorentz dot product (compiled)
         uv = u * v  # (batch_size, k, embedding_dim+1)
-
-        # Lorentz dot: sum of spatial components - time component
-        dot_product = torch.sum(uv[:, :, 1:], dim=2) - uv[:, :, 0]  # (batch_size, k)
+        dot_product = _batched_lorentz_dot_compiled(uv)  # (batch_size, k)
 
         # Clamp to ensure valid arccosh argument (arccosh requires arg >= 1)
         arccosh_arg = torch.clamp(-dot_product, min=1.0)
@@ -305,6 +333,44 @@ def log_hyperbolic_diagnostics(
     return diagnostics
 
 # -------------------------------------------------------------------------------------------------
+# Compiled Lorentz Operations Core Functions
+# -------------------------------------------------------------------------------------------------
+
+@maybe_compile(mode='reduce-overhead')
+def _log_map_zero_ops_compiled(
+    x0: torch.Tensor, x_spatial: torch.Tensor, sqrt_c: torch.Tensor
+) -> torch.Tensor:
+    '''Core logarithmic map computation for LorentzOps - highly fusible.'''
+    theta = torch.acosh(torch.clamp(sqrt_c * x0, min=1.0 + 1e-5))
+    sinh_theta = torch.sinh(theta)
+    sinh_theta = torch.clamp(sinh_theta, min=1e-8)
+    scale = theta / sinh_theta
+    scale = torch.where(theta > 1e-8, scale, torch.ones_like(scale))
+    v_spatial = scale * x_spatial
+    v_time = torch.zeros_like(x0)
+    return torch.cat([v_time, v_spatial], dim=1)
+
+@maybe_compile(mode='reduce-overhead')
+def _exp_map_zero_ops_compiled(v_spatial: torch.Tensor, sqrt_c: torch.Tensor) -> torch.Tensor:
+    '''Core exponential map computation for LorentzOps - highly fusible.'''
+    norm_v = torch.norm(v_spatial, p=2, dim=1, keepdim=True)
+    norm_v = torch.clamp(norm_v, min=1e-8)
+    theta = torch.clamp(sqrt_c * norm_v, max=40.0)
+    x0 = torch.cosh(theta) / sqrt_c
+    sinh_term = torch.sinh(theta) / sqrt_c
+    x_spatial = (sinh_term / norm_v) * v_spatial
+    return torch.cat([x0, x_spatial], dim=1)
+
+@maybe_compile(mode='reduce-overhead')
+def _lorentz_distance_ops_compiled(
+    uv_time: torch.Tensor, uv_spatial_sum: torch.Tensor, sqrt_c: torch.Tensor
+) -> torch.Tensor:
+    '''Core Lorentz distance computation for LorentzOps - highly fusible.'''
+    dot_product = uv_spatial_sum - uv_time
+    arccosh_arg = torch.clamp(-dot_product, min=1.0)
+    return sqrt_c * torch.acosh(arccosh_arg)
+
+# -------------------------------------------------------------------------------------------------
 # Lorentz Operations Utility Class
 # -------------------------------------------------------------------------------------------------
 
@@ -312,6 +378,9 @@ class LorentzOps:
     '''
     Static utility class for Lorentz model operations.
     Provides functions for mapping between hyperboloid and tangent space, and computing distances.
+
+    When torch.compile is enabled (PyTorch 2.0+), core operations are compiled
+    for better throughput through kernel fusion.
     '''
 
     @staticmethod
@@ -322,6 +391,8 @@ class LorentzOps:
         Maps a point on the Lorentz hyperboloid to the tangent space at the origin.
         Inverse of exp_map_zero.
 
+        Uses compiled operations when torch.compile is enabled.
+
         Args:
             x_hyp: Point on hyperboloid, shape (batch_size, embedding_dim+1)
                    Must satisfy ||x_spatial||^2 - x0^2 = -1/c
@@ -331,35 +402,9 @@ class LorentzOps:
             Tangent vector, shape (batch_size, embedding_dim+1)
         '''
         sqrt_c = torch.sqrt(torch.tensor(c, device=x_hyp.device, dtype=x_hyp.dtype))
-
-        # Time coordinate (x0) and spatial coordinates (x1...xn)
         x0 = x_hyp[:, 0:1]  # (batch_size, 1)
         x_spatial = x_hyp[:, 1:]  # (batch_size, embedding_dim)
-
-        # Compute norm of spatial part
-        norm_spatial = torch.norm(x_spatial, p=2, dim=1, keepdim=True)  # (batch_size, 1)
-        norm_spatial = torch.clamp(norm_spatial, min=1e-8)
-
-        # For the scaled hyperboloid, the origin is at (1/sqrt(c), 0, ..., 0)
-        # Distance from origin: d = (1/sqrt(c)) * arccosh(c * x0)
-        # where theta = sqrt(c) * ||v|| was used in exp_map
-        # So: theta = arccosh(sqrt(c) * x0)
-        theta = torch.acosh(torch.clamp(sqrt_c * x0, min=1.0 + 1e-5))
-
-        # Scale factor to recover tangent vector
-        # v_spatial = theta / (sqrt(c) * ||x_spatial||) * x_spatial
-        # But ||x_spatial|| = sinh(theta) / sqrt(c), so:
-        # scale = theta / sinh(theta) when theta > 0
-        sinh_theta = torch.sinh(theta)
-        sinh_theta = torch.clamp(sinh_theta, min=1e-8)
-        scale = theta / sinh_theta
-        scale = torch.where(theta > 1e-8, scale, torch.ones_like(scale))
-
-        # Tangent vector: time component is 0, spatial components are scaled
-        v_spatial = scale * x_spatial * sqrt_c
-        v_time = torch.zeros_like(x0)
-
-        return torch.cat([v_time, v_spatial], dim=1)
+        return _log_map_zero_ops_compiled(x0, x_spatial, sqrt_c)
 
     @staticmethod
     def exp_map_zero(x_tan: torch.Tensor, c: float = 1.0) -> torch.Tensor:
@@ -369,6 +414,8 @@ class LorentzOps:
         Maps a tangent vector at the origin to a point on the Lorentz hyperboloid.
         The output satisfies the Lorentz constraint: ||x_spatial||^2 - x0^2 = -1/c
 
+        Uses compiled operations when torch.compile is enabled.
+
         Args:
             x_tan: Tangent vector, shape (batch_size, embedding_dim+1)
             c: Curvature parameter (default: 1.0)
@@ -377,32 +424,15 @@ class LorentzOps:
             Point on hyperboloid, shape (batch_size, embedding_dim+1)
         '''
         sqrt_c = torch.sqrt(torch.tensor(c, device=x_tan.device, dtype=x_tan.dtype))
-
-        # Time component should be 0 for tangent at origin, but handle general case
         v_spatial = x_tan[:, 1:]  # (batch_size, embedding_dim)
-
-        # Compute norm of tangent vector (spatial part)
-        norm_v = torch.norm(v_spatial, p=2, dim=1, keepdim=True)  # (batch_size, 1)
-        norm_v = torch.clamp(norm_v, min=1e-8)
-
-        # Clamp the argument to sinh/cosh to avoid overflow (exp(88) is max for float32)
-        # Using max of 40 gives cosh(40) ~ 2.4e17 which is safe
-        theta = torch.clamp(sqrt_c * norm_v, max=40.0)
-
-        # Exponential map formula for Lorentz model with curvature c:
-        # x0 = (1/sqrt(c)) * cosh(sqrt(c) * ||v||)
-        # x_spatial = (1/sqrt(c)) * sinh(sqrt(c) * ||v||) / ||v|| * v
-        # This ensures: ||x_spatial||^2 - x0^2 = -1/c
-        x0 = torch.cosh(theta) / sqrt_c
-        sinh_term = torch.sinh(theta) / sqrt_c
-        x_spatial = (sinh_term / norm_v) * v_spatial
-
-        return torch.cat([x0, x_spatial], dim=1)
+        return _exp_map_zero_ops_compiled(v_spatial, sqrt_c)
 
     @staticmethod
     def lorentz_distance(u: torch.Tensor, v: torch.Tensor, c: float = 1.0) -> torch.Tensor:
         '''
         Compute Lorentzian distance between two points on the hyperboloid.
+
+        Uses compiled operations when torch.compile is enabled.
 
         Args:
             u: First point on hyperboloid, shape (batch_size, embedding_dim+1)
@@ -412,15 +442,8 @@ class LorentzOps:
         Returns:
             Distances, shape (batch_size,)
         '''
-        # Compute Lorentz inner product: ⟨u, v⟩_L = Σᵢ uᵢvᵢ - u₀v₀
-        uv = u * v
-        dot_product = torch.sum(uv[:, 1:], dim=1) - uv[:, 0]
-
-        # Clamp to ensure valid arccosh argument (arccosh requires arg >= 1)
-        # For self-distance, dot_product = -1, so -dot_product = 1, giving arccosh(1) = 0
-        arccosh_arg = torch.clamp(-dot_product, min=1.0)
-
         sqrt_c = torch.sqrt(torch.tensor(c, device=u.device, dtype=u.dtype))
-        dist = sqrt_c * torch.acosh(arccosh_arg)
-
-        return dist
+        uv = u * v
+        uv_time = uv[:, 0]
+        uv_spatial_sum = torch.sum(uv[:, 1:], dim=1)
+        return _lorentz_distance_ops_compiled(uv_time, uv_spatial_sum, sqrt_c)

@@ -9,6 +9,7 @@ This module provides:
   - Curvature management with phase-aware clamping
   - Manifold validation checks
   - Projection utilities for ensuring embeddings stay on hyperboloid
+  - Optional torch.compile support for fused operations
 
 The Lorentz model represents hyperbolic space on a hyperboloid:
   L^n_c = {x ∈ R^{n+1} : ⟨x, x⟩_L = -1/c, x_0 > 0}
@@ -25,6 +26,22 @@ import torch.nn as nn
 from torch import Tensor
 
 logger = logging.getLogger(__name__)
+
+# Import compiled operations (available when torch.compile is enabled)
+try:
+    from naics_embedder.utils.compile import maybe_compile
+
+    _COMPILE_AVAILABLE = True
+except ImportError:
+    _COMPILE_AVAILABLE = False
+
+    def maybe_compile(*args, **kwargs):  # type: ignore[misc]
+        '''Fallback decorator when compile module not available.'''
+
+        def decorator(fn):
+            return fn
+
+        return decorator
 
 # -------------------------------------------------------------------------------------------------
 # Curvature Management
@@ -123,14 +140,60 @@ class CurvatureManager(nn.Module):
         self._is_learnable = state['is_learnable']
 
 # -------------------------------------------------------------------------------------------------
-# Lorentz Operations (Extended)
+# Lorentz Operations (Extended) - with optional torch.compile support
 # -------------------------------------------------------------------------------------------------
+
+# Core operations as standalone functions for compilation
+@maybe_compile(mode='reduce-overhead')
+def _minkowski_dot_core(x: Tensor, y: Tensor) -> Tensor:
+    '''Minkowski inner product core computation.'''
+    xy = x * y
+    return torch.sum(xy[..., 1:], dim=-1) - xy[..., 0]
+
+@maybe_compile(mode='reduce-overhead')
+def _exp_map_zero_core(v_spatial: Tensor, sqrt_c: Tensor) -> Tensor:
+    '''Exponential map core computation - highly fusible.'''
+    norm_v = torch.norm(v_spatial, p=2, dim=-1, keepdim=True)
+    norm_v = torch.clamp(norm_v, min=1e-8)
+    theta = torch.clamp(sqrt_c * norm_v, max=40.0)
+    x0 = torch.cosh(theta) / sqrt_c
+    sinh_term = torch.sinh(theta) / sqrt_c
+    x_spatial = (sinh_term / norm_v) * v_spatial
+    return torch.cat([x0, x_spatial], dim=-1)
+
+@maybe_compile(mode='reduce-overhead')
+def _log_map_zero_core(x0: Tensor, x_spatial: Tensor, sqrt_c: Tensor) -> Tensor:
+    '''Logarithmic map core computation - highly fusible.'''
+    theta = torch.acosh(torch.clamp(sqrt_c * x0, min=1.0 + 1e-5))
+    sinh_theta = torch.sinh(theta)
+    sinh_theta = torch.clamp(sinh_theta, min=1e-8)
+    scale = theta / sinh_theta
+    scale = torch.where(theta > 1e-8, scale, torch.ones_like(scale))
+    v_spatial = scale * x_spatial
+    v_time = torch.zeros_like(x0)
+    return torch.cat([v_time, v_spatial], dim=-1)
+
+@maybe_compile(mode='reduce-overhead')
+def _distance_core(dot: Tensor, sqrt_c: Tensor) -> Tensor:
+    '''Distance core computation - highly fusible.'''
+    arccosh_arg = torch.clamp(-dot, min=1.0)
+    return sqrt_c * torch.acosh(arccosh_arg)
+
+@maybe_compile(mode='reduce-overhead')
+def _project_to_hyperboloid_core(spatial: Tensor, c_inv: float) -> Tensor:
+    '''Projection core computation - highly fusible.'''
+    spatial_norm_sq = torch.sum(spatial**2, dim=-1, keepdim=True)
+    x0_new = torch.sqrt(spatial_norm_sq + c_inv)
+    return torch.cat([x0_new, spatial], dim=-1)
 
 class LorentzManifold:
     '''
     Extended Lorentz manifold operations with validation and projection.
 
     All operations maintain the Lorentz constraint: ⟨x, x⟩_L = -1/c
+
+    When torch.compile is enabled (PyTorch 2.0+), core operations are compiled
+    for better throughput through kernel fusion.
     '''
 
     @staticmethod
@@ -145,8 +208,7 @@ class LorentzManifold:
         Returns:
             Inner product [...,]
         '''
-        xy = x * y
-        return torch.sum(xy[..., 1:], dim=-1) - xy[..., 0]
+        return _minkowski_dot_core(x, y)
 
     @staticmethod
     def lorentz_norm_squared(x: Tensor) -> Tensor:
@@ -171,14 +233,8 @@ class LorentzManifold:
         Returns:
             Projected points on hyperboloid
         '''
-        # Compute spatial norm
         spatial = x[..., 1:]
-        spatial_norm_sq = torch.sum(spatial**2, dim=-1, keepdim=True)
-
-        # Compute required time coordinate: x_0 = sqrt(spatial_norm^2 + 1/c)
-        x0_new = torch.sqrt(spatial_norm_sq + 1.0 / c)
-
-        return torch.cat([x0_new, spatial], dim=-1)
+        return _project_to_hyperboloid_core(spatial, 1.0 / c)
 
     @staticmethod
     def check_on_manifold(x: Tensor, c: float = 1.0,
@@ -213,21 +269,8 @@ class LorentzManifold:
             Points on hyperboloid [..., D+1]
         '''
         sqrt_c = torch.sqrt(torch.tensor(c, device=v.device, dtype=v.dtype))
-
-        # Spatial components only
         v_spatial = v[..., 1:]
-        norm_v = torch.norm(v_spatial, p=2, dim=-1, keepdim=True)
-        norm_v = torch.clamp(norm_v, min=1e-8)
-
-        # Clamp argument to avoid overflow
-        theta = torch.clamp(sqrt_c * norm_v, max=40.0)
-
-        # Exponential map formula
-        x0 = torch.cosh(theta) / sqrt_c
-        sinh_term = torch.sinh(theta) / sqrt_c
-        x_spatial = (sinh_term / norm_v) * v_spatial
-
-        return torch.cat([x0, x_spatial], dim=-1)
+        return _exp_map_zero_core(v_spatial, sqrt_c)
 
     @staticmethod
     def log_map_zero(x: Tensor, c: float = 1.0) -> Tensor:
@@ -242,24 +285,9 @@ class LorentzManifold:
             Tangent vectors [..., D+1]
         '''
         sqrt_c = torch.sqrt(torch.tensor(c, device=x.device, dtype=x.dtype))
-
         x0 = x[..., 0:1]
         x_spatial = x[..., 1:]
-
-        # Distance from origin
-        theta = torch.acosh(torch.clamp(sqrt_c * x0, min=1.0 + 1e-5))
-
-        # Scale factor
-        sinh_theta = torch.sinh(theta)
-        sinh_theta = torch.clamp(sinh_theta, min=1e-8)
-        scale = theta / sinh_theta
-        scale = torch.where(theta > 1e-8, scale, torch.ones_like(scale))
-
-        # Tangent vector
-        v_spatial = scale * x_spatial * sqrt_c
-        v_time = torch.zeros_like(x0)
-
-        return torch.cat([v_time, v_spatial], dim=-1)
+        return _log_map_zero_core(x0, x_spatial, sqrt_c)
 
     @staticmethod
     def distance(x: Tensor, y: Tensor, c: float = 1.0) -> Tensor:
@@ -277,9 +305,8 @@ class LorentzManifold:
             Distances [...]
         '''
         dot = LorentzManifold.minkowski_dot(x, y)
-        arccosh_arg = torch.clamp(-dot, min=1.0)
         sqrt_c = torch.sqrt(torch.tensor(c, device=x.device, dtype=x.dtype))
-        return sqrt_c * torch.acosh(arccosh_arg)
+        return _distance_core(dot, sqrt_c)
 
     @staticmethod
     def parallel_transport(v: Tensor, x: Tensor, y: Tensor, c: float = 1.0) -> Tensor:

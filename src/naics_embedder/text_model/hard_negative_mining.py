@@ -1,5 +1,6 @@
 # -------------------------------------------------------------------------------------------------
 # Phase 2: Lorentzian Hard Negative Mining (HNM)
+# With torch.compile support for fused operations
 # -------------------------------------------------------------------------------------------------
 
 import logging
@@ -11,6 +12,62 @@ import torch.nn as nn
 from naics_embedder.text_model.hyperbolic import LorentzDistance
 
 logger = logging.getLogger(__name__)
+
+# Import compile utilities
+try:
+    from naics_embedder.utils.compile import maybe_compile
+
+    _COMPILE_AVAILABLE = True
+except ImportError:
+    _COMPILE_AVAILABLE = False
+
+    def maybe_compile(*args, **kwargs):  # type: ignore[misc]
+        '''Fallback decorator when compile module not available.'''
+
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+# -------------------------------------------------------------------------------------------------
+# Compiled core operations for hard negative mining
+# -------------------------------------------------------------------------------------------------
+
+@maybe_compile(mode='reduce-overhead')
+def _lorentz_norm_compiled(
+    time_norm_sq: torch.Tensor, spatial_norm_sq: torch.Tensor
+) -> torch.Tensor:
+    '''Core Lorentz norm computation - highly fusible.'''
+    lorentz_norm_sq = time_norm_sq - spatial_norm_sq
+    return torch.sqrt(torch.clamp(lorentz_norm_sq, min=1e-8))
+
+@maybe_compile(mode='reduce-overhead')
+def _sech_margin_compiled(
+    time_coord: torch.Tensor, sqrt_c: torch.Tensor, base_margin: float
+) -> torch.Tensor:
+    '''Core sech-based adaptive margin computation - highly fusible.'''
+    arg = sqrt_c * time_coord
+    arg_clamped = torch.clamp(arg, min=1.0 + 1e-6)
+    lorentz_norm = torch.acosh(arg_clamped)
+    cosh_norms = torch.cosh(lorentz_norm)
+    sech_norms = 1.0 / (cosh_norms + 1e-8)
+    return base_margin * sech_norms
+
+@maybe_compile(mode='reduce-overhead')
+def _kl_divergence_compiled(
+    anchor_probs: torch.Tensor, negative_probs: torch.Tensor
+) -> torch.Tensor:
+    '''Core KL-divergence computation - highly fusible.'''
+    eps = 1e-8
+    log_ratio = torch.log(anchor_probs + eps) - torch.log(negative_probs + eps)
+    return (anchor_probs * log_ratio).sum(dim=2)
+
+@maybe_compile(mode='reduce-overhead')
+def _cosine_similarity_compiled(
+    anchor_normalized: torch.Tensor, negative_normalized: torch.Tensor
+) -> torch.Tensor:
+    '''Core cosine similarity computation - highly fusible.'''
+    return (anchor_normalized * negative_normalized).sum(dim=2)
 
 # -------------------------------------------------------------------------------------------------
 # Lorentzian Hard Negative Mining
@@ -46,29 +103,19 @@ class LorentzianHardNegativeMiner(nn.Module):
         For a point on the hyperboloid: ⟨x, x⟩_L = -1/c
         The norm is the hyperbolic radius: sqrt(x0^2 - 1/c)
 
+        Uses compiled operations when torch.compile is enabled.
+
         Args:
             x: Hyperbolic embeddings (batch_size, embedding_dim+1)
 
         Returns:
             Lorentz norms (batch_size,)
         '''
-        # Lorentz inner product with itself
         time_coord = x[:, 0]  # x₀
         spatial_coords = x[:, 1:]  # x₁...xₙ
-
         spatial_norm_sq = torch.sum(spatial_coords**2, dim=1)
         time_norm_sq = time_coord**2
-
-        # For valid hyperboloid points: spatial_norm_sq - time_norm_sq = -1/c
-        # Lorentz norm (hyperbolic radius) = sqrt(time_norm_sq - spatial_norm_sq)
-        # = sqrt(x0^2 - ||x_spatial||^2)
-        # But we can also use: ||x||_L = sqrt(⟨x, x⟩_L + 2/c) = sqrt(-1/c + 2/c)
-        # = sqrt(1/c)
-        # Actually, the hyperbolic radius is: r = sqrt(x0^2 - 1/c)
-        lorentz_norm_sq = time_norm_sq - spatial_norm_sq  # Should be 1/c for valid points
-        lorentz_norm = torch.sqrt(torch.clamp(lorentz_norm_sq, min=1e-8))
-
-        return lorentz_norm
+        return _lorentz_norm_compiled(time_norm_sq, spatial_norm_sq)
 
     def check_lorentz_inner_product_safety(self, u: torch.Tensor,
                                            v: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -224,6 +271,8 @@ class RouterGuidedNegativeMiner(nn.Module):
         to confuse the router,
         as they make the router think the negative is similar to the anchor.
 
+        Uses compiled operations when torch.compile is enabled.
+
         Args:
             anchor_gate_probs: Anchor gate probabilities (batch_size, num_experts)
             negative_gate_probs: Negative gate probabilities (batch_size, k_negatives, num_experts)
@@ -231,7 +280,6 @@ class RouterGuidedNegativeMiner(nn.Module):
         Returns:
             KL-divergence scores (batch_size, k_negatives) - lower = more confusion
         '''
-        # Add small epsilon for numerical stability
         eps = 1e-8
 
         # Normalize to ensure valid probability distributions
@@ -242,13 +290,10 @@ class RouterGuidedNegativeMiner(nn.Module):
         negative_probs = negative_probs / negative_probs.sum(dim=2, keepdim=True)
 
         # Expand anchor_probs for broadcasting: (batch_size, 1, num_experts)
-        anchor_probs_expanded = anchor_probs.unsqueeze(1)  # (batch_size, 1, num_experts)
+        anchor_probs_expanded = anchor_probs.unsqueeze(1)
 
-        # Compute KL-divergence: sum(P_anchor * log(P_anchor / P_negative))
-        log_ratio = torch.log(anchor_probs_expanded + eps) - torch.log(negative_probs + eps)
-        kl_div = (anchor_probs_expanded * log_ratio).sum(dim=2)  # (batch_size, k_negatives)
-
-        return kl_div
+        # Use compiled KL-divergence computation
+        return _kl_divergence_compiled(anchor_probs_expanded, negative_probs)
 
     def compute_cosine_similarity(
         self, anchor_gate_probs: torch.Tensor, negative_gate_probs: torch.Tensor
@@ -258,6 +303,8 @@ class RouterGuidedNegativeMiner(nn.Module):
 
         Higher cosine similarity means more confusion (similar distributions).
 
+        Uses compiled operations when torch.compile is enabled.
+
         Args:
             anchor_gate_probs: Anchor gate probabilities (batch_size, num_experts)
             negative_gate_probs: Negative gate probabilities (batch_size, k_negatives, num_experts)
@@ -266,20 +313,17 @@ class RouterGuidedNegativeMiner(nn.Module):
             Cosine similarity scores (batch_size, k_negatives)
         '''
         # Normalize to unit vectors
-        anchor_norm = torch.norm(anchor_gate_probs, dim=1, keepdim=True)  # (batch_size, 1)
+        anchor_norm = torch.norm(anchor_gate_probs, dim=1, keepdim=True)
         anchor_normalized = anchor_gate_probs / (anchor_norm + 1e-8)
 
-        # (batch_size, k_negatives, 1)
         negative_norm = torch.norm(negative_gate_probs, dim=2, keepdim=True)
         negative_normalized = negative_gate_probs / (negative_norm + 1e-8)
 
         # Expand anchor for broadcasting: (batch_size, 1, num_experts)
         anchor_expanded = anchor_normalized.unsqueeze(1)
 
-        # Compute cosine similarity: dot product of normalized vectors
-        cosine_sim = (anchor_expanded * negative_normalized).sum(dim=2)  # (batch_size, k_negatives)
-
-        return cosine_sim
+        # Use compiled cosine similarity computation
+        return _cosine_similarity_compiled(anchor_expanded, negative_normalized)
 
     def compute_confusion_scores(
         self, anchor_gate_probs: torch.Tensor, negative_gate_probs: torch.Tensor
@@ -412,7 +456,7 @@ class NormAdaptiveMargin(nn.Module):
         # Clamp to avoid numerical issues (arccosh requires argument >= 1)
         arg = sqrt_c * time_coord
         arg_clamped = torch.clamp(arg, min=1.0 + 1e-6)
-        lorentz_norm = torch.arccosh(arg_clamped)
+        lorentz_norm = torch.acosh(arg_clamped)
 
         return lorentz_norm
 
@@ -420,21 +464,16 @@ class NormAdaptiveMargin(nn.Module):
         '''
         Compute norm-adaptive margin for each anchor.
 
+        Uses compiled operations when torch.compile is enabled.
+
         Args:
             anchor_emb: Anchor embeddings (batch_size, embedding_dim+1)
 
         Returns:
             Adaptive margins (batch_size,)
         '''
-        # Compute Lorentz norm for each anchor
-        lorentz_norms = self.compute_lorentz_norm(anchor_emb)  # (batch_size,)
-
-        # Compute sech(||a||_L) = 1 / cosh(||a||_L)
-        # sech is numerically stable: 1 / cosh(x)
-        cosh_norms = torch.cosh(lorentz_norms)
-        sech_norms = 1.0 / (cosh_norms + 1e-8)  # Add small epsilon for stability
-
-        # Adaptive margin: m(a) = m_0 * sech(||a||_L)
-        adaptive_margins = self.base_margin * sech_norms
-
-        return adaptive_margins
+        time_coord = anchor_emb[:, 0]
+        sqrt_c = torch.sqrt(
+            torch.tensor(self.curvature, device=anchor_emb.device, dtype=anchor_emb.dtype)
+        )
+        return _sech_margin_compiled(time_coord, sqrt_c, self.base_margin)

@@ -38,5 +38,11 @@ search, hierarchical modeling, graph-based reasoning, and downstream machine lea
 - **Memory Efficient**: Monitors and logs VRAM usage for distributed operations
 - **Gradient Flow**: Proper gradient propagation through all_gather operations
 
+### Performance Optimizations
+
+- **torch.compile Support**: Fused operations for Lorentz geometry via PyTorch 2.0+ compilation
+- **Compiled Core Operations**: Exponential/logarithmic maps, distance computations, and gating optimized for throughput
+- **Modular Mixin Architecture**: Model decomposed into functional mixins for maintainability
+
 Use the navigation menu to explore system architecture, training procedures,
 and API references for each module.
