@@ -16,16 +16,12 @@ nav:
               - Relationship Measures: api/compute_relations.md
               - Graph Distance Measures: api/compute_distances.md
           - Create Contrastive Training Triplets: api/create_triplets.md
-      - Data Loading:
-          - Text Training:
-              - Tokenization: api/tokenization_cache.md
-              - Streaming DataSet: api/streaming_dataset.md
-              - DataLoader: api/datamodule.md
-          - HGCN Training:
-              - Streaming DataSet: api/hgcn_streaming_dataset.md
-              - DataLoader: api/hgcn_datamodule.md
       - Training:
           - Text Training:
+              - Data Loading:
+                  - Tokenization: api/tokenization_cache.md
+                  - Streaming DataSet: api/streaming_dataset.md
+                  - DataLoader: api/datamodule.md
               - Encoder: api/encoder.md
               - Mixture of Experts: api/moe.md
               - Hyperbolic Operations: api/hyperbolic.md
@@ -35,10 +31,20 @@ nav:
                   - Rank Order Preservation: api/rank_order_preservation_loss.md
               - Evaluation: api/evaluation.md
           - HGCN Training:
+              - Data Loading:
+                  - Streaming DataSet: api/hgcn_streaming_dataset.md
+                  - DataLoader: api/hgcn_datamodule.md
               - HGCN: api/hgcn.md
+      - Metrics:
+          - Core: api/core_metrics.md
+          - Graph: api/graph_metrics.md
+          - Hierarchy Structure: api/hierarchy_structure_metrics.md
+          - QCEW: api/qcew_metrics.md
+          - Runner: api/runner.md
       - Tools:
           - Current Training Configuration: api/config_tools.md
           - Training Metrics: api/metrics_tools.md
+          - Embeddings Verification: api/embeddings_verification.md
       - Utilities:
           - Backend: api/backend.md
           - Console: api/console.md
