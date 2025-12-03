@@ -4,7 +4,7 @@ import polars as pl
 import pytest
 import torch
 
-from naics_embedder.graph_model.evaluation import (
+from naics_embedder.metrics import (
     GraphDownstreamEvaluator,
     GraphEmbeddingDataset,
     QCEWBenchmarkConfig,

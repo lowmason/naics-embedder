@@ -36,14 +36,6 @@ from naics_embedder.graph_model.curriculum import (
     # Preprocessing
     preprocess_curriculum_data,
 )
-from naics_embedder.graph_model.evaluation import (
-    GraphDownstreamEvaluator,
-    GraphEmbeddingDataset,
-    QCEWBenchmarkConfig,
-    compute_validation_metrics,
-    run_graph_downstream_suite,
-    run_qcew_employment_benchmark,
-)
 from naics_embedder.graph_model.hgcn import (
     HGCN,
     HGCNLightningModule,
@@ -53,6 +45,14 @@ from naics_embedder.graph_model.hgcn import (
 )
 from naics_embedder.graph_model.hgcn import (
     main as train_hgcn,
+)
+from naics_embedder.metrics import (
+    GraphDownstreamEvaluator,
+    GraphEmbeddingDataset,
+    QCEWBenchmarkConfig,
+    compute_validation_metrics,
+    run_graph_downstream_suite,
+    run_qcew_employment_benchmark,
 )
 
 __all__ = [

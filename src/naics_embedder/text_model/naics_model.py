@@ -24,13 +24,13 @@ import polars as pl
 import pytorch_lightning as pyl
 import torch
 
-from naics_embedder.text_model.curriculum import CurriculumScheduler
-from naics_embedder.text_model.encoder import MultiChannelEncoder
-from naics_embedder.text_model.evaluation import (
+from naics_embedder.metrics import (
     EmbeddingEvaluator,
     EmbeddingStatistics,
     HierarchyMetrics,
 )
+from naics_embedder.text_model.curriculum import CurriculumScheduler
+from naics_embedder.text_model.encoder import MultiChannelEncoder
 from naics_embedder.text_model.hard_negative_mining import (
     LorentzianHardNegativeMiner,
     NormAdaptiveMargin,

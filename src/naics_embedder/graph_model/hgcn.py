@@ -21,12 +21,13 @@ from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import softmax
 
 from naics_embedder.graph_model.dataloader.hgcn_datamodule import HGCNDataModule
-from naics_embedder.graph_model.evaluation import compute_validation_metrics
-from naics_embedder.metrics.hierarchy_structure import (
+from naics_embedder.metrics import (
+    EmbeddingEvaluator,
+    HierarchyMetrics,
     compute_hierarchy_retrieval_metrics,
     compute_radius_structure_metrics,
+    compute_validation_metrics,
 )
-from naics_embedder.text_model.evaluation import EmbeddingEvaluator, HierarchyMetrics
 from naics_embedder.text_model.hyperbolic import LorentzOps
 from naics_embedder.utils.config import GraphConfig
 from naics_embedder.utils.distance_matrix import load_distance_submatrix

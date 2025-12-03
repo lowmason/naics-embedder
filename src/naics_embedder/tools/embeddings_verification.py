@@ -9,7 +9,7 @@ import polars as pl
 import torch
 
 from naics_embedder.graph_model.hgcn import load_embeddings
-from naics_embedder.text_model.evaluation import EmbeddingEvaluator, HierarchyMetrics
+from naics_embedder.metrics import EmbeddingEvaluator, HierarchyMetrics
 from naics_embedder.utils.distance_matrix import load_distance_submatrix
 
 logger = logging.getLogger(__name__)
@@ -185,3 +185,4 @@ def verify_stage4(
         'passed': all(checks.values()),
         'codes': codes,
     }
+

@@ -1,7 +1,7 @@
 import polars as pl
 import torch
 
-from naics_embedder.tools.stage4_verification import (
+from naics_embedder.tools.embeddings_verification import (
     Stage4VerificationConfig,
     verify_stage4,
 )
@@ -110,3 +110,4 @@ def test_verify_stage4_threshold_failure(tmp_path):
 
     assert result['passed'] is False
     assert result['checks']['local_improvement'] is False
+

@@ -21,8 +21,8 @@ from rich.console import Console
 from typing_extensions import Annotated
 
 from naics_embedder.tools.config_tools import show_current_config
+from naics_embedder.tools.embeddings_verification import Stage4VerificationConfig, verify_stage4
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
-from naics_embedder.tools.stage4_verification import Stage4VerificationConfig, verify_stage4
 from naics_embedder.utils.console import configure_logging
 
 # -------------------------------------------------------------------------------------------------

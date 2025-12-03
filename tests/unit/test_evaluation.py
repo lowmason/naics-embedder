@@ -12,7 +12,7 @@ Tests cover:
 import pytest
 import torch
 
-from naics_embedder.text_model.evaluation import (
+from naics_embedder.metrics import (
     EmbeddingEvaluator,
     EmbeddingStatistics,
     HierarchyMetrics,
