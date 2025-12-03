@@ -114,14 +114,15 @@ def _download_files(
         dfs = []
         for col, df in df_list:
             dfs.append(
-                df.with_columns(  # type: ignore
+                df
+                .with_columns(  # type: ignore
                     code=pl.when(pl.col('code').eq('31-33'))
-                    .then(pl.lit('31'))
-                    .when(pl.col('code').eq('44-45'))
-                    .then(pl.lit('44'))
-                    .when(pl.col('code').eq('48-49'))
-                    .then(pl.lit('48'))
-                    .otherwise(pl.col('code'))
+                           .then(pl.lit('31'))
+                           .when(pl.col('code').eq('44-45'))
+                           .then(pl.lit('44'))
+                           .when(pl.col('code').eq('48-49'))
+                           .then(pl.lit('48'))
+                           .otherwise(pl.col('code'))
                 )
             )
 
@@ -141,12 +142,16 @@ def _download_files(
 
 
 def _get_titles(titles_df: pl.DataFrame) -> Tuple[pl.DataFrame, Set[str]]:
+
     # Load NAICS titles and normalize combined sector codes (31-33, 44-45, 48-49)
-    titles = titles_df.select(
-        index=pl.col('index').sub(1),
-        level=pl.col('code').str.len_chars().cast(pl.UInt8),
-        code=pl.col('code'),
-        title=pl.col('title'),
+    titles = (
+        titles_df
+        .select(
+            index=pl.col('index').sub(1),
+            level=pl.col('code').str.len_chars().cast(pl.UInt8),
+            code=pl.col('code'),
+            title=pl.col('title'),
+        )
     )
 
     # Unique set of NAICS codes
@@ -165,12 +170,14 @@ def _get_titles(titles_df: pl.DataFrame) -> Tuple[pl.DataFrame, Set[str]]:
 
 
 def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    
     # descriptions: normalize combined sector codes
-    descriptions_1 = descriptions_df.select('code', 'description')
+    descriptions_1 = (descriptions_df.select('code', 'description'))
 
     # Split multiline descriptions and filter out section headers and cross-references
     descriptions_2 = (
-        descriptions_1.with_columns(
+        descriptions_1
+        .with_columns(
             description=pl.col('description')
             .str.split('\r\n')
             .list.eval(pl.element().filter(pl.element().str.len_chars() > 0))
@@ -190,23 +197,23 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
         code=pl.col('code').str.strip_chars(),
         description_id=pl.col('description_id'),
         description=pl.col('description')
-        .str.strip_prefix(' ')
-        .str.strip_suffix(' ')
-        .str.replace_all('NULL', '', literal=True)
-        .str.replace_all(r'See industry description for \d{6}\.', '')
-        .str.replace_all(r'<.*?>', '')
-        .str.replace_all(r'\xa0', ' ')
-        .str.replace_all('.', '. ', literal=True)
-        .str.replace_all('U. S. ', 'U.S.', literal=True)
-        .str.replace_all('e. g. ,', 'e.g.,', literal=True)
-        .str.replace_all('i. e. ,', 'i.e.,', literal=True)
-        .str.replace_all(';', '; ', literal=True)
-        .str.replace_all('31-33', '31', literal=True)
-        .str.replace_all('44-45', '44', literal=True)
-        .str.replace_all('48-49', '48', literal=True)
-        .str.replace_all(r'\s{2,}', ' ')
-        .str.strip_prefix(' ')
-        .str.strip_suffix(' '),
+                      .str.strip_prefix(' ')
+                      .str.strip_suffix(' ')
+                      .str.replace_all('NULL', '', literal=True)
+                      .str.replace_all(r'See industry description for \d{6}\.', '')
+                      .str.replace_all(r'<.*?>', '')
+                      .str.replace_all(r'\xa0', ' ')
+                      .str.replace_all('.', '. ', literal=True)
+                      .str.replace_all('U. S. ', 'U.S.', literal=True)
+                      .str.replace_all('e. g. ,', 'e.g.,', literal=True)
+                      .str.replace_all('i. e. ,', 'i.e.,', literal=True)
+                      .str.replace_all(';', '; ', literal=True)
+                      .str.replace_all('31-33', '31', literal=True)
+                      .str.replace_all('44-45', '44', literal=True)
+                      .str.replace_all('48-49', '48', literal=True)
+                      .str.replace_all(r'\s{2,}', ' ')
+                      .str.strip_prefix(' ')
+                      .str.strip_suffix(' '),
     )
 
     logger.info('Descriptions:')
@@ -248,14 +255,18 @@ def _get_exclusions(
     )
 
     # Extract excluded activities (typically last description block for a code)
-    exclusions_3 = descriptions_3.filter(
-        pl.col('description_id').max().over('code').eq(pl.col('description_id')),
-        pl.col('description').str.contains_any(['Excluded', 'excluded', 'Exclude', 'exclude']),
-        pl.col('description').str.contains(r' \d{2,6}'),
-    ).select(
-        code=pl.col('code').str.strip_chars(),
-        description_id=pl.col('description_id'),
-        description=pl.col('description'),
+    exclusions_3 = (
+        descriptions_3
+        .filter(
+            pl.col('description_id').max().over('code').eq(pl.col('description_id')),
+            pl.col('description').str.contains_any(['Excluded', 'excluded', 'Exclude', 'exclude']),
+            pl.col('description').str.contains(r' \d{2,6}'),
+        )
+        .select(
+            code=pl.col('code').str.strip_chars(),
+            description_id=pl.col('description_id'),
+            description=pl.col('description'),
+        )
     )
 
     # Exclusions for cleaning descriptions
@@ -267,17 +278,20 @@ def _get_exclusions(
         .filter(pl.col('description').is_not_null())
         .with_columns(
             digit=pl.col('description')
-            .str.extract_all(r' \d{2,6}')
-            .list.eval(pl.element().str.strip_prefix(' '))
-            .list.set_intersection(codes)
-            .list.drop_nulls()
+                    .str.extract_all(r' \d{2,6}')
+                    .list.eval(pl.element().str.strip_prefix(' '))
+                    .list.set_intersection(codes)
+                    .list.drop_nulls()
+                    .list.set_intersection(codes)
+                    .list.drop_nulls()
         )
         .filter(pl.col('digit').list.len().gt(0))
     )
 
     # Final exclusions DataFrame
     exclusions = (
-        exclusions_4.explode('digit')
+        exclusions_4
+        .explode('digit')
         .select(
             level=pl.col('code').str.len_chars().cast(pl.UInt8),
             code=pl.col('code'),
@@ -286,12 +300,20 @@ def _get_exclusions(
         )
         .sort('level', 'code')
         .group_by('level', 'code', maintain_order=True)
-        .agg(excluded=pl.col('excluded'), excluded_codes=pl.col('excluded_codes'))
-        .with_columns(excluded=pl.col('excluded').list.join(' '))
+        .agg(
+            excluded=pl.col('excluded'), 
+            excluded_codes=pl.col('excluded_codes')
+        )
+        .with_columns(
+            excluded=pl.col('excluded').list.join(' ')
+        )
     )
 
     exclusions_cnt = (
-        exclusions.with_columns(excluded_count=pl.col('excluded_codes').list.len())
+        exclusions
+        .with_columns(
+            excluded_count=pl.col('excluded_codes').list.len()
+        )
         .get_column('excluded_count')
         .sum()
     )
@@ -317,18 +339,31 @@ def _get_examples(
     descriptions_2: pl.DataFrame,
     descriptions_3: pl.DataFrame,
 ) -> Tuple[pl.DataFrame, pl.DataFrame]:
+
     # Example spreadsheet
     examples_1 = (
-        examples_df.filter(pl.col('code').is_in(codes))
+        examples_df
+        .filter(
+            pl.col('code').is_in(codes)
+        )
         .sort('code')
         .group_by('code', maintain_order=True)
-        .agg(examples_1=pl.col('examples'))
+        .agg(
+            examples_1=pl.col('examples')
+        )
     )
 
     # Identify where 'Illustrative Examples:' section begins
-    examples_2 = descriptions_2.filter(
-        pl.col('description').str.contains('Illustrative Examples:')
-    ).select(code=pl.col('code'), example_id=pl.col('description_id'))
+    examples_2 = (
+        descriptions_2
+        .filter(
+            pl.col('description').str.contains('Illustrative Examples:')
+        )
+        .select(
+            code=pl.col('code'), 
+            example_id=pl.col('description_id')
+        )
+    )
 
     # Extract examples that appear after 'Illustrative Examples:' marker
     examples_3 = (
