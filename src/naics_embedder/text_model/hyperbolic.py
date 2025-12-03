@@ -12,6 +12,23 @@ import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 
+# Torch 2.1+ exposes cudagraph helpers under torch.compiler; use best-effort import.
+try:
+    from torch.compiler import cudagraph_mark_step_begin as _cudagraph_mark_step_begin
+except Exception:  # pragma: no cover - torch version specific
+    _cudagraph_mark_step_begin = None
+
+
+def _mark_cudagraph_step() -> None:
+    '''
+    Notify Torch compile that a new CUDA graph step begins.
+
+    Prevents "tensor output ... overwritten by a subsequent run" when compiled
+    kernels are invoked from Lightning sanity checks or validation loops.
+    '''
+    if _cudagraph_mark_step_begin is not None:
+        _cudagraph_mark_step_begin()
+
 # Import compile utilities
 try:
     from naics_embedder.utils.compile import maybe_compile
@@ -41,7 +58,9 @@ def _exp_map_zero_compiled(v_spatial: torch.Tensor, sqrt_c: torch.Tensor) -> tor
     x0 = torch.cosh(theta) / sqrt_c
     sinh_term = torch.sinh(theta) / sqrt_c
     x_spatial = (sinh_term / norm_v) * v_spatial
-    return torch.cat([x0, x_spatial], dim=1)
+    # Clone to prevent CUDAGraphs from reusing the output buffer across steps when
+    # this compiled kernel is captured; otherwise subsequent runs can overwrite it.
+    return torch.cat([x0, x_spatial], dim=1).clone()
 
 @maybe_compile(mode='reduce-overhead')
 def _lorentz_dot_compiled(uv: torch.Tensor) -> torch.Tensor:
@@ -122,6 +141,7 @@ class HyperbolicProjection(nn.Module):
         )
         tangent_vec = torch.cat([tangent_vec[:, :1], spatial * scale], dim=1)
 
+        _mark_cudagraph_step()
         hyperbolic_embedding = self.exp_map_zero(tangent_vec)
         return hyperbolic_embedding
 
@@ -172,6 +192,7 @@ class LorentzDistance(nn.Module):
         Returns:
             Distances, shape (batch_size,)
         '''
+        _mark_cudagraph_step()
         uv = u * v
         dot_product = _lorentz_dot_compiled(uv)
         sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device, dtype=u.dtype))
@@ -190,6 +211,7 @@ class LorentzDistance(nn.Module):
         Returns:
             Tensor of shape (batch_size, k) with distances
         '''
+        _mark_cudagraph_step()
         # Ensure u has the right shape for broadcasting
         if u.dim() == 2:
             u = u.unsqueeze(1)  # (batch_size, 1, embedding_dim+1)

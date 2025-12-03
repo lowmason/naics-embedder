@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import pickle
+import random
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
@@ -364,8 +365,10 @@ def _sample_negatives_sans_static(
 # Negative candidate loading
 # -------------------------------------------------------------------------------------------------
 
-def _load_negative_candidates(triplets_parquet: str,
-                              ) -> Dict[Tuple[int, int], List[Dict[str, Any]]]:
+def _load_negative_candidates(
+    triplets_parquet: str,
+    required_pairs: Optional[Set[Tuple[int, int]]] = None,
+) -> Dict[Tuple[int, int], List[Dict[str, Any]]]:
     '''Load all candidate negatives from triplets parquet files.
 
     Returns a dictionary mapping (anchor_idx, positive_idx) -> list of negative dicts.
@@ -378,16 +381,42 @@ def _load_negative_candidates(triplets_parquet: str,
         logger.warning(f'No parquet files found in {triplets_parquet}')
         return {}
 
-    df = (
-        pl.scan_parquet(dataset_files).select(
-            'anchor_idx',
-            'positive_idx',
-            'negative_idx',
-            'negative_code',
-            'relation_margin',
-            'distance_margin',
-        ).collect()
-    )
+    anchor_filter: Optional[List[int]] = None
+    pairs_lazy: Optional[pl.LazyFrame] = None
+    if required_pairs is not None:
+        if not required_pairs:
+            logger.info('No anchor/positive pairs provided; skipping negative candidate load.')
+            return {}
+
+        unique_pairs = sorted(required_pairs)
+        anchor_filter = sorted({anchor for anchor, _ in unique_pairs})
+        pair_df = pl.DataFrame(
+            {
+                'anchor_idx': [anchor for anchor, _ in unique_pairs],
+                'positive_idx': [positive for _, positive in unique_pairs],
+            },
+            schema={'anchor_idx': pl.UInt32, 'positive_idx': pl.UInt32},
+        )
+        pairs_lazy = pair_df.lazy()
+        logger.info(
+            f'Filtering negative candidates to {len(unique_pairs):,} selected (anchor, positive) pairs'
+        )
+
+    scan = pl.scan_parquet(dataset_files)
+    if anchor_filter:
+        scan = scan.filter(pl.col('anchor_idx').is_in(anchor_filter))
+
+    if pairs_lazy is not None:
+        scan = scan.join(pairs_lazy, on=['anchor_idx', 'positive_idx'], how='inner')
+
+    df = scan.select(
+        'anchor_idx',
+        'positive_idx',
+        'negative_idx',
+        'negative_code',
+        'relation_margin',
+        'distance_margin',
+    ).collect()
 
     logger.info(f'Loaded {len(df):,} negative candidate rows')
 
@@ -408,6 +437,161 @@ def _load_negative_candidates(triplets_parquet: str,
 
     logger.info(f'Grouped into {len(result):,} (anchor, positive) pairs')
     return result
+
+# -------------------------------------------------------------------------------------------------
+# Triplet materialization helpers
+# -------------------------------------------------------------------------------------------------
+
+
+def _build_triplet_rows(
+    cfg: StreamingConfig,
+    sampling_cfg: SamplingConfig,
+    worker_id: str,
+) -> List[Dict[str, Any]]:
+    '''Materialize triplet rows applying the configured sampling strategy.'''
+
+    # Load indices
+    code_to_idx_dict = get_indices_codes('code_to_idx')
+    idx_to_code_dict = get_indices_codes('idx_to_code')
+
+    # Type assertions for type checker
+    assert isinstance(code_to_idx_dict, dict), 'code_to_idx must be a dict'
+    assert isinstance(idx_to_code_dict, dict), 'idx_to_code must be a dict'
+    code_to_idx: Dict[str, int] = code_to_idx_dict  # type: ignore
+    idx_to_code: Dict[int, str] = idx_to_code_dict  # type: ignore
+
+    sampling_strategy = sampling_cfg.strategy
+    sans_cfg: SansStaticConfig = sampling_cfg.sans_static
+
+    # Load Phase 1/SANS sampling data if needed
+    distance_lookup: Optional[Dict[Tuple[str, str], float]] = None
+    excluded_map: Optional[Dict[str, Set[str]]] = None
+    requires_distance_lookup = cfg.use_phase1_sampling or sampling_strategy == 'sans_static'
+
+    if requires_distance_lookup:
+        logger.info(f'{worker_id} Loading tree distance matrix for sampling strategy...')
+        distance_lookup = _load_distance_matrix(
+            cfg.distance_matrix_parquet, code_to_idx, idx_to_code
+        )
+
+    if cfg.use_phase1_sampling:
+        logger.info(f'{worker_id} Loading excluded codes for Phase 1 sampling...')
+        excluded_map = _load_excluded_codes(cfg.descriptions_parquet, code_to_idx)
+
+    # Create positive sampler using taxonomy-based stratification
+    logger.info(f'{worker_id} Creating positive sampler...')
+    positive_sampler = create_positive_sampler(
+        descriptions_parquet=cfg.descriptions_parquet,
+        relations_parquet=cfg.relations_parquet,
+        max_per_stratum=4,
+        seed=cfg.seed,
+    )
+
+    # Pre-sample positives once to know which (anchor, positive) pairs are needed.
+    anchor_positive_map: Dict[int, List[Dict[str, Any]]] = {}
+    anchor_code_map: Dict[int, str] = {}
+    required_pairs: Set[Tuple[int, int]] = set()
+
+    for anchor_idx in positive_sampler.anchors:
+        anchor_code = idx_to_code.get(anchor_idx)
+        if anchor_code is None:
+            continue
+
+        positives = positive_sampler.sample_positives(anchor_idx)
+        if not positives:
+            continue
+
+        anchor_code_map[anchor_idx] = anchor_code
+        anchor_positive_map[anchor_idx] = positives
+        for positive in positives:
+            required_pairs.add((anchor_idx, positive['positive_idx']))
+
+    if not anchor_positive_map:
+        logger.warning(f'{worker_id} Positive sampling produced no anchors with positives.')
+        return []
+
+    # Load negative candidates from triplets
+    logger.info(f'{worker_id} Loading negative candidates...')
+    negative_candidates = _load_negative_candidates(cfg.triplets_parquet, required_pairs=required_pairs)
+
+    triplet_rows: List[Dict[str, Any]] = []
+
+    for anchor_idx in positive_sampler.anchors:
+        positives = anchor_positive_map.get(anchor_idx)
+        if not positives:
+            continue
+
+        anchor_code = anchor_code_map.get(anchor_idx)
+        if anchor_code is None:
+            continue
+
+        for positive in positives:
+            positive_idx = positive['positive_idx']
+            positive_code = positive['positive_code']
+
+            # Get candidate negatives for this (anchor, positive) pair
+            key = (anchor_idx, positive_idx)
+            candidates = negative_candidates.get(key, [])
+
+            if not candidates:
+                continue
+
+            # Apply sampling strategy
+            sampling_metadata: Optional[Dict[str, Any]] = None
+
+            if sampling_strategy == 'sans_static' and distance_lookup is not None:
+                sampled_negatives, sampling_metadata = _sample_negatives_sans_static(
+                    anchor_code=anchor_code,
+                    candidate_negatives=candidates,
+                    n_negatives=cfg.n_negatives,
+                    distance_lookup=distance_lookup,
+                    sans_cfg=sans_cfg,
+                    seed=cfg.seed,
+                )
+            elif cfg.use_phase1_sampling and distance_lookup is not None and excluded_map is not None:
+                sampled_negatives = _sample_negatives_phase1(
+                    anchor_code=anchor_code,
+                    anchor_idx=anchor_idx,
+                    candidate_negatives=candidates,
+                    n_negatives=cfg.n_negatives,
+                    distance_lookup=distance_lookup,
+                    excluded_map=excluded_map,
+                    code_to_idx=code_to_idx,
+                    alpha=cfg.phase1_alpha,
+                    exclusion_weight=cfg.phase1_exclusion_weight,
+                    seed=cfg.seed,
+                )
+            else:
+                rng = random.Random(cfg.seed)
+                n_sample = min(cfg.n_negatives, len(candidates))
+                sampled_negatives = rng.sample(candidates, n_sample)
+                if sampling_strategy == 'sans_static' and distance_lookup is None:
+                    logger.warning(
+                        'SANS static sampling requested but tree distances were unavailable; '
+                        'falling back to uniform sampling.'
+                    )
+
+            if not sampled_negatives:
+                continue
+
+            row: Dict[str, Any] = {
+                'anchor_idx': anchor_idx,
+                'anchor_code': anchor_code,
+                'positive_idx': positive_idx,
+                'positive_code': positive_code,
+                'positive_level': positive['positive_level'],
+                'stratum_id': positive['stratum_id'],
+                'stratum_wgt': positive['stratum_wgt'],
+                'negatives': sampled_negatives,
+            }
+
+            if sampling_metadata:
+                row['sampling_metadata'] = sampling_metadata
+
+            triplet_rows.append(row)
+
+    logger.info(f'{worker_id} Built {len(triplet_rows):,} triplet rows')
+    return triplet_rows
 
 # -------------------------------------------------------------------------------------------------
 # Cache utilities
@@ -461,17 +645,10 @@ def _save_final_cache(data: List[Dict[str, Any]], cfg: StreamingConfig) -> None:
 # Triplet batch generator
 # -------------------------------------------------------------------------------------------------
 
-def create_streaming_generator(cfg: StreamingConfig, sampling_cfg: Optional[SamplingConfig] = None
-                               ) -> Iterator[Dict[str, Any]]:
-    '''Create a generator that yields triplets for training.
-
-    Uses taxonomy-based stratified positive sampling:
-    - Stratum 0 (descendants): for levels 2-5, next-level descendants
-    - Stratum 1 (ancestors): for levels 3-6, parent codes up to level 2
-    - Stratum 2 (siblings): codes sharing the same parent
-
-    Samples up to 4 positives per stratum, then samples negatives for each.
-    '''
+def create_streaming_generator(
+    cfg: StreamingConfig, sampling_cfg: Optional[SamplingConfig] = None
+) -> Iterator[Dict[str, Any]]:
+    '''Create a generator that yields triplets for training, using cached data when available.'''
 
     # Identify worker process
     worker_info = None
@@ -483,128 +660,52 @@ def create_streaming_generator(cfg: StreamingConfig, sampling_cfg: Optional[Samp
         pass
 
     worker_id = f'Worker {worker_info.id}' if worker_info else 'Main'
+    allow_cache_save = worker_info is None
 
-    # Load codes and indices
-    code_to_idx_dict = get_indices_codes('code_to_idx')
-    idx_to_code_dict = get_indices_codes('idx_to_code')
-
-    # Type assertions for type checker
-    assert isinstance(code_to_idx_dict, dict), 'code_to_idx must be a dict'
-    assert isinstance(idx_to_code_dict, dict), 'idx_to_code must be a dict'
-    code_to_idx: Dict[str, int] = code_to_idx_dict  # type: ignore
-    idx_to_code: Dict[int, str] = idx_to_code_dict  # type: ignore
-
-    # Resolve sampling configuration
     if sampling_cfg is None:
         sampling_cfg = SamplingConfig()
-    sampling_strategy = sampling_cfg.strategy
-    sans_cfg: SansStaticConfig = sampling_cfg.sans_static
 
-    # Load Phase 1/SANS sampling data if needed
-    distance_lookup: Optional[Dict[Tuple[str, str], float]] = None
-    excluded_map: Optional[Dict[str, Set[str]]] = None
+    triplet_rows = _load_final_cache(cfg)
 
-    requires_distance_lookup = cfg.use_phase1_sampling or sampling_strategy == 'sans_static'
+    if triplet_rows is None:
+        triplet_rows = _build_triplet_rows(cfg, sampling_cfg, worker_id)
+        if not triplet_rows:
+            return
 
-    if requires_distance_lookup:
-        logger.info(f'{worker_id} Loading tree distance matrix for sampling strategy...')
-        distance_lookup = _load_distance_matrix(
-            cfg.distance_matrix_parquet, code_to_idx, idx_to_code
-        )
+        if allow_cache_save:
+            _save_final_cache(triplet_rows, cfg)
+        else:
+            logger.info(
+                f'{worker_id} Cache miss but worker context prevents saving; proceeding without cache'
+            )
+    else:
+        if allow_cache_save:
+            logger.info(
+                f'{worker_id} Loaded streaming cache with {len(triplet_rows):,} triplet rows'
+            )
 
-    if cfg.use_phase1_sampling:
-        logger.info(f'{worker_id} Loading excluded codes for Phase 1 sampling...')
-        excluded_map = _load_excluded_codes(cfg.descriptions_parquet, code_to_idx)
-
-    # Create positive sampler using taxonomy-based stratification
-    logger.info(f'{worker_id} Creating positive sampler...')
-    positive_sampler = create_positive_sampler(
-        descriptions_parquet=cfg.descriptions_parquet,
-        relations_parquet=cfg.relations_parquet,
-        max_per_stratum=4,
-        seed=cfg.seed,
-    )
-
-    # Load negative candidates from triplets
-    logger.info(f'{worker_id} Loading negative candidates...')
-    negative_candidates = _load_negative_candidates(cfg.triplets_parquet)
-
-    # Iterate over anchors and sample positives + negatives
-    for anchor_idx in positive_sampler.anchors:
-        anchor_code = idx_to_code.get(anchor_idx)
-        if anchor_code is None:
-            continue
-
-        # Sample positives across strata
-        positives = positive_sampler.sample_positives(anchor_idx)
-        if not positives:
-            continue
-
-        # For each positive, sample negatives
-        for positive in positives:
-            positive_idx = positive['positive_idx']
-            positive_code = positive['positive_code']
-
-            # Get candidate negatives for this (anchor, positive) pair
-            key = (anchor_idx, positive_idx)
-            candidates = negative_candidates.get(key, [])
-
-            if not candidates:
-                # Try reverse lookup or skip
-                continue
-
-            # Apply sampling strategy
-            sampling_metadata: Optional[Dict[str, Any]] = None
-
-            if sampling_strategy == 'sans_static' and distance_lookup is not None:
-                sampled_negatives, sampling_metadata = _sample_negatives_sans_static(
-                    anchor_code=anchor_code,
-                    candidate_negatives=candidates,
-                    n_negatives=cfg.n_negatives,
-                    distance_lookup=distance_lookup,
-                    sans_cfg=sans_cfg,
-                    seed=cfg.seed,
-                )
-            elif cfg.use_phase1_sampling and distance_lookup is not None and excluded_map is not None:
-                sampled_negatives = _sample_negatives_phase1(
-                    anchor_code=anchor_code,
-                    anchor_idx=anchor_idx,
-                    candidate_negatives=candidates,
-                    n_negatives=cfg.n_negatives,
-                    distance_lookup=distance_lookup,
-                    excluded_map=excluded_map,
-                    code_to_idx=code_to_idx,
-                    alpha=cfg.phase1_alpha,
-                    exclusion_weight=cfg.phase1_exclusion_weight,
-                    seed=cfg.seed,
-                )
-            else:
-                # Default: sample uniformly
-                import random
-
-                rng = random.Random(cfg.seed)
-                n_sample = min(cfg.n_negatives, len(candidates))
-                sampled_negatives = rng.sample(candidates, n_sample)
-                if sampling_strategy == 'sans_static':
-                    logger.warning(
-                        'SANS static sampling requested but tree distances were unavailable; '
-                        'falling back to uniform sampling.'
-                    )
-
-            if not sampled_negatives:
-                continue
-
-            yield {
-                'anchor_idx': anchor_idx,
-                'anchor_code': anchor_code,
-                'positive_idx': positive_idx,
-                'positive_code': positive_code,
-                'positive_level': positive['positive_level'],
-                'stratum_id': positive['stratum_id'],
-                'stratum_wgt': positive['stratum_wgt'],
-                'negatives': sampled_negatives,
-                'sampling_metadata': sampling_metadata,
+    for row in triplet_rows:
+        negatives = [
+            {
+                'negative_idx': neg['negative_idx'],
+                'negative_code': neg['negative_code'],
+                'relation_margin': neg['relation_margin'],
+                'distance_margin': neg['distance_margin'],
             }
+            for neg in row['negatives']
+        ]
+
+        yield {
+            'anchor_idx': row['anchor_idx'],
+            'anchor_code': row['anchor_code'],
+            'positive_idx': row['positive_idx'],
+            'positive_code': row['positive_code'],
+            'positive_level': row.get('positive_level'),
+            'stratum_id': row.get('stratum_id'),
+            'stratum_wgt': row.get('stratum_wgt'),
+            'negatives': negatives,
+            'sampling_metadata': row.get('sampling_metadata'),
+        }
 
 # -------------------------------------------------------------------------------------------------
 # Streaming dataset generator

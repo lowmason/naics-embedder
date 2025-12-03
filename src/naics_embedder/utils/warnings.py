@@ -81,6 +81,12 @@ _WARNING_FILTERS: List[Tuple[str, type, str, str]] = [
         'pytorch_lightning',
         'Custom collate returns proper structure; inference not needed',
     ),
+    (
+        '.*Online softmax is disabled on the fly.*',
+        UserWarning,
+        'torch',
+        'Inductor fallback only affects performance slightly; ignore noise during training',
+    ),
 ]
 
 # -------------------------------------------------------------------------------------------------

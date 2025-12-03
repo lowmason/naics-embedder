@@ -8,7 +8,7 @@ import logging
 import pickle
 import random
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import polars as pl
@@ -137,8 +137,10 @@ def _load_codes_and_indices(descriptions_parquet: str,
         code_to_idx = {row['code']: row['index'] for row in df_codes.iter_rows(named=True)}
         return codes, code_to_idx
 
-def _load_negative_candidates(triplets_parquet: str,
-                              ) -> Dict[tuple[int, int], List[Dict[str, Any]]]:
+def _load_negative_candidates(
+    triplets_parquet: str,
+    required_pairs: Optional[Set[Tuple[int, int]]] = None,
+) -> Dict[Tuple[int, int], List[Dict[str, Any]]]:
     '''Load all candidate negatives from triplets parquet files.
 
     Returns a dictionary mapping (anchor_idx, positive_idx) -> list of negative dicts.
@@ -150,16 +152,42 @@ def _load_negative_candidates(triplets_parquet: str,
         logger.warning(f'No parquet files found in {triplets_parquet}')
         return {}
 
-    df = (
-        pl.scan_parquet(dataset_files).select(
-            'anchor_idx',
-            'positive_idx',
-            'negative_idx',
-            'negative_code',
-            'relation_margin',
-            'distance_margin',
-        ).collect()
-    )
+    anchor_filter: Optional[List[int]] = None
+    pairs_lazy: Optional[pl.LazyFrame] = None
+    if required_pairs is not None:
+        if not required_pairs:
+            logger.info('No (anchor, positive) pairs provided; skipping negative candidate load.')
+            return {}
+
+        unique_pairs = sorted(required_pairs)
+        anchor_filter = sorted({anchor for anchor, _ in unique_pairs})
+        pair_df = pl.DataFrame(
+            {
+                'anchor_idx': [anchor for anchor, _ in unique_pairs],
+                'positive_idx': [positive for _, positive in unique_pairs],
+            },
+            schema={'anchor_idx': pl.UInt32, 'positive_idx': pl.UInt32},
+        )
+        pairs_lazy = pair_df.lazy()
+        logger.info(
+            f'Filtering negative candidates to {len(unique_pairs):,} selected (anchor, positive) pairs'
+        )
+
+    scan = pl.scan_parquet(dataset_files)
+    if anchor_filter:
+        scan = scan.filter(pl.col('anchor_idx').is_in(anchor_filter))
+
+    if pairs_lazy is not None:
+        scan = scan.join(pairs_lazy, on=['anchor_idx', 'positive_idx'], how='inner')
+
+    df = scan.select(
+        'anchor_idx',
+        'positive_idx',
+        'negative_idx',
+        'negative_code',
+        'relation_margin',
+        'distance_margin',
+    ).collect()
 
     logger.info(f'Loaded {len(df):,} negative candidate rows')
 
@@ -225,22 +253,46 @@ def load_streaming_triplets(
         seed=cfg.seed,
     )
 
-    # Load negative candidates
-    logger.info(f'{worker_id} Loading negative candidates...')
-    negative_candidates = _load_negative_candidates(cfg.triplets_parquet)
-
-    # Build triplet list
-    df_list = []
-    rng = random.Random(cfg.seed)
+    # Pre-sample positives to know which (anchor, positive) pairs require negatives.
+    anchor_positive_map: Dict[int, List[Dict[str, Any]]] = {}
+    anchor_code_map: Dict[int, str] = {}
+    required_pairs: Set[Tuple[int, int]] = set()
 
     for anchor_idx in positive_sampler.anchors:
         anchor_code = idx_to_code.get(anchor_idx)
         if anchor_code is None:
             continue
 
-        # Sample positives across strata
         positives = positive_sampler.sample_positives(anchor_idx)
         if not positives:
+            continue
+
+        anchor_positive_map[anchor_idx] = positives
+        anchor_code_map[anchor_idx] = anchor_code
+        for positive in positives:
+            required_pairs.add((anchor_idx, positive['positive_idx']))
+
+    if not anchor_positive_map:
+        logger.warning(f'{worker_id} Positive sampling produced no anchors with positives.')
+        return []
+
+    # Load negative candidates
+    logger.info(f'{worker_id} Loading negative candidates...')
+    negative_candidates = _load_negative_candidates(
+        cfg.triplets_parquet, required_pairs=required_pairs
+    )
+
+    # Build triplet list
+    df_list = []
+    rng = random.Random(cfg.seed)
+
+    for anchor_idx in positive_sampler.anchors:
+        positives = anchor_positive_map.get(anchor_idx)
+        if not positives:
+            continue
+
+        anchor_code = anchor_code_map.get(anchor_idx)
+        if anchor_code is None:
             continue
 
         for positive in positives:

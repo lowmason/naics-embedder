@@ -594,6 +594,12 @@ class LossConfig(BaseModel):
         default=0.07, gt=0, le=1, description='Temperature for contrastive loss'
     )
     curvature: float = Field(default=1.0, gt=0, description='Curvature for hyperbolic space')
+    base_margin: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=2.0,
+        description='Base margin for adaptive margin miner (higher = stricter separation)',
+    )
     hierarchy_weight: float = Field(
         default=0.1,
         ge=0,

@@ -150,7 +150,10 @@ def validate_data_paths(cfg: Config) -> ValidationResult:
     # Check triplets directory
     triplets_path = Path(cfg.data_loader.streaming.triplets_parquet)
     if triplets_path.is_dir():
-        parquet_files = list(triplets_path.glob('*.parquet'))
+        # Triplet generation organizes files under anchor= directories, so we glob
+        # recursively to detect nested parquet data shards instead of only checking
+        # the top-level directory.
+        parquet_files = list(triplets_path.glob('**/*.parquet'))
         if not parquet_files:
             result.add_error(
                 f'Triplets directory is empty: {triplets_path}\n'

@@ -11,6 +11,7 @@ Tests cover:
 import polars as pl
 import pytest
 
+import naics_embedder.text_model.dataloader.streaming_dataset as streaming
 from naics_embedder.data.positive_sampling import (
     build_anchor_list,
     build_taxonomy,
@@ -21,10 +22,11 @@ from naics_embedder.text_model.dataloader.streaming_dataset import (
     _get_final_cache_path,
     _load_distance_matrix,
     _load_excluded_codes,
+    _load_negative_candidates,
     _sample_negatives_phase1,
     _sample_negatives_sans_static,
 )
-from naics_embedder.utils.config import SansStaticConfig, StreamingConfig
+from naics_embedder.utils.config import SansStaticConfig, SamplingConfig, StreamingConfig
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -443,6 +445,133 @@ def test_sample_handles_fewer_candidates_than_requested():
     )
 
     assert len(sampled) == 1
+
+
+# -------------------------------------------------------------------------------------------------
+# Negative candidate loading tests
+# -------------------------------------------------------------------------------------------------
+
+
+def test_load_negative_candidates_filters_pairs(tmp_path):
+    '''Only requested (anchor, positive) pairs should be loaded from triplets parquet.'''
+    triplets_dir = tmp_path / 'triplets'
+    (triplets_dir / 'anchor=0').mkdir(parents=True)
+
+    df = pl.DataFrame(
+        {
+            'anchor_idx': [1, 1, 2],
+            'positive_idx': [10, 11, 20],
+            'negative_idx': [100, 101, 200],
+            'negative_code': ['N100', 'N101', 'N200'],
+            'relation_margin': [0.1, 0.2, 0.3],
+            'distance_margin': [1.0, 2.0, 3.0],
+        }
+    )
+    df.write_parquet(triplets_dir / 'anchor=0' / 'chunk.parquet')
+
+    required = {(1, 10)}
+    result = _load_negative_candidates(str(triplets_dir), required_pairs=required)
+
+    assert set(result.keys()) == {(1, 10)}
+    assert result[(1, 10)][0]['negative_idx'] == 100
+
+
+def test_load_negative_candidates_handles_empty_pairs(tmp_path):
+    '''Providing an empty pair set should skip loading and return empty mapping.'''
+    triplets_dir = tmp_path / 'triplets'
+    (triplets_dir / 'anchor=0').mkdir(parents=True)
+
+    # Write a file to ensure the directory isn't empty (shouldn't be read)
+    pl.DataFrame(
+        {
+            'anchor_idx': [1],
+            'positive_idx': [10],
+            'negative_idx': [100],
+            'negative_code': ['N100'],
+            'relation_margin': [0.1],
+            'distance_margin': [1.0],
+        }
+    ).write_parquet(triplets_dir / 'anchor=0' / 'chunk.parquet')
+
+    result = _load_negative_candidates(str(triplets_dir), required_pairs=set())
+    assert result == {}
+
+
+def _fake_triplet_row():
+    return [
+        {
+            'anchor_idx': 1,
+            'anchor_code': '01',
+            'positive_idx': 11,
+            'positive_code': '011',
+            'positive_level': 3,
+            'stratum_id': 0,
+            'stratum_wgt': 1.0,
+            'negatives': [
+                {
+                    'negative_idx': 21,
+                    'negative_code': '021',
+                    'relation_margin': 0.1,
+                    'distance_margin': 0.2,
+                }
+            ],
+            'sampling_metadata': {'candidates_near': 1},
+        }
+    ]
+
+
+def test_streaming_generator_saves_cache_when_missing(monkeypatch):
+    '''Generator should persist built triplets before yielding when cache is absent.'''
+    cfg = StreamingConfig()
+    sampling_cfg = SamplingConfig()
+    fake_rows = _fake_triplet_row()
+
+    monkeypatch.setattr(streaming, '_load_final_cache', lambda cfg_arg: None)
+
+    def fake_build(cfg_arg, sampling_cfg_arg, worker_id):
+        assert sampling_cfg_arg is sampling_cfg
+        return fake_rows
+
+    saved = {}
+
+    def fake_save(data, cfg_arg):
+        saved['data'] = data
+
+    monkeypatch.setattr(streaming, '_build_triplet_rows', fake_build)
+    monkeypatch.setattr(streaming, '_save_final_cache', fake_save)
+
+    gen = streaming.create_streaming_generator(cfg, sampling_cfg)
+    row = next(gen)
+
+    assert row['anchor_idx'] == fake_rows[0]['anchor_idx']
+    assert saved['data'] == fake_rows
+    with pytest.raises(StopIteration):
+        next(gen)
+
+
+def test_streaming_generator_uses_existing_cache(monkeypatch):
+    '''When cache exists, generator should not rebuild or resave triplets.'''
+    cfg = StreamingConfig()
+    sampling_cfg = SamplingConfig()
+    cached_rows = _fake_triplet_row()
+
+    monkeypatch.setattr(streaming, '_load_final_cache', lambda cfg_arg: cached_rows)
+
+    def fail_build(*args, **kwargs):
+        raise AssertionError('Should not rebuild when cache exists')
+
+    def fail_save(*args, **kwargs):
+        raise AssertionError('Should not save when cache exists')
+
+    monkeypatch.setattr(streaming, '_build_triplet_rows', fail_build)
+    monkeypatch.setattr(streaming, '_save_final_cache', fail_save)
+
+    gen = streaming.create_streaming_generator(cfg, sampling_cfg)
+    row = next(gen)
+
+    assert row['positive_code'] == cached_rows[0]['positive_code']
+    with pytest.raises(StopIteration):
+        next(gen)
 
 # -------------------------------------------------------------------------------------------------
 # SANS Static Sampling Tests

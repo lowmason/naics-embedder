@@ -62,7 +62,7 @@ class CompileConfig:
         cache_size_limit: Maximum number of cached compilations per function
     '''
 
-    enabled: bool = True
+    enabled: bool = False
     mode: CompileMode = 'reduce-overhead'
     backend: CompileBackend = 'inductor'
     fullgraph: bool = False

@@ -7,6 +7,7 @@ Tests cover:
 - Deterministic behavior with same seed
 '''
 
+import polars as pl
 import pytest
 
 from naics_embedder.graph_model.dataloader import hgcn_streaming_dataset as streaming
@@ -159,3 +160,26 @@ def test_generator_negatives_structure(monkeypatch: pytest.MonkeyPatch):
             assert 'negative_code' in neg
             assert 'relation_margin' in neg
             assert 'distance_margin' in neg
+
+
+@pytest.mark.unit
+def test_negative_candidate_loader_filters_pairs(tmp_path):
+    '''Graph loader should restrict triplet rows to requested pairs.'''
+    triplets_dir = tmp_path / 'triplets'
+    (triplets_dir / 'anchor=0').mkdir(parents=True)
+
+    pl.DataFrame(
+        {
+            'anchor_idx': [1, 1, 2],
+            'positive_idx': [10, 11, 20],
+            'negative_idx': [100, 101, 200],
+            'negative_code': ['N100', 'N101', 'N200'],
+            'relation_margin': [0.1, 0.2, 0.3],
+            'distance_margin': [1.0, 2.0, 3.0],
+        }
+    ).write_parquet(triplets_dir / 'anchor=0' / 'chunk.parquet')
+
+    result = streaming._load_negative_candidates(str(triplets_dir), required_pairs={(1, 11)})
+
+    assert set(result.keys()) == {(1, 11)}
+    assert result[(1, 11)][0]['negative_code'] == 'N101'

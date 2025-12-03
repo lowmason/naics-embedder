@@ -409,19 +409,42 @@ def _get_descriptions_2(
     descriptions_exclusions: pl.DataFrame,
     descriptions_examples: pl.DataFrame,
 ) -> pl.DataFrame:
+
     # descriptions: exclude exclusion and example description blocks
     descriptions_4 = (
-        descriptions_3.join(descriptions_exclusions, how='anti', on=['code', 'description_id'])
-        .join(descriptions_examples, how='left', on='code')
-        .with_columns(pl.col('description_id_min').fill_null(999))
-        .filter(pl.col('description_id').lt(pl.col('description_id_min')))
+        descriptions_3
+        .join(
+            descriptions_exclusions, 
+            how='anti', 
+            on=['code', 'description_id']
+        )
+        .join(
+            descriptions_examples, 
+            how='left', 
+            on='code'
+        )
+        .with_columns(
+            pl.col('description_id_min').fill_null(999)
+        )
+        .filter(
+            pl.col('description_id').lt(pl.col('description_id_min'))
+        )
         .group_by('code', maintain_order=True)
-        .agg(pl.col('description'))
-        .with_columns(description=pl.col('description').list.join(' '))
+        .agg(
+            pl.col('description')
+        )
+        .with_columns(
+            description=pl.col('description').list.join(' ')
+        )
     )
 
     # Separate complete descriptions from missing ones
-    description_complete_1 = descriptions_4.filter(pl.col('description').ne(''))
+    description_complete_1 = (
+        descriptions_4
+        .filter(
+            pl.col('description').ne('')
+        )
+    )
 
     # Find 4-digit codes missing descriptions
     description_4_missing = descriptions_4.filter(
