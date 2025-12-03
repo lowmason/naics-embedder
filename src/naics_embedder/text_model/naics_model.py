@@ -104,6 +104,7 @@ class NAICSContrastiveModel(
         hierarchy_weight: Weight for hierarchy preservation loss
         rank_order_weight: Weight for LambdaRank loss
         radius_reg_weight: Weight for radius regularization
+        level_radius_weight: Weight for level-aware radius prior
         learning_rate: Base learning rate
         weight_decay: AdamW weight decay
         warmup_steps: Number of warmup steps
@@ -143,6 +144,7 @@ class NAICSContrastiveModel(
         hierarchy_weight: float = 0.1,
         rank_order_weight: float = 0.15,
         radius_reg_weight: float = 0.01,
+        level_radius_weight: float = 0.05,
         learning_rate: float = 2e-4,
         weight_decay: float = 0.01,
         warmup_steps: int = 500,
@@ -436,6 +438,12 @@ class NAICSContrastiveModel(
             negative_emb,
             batch_size,
         )
+        level_radius_loss = self._compute_level_radius_alignment_loss(
+            anchor_emb,
+            positive_emb,
+            batch,
+            batch_size,
+        )
 
         # Combine losses
         total_loss, scaled_load_balancing_loss = self._combine_loss_terms(
@@ -444,6 +452,7 @@ class NAICSContrastiveModel(
             hierarchy_loss,
             lambdarank_loss,
             radius_reg_loss,
+            level_radius_loss,
         )
 
         # Log loss breakdown
@@ -453,6 +462,7 @@ class NAICSContrastiveModel(
             hierarchy_loss,
             lambdarank_loss,
             radius_reg_loss,
+            level_radius_loss,
             total_loss,
             batch_size,
         )

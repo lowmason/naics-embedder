@@ -467,6 +467,7 @@ def train(
                 hierarchy_weight=cfg.loss.hierarchy_weight,
                 rank_order_weight=cfg.loss.rank_order_weight,
                 radius_reg_weight=cfg.loss.radius_reg_weight,
+                level_radius_weight=cfg.loss.level_radius_weight,
                 learning_rate=cfg.training.learning_rate,
                 weight_decay=cfg.training.weight_decay,
                 warmup_steps=cfg.training.warmup_steps,

@@ -86,7 +86,13 @@ class ValidationMixin:
             anchor_emb, positive_emb, negative_emb, batch_size, k_negatives
         )
 
-        self.log('val/contrastive_loss', contrastive_loss, prog_bar=True, batch_size=batch_size)
+        self.log(
+            'val/contrastive_loss',
+            contrastive_loss.detach(),
+            prog_bar=True,
+            batch_size=batch_size,
+            sync_dist=True,
+        )
 
         if 'anchor_code' in batch:
             for i, code in enumerate(batch['anchor_code']):
@@ -134,9 +140,10 @@ class ValidationMixin:
             gt_dists = self.ground_truth_distances[code_indices][:, code_indices].to(self.device)
 
             num_samples = len(embeddings)
-            epoch_metrics = self._compute_validation_metrics(
-                embeddings, codes, gt_dists, num_samples
-            )
+            with torch.no_grad():
+                epoch_metrics = self._compute_validation_metrics(
+                    embeddings, codes, gt_dists, num_samples
+                )
 
             # Handle clustering updates
             self._handle_clustering_update()
@@ -193,15 +200,31 @@ class ValidationMixin:
         )
 
         # Log manifold validity metrics
-        self.log('val/manifold_valid', float(is_valid), batch_size=num_samples)
-        self.log('val/lorentz_norm_mean', diagnostics['lorentz_norm_mean'], batch_size=num_samples)
+        self.log('val/manifold_valid', float(is_valid), batch_size=num_samples, sync_dist=True)
+        self.log(
+            'val/lorentz_norm_mean',
+            diagnostics['lorentz_norm_mean'],
+            batch_size=num_samples,
+            sync_dist=True,
+        )
         self.log(
             'val/lorentz_norm_violation_max',
-            diagnostics['violation_max'],
+            self._to_python_scalar(diagnostics['violation_max']),
             batch_size=num_samples,
+            sync_dist=True,
         )
-        self.log('val/hyperbolic_radius_mean', diagnostics['radius_mean'], batch_size=num_samples)
-        self.log('val/hyperbolic_radius_std', diagnostics['radius_std'], batch_size=num_samples)
+        self.log(
+            'val/hyperbolic_radius_mean',
+            self._to_python_scalar(diagnostics['radius_mean']),
+            batch_size=num_samples,
+            sync_dist=True,
+        )
+        self.log(
+            'val/hyperbolic_radius_std',
+            self._to_python_scalar(diagnostics['radius_std']),
+            batch_size=num_samples,
+            sync_dist=True,
+        )
 
         # Warn if manifold constraint is violated
         if not is_valid:
@@ -214,18 +237,28 @@ class ValidationMixin:
         embeddings_euc = embeddings[:, 1:]  # Remove time coordinate
         stats = self.embedding_stats.compute_statistics(embeddings_euc)
         self.log(
-            'val/mean_norm', self._to_python_scalar(stats['mean_norm']), batch_size=num_samples
+            'val/mean_norm',
+            self._to_python_scalar(stats['mean_norm']),
+            batch_size=num_samples,
+            sync_dist=True,
         )
-        self.log('val/std_norm', self._to_python_scalar(stats['std_norm']), batch_size=num_samples)
+        self.log(
+            'val/std_norm',
+            self._to_python_scalar(stats['std_norm']),
+            batch_size=num_samples,
+            sync_dist=True,
+        )
         self.log(
             'val/mean_pairwise_distance',
             self._to_python_scalar(stats['mean_pairwise_distance']),
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/std_pairwise_distance',
             self._to_python_scalar(stats['std_pairwise_distance']),
             batch_size=num_samples,
+            sync_dist=True,
         )
 
         # Check collapse on Euclidean projection
@@ -234,33 +267,39 @@ class ValidationMixin:
             'val/variance_collapsed',
             self._to_python_scalar(collapse['variance_collapsed']),
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/norm_collapsed',
             self._to_python_scalar(collapse['norm_collapsed']),
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/distance_collapsed',
             self._to_python_scalar(collapse['distance_collapsed']),
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/mean_variance',
             self._to_python_scalar(collapse['mean_variance']),
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/norm_cv',
             self._to_python_scalar(collapse['norm_cv']),
             prog_bar=True,
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/distance_cv',
             self._to_python_scalar(collapse['distance_cv']),
             prog_bar=True,
             batch_size=num_samples,
+            sync_dist=True,
         )
 
         # Use Lorentzian distances for hyperbolic embeddings
@@ -281,11 +320,13 @@ class ValidationMixin:
             self._to_python_scalar(cophenetic_result['correlation']),
             prog_bar=True,
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/cophenetic_n_pairs',
             self._to_python_scalar(cophenetic_result['n_pairs']),
             batch_size=num_samples,
+            sync_dist=True,
         )
 
         # Compute NDCG@k for ranking evaluation
@@ -295,11 +336,13 @@ class ValidationMixin:
                 f'val/ndcg@{k}',
                 self._to_python_scalar(ndcg_result[f'ndcg@{k}']),
                 batch_size=num_samples,
+                sync_dist=True,
             )
             self.log(
                 f'val/ndcg@{k}_n_queries',
                 self._to_python_scalar(ndcg_result[f'ndcg@{k}_n_queries']),
                 batch_size=num_samples,
+                sync_dist=True,
             )
 
         # Compute Spearman for backward compatibility
@@ -308,11 +351,13 @@ class ValidationMixin:
             'val/spearman_correlation',
             self._to_python_scalar(spearman_result['correlation']),
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/spearman_n_pairs',
             self._to_python_scalar(spearman_result['n_pairs']),
             batch_size=num_samples,
+            sync_dist=True,
         )
 
         distortion = self.hierarchy_metrics.distortion(emb_dists, gt_dists)
@@ -320,17 +365,20 @@ class ValidationMixin:
             'val/mean_distortion',
             self._to_python_scalar(distortion['mean_distortion']),
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/std_distortion',
             self._to_python_scalar(distortion['std_distortion']),
             batch_size=num_samples,
+            sync_dist=True,
         )
         self.log(
             'val/median_distortion',
             self._to_python_scalar(distortion['median_distortion']),
             prog_bar=True,
             batch_size=num_samples,
+            sync_dist=True,
         )
 
         logger.info(

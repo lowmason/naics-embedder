@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Tuple
 
 import torch
 
+from naics_embedder.losses.level_radius import level_radius_loss
+
 logger = logging.getLogger(__name__)
 
 class LossMixin:
@@ -173,6 +175,51 @@ class LossMixin:
         self.log('train/mean_radius', radius.mean(), batch_size=batch_size)
         self.log('train/max_radius', radius.max(), batch_size=batch_size)
         return radius_reg_loss
+
+    def _compute_level_radius_alignment_loss(
+        self,
+        anchor_emb: torch.Tensor,
+        positive_emb: torch.Tensor,
+        batch: Dict[str, Any],
+        batch_size: int,
+    ) -> torch.Tensor:
+        '''
+        Encourage monotonically increasing hyperbolic radii across hierarchy levels.
+        '''
+        weight = getattr(self.hparams, 'level_radius_weight', 0.0)
+        if weight <= 0:
+            return torch.tensor(0.0, device=self.device)
+
+        anchor_codes = batch.get('anchor_code', [])
+        positive_codes = batch.get('positive_code', [])
+        if not anchor_codes and not positive_codes:
+            return torch.tensor(0.0, device=self.device)
+
+        device = anchor_emb.device
+
+        def _code_lengths(codes: List[str]) -> torch.Tensor:
+            lengths = [len(code or '') for code in codes]
+            return torch.tensor(lengths, dtype=torch.float32, device=device)
+
+        anchor_levels = _code_lengths(anchor_codes)
+        positive_levels_raw = batch.get('positive_levels')
+        if positive_levels_raw:
+            positive_levels = torch.tensor(
+                positive_levels_raw, dtype=torch.float32, device=device
+            )
+        else:
+            positive_levels = _code_lengths(positive_codes)
+
+        embeddings = torch.cat([anchor_emb, positive_emb], dim=0)
+        levels = torch.cat([anchor_levels, positive_levels], dim=0)
+        if embeddings.shape[0] != levels.shape[0]:
+            logger.warning('Mismatch between embeddings and level annotations; skipping radius loss.')
+            return torch.tensor(0.0, device=self.device)
+
+        curvature = getattr(self.hparams, 'curvature', 1.0)
+        base_loss = level_radius_loss(embeddings, levels, curvature=curvature)
+        scaled_loss = base_loss * weight
+        return scaled_loss
 
     def _compute_load_balancing_loss(
         self,
@@ -381,6 +428,7 @@ class LossMixin:
         hierarchy_loss: torch.Tensor,
         lambdarank_loss: torch.Tensor,
         radius_reg_loss: torch.Tensor,
+        level_radius_loss_value: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
         Combine individual loss components into the final optimization target.
@@ -391,6 +439,7 @@ class LossMixin:
             hierarchy_loss: Hierarchy preservation loss
             lambdarank_loss: Ranking optimization loss
             radius_reg_loss: Radius regularization loss
+            level_radius_loss_value: Level-aware radius alignment loss
 
         Returns:
             Tuple containing the total loss and the scaled load balancing term.
@@ -398,7 +447,7 @@ class LossMixin:
         scaled_load_balancing_loss = self.load_balancing_coef * load_balancing_loss
         total_loss = (
             contrastive_loss + scaled_load_balancing_loss + hierarchy_loss + lambdarank_loss +
-            radius_reg_loss
+            radius_reg_loss + level_radius_loss_value
         )
         return total_loss, scaled_load_balancing_loss
 

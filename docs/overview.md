@@ -588,7 +588,7 @@ Compilation can be disabled via environment variable: `NAICS_DISABLE_COMPILE=1`
 | LoRA | r / alpha / dropout | 8 / 16 / 0.1 |
 | MoE | num_experts / top_k / hidden_dim | 4 / 2 / 1024 |
 | Loss | temperature / curvature | 0.07 / 1.0 |
-| Loss Weights | hierarchy / rank_order / radius_reg | 0.325 / 0.275 / 0.01 |
+| Loss Weights | hierarchy / rank_order / radius_reg / level_radius | 0.45 / 0.35 / 0.15 / 0.05 |
 | MoE | load_balancing_coef | 0.01 |
 | Training | learning_rate / weight_decay | 2e-4 / 0.01 |
 | Training | warmup_steps | 500 |

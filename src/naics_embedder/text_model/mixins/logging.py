@@ -395,6 +395,7 @@ class LoggingMixin:
         hierarchy_loss: torch.Tensor,
         lambdarank_loss: torch.Tensor,
         radius_reg_loss: torch.Tensor,
+        level_radius_loss: torch.Tensor,
         total_loss: torch.Tensor,
         batch_size: int,
     ) -> None:
@@ -416,6 +417,13 @@ class LoggingMixin:
             self.log(
                 'train/radius_reg_loss', radius_reg_loss, prog_bar=False, batch_size=batch_size
             )
+        if level_radius_loss.item() > 0:
+            self.log(
+                'train/level_radius_loss',
+                level_radius_loss,
+                prog_bar=False,
+                batch_size=batch_size,
+            )
         self.log('train/total_loss', total_loss, prog_bar=True, batch_size=batch_size)
 
     def _log_radius_structure_metrics(
@@ -432,12 +440,14 @@ class LoggingMixin:
 
         metrics = compute_radius_structure_metrics(embeddings, codes, self.naics_hierarchy)
         for name, value in metrics.items():
+            scalar_value = self._to_python_scalar(value)
             self.log(
                 f'val/{name}',
-                value,
+                scalar_value,
                 batch_size=batch_size,
                 on_step=False,
                 on_epoch=True,
+                sync_dist=True,
             )
         return metrics
 
@@ -461,11 +471,13 @@ class LoggingMixin:
             child_top_k=self.child_eval_top_k,
         )
         for name, value in metrics.items():
+            scalar_value = self._to_python_scalar(value)
             self.log(
                 f'val/{name}',
-                value,
+                scalar_value,
                 batch_size=batch_size,
                 on_step=False,
                 on_epoch=True,
+                sync_dist=True,
             )
         return metrics

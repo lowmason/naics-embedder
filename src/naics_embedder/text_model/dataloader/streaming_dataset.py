@@ -716,127 +716,64 @@ def create_streaming_dataset(
     cfg: StreamingConfig,
     sampling_cfg: Optional[SamplingConfig] = None,
 ) -> Iterator[Dict[str, Any]]:
-    '''Create streaming dataset that yields triplets with tokenized embeddings.
+    '''Create streaming dataset that yields per-positive triplets with tokenized embeddings.'''
 
-    Uses taxonomy-based stratified positive sampling:
-    - Samples positives from descendants (stratum 0), ancestors (stratum 1), siblings (stratum 2)
-    - Up to 4 positives per stratum
-    - Negatives sampled per positive using Phase 1 / SANS / uniform strategies
-
-    Yields anchor-level samples with all positives grouped together.
-    '''
-
-    # Get triplets iterator
     triplets_iterator = create_streaming_generator(cfg, sampling_cfg)
 
-    # Buffer triplets by anchor to collect all positives
-    current_anchor: Optional[Tuple[int, str]] = None
-    buffered_triplets: List[Dict[str, Any]] = []
-
-    def yield_anchor_group(anchor_key: Tuple[int, str],
-                           triplets_list: List[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
-        '''Yield grouped triplets for an anchor.'''
-        anchor_idx, anchor_code = anchor_key
-
+    def _extract_embedding(idx: int) -> Optional[Dict[str, Any]]:
         try:
-            anchor_embedding = {k: v for k, v in token_cache[anchor_idx].items() if k != 'code'}
-        except KeyError as e:
-            logger.error(f'KeyError accessing token_cache[{anchor_idx}]: {e}')
-            raise
+            return {k: v for k, v in token_cache[idx].items() if k != 'code'}
+        except KeyError:
+            logger.warning(f'Missing token_cache for index {idx}, skipping sample')
+            return None
 
-        # Build positives list with embeddings
-        positives_list = []
-        all_negatives: Dict[int, Dict[str, Any]] = {}  # Dedupe negatives by idx
-        sampling_metadata = None
+    for triplet in triplets_iterator:
+        anchor_idx = int(triplet['anchor_idx'])
+        positive_idx = int(triplet['positive_idx'])
 
-        for triplet in triplets_list:
-            positive_idx = triplet['positive_idx']
-            positive_code = triplet['positive_code']
+        anchor_embedding = _extract_embedding(anchor_idx)
+        if anchor_embedding is None:
+            continue
 
-            # Get positive embedding
-            if not isinstance(positive_idx, int):
-                positive_idx_int = int(positive_idx)
-            else:
-                positive_idx_int = positive_idx
+        positive_embedding = _extract_embedding(positive_idx)
+        if positive_embedding is None:
+            continue
 
-            try:
-                positive_embedding = {
-                    k: v
-                    for k, v in token_cache[positive_idx_int].items() if k != 'code'
-                }
-            except KeyError:
-                logger.warning(f'Missing token_cache for positive {positive_idx_int}, skipping')
+        negative_entries = []
+        for neg in triplet.get('negatives', []):
+            neg_embedding = _extract_embedding(int(neg['negative_idx']))
+            if neg_embedding is None:
                 continue
 
-            positives_list.append(
+            negative_entries.append(
                 {
-                    'positive_idx': positive_idx,
-                    'positive_code': positive_code,
-                    'positive_level': triplet.get('positive_level', len(positive_code)),
-                    'stratum_id': triplet.get('stratum_id', 0),
-                    'stratum_wgt': triplet.get('stratum_wgt', 1.0),
-                    'positive_embedding': positive_embedding,
+                    'negative_idx': int(neg['negative_idx']),
+                    'negative_code': neg['negative_code'],
+                    'negative_embedding': neg_embedding,
+                    'relation_margin': neg.get('relation_margin', 0),
+                    'distance_margin': neg.get('distance_margin', 0),
+                    'explicit_exclusion': neg.get('explicit_exclusion', False),
                 }
             )
 
-            # Collect negatives (dedupe across positives)
-            for neg in triplet.get('negatives', []):
-                neg_idx = neg['negative_idx']
-                if neg_idx not in all_negatives:
-                    try:
-                        neg_embedding = {
-                            k: v
-                            for k, v in token_cache[neg_idx].items() if k != 'code'
-                        }
-                    except KeyError:
-                        logger.warning(f'Missing token_cache for negative {neg_idx}, skipping')
-                        continue
-
-                    all_negatives[neg_idx] = {
-                        'negative_idx': neg_idx,
-                        'negative_code': neg['negative_code'],
-                        'negative_embedding': neg_embedding,
-                        'relation_margin': neg.get('relation_margin', 0),
-                        'distance_margin': neg.get('distance_margin', 0),
-                        'explicit_exclusion': neg.get('explicit_exclusion', False),
-                    }
-
-            # Capture sampling metadata from first triplet
-            if sampling_metadata is None:
-                sampling_metadata = triplet.get('sampling_metadata')
-
-        if not positives_list:
-            return
+        if not negative_entries:
+            continue
 
         result: Dict[str, Any] = {
             'anchor_idx': anchor_idx,
-            'anchor_code': anchor_code,
+            'anchor_code': triplet['anchor_code'],
             'anchor_embedding': anchor_embedding,
-            'positives': positives_list,
-            'negatives': list(all_negatives.values()),
+            'positive_idx': positive_idx,
+            'positive_code': triplet['positive_code'],
+            'positive_level': triplet.get('positive_level', len(triplet['positive_code'])),
+            'stratum_id': triplet.get('stratum_id', 0),
+            'stratum_wgt': triplet.get('stratum_wgt', 1.0),
+            'positive_embedding': positive_embedding,
+            'negatives': negative_entries,
         }
 
+        sampling_metadata = triplet.get('sampling_metadata')
         if sampling_metadata:
             result['sampling_metadata'] = sampling_metadata
 
         yield result
-
-    # Iterate through triplets and group by anchor
-    for triplet in triplets_iterator:
-        anchor_key = (triplet['anchor_idx'], triplet['anchor_code'])
-
-        if current_anchor is None:
-            current_anchor = anchor_key
-            buffered_triplets = [triplet]
-        elif current_anchor == anchor_key:
-            # Same anchor, add to buffer
-            buffered_triplets.append(triplet)
-        else:
-            # New anchor, yield previous group
-            yield from yield_anchor_group(current_anchor, buffered_triplets)
-            current_anchor = anchor_key
-            buffered_triplets = [triplet]
-
-    # Yield final group
-    if current_anchor is not None:
-        yield from yield_anchor_group(current_anchor, buffered_triplets)

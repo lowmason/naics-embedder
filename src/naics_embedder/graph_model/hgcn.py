@@ -21,6 +21,7 @@ from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import softmax
 
 from naics_embedder.graph_model.dataloader.hgcn_datamodule import HGCNDataModule
+from naics_embedder.losses.level_radius import level_radius_loss
 from naics_embedder.metrics import (
     EmbeddingEvaluator,
     HierarchyMetrics,
@@ -248,16 +249,6 @@ def triplet_loss_hyp(
         loss = loss.mean(dim=1)
 
     return loss.mean()
-
-def level_radius_loss(emb: torch.Tensor, idx: torch.Tensor, levels: torch.Tensor) -> torch.Tensor:
-    # radial distance on Lorentz model: sqrt(x0^2 - 1)
-    radial = torch.sqrt(torch.clamp(emb[idx, 0].pow(2) - 1, min=1e-8))
-    target = (levels[idx].float() - 2) * 0.5
-
-    # Use Huber loss (smooth_l1) instead of MSE
-    # More robust to outliers and prevents loss explosion
-    # Quadratic for small errors, linear for large errors
-    return F.smooth_l1_loss(radial, target)
 
 @dataclass
 class CurriculumState:
@@ -737,7 +728,14 @@ class HGCNLightningModule(pyl.LightningModule):
     ) -> torch.Tensor:
         unique_idx = torch.cat([anchors, positives, negatives.view(-1)]).unique()
         levels_tensor: torch.Tensor = self.levels  # type: ignore[assignment]
-        return level_radius_loss(embeddings, unique_idx, levels_tensor)
+        selected_embeddings = embeddings[unique_idx]
+        selected_levels = levels_tensor[unique_idx]
+        curvature = getattr(self.cfg, 'curvature', 1.0)
+        return level_radius_loss(
+            selected_embeddings,
+            selected_levels,
+            curvature=curvature,
+        )
 
     def _apply_loss_weights(
         self,

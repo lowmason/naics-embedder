@@ -449,7 +449,7 @@ class StreamingConfig(BaseModel):
 
     # Phase 1 sampling parameters
     use_phase1_sampling: bool = Field(
-        default=False,
+        default=True,
         description=(
             'Use Phase 1 tree-distance based sampling '
             '(inverse weighting, sibling masking, exclusion mining)'
@@ -621,6 +621,12 @@ class LossConfig(BaseModel):
         description=(
             'Weight for radius regularization to prevent hyperbolic radius instability (0.0 to disable)'
         ),
+    )
+    level_radius_weight: float = Field(
+        default=0.05,
+        ge=0,
+        le=1.0,
+        description='Weight for hierarchy-level-aware radius prior (0.0 to disable)',
     )
 
 # -------------------------------------------------------------------------------------------------

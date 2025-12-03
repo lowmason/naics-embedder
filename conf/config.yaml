@@ -6,7 +6,7 @@ seed: 42
 
 # Curriculum scheduler configuration (Structure-Aware Dynamic Curriculum)
 curriculum:
-  phase1_end: 0.3  # Structural initialization cutoff (fraction of epochs)
+  phase1_end: 0.5  # Structural initialization cutoff (fraction of epochs)
   phase2_end: 0.7  # Geometric refinement cutoff (fraction of epochs)
   phase3_end: 1.0  # False negative mitigation cutoff (fraction of epochs)
   tree_distance_alpha: 1.5  # Inverse-distance weighting exponent for negatives
@@ -50,7 +50,7 @@ dirs:
 
 # Data loading configuration
 data_loader:
-  batch_size: 1
+  batch_size: 16
   num_workers: 4
   val_split: 0.05
 
@@ -96,9 +96,10 @@ loss:
   temperature: 0.07
   curvature: 1.0
   base_margin: 0.5
-  hierarchy_weight: 0.325  # Weight for hierarchy preservation loss (increased from 0.1)
-  rank_order_weight: 0.275  # Weight for rank order preservation loss (Spearman correlation)
-  radius_reg_weight: 0.01  # Weight for radius regularization to prevent instability
+  hierarchy_weight: 0.45  # Weight for hierarchy preservation loss (increased from 0.1)
+  rank_order_weight: 0.35  # Weight for rank order preservation loss (Spearman correlation)
+  radius_reg_weight: 0.10  # Weight for radius regularization to prevent instability
+  level_radius_weight: 0.15  # Weight for aligning hyperbolic radius with hierarchy depth
 
 # Training configuration
 training:
@@ -108,7 +109,7 @@ training:
   use_warmup_cosine: false  # Set to true for large training jobs with many epochs
 
   trainer:
-    max_epochs: 20
+    max_epochs: 10
     accelerator: auto
     devices: 1
     precision: "16-mixed"

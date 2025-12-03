@@ -97,6 +97,7 @@ def sample_training_batch(test_device, batch_size=4, k_negatives=8):
         'anchor_code': [f'{i:02d}111' for i in range(batch_size)],
         'positive_code': [f'{i:02d}1111' for i in range(batch_size)],
         'negative_codes': [[f'{j:02d}999' for j in range(k_negatives)] for _ in range(batch_size)],
+        'positive_levels': [len(f'{i:02d}1111') for i in range(batch_size)],
     }
 
     return batch
@@ -323,6 +324,7 @@ class TestTrainingStep:
         hierarchy_loss = torch.tensor(0.3)
         lambdarank_loss = torch.tensor(0.2)
         radius_reg_loss = torch.tensor(0.1)
+        level_radius_loss = torch.tensor(0.05)
 
         total_loss, scaled_load_balancing = naics_model._combine_loss_terms(
             contrastive_loss,
@@ -330,11 +332,13 @@ class TestTrainingStep:
             hierarchy_loss,
             lambdarank_loss,
             radius_reg_loss,
+            level_radius_loss,
         )
 
         expected_scaled = load_balancing_loss * naics_model.load_balancing_coef
         expected_total = (
-            contrastive_loss + expected_scaled + hierarchy_loss + lambdarank_loss + radius_reg_loss
+            contrastive_loss + expected_scaled + hierarchy_loss + lambdarank_loss + radius_reg_loss +
+            level_radius_loss
         )
 
         assert torch.isclose(scaled_load_balancing, expected_scaled)
