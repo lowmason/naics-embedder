@@ -29,7 +29,6 @@ nav:
                   - Contrastive: api/contrastive_loss.md
                   - Hierarchy Preservation: api/hierarchy_preservation_loss.md
                   - Rank Order Preservation: api/rank_order_preservation_loss.md
-              - Evaluation: api/evaluation.md
           - HGCN Training:
               - Data Loading:
                   - Streaming DataSet: api/hgcn_streaming_dataset.md

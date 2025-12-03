@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-[![License](https://img.shields.io/github/license/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/blob/main/LICENSE) [![Documentation](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml) [![Tests](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml) [![Coverage](https://codecov.io/gh/lowmason/naics-embedder/branch/main/graph/badge.svg)](https://github.com/lowmason/naics-embedder/main/graph) [![Issues](https://img.shields.io/github/issues/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/issues) [![Last Commit](https://img.shields.io/github/last-commit/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/commits/main) [![Contributors](https://img.shields.io/github/contributors/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/graphs/contributors) [![Repo size](https://img.shields.io/github/repo-size/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder) [![Top language](https://img.shields.io/github/languages/top/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder)
+[![PyPI Version](https://img.shields.io/pypi/v/naics-embedder)](https://pypi.org/project/naics-embedder/) [![GitHub Release](https://img.shields.io/github/v/release/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/releases) [![PyPI Downloads](https://img.shields.io/pypi/dm/naics-embedder)](https://pypi.org/project/naics-embedder/) [![License](https://img.shields.io/github/license/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/blob/main/LICENSE) [![Documentation](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml) [![Tests](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml) [![Coverage](https://codecov.io/gh/lowmason/naics-embedder/branch/main/graph/badge.svg)](https://github.com/lowmason/naics-embedder/main/graph) [![Issues](https://img.shields.io/github/issues/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/issues) [![Last Commit](https://img.shields.io/github/last-commit/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/commits/main) [![Contributors](https://img.shields.io/github/contributors/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/graphs/contributors) [![Repo size](https://img.shields.io/github/repo-size/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder) [![Top language](https://img.shields.io/github/languages/top/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder)
 
 ------------------------------------------------------------------------
 
@@ -16,10 +16,10 @@ The final output is a set of **Lorentz-model hyperbolic embeddings** suitable fo
 
 The system consists of four sequential stages:
 
-1.  **Multi-channel text encoding** – independent transformer-based encoders for title, description, examples, and exclusions.
-2.  **Mixture-of-Experts (MoE) fusion** – adaptive fusion of the four embeddings using Top-2 gating.
-3.  **Hyperbolic contrastive learning** – projection into Lorentz space and optimization with Decoupled Contrastive Learning (DCL).
-4.  **Hyperbolic Graph Convolutional Refinement (HGCN)** – structure-aware refinement using the explicit NAICS parent–child graph.
+1. **Multi-channel text encoding** – independent transformer-based encoders for title, description, examples, and exclusions.
+2. **Mixture-of-Experts (MoE) fusion** – adaptive fusion of the four embeddings using Top-2 gating.
+3. **Hyperbolic contrastive learning** – projection into Lorentz space and optimization with Decoupled Contrastive Learning (DCL).
+4. **Hyperbolic Graph Convolutional Refinement (HGCN)** – structure-aware refinement using the explicit NAICS parent–child graph.
 
 Each stage is designed to preserve or enhance the hierarchical geometry of NAICS codes.
 
@@ -29,17 +29,17 @@ Each stage is designed to preserve or enhance the hierarchical geometry of NAICS
 
 Each NAICS code includes four distinct text fields:
 
--   Title: Short code name ⟶ Concise category identification
--   Description: Detailed explanation of what the code encompasses ⟶ Rich semantic content
--   Examples: Representative businesses in this category ⟶ Concrete instantiations
--   Excluded: Codes explicitly NOT in this category ⟶ Disambiguation and boundaries
+- Title: Short code name ⟶ Concise category identification
+- Description: Detailed explanation of what the code encompasses ⟶ Rich semantic content
+- Examples: Representative businesses in this category ⟶ Concrete instantiations
+- Excluded: Codes explicitly NOT in this category ⟶ Disambiguation and boundaries
 
 Each field is processed independently using a transformer encoder (LoRA-adapted). This produces four Euclidean embeddings:
 
--   Title: (Embedding_title)
--   Description: (Embedding_description)
--   Examples: Embedding_examples)
--   Excluded: (Embedding_excluded)
+- Title: (Embedding_title)
+- Description: (Embedding_description)
+- Examples: Embedding_examples)
+- Excluded: (Embedding_excluded)
 
 These embeddings serve as inputs to the fusion stage.
 
@@ -49,9 +49,9 @@ These embeddings serve as inputs to the fusion stage.
 
 The four channel embeddings are concatenated and passed into a **Mixture-of-Experts (MoE)** module. Key components include:
 
--   Top-2 gating to route each input to the two most relevant experts.
--   Feed-forward expert networks that learn specialized fusion behaviors.
--   Auxiliary load-balancing loss to ensure even expert utilization across batches.
+- Top-2 gating to route each input to the two most relevant experts.
+- Feed-forward expert networks that learn specialized fusion behaviors.
+- Auxiliary load-balancing loss to ensure even expert utilization across batches.
 
 This produces a single fused Euclidean embedding (E_fused) per NAICS code.
 
@@ -65,9 +65,9 @@ To align the latent space with the hierarchical structure of NAICS, embeddings a
 
 The fused Euclidean vector is mapped onto the hyperboloid:
 
--   Uses exponential map at the origin
--   Supports learned or fixed curvature
--   Ensures numerical stability
+- Uses exponential map at the origin
+- Supports learned or fixed curvature
+- Ensures numerical stability
 
 The result is a Lorentz embedding (E_hyp).
 
@@ -85,18 +85,18 @@ This formulation provides better gradient flow and numerical stability compared 
 
 Negatives include:
 
--   unrelated codes,
--   hierarchically distant codes,
--   false negatives detected via periodic clustering (masked with -inf).
+- unrelated codes,
+- hierarchically distant codes,
+- false negatives detected via periodic clustering (masked with -inf).
 
 ### 4.3 False Negative Mitigation
 
 A curriculum-based procedure removes semantically similar negatives once the embedding space stabilizes:
 
-1.  Generate embeddings for the dataset.
-2.  Cluster embeddings (e.g., via KMeans).
-3.  Identify negatives sharing the cluster label with the anchor.
-4.  Exclude these from the contrastive denominator.
+1. Generate embeddings for the dataset.
+2. Cluster embeddings (e.g., via KMeans).
+3. Identify negatives sharing the cluster label with the anchor.
+4. Exclude these from the contrastive denominator.
 
 This prevents the model from incorrectly separating close hierarchical neighbors.
 
@@ -114,10 +114,10 @@ Nodes represent NAICS codes, and edges represent parent–child relationships in
 
 The refinement module includes:
 
--   Two hyperbolic graph convolutional layers
--   Tangent-space aggregation and message passing
--   Learnable curvature shared across layers
--   Exponential and logarithmic maps for manifold transitions
+- Two hyperbolic graph convolutional layers
+- Tangent-space aggregation and message passing
+- Learnable curvature shared across layers
+- Exponential and logarithmic maps for manifold transitions
 
 ### 5.3 Refinement Objectives
 
@@ -127,8 +127,8 @@ The model optimizes a combined loss:
 
 Ensures that:
 
--   anchor–positive distance \< anchor–negative distance
--   distances use Lorentz geodesics
+- anchor–positive distance \< anchor–negative distance
+- distances use Lorentz geodesics
 
 #### b. Per-Level Radial Regularization
 
@@ -140,10 +140,10 @@ This aligns global and local geometric structure with the NAICS taxonomy.
 
 To ensure graph refinement does not erode the global structure captured by the text model, the same hierarchy-aware metrics introduced earlier in the pipeline are logged:
 
--   Cophenetic correlation + pair counts
--   Spearman correlation
--   NDCG\@K (configurable list, default `5/10/20`)
--   Hyperbolic distortion statistics
+- Cophenetic correlation + pair counts
+- Spearman correlation
+- NDCG\@K (configurable list, default `5/10/20`)
+- Hyperbolic distortion statistics
 
 ### 5.5 Pre/Post Verification
 
@@ -165,13 +165,13 @@ The verifier reports cophenetic correlation, NDCG\@K, and parent-retrieval accur
 
 Upon completion of all four stages, the system produces:
 
--   High-fidelity hyperbolic embeddings in Lorentz space
--   Representations consistent with both text semantics and hierarchical relationships
--   Embeddings suitable for:
-    -   hierarchical search and retrieval
-    -   clustering and visualization
-    -   downstream machine learning tasks
-    -   graph-based analytics
+- High-fidelity hyperbolic embeddings in Lorentz space
+- Representations consistent with both text semantics and hierarchical relationships
+- Embeddings suitable for:
+  - hierarchical search and retrieval
+  - clustering and visualization
+  - downstream machine learning tasks
+  - graph-based analytics
 
 ------------------------------------------------------------------------
 
@@ -298,8 +298,8 @@ Project to tangent space or Poincaré ball for plotting.
 
 Final embeddings can be used as features for:
 
--   classification models,
--   clustering algorithms (in hyperbolic or tangent space),
--   retrieval and recommendation systems.
+- classification models,
+- clustering algorithms (in hyperbolic or tangent space),
+- retrieval and recommendation systems.
 
 ------------------------------------------------------------------------
