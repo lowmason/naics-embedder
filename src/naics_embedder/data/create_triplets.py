@@ -303,7 +303,7 @@ def generate_training_triplets() -> pl.DataFrame:
     # Combine positives and negatives into triplets
     triplets_df = _get_triplets(positives, negatives, positive_distances, negative_distances)
 
-    _triplet_stats(triplets_df)
+    #_triplet_stats(triplets_df)
 
     _parquet_stats(
         parquet_df=triplets_df,
