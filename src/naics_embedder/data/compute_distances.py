@@ -331,7 +331,7 @@ def calculate_pairwise_distances() -> pl.DataFrame:
 
     (distances_df.write_parquet(cfg.distances_parquet))
 
-    _distance_stats(distances_df)
+    #_distance_stats(distances_df)
 
     _parquet_stats(
         parquet_df=distances_df,
