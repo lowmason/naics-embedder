@@ -184,8 +184,9 @@ The following modules have comprehensive test coverage:
 
 2. **text_model/dataloader/datamodule.py** ✅ - `test_datamodule.py`
     - collate_fn batching logic
-    - Multi-level supervision expansion
-    - GeneratorDataset worker sharding
+    - Positive level extraction
+    - NAICSMapDataset indexing and __getitem__
+    - DataLoader shuffle configuration
     - **Coverage: >60%**
 
 3. **text_model/dataloader/streaming_dataset.py** ✅ - `test_streaming_dataset.py`
@@ -193,6 +194,7 @@ The following modules have comprehensive test coverage:
     - Ancestor/descendant generation
     - Matrix loading
     - Sampling weight computation
+    - Multi-epoch cache path generation
     - **Coverage: >65%**
 
 #### Configuration & Utilities

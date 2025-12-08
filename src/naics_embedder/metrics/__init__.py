@@ -33,7 +33,10 @@ from .hierarchy_structure import (
 # QCEW benchmark
 from .qcew import (
     QCEWBenchmarkConfig,
+    QCEWMultilevelConfig,
+    print_multilevel_comparison,
     run_qcew_employment_benchmark,
+    run_qcew_multilevel_benchmark,
 )
 
 # Evaluation runner
@@ -55,7 +58,10 @@ __all__ = [
     'compute_radius_structure_metrics',
     # QCEW
     'QCEWBenchmarkConfig',
+    'QCEWMultilevelConfig',
+    'print_multilevel_comparison',
     'run_qcew_employment_benchmark',
+    'run_qcew_multilevel_benchmark',
     # Runner
     'NAICSEvaluationRunner',
 ]

@@ -2,6 +2,7 @@
 
 input_parquet: ./data/naics_descriptions.parquet
 output_parquet: ./data/naics_relations.parquet
+relation_matrix_parquet: ./data/naics_relation_matrix.parquet
 
 # Relation mapping from names to IDs
 relation_id:

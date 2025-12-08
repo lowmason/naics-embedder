@@ -5,7 +5,7 @@ Tests cover:
 - collate_fn batching and padding logic
 - Multi-level supervision expansion
 - Sampling metadata accumulation
-- GeneratorDataset worker sharding
+- NAICSMapDataset indexing and __getitem__
 '''
 
 from unittest.mock import MagicMock, patch
@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from naics_embedder.text_model.dataloader.datamodule import GeneratorDataset, collate_fn
+from naics_embedder.text_model.dataloader.datamodule import NAICSMapDataset, collate_fn
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -67,51 +67,6 @@ def make_batch_item(make_embedding):
 
     return _create
 
-@pytest.fixture
-def make_multilevel_item(make_embedding):
-    '''Factory to create a multi-level supervision batch item.'''
-
-    def _create(anchor_code, positive_codes, negative_codes, seq_len=128):
-        positives = [
-            {
-                'positive_code':
-                pc,
-                'positive_idx':
-                i,
-                'positive_embedding':
-                make_embedding(seq_len),
-                'negatives': [
-                    {
-                        'negative_code': nc,
-                        'negative_idx': j,
-                        'negative_embedding': make_embedding(seq_len),
-                        'relation_margin': 0,
-                        'distance_margin': 4,
-                    } for j, nc in enumerate(negative_codes)
-                ],
-            } for i, pc in enumerate(positive_codes)
-        ]
-
-        return {
-            'anchor_code':
-            anchor_code,
-            'anchor_embedding':
-            make_embedding(seq_len),
-            'positives':
-            positives,
-            'negatives': [
-                {
-                    'negative_code': nc,
-                    'negative_idx': i,
-                    'negative_embedding': make_embedding(seq_len),
-                    'relation_margin': 0,
-                    'distance_margin': 4,
-                    'explicit_exclusion': False,
-                } for i, nc in enumerate(negative_codes)
-            ],
-        }
-
-    return _create
 
 # -------------------------------------------------------------------------------------------------
 # Basic Collate Tests
@@ -262,67 +217,43 @@ def test_collate_handles_single_item_batch(make_batch_item):
     assert result['anchor']['title']['input_ids'].shape == (1, 128)
 
 # -------------------------------------------------------------------------------------------------
-# Multi-Level Supervision Tests
+# Positive Level Tests
 # -------------------------------------------------------------------------------------------------
 
-def test_collate_multi_level_expansion(make_multilevel_item):
-    '''Multi-level positives should be expanded into separate entries.'''
+def test_collate_extracts_positive_level(make_batch_item):
+    '''collate_fn should extract positive_level from batch items.'''
+    batch = [make_batch_item('311111', '31111', ['222'])]
+    # Add positive_level to the item
+    batch[0]['positive_level'] = 5
+
+    result = collate_fn(batch)
+
+    assert 'positive_levels' in result
+    assert result['positive_levels'] == [5]
+
+def test_collate_infers_positive_level_from_code_length(make_batch_item):
+    '''collate_fn should infer positive_level from positive_code length if not present.'''
+    batch = [make_batch_item('311111', '3111', ['222'])]
+    # positive_level not explicitly set, should use len(positive_code)
+
+    result = collate_fn(batch)
+
+    assert 'positive_levels' in result
+    # Default is len(positive_code) = 4
+    assert result['positive_levels'] == [4]
+
+def test_collate_multiple_positive_levels(make_batch_item):
+    '''collate_fn should track positive_levels for multiple items.'''
     batch = [
-        make_multilevel_item(
-            '311111',
-            ['31111', '3111', '311'],  # 3 ancestor levels
-            ['222'],
-        )
+        make_batch_item('311111', '31111', ['222']),
+        make_batch_item('321111', '3211', ['333']),
     ]
+    batch[0]['positive_level'] = 5
+    batch[1]['positive_level'] = 4
 
     result = collate_fn(batch)
 
-    # Should expand to 3 entries (one per positive level)
-    assert result['batch_size'] == 3
-    assert result['positive_levels'] == [5, 4, 3]  # len of each positive code
-
-def test_collate_multi_level_preserves_anchor(make_multilevel_item):
-    '''Each expanded entry should share the same anchor.'''
-    batch = [make_multilevel_item('311111', ['31111', '3111'], ['222'])]
-
-    result = collate_fn(batch)
-
-    # All anchor codes should be the same
-    assert result['anchor_code'] == ['311111', '311111']
-
-    # Anchor embeddings should be stacked (same embedding repeated)
-    assert result['anchor']['title']['input_ids'].shape == (2, 128)
-
-def test_collate_multi_level_different_positives(make_multilevel_item):
-    '''Each expanded entry should have different positive.'''
-    batch = [make_multilevel_item('311111', ['31111', '3111'], ['222'])]
-
-    result = collate_fn(batch)
-
-    assert result['positive_code'] == ['31111', '3111']
-
-def test_collate_multi_level_shared_negatives(make_multilevel_item):
-    '''All expanded entries should share the same negatives.'''
-    batch = [make_multilevel_item('311111', ['31111', '3111'], ['222', '333'])]
-
-    result = collate_fn(batch)
-
-    # Each expansion uses the same negatives
-    assert result['negative_codes'][0] == ['222', '333']
-    assert result['negative_codes'][1] == ['222', '333']
-
-def test_collate_mixed_single_and_multi_level(make_batch_item, make_multilevel_item):
-    '''Batch can contain both single and multi-level items.'''
-    batch = [
-        make_multilevel_item('311111', ['31111', '3111'], ['222']),
-        # Standard single-positive item won't trigger multi-level path
-        # since it doesn't have 'positives' key as a list
-    ]
-
-    result = collate_fn(batch)
-
-    # Should have 2 entries from multi-level expansion
-    assert result['batch_size'] == 2
+    assert result['positive_levels'] == [5, 4]
 
 # -------------------------------------------------------------------------------------------------
 # Sampling Metadata Tests
@@ -404,142 +335,185 @@ def test_collate_no_metadata_when_missing(make_batch_item):
     assert 'sampling_metadata' not in result
 
 # -------------------------------------------------------------------------------------------------
-# GeneratorDataset Tests
+# NAICSMapDataset Tests
 # -------------------------------------------------------------------------------------------------
 
-def test_generator_dataset_sharding_worker_0():
-    '''Worker 0 should get items at indices 0, 2, 4, ...'''
+@pytest.fixture
+def mock_token_cache():
+    '''Create a mock token cache with embeddings for indices 0-4.'''
+    channels = ['title', 'description', 'excluded', 'examples']
 
-    def mock_generator_fn(token_cache, cfg, sampling_cfg):
-        for i in range(10):
-            yield {'idx': i}
+    def make_embedding(idx):
+        return {
+            ch: {
+                'input_ids': torch.randint(0, 1000, (128,)),
+                'attention_mask': torch.ones(128, dtype=torch.long),
+            }
+            for ch in channels
+        }
 
-    mock_tokenization_cfg = MagicMock()
-    mock_tokenization_cfg.output_path = '/tmp/nonexistent_cache.pt'
-    mock_streaming_cfg = MagicMock()
-    mock_sampling_cfg = MagicMock()
+    return {i: {'code': f'{i:06d}', **make_embedding(i)} for i in range(5)}
 
-    dataset = GeneratorDataset(
-        mock_generator_fn, mock_tokenization_cfg, mock_streaming_cfg, mock_sampling_cfg
-    )
 
-    # Mock worker info for worker 0 of 2
-    worker_info = MagicMock()
-    worker_info.id = 0
-    worker_info.num_workers = 2
+@pytest.fixture
+def mock_triplet_rows():
+    '''Create mock triplet rows for testing.'''
+    return [
+        {
+            'anchor_idx': 0,
+            'anchor_code': '000000',
+            'positive_idx': 1,
+            'positive_code': '000001',
+            'positive_level': 6,
+            'stratum_id': 0,
+            'stratum_wgt': 1.0,
+            'negatives': [
+                {'negative_idx': 2, 'negative_code': '000002', 'relation_margin': 0, 'distance_margin': 4},
+                {'negative_idx': 3, 'negative_code': '000003', 'relation_margin': 0, 'distance_margin': 4},
+            ],
+        },
+        {
+            'anchor_idx': 1,
+            'anchor_code': '000001',
+            'positive_idx': 0,
+            'positive_code': '000000',
+            'positive_level': 6,
+            'stratum_id': 1,
+            'stratum_wgt': 1.0,
+            'negatives': [
+                {'negative_idx': 4, 'negative_code': '000004', 'relation_margin': 0, 'distance_margin': 4},
+            ],
+        },
+    ]
 
-    with patch('torch.utils.data.get_worker_info', return_value=worker_info):
-        with patch.object(dataset, '_get_token_cache', return_value={}):
-            items = list(dataset)
 
-    # Worker 0 should get indices 0, 2, 4, 6, 8
-    assert [item['idx'] for item in items] == [0, 2, 4, 6, 8]
+def test_map_dataset_len(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset should return correct length.'''
+    dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
+    assert len(dataset) == 2
 
-def test_generator_dataset_sharding_worker_1():
-    '''Worker 1 should get items at indices 1, 3, 5, ...'''
 
-    def mock_generator_fn(token_cache, cfg, sampling_cfg):
-        for i in range(10):
-            yield {'idx': i}
+def test_map_dataset_getitem_returns_correct_structure(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset __getitem__ should return correctly structured item.'''
+    dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
 
-    mock_tokenization_cfg = MagicMock()
-    mock_tokenization_cfg.output_path = '/tmp/nonexistent_cache.pt'
-    mock_streaming_cfg = MagicMock()
-    mock_sampling_cfg = MagicMock()
+    item = dataset[0]
 
-    dataset = GeneratorDataset(
-        mock_generator_fn, mock_tokenization_cfg, mock_streaming_cfg, mock_sampling_cfg
-    )
+    assert item is not None
+    assert item['anchor_idx'] == 0
+    assert item['anchor_code'] == '000000'
+    assert item['positive_idx'] == 1
+    assert item['positive_code'] == '000001'
+    assert 'anchor_embedding' in item
+    assert 'positive_embedding' in item
+    assert len(item['negatives']) == 2
 
-    # Mock worker info for worker 1 of 2
-    worker_info = MagicMock()
-    worker_info.id = 1
-    worker_info.num_workers = 2
 
-    with patch('torch.utils.data.get_worker_info', return_value=worker_info):
-        with patch.object(dataset, '_get_token_cache', return_value={}):
-            items = list(dataset)
+def test_map_dataset_getitem_extracts_embeddings(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset should extract embeddings from token cache.'''
+    dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
 
-    # Worker 1 should get indices 1, 3, 5, 7, 9
-    assert [item['idx'] for item in items] == [1, 3, 5, 7, 9]
+    item = dataset[0]
+    assert item is not None
 
-def test_generator_dataset_no_sharding_single_worker():
-    '''With no workers, should yield all items from generator.'''
+    # Check that embeddings have all channels
+    for channel in ['title', 'description', 'excluded', 'examples']:
+        assert channel in item['anchor_embedding']
+        assert channel in item['positive_embedding']
+        assert 'input_ids' in item['anchor_embedding'][channel]
+        assert 'attention_mask' in item['anchor_embedding'][channel]
 
-    def mock_generator_fn(token_cache, cfg, sampling_cfg):
-        for i in range(5):
-            yield {'idx': i}
 
-    mock_tokenization_cfg = MagicMock()
-    mock_tokenization_cfg.output_path = '/tmp/nonexistent_cache.pt'
-    mock_streaming_cfg = MagicMock()
-    mock_sampling_cfg = MagicMock()
+def test_map_dataset_getitem_excludes_code_from_embedding(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset should exclude 'code' field from embeddings.'''
+    dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
 
-    dataset = GeneratorDataset(
-        mock_generator_fn, mock_tokenization_cfg, mock_streaming_cfg, mock_sampling_cfg
-    )
+    item = dataset[0]
+    assert item is not None
 
-    # Directly set the token cache to bypass loading
-    dataset._token_cache = {}
+    assert 'code' not in item['anchor_embedding']
+    assert 'code' not in item['positive_embedding']
 
-    # Patch get_worker_info at the module level
-    with patch(
-        'naics_embedder.text_model.dataloader.datamodule.torch.utils.data.get_worker_info',
-        return_value=None,
-    ):
-        items = list(dataset)
 
-    assert [item['idx'] for item in items] == [0, 1, 2, 3, 4]
+def test_map_dataset_getitem_returns_none_for_missing_anchor(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset should return None if anchor not in token cache.'''
+    # Remove anchor idx 0 from token cache
+    token_cache_missing = {k: v for k, v in mock_token_cache.items() if k != 0}
+    dataset = NAICSMapDataset(mock_triplet_rows, token_cache_missing)
 
-def test_generator_dataset_sharding_four_workers():
-    '''Four workers should each get 1/4 of items.'''
+    item = dataset[0]
+    assert item is None
 
-    def mock_generator_fn(token_cache, cfg, sampling_cfg):
-        for i in range(12):
-            yield {'idx': i}
 
-    mock_tokenization_cfg = MagicMock()
-    mock_tokenization_cfg.output_path = '/tmp/nonexistent_cache.pt'
-    mock_streaming_cfg = MagicMock()
-    mock_sampling_cfg = MagicMock()
+def test_map_dataset_getitem_returns_none_for_missing_positive(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset should return None if positive not in token cache.'''
+    # Remove positive idx 1 from token cache
+    token_cache_missing = {k: v for k, v in mock_token_cache.items() if k != 1}
+    dataset = NAICSMapDataset(mock_triplet_rows, token_cache_missing)
 
-    all_items = []
-    for worker_id in range(4):
-        dataset = GeneratorDataset(
-            mock_generator_fn, mock_tokenization_cfg, mock_streaming_cfg, mock_sampling_cfg
-        )
+    item = dataset[0]
+    assert item is None
 
-        worker_info = MagicMock()
-        worker_info.id = worker_id
-        worker_info.num_workers = 4
 
-        with patch('torch.utils.data.get_worker_info', return_value=worker_info):
-            with patch.object(dataset, '_get_token_cache', return_value={}):
-                items = list(dataset)
-                all_items.extend([item['idx'] for item in items])
+def test_map_dataset_getitem_filters_missing_negatives(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset should filter out negatives not in token cache.'''
+    # Remove negative idx 2 from token cache
+    token_cache_missing = {k: v for k, v in mock_token_cache.items() if k != 2}
+    dataset = NAICSMapDataset(mock_triplet_rows, token_cache_missing)
 
-    # All items should be covered exactly once
-    assert sorted(all_items) == list(range(12))
+    item = dataset[0]
 
-def test_generator_dataset_lazy_cache_loading():
-    '''Token cache should be loaded lazily on first iteration.'''
+    # Should have 1 negative instead of 2
+    assert item is not None
+    assert len(item['negatives']) == 1
+    assert item['negatives'][0]['negative_idx'] == 3
 
-    def mock_generator_fn(token_cache, cfg, sampling_cfg):
-        yield {'cache': token_cache}
 
-    mock_tokenization_cfg = MagicMock()
-    mock_tokenization_cfg.output_path = '/tmp/nonexistent_cache.pt'
+def test_map_dataset_getitem_returns_none_for_no_negatives(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset should return None if all negatives are missing.'''
+    # Remove all negative indices from token cache
+    token_cache_missing = {k: v for k, v in mock_token_cache.items() if k not in [2, 3]}
+    dataset = NAICSMapDataset(mock_triplet_rows, token_cache_missing)
 
-    dataset = GeneratorDataset(mock_generator_fn, mock_tokenization_cfg, MagicMock(), MagicMock())
+    item = dataset[0]
+    assert item is None
 
-    # Cache should not be loaded yet
-    assert dataset._token_cache is None
 
-    # Mock the cache loading
-    with patch('torch.utils.data.get_worker_info', return_value=None):
-        with patch.object(dataset, '_get_token_cache', return_value={'loaded': True}) as mock_get:
-            list(dataset)
-            mock_get.assert_called_once()
+def test_map_dataset_random_access(mock_triplet_rows, mock_token_cache):
+    '''NAICSMapDataset should support random access (any order).'''
+    dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
+
+    # Access in reverse order
+    item1 = dataset[1]
+    item0 = dataset[0]
+
+    assert item0 is not None
+    assert item1 is not None
+    assert item0['anchor_idx'] == 0
+    assert item1['anchor_idx'] == 1
+
+
+def test_map_dataset_includes_sampling_metadata(mock_token_cache):
+    '''NAICSMapDataset should include sampling_metadata if present.'''
+    triplet_rows = [
+        {
+            'anchor_idx': 0,
+            'anchor_code': '000000',
+            'positive_idx': 1,
+            'positive_code': '000001',
+            'negatives': [
+                {'negative_idx': 2, 'negative_code': '000002', 'relation_margin': 0, 'distance_margin': 4},
+            ],
+            'sampling_metadata': {'strategy': 'sans_static', 'sampled_near': 1},
+        },
+    ]
+    dataset = NAICSMapDataset(triplet_rows, mock_token_cache)
+
+    item = dataset[0]
+    assert item is not None
+
+    assert 'sampling_metadata' in item
+    assert item['sampling_metadata']['strategy'] == 'sans_static'
 
 # -------------------------------------------------------------------------------------------------
 # Edge Cases
@@ -699,8 +673,8 @@ class TestNAICSDataModuleSetup:
 
         assert datamodule.train_streaming_cfg.n_negatives == 8
         assert datamodule.train_streaming_cfg.seed == 123
-        # Validation config uses (seed + 1) from NAICSDataModule.__init__ seed param
-        assert datamodule.val_streaming_cfg.seed == 101  # 100 + 1
+        # Validation config uses (seed + 1000) from NAICSDataModule.__init__ seed param
+        assert datamodule.val_streaming_cfg.seed == 1100  # 100 + 1000
 
     def test_datamodule_init_custom_sampling_config(
         self, mock_descriptions_parquet, mock_triplets_dir
@@ -720,12 +694,11 @@ class TestNAICSDataModuleSetup:
 
         assert datamodule.sampling_cfg.strategy == 'sans_static'
 
-    def test_datamodule_creates_train_dataset(self, mock_descriptions_parquet, mock_triplets_dir):
-        '''Test that train_dataset is created during initialization.'''
-        from naics_embedder.text_model.dataloader.datamodule import (
-            GeneratorDataset,
-            NAICSDataModule,
-        )
+    def test_datamodule_train_dataset_none_before_setup(
+        self, mock_descriptions_parquet, mock_triplets_dir
+    ):
+        '''Test that train_dataset is None before setup() is called.'''
+        from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
 
         datamodule = NAICSDataModule(
             descriptions_path=mock_descriptions_parquet,
@@ -734,25 +707,23 @@ class TestNAICSDataModuleSetup:
             num_workers=0,
         )
 
-        assert datamodule.train_dataset is not None
-        assert isinstance(datamodule.train_dataset, GeneratorDataset)
+        # Datasets are None until setup() is called
+        assert datamodule.train_dataset is None
+        assert datamodule.val_dataset is None
 
-    def test_datamodule_creates_val_dataset(self, mock_descriptions_parquet, mock_triplets_dir):
-        '''Test that val_dataset is created during initialization.'''
-        from naics_embedder.text_model.dataloader.datamodule import (
-            GeneratorDataset,
-            NAICSDataModule,
-        )
+    def test_datamodule_n_epochs_parameter(self, mock_descriptions_parquet, mock_triplets_dir):
+        '''Test that n_epochs parameter is stored correctly.'''
+        from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
 
         datamodule = NAICSDataModule(
             descriptions_path=mock_descriptions_parquet,
             triplets_path=mock_triplets_dir,
             batch_size=4,
             num_workers=0,
+            n_epochs=50,
         )
 
-        assert datamodule.val_dataset is not None
-        assert isinstance(datamodule.val_dataset, GeneratorDataset)
+        assert datamodule.n_epochs == 50
 
     def test_datamodule_tokenization_config(self, mock_descriptions_parquet, mock_triplets_dir):
         '''Test that tokenization config is set correctly.'''
@@ -777,11 +748,14 @@ class TestDataLoaderCreation:
     '''Test suite for train and validation dataloader creation.'''
 
     @pytest.fixture
-    def mock_datamodule(self, tmp_path):
-        '''Create a mock NAICSDataModule for testing.'''
+    def mock_datamodule_with_datasets(self, tmp_path):
+        '''Create a NAICSDataModule with mock datasets for testing DataLoader creation.'''
         import polars as pl
 
-        from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
+        from naics_embedder.text_model.dataloader.datamodule import (
+            NAICSDataModule,
+            NAICSMapDataset,
+        )
 
         # Create descriptions
         desc_data = {
@@ -825,78 +799,147 @@ class TestDataLoaderCreation:
         triplet_path = anchor_dir / 'part0.parquet'
         triplet_df.write_parquet(triplet_path)
 
-        return NAICSDataModule(
+        datamodule = NAICSDataModule(
             descriptions_path=str(desc_path),
             triplets_path=str(triplets_dir),
             batch_size=2,
             num_workers=0,
         )
 
-    def test_train_dataloader_returns_dataloader(self, mock_datamodule):
+        # Create mock token cache and triplet rows
+        channels = ['title', 'description', 'excluded', 'examples']
+
+        def make_embedding():
+            return {
+                ch: {
+                    'input_ids': torch.randint(0, 1000, (128,)),
+                    'attention_mask': torch.ones(128, dtype=torch.long),
+                }
+                for ch in channels
+            }
+
+        mock_token_cache = {i: {'code': f'{i:06d}', **make_embedding()} for i in range(3)}
+        mock_triplet_rows = [
+            {
+                'anchor_idx': 0,
+                'anchor_code': '311111',
+                'positive_idx': 1,
+                'positive_code': '311112',
+                'positive_level': 6,
+                'stratum_id': 0,
+                'stratum_wgt': 1.0,
+                'negatives': [
+                    {
+                        'negative_idx': 2,
+                        'negative_code': '321111',
+                        'relation_margin': 0,
+                        'distance_margin': 4,
+                    }
+                ],
+            },
+        ]
+
+        # Manually set datasets (bypassing setup())
+        datamodule.train_dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
+        datamodule.val_dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
+
+        return datamodule
+
+    def test_train_dataloader_returns_dataloader(self, mock_datamodule_with_datasets):
         '''Test that train_dataloader returns a DataLoader instance.'''
         from torch.utils.data import DataLoader
 
-        train_loader = mock_datamodule.train_dataloader()
+        train_loader = mock_datamodule_with_datasets.train_dataloader()
 
         assert isinstance(train_loader, DataLoader)
 
-    def test_train_dataloader_batch_size(self, mock_datamodule):
+    def test_train_dataloader_batch_size(self, mock_datamodule_with_datasets):
         '''Test that train_dataloader uses correct batch size.'''
-        train_loader = mock_datamodule.train_dataloader()
+        train_loader = mock_datamodule_with_datasets.train_dataloader()
 
         assert train_loader.batch_size == 2
 
-    def test_train_dataloader_num_workers(self, mock_datamodule):
+    def test_train_dataloader_num_workers(self, mock_datamodule_with_datasets):
         '''Test that train_dataloader uses correct num_workers.'''
-        train_loader = mock_datamodule.train_dataloader()
+        train_loader = mock_datamodule_with_datasets.train_dataloader()
 
         assert train_loader.num_workers == 0
 
-    def test_train_dataloader_collate_fn(self, mock_datamodule):
-        '''Test that train_dataloader uses custom collate function.'''
-        train_loader = mock_datamodule.train_dataloader()
+    def test_train_dataloader_has_shuffle_enabled(self, mock_datamodule_with_datasets):
+        '''Test that train_dataloader has shuffle=True for map-style dataset.'''
+        train_loader = mock_datamodule_with_datasets.train_dataloader()
 
-        assert train_loader.collate_fn == collate_fn
+        # DataLoader with shuffle=True uses a RandomSampler
+        from torch.utils.data import RandomSampler
 
-    def test_val_dataloader_returns_dataloader(self, mock_datamodule):
+        assert isinstance(train_loader.sampler, RandomSampler)
+
+    def test_val_dataloader_returns_dataloader(self, mock_datamodule_with_datasets):
         '''Test that val_dataloader returns a DataLoader instance.'''
         from torch.utils.data import DataLoader
 
-        val_loader = mock_datamodule.val_dataloader()
+        val_loader = mock_datamodule_with_datasets.val_dataloader()
 
         assert isinstance(val_loader, DataLoader)
 
-    def test_val_dataloader_batch_size(self, mock_datamodule):
+    def test_val_dataloader_batch_size(self, mock_datamodule_with_datasets):
         '''Test that val_dataloader uses correct batch size.'''
-        val_loader = mock_datamodule.val_dataloader()
+        val_loader = mock_datamodule_with_datasets.val_dataloader()
 
         assert val_loader.batch_size == 2
 
-    def test_val_dataloader_num_workers(self, mock_datamodule):
+    def test_val_dataloader_num_workers(self, mock_datamodule_with_datasets):
         '''Test that val_dataloader uses correct num_workers.'''
-        val_loader = mock_datamodule.val_dataloader()
+        val_loader = mock_datamodule_with_datasets.val_dataloader()
 
         assert val_loader.num_workers == 0
 
-    def test_val_dataloader_collate_fn(self, mock_datamodule):
-        '''Test that val_dataloader uses custom collate function.'''
-        val_loader = mock_datamodule.val_dataloader()
+    def test_val_dataloader_has_shuffle_disabled(self, mock_datamodule_with_datasets):
+        '''Test that val_dataloader has shuffle=False.'''
+        val_loader = mock_datamodule_with_datasets.val_dataloader()
 
-        assert val_loader.collate_fn == collate_fn
+        # DataLoader with shuffle=False uses a SequentialSampler
+        from torch.utils.data import SequentialSampler
 
-    def test_train_val_dataloaders_are_different(self, mock_datamodule):
+        assert isinstance(val_loader.sampler, SequentialSampler)
+
+    def test_train_val_dataloaders_are_different(self, mock_datamodule_with_datasets):
         '''Test that train and val dataloaders are distinct.'''
-        train_loader = mock_datamodule.train_dataloader()
-        val_loader = mock_datamodule.val_dataloader()
+        train_loader = mock_datamodule_with_datasets.train_dataloader()
+        val_loader = mock_datamodule_with_datasets.val_dataloader()
 
         # They should be different objects
         assert train_loader is not val_loader
         # They should use different datasets
         assert train_loader.dataset is not val_loader.dataset
 
-    def test_persistent_workers_disabled_when_zero_workers(self, mock_datamodule):
+    def test_persistent_workers_disabled_when_zero_workers(self, mock_datamodule_with_datasets):
         '''Test persistent_workers is False when num_workers=0.'''
-        train_loader = mock_datamodule.train_dataloader()
+        train_loader = mock_datamodule_with_datasets.train_dataloader()
 
         # persistent_workers should be False since num_workers=0
         assert train_loader.persistent_workers is False
+
+    def test_train_dataloader_raises_if_dataset_none(self, tmp_path):
+        '''Test that train_dataloader raises RuntimeError if setup() not called.'''
+        import polars as pl
+
+        from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
+
+        # Create minimal parquet file
+        desc_data = {'index': [0], 'code': ['311111'], 'level': [6], 'title': ['Test'],
+                     'description': [''], 'excluded': [''], 'examples': [''],
+                     'excluded_codes': [None]}
+        desc_df = pl.DataFrame(desc_data)
+        desc_path = tmp_path / 'desc.parquet'
+        desc_df.write_parquet(desc_path)
+
+        datamodule = NAICSDataModule(
+            descriptions_path=str(desc_path),
+            triplets_path=str(tmp_path),
+            batch_size=2,
+            num_workers=0,
+        )
+
+        with pytest.raises(RuntimeError, match='train_dataset is None'):
+            datamodule.train_dataloader()

@@ -10,12 +10,11 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from pytorch_lightning import LightningDataModule
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import DataLoader, Dataset
 
 from naics_embedder.text_model.dataloader.streaming_dataset import (
-    _get_final_cache_path,
-    create_streaming_dataset,
-    create_streaming_generator,
+    _get_multi_epoch_cache_path,
+    build_multi_epoch_triplets,
 )
 from naics_embedder.utils.config import SamplingConfig, StreamingConfig, TokenizationConfig
 
@@ -149,88 +148,107 @@ def collate_fn(batch: List[Dict]) -> Dict:
     return result
 
 # -------------------------------------------------------------------------------------------------
-# Wrapper to make generator function work with DataLoader
+# Map-style Dataset for pre-sampled triplets
 # -------------------------------------------------------------------------------------------------
 
-class GeneratorDataset(IterableDataset):
-    '''Dataset wrapper for streaming generators.'''
+class NAICSMapDataset(Dataset):
+    '''Map-style dataset for pre-sampled triplets with tokenized embeddings.'''
 
-    def __init__(self, generator_fn, tokenization_cfg, *args, **kwargs):
-        self.generator_fn = generator_fn
-        self.tokenization_cfg = tokenization_cfg
-        self.args = args
-        self.kwargs = kwargs
-        self._token_cache = None
+    def __init__(self, triplet_rows: List[Dict[str, Any]], token_cache: Dict[int, Dict[str, Any]]):
+        '''
+        Initialize the map-style dataset.
 
-    def _get_token_cache(self):
-        '''Lazily load token cache once per worker process.'''
-        if self._token_cache is None:
-            import random
-            import time
+        Args:
+            triplet_rows: List of triplet dictionaries with anchor/positive/negative info
+            token_cache: Dictionary mapping index to tokenized embeddings
+        '''
+        self.triplet_rows = triplet_rows
+        self.token_cache = token_cache
 
-            # Set tokenizer parallelism to false in each worker
-            os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+    def __len__(self) -> int:
+        return len(self.triplet_rows)
 
-            from naics_embedder.text_model.dataloader.tokenization_cache import (
-                _load_tokenization_cache,
-                tokenization_cache,
+    def _extract_embedding(self, idx: int) -> Optional[Dict[str, Any]]:
+        '''Extract embedding from token cache, excluding code field.'''
+        try:
+            return {k: v for k, v in self.token_cache[idx].items() if k != 'code'}
+        except KeyError:
+            logger.warning(f'Missing token_cache for index {idx}')
+            return None
+
+    def __getitem__(self, idx: int) -> Optional[Dict[str, Any]]:
+        '''Get a single triplet item by index.'''
+        row = self.triplet_rows[idx]
+
+        anchor_idx = int(row['anchor_idx'])
+        positive_idx = int(row['positive_idx'])
+
+        anchor_embedding = self._extract_embedding(anchor_idx)
+        if anchor_embedding is None:
+            # Return a placeholder that will be filtered by collate_fn
+            return None
+
+        positive_embedding = self._extract_embedding(positive_idx)
+        if positive_embedding is None:
+            return None
+
+        negative_entries = []
+        for neg in row.get('negatives', []):
+            neg_embedding = self._extract_embedding(int(neg['negative_idx']))
+            if neg_embedding is None:
+                continue
+
+            negative_entries.append(
+                {
+                    'negative_idx': int(neg['negative_idx']),
+                    'negative_code': neg['negative_code'],
+                    'negative_embedding': neg_embedding,
+                    'relation_margin': neg.get('relation_margin', 0),
+                    'distance_margin': neg.get('distance_margin', 0),
+                    'explicit_exclusion': neg.get('explicit_exclusion', False),
+                }
             )
 
-            # Fast path: load cache directly (should already exist from prepare_data)
-            cache_path = Path(self.tokenization_cfg.output_path)
-            if cache_path.exists():
-                try:
-                    # Add small random delay to stagger worker loading
-                    worker_info = torch.utils.data.get_worker_info()
-                    if worker_info is not None:
-                        delay = random.uniform(0, 0.5) * (worker_info.id + 1)
-                        time.sleep(delay)
+        if not negative_entries:
+            return None
 
-                    self._token_cache = _load_tokenization_cache(
-                        self.tokenization_cfg.output_path, verbose=False
-                    )
-                    if self._token_cache is not None:
-                        return self._token_cache
-                except Exception as e:
-                    worker_pid = os.getpid()
-                    logger.warning(
-                        f'Worker {worker_pid} failed to load cache: {e}, will try with locking'
-                    )
+        result: Dict[str, Any] = {
+            'anchor_idx': anchor_idx,
+            'anchor_code': row['anchor_code'],
+            'anchor_embedding': anchor_embedding,
+            'positive_idx': positive_idx,
+            'positive_code': row['positive_code'],
+            'positive_level': row.get('positive_level', len(row['positive_code'])),
+            'stratum_id': row.get('stratum_id', 0),
+            'stratum_wgt': row.get('stratum_wgt', 1.0),
+            'positive_embedding': positive_embedding,
+            'negatives': negative_entries,
+        }
 
-            # Fallback: use full tokenization_cache() with locking
-            worker_pid = os.getpid()
-            logger.warning(
-                f'Worker {worker_pid} cache not found, loading with locking (this should be rare)'
-            )
-            self._token_cache = tokenization_cache(self.tokenization_cfg, use_locking=True)
-            logger.debug(f'Worker {os.getpid()} loaded tokenization cache')
+        sampling_metadata = row.get('sampling_metadata')
+        if sampling_metadata:
+            result['sampling_metadata'] = sampling_metadata
 
-        return self._token_cache
+        return result
 
-    def __iter__(self):
-        '''Iterate over dataset with worker sharding.'''
-        worker_info = torch.utils.data.get_worker_info()
-        token_cache = self._get_token_cache()
-        generator = self.generator_fn(token_cache, *self.args, **self.kwargs)
+# -------------------------------------------------------------------------------------------------
+# Collate function wrapper to filter None items
+# -------------------------------------------------------------------------------------------------
 
-        if worker_info is None:
-            # Single worker: yield all items directly
-            yield from generator
-        else:
-            # Shard the generator efficiently
-            # Each worker takes every num_workers-th item starting from worker_id
-            count = 0
-            for item in generator:
-                if count % worker_info.num_workers == worker_info.id:
-                    yield item
-                count += 1
+def _filter_none_collate_fn(batch: List[Optional[Dict]]) -> Dict:
+    '''Filter out None items before calling the main collate function.'''
+    filtered = [item for item in batch if item is not None]
+    if not filtered:
+        raise ValueError('All items in batch were None - no valid triplets')
+    return collate_fn(filtered)
+
 
 # -------------------------------------------------------------------------------------------------
 # Main DataModule for PyTorch Lightning
 # -------------------------------------------------------------------------------------------------
 
 class NAICSDataModule(LightningDataModule):
-    '''DataModule for NAICS embedding training.'''
+    '''DataModule for NAICS embedding training with pre-sampled multi-epoch triplets.'''
 
     def __init__(
         self,
@@ -243,6 +261,7 @@ class NAICSDataModule(LightningDataModule):
         num_workers: int = 4,
         seed: int = 42,
         val_split: float = 0.1,
+        n_epochs: int = 100,
         **kwargs: Any,
     ):
         super().__init__()
@@ -252,16 +271,17 @@ class NAICSDataModule(LightningDataModule):
         self.tokenizer_name = tokenizer_name
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.n_epochs = n_epochs
 
         # Create streaming configs
         if streaming_config is not None:
             val_streaming_config = streaming_config.copy()
-            val_streaming_config['seed'] = seed + 1
+            val_streaming_config['seed'] = seed + 1000  # Large offset for validation
             curriculum = StreamingConfig(**streaming_config)
             val_curriculum = StreamingConfig(**val_streaming_config)
         else:
             curriculum = StreamingConfig()
-            val_curriculum = StreamingConfig(seed=seed + 1)
+            val_curriculum = StreamingConfig(seed=seed + 1000)
 
         self.tokenization_cfg = TokenizationConfig(
             descriptions_parquet=descriptions_path,
@@ -276,20 +296,14 @@ class NAICSDataModule(LightningDataModule):
         else:
             self.sampling_cfg = SamplingConfig(**sampling_config)
 
-        # Store streaming configs for use in prepare_data()
+        # Store streaming configs for use in prepare_data() and setup()
         self.train_streaming_cfg = curriculum
         self.val_streaming_cfg = val_curriculum
 
-        # Create datasets
-        logger.info('  • Creating training dataset')
-        self.train_dataset = GeneratorDataset(
-            create_streaming_dataset, self.tokenization_cfg, curriculum, self.sampling_cfg
-        )
-
-        logger.info('  • Creating validation dataset\n')
-        self.val_dataset = GeneratorDataset(
-            create_streaming_dataset, self.tokenization_cfg, val_curriculum, self.sampling_cfg
-        )
+        # Datasets will be created in setup() after prepare_data() builds caches
+        self.train_dataset: Optional[NAICSMapDataset] = None
+        self.val_dataset: Optional[NAICSMapDataset] = None
+        self._token_cache: Optional[Dict[int, Dict[str, Any]]] = None
 
     def prepare_data(self):
         '''Build all caches before worker processes are spawned.'''
@@ -319,55 +333,77 @@ class NAICSDataModule(LightningDataModule):
         else:
             logger.info('Codes/indices cache already exists')
 
-        # Build streaming query caches (complete pipeline including weighted sampling)
-        self._build_streaming_cache(self.train_streaming_cfg, 'training', self.sampling_cfg)
-        self._build_streaming_cache(self.val_streaming_cfg, 'validation', self.sampling_cfg)
+        # Build multi-epoch triplet caches
+        self._build_multi_epoch_cache(self.train_streaming_cfg, 'training')
+        self._build_multi_epoch_cache(self.val_streaming_cfg, 'validation')
 
-    def _build_streaming_cache(self, cfg: StreamingConfig, name: str, sampling_cfg: SamplingConfig):
-        '''Build streaming query cache for a given config.'''
-        logger.info(f'Preparing streaming query cache ({name}) in main process...')
-        cache_path = _get_final_cache_path(cfg)
+    def _build_multi_epoch_cache(self, cfg: StreamingConfig, name: str):
+        '''Build multi-epoch triplet cache for a given config.'''
+        logger.info(f'Preparing multi-epoch triplet cache ({name}) in main process...')
+        cache_path = _get_multi_epoch_cache_path(cfg, self.n_epochs)
 
         if cache_path.exists():
-            logger.info(f'{name.capitalize()} streaming query cache already exists')
+            logger.info(f'{name.capitalize()} multi-epoch cache already exists')
             return
 
-        logger.info(f'Building {name} streaming query cache (this may take 30-60 seconds)...')
-        gen = create_streaming_generator(cfg, sampling_cfg)
+        logger.info(f'Building {name} multi-epoch cache for {self.n_epochs} epochs...')
+        # This will build and save the cache
+        build_multi_epoch_triplets(cfg, self.sampling_cfg, self.n_epochs)
+        logger.info(f'{name.capitalize()} multi-epoch cache built successfully')
 
-        try:
-            # Consume first item to trigger cache build
-            # Cache is saved before iteration starts
-            next(gen)
+    def setup(self, stage: Optional[str] = None):
+        '''Load caches and create datasets.'''
+        from naics_embedder.text_model.dataloader.tokenization_cache import _load_tokenization_cache
 
-            # Verify cache was created
-            if cache_path.exists():
-                logger.info(f'{name.capitalize()} streaming query cache built successfully')
-            else:
-                logger.warning('Cache build completed but file not found - this should not happen')
-        except StopIteration:
-            # Generator was empty, but cache should still be saved
-            if cache_path.exists():
-                logger.info(f'{name.capitalize()} streaming query cache built successfully')
-            else:
-                logger.warning('Cache file not found after build attempt')
+        # Load token cache (shared between train and val)
+        if self._token_cache is None:
+            logger.info('Loading tokenization cache...')
+            self._token_cache = _load_tokenization_cache(
+                self.tokenization_cfg.output_path, verbose=True
+            )
+            if self._token_cache is None:
+                raise RuntimeError('Failed to load tokenization cache')
+
+        # Load and create training dataset
+        if self.train_dataset is None:
+            logger.info('Loading training triplets...')
+            train_triplets = build_multi_epoch_triplets(
+                self.train_streaming_cfg, self.sampling_cfg, self.n_epochs
+            )
+            logger.info(f'  • Creating training dataset with {len(train_triplets):,} triplets')
+            self.train_dataset = NAICSMapDataset(train_triplets, self._token_cache)
+
+        # Load and create validation dataset
+        if self.val_dataset is None:
+            logger.info('Loading validation triplets...')
+            val_triplets = build_multi_epoch_triplets(
+                self.val_streaming_cfg, self.sampling_cfg, self.n_epochs
+            )
+            logger.info(f'  • Creating validation dataset with {len(val_triplets):,} triplets\n')
+            self.val_dataset = NAICSMapDataset(val_triplets, self._token_cache)
 
     def train_dataloader(self) -> DataLoader:
-        '''Create training dataloader.'''
+        '''Create training dataloader with shuffling enabled.'''
+        if self.train_dataset is None:
+            raise RuntimeError('train_dataset is None - call setup() first')
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
+            shuffle=True,  # Enable shuffling for map-style dataset
             num_workers=self.num_workers,
-            collate_fn=collate_fn,
+            collate_fn=_filter_none_collate_fn,
             persistent_workers=self.num_workers > 0,
         )
 
     def val_dataloader(self) -> DataLoader:
         '''Create validation dataloader.'''
+        if self.val_dataset is None:
+            raise RuntimeError('val_dataset is None - call setup() first')
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
+            shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=collate_fn,
+            collate_fn=_filter_none_collate_fn,
             persistent_workers=self.num_workers > 0,
         )

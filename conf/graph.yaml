@@ -1,0 +1,93 @@
+# Configuration for HGCN (Hyperbolic Graph Convolutional Network) training
+
+# Input/Output paths
+encodings_parquet: ./output/hyperbolic_projection/encodings.parquet
+relations_parquet: ./data/naics_relations.parquet
+training_pairs_path: ./data/naics_training_pairs.parquet
+output_dir: ./output/hgcn/
+output_parquet: ./output/hgcn/encodings.parquet
+distance_matrix_parquet: ./data/naics_distance_matrix.parquet
+
+# Model architecture
+tangent_dim: 31  # Spatial dimensions in tangent space
+n_hgcn_layers: 2  # Number of HGCN layers
+dropout: 0.10  # Dropout rate
+learnable_curvature: true  # Whether curvature is learnable
+learnable_loss_weights: true  # Whether loss weights are learnable
+
+# Evaluation settings
+full_eval_frequency: 1  # Run expensive hierarchy metrics every N optimizer steps
+ndcg_k_values: [5, 10, 20]  # NDCG@K values for ranking metrics
+parent_eval_top_k: 1  # Top-k for parent retrieval evaluation
+child_eval_top_k: 5  # Top-k for child retrieval evaluation
+
+# Training parameters
+num_epochs: 8
+epoch_every: 1  # Log every N epochs
+batch_size: 64
+lr: 0.00075  # Learning rate
+warmup_ratio: 0.2  # Fraction of epochs for warmup
+temperature_start: 0.10  # Starting temperature for loss scaling
+temperature_end: 0.08  # Ending temperature for loss scaling
+weight_decay: 1e-5
+gradient_clip_norm: 1.0
+
+# Loss parameters
+triplet_margin: 1.0
+w_triplet: 1.0  # Triplet loss weight
+w_per_level: 0.5  # Level loss weight
+
+# Edge-aware convolution parameters
+edge_relations:
+  - child
+  - grandchild
+  - great-grandchild
+  - sibling
+edge_relation_weights:
+  child: 1.0
+  sibling: 0.85
+  grandchild: 0.7
+  great-grandchild: 0.5
+  great-great-grandchild: 0.35
+edge_attention_hidden_dim: 64  # Hidden dimension for edge attention MLP
+edge_sibling_boost: 0.15  # Additive attention bonus for sibling edges
+
+# Curriculum / adaptive sampling
+curriculum_enabled: true
+curriculum_cache_dir: ./data/curriculum_cache
+curriculum_warmup_epochs: 2  # Epochs using warmup curriculum filters
+curriculum_margin_warmup_scale: 0.5  # Margin scaling during warmup
+hard_negative_start_epoch: 4  # Epoch to enable hard-negative mining
+hard_negative_fraction: 0.5  # Fraction of negatives to treat as hard
+hard_negative_temperature: 0.5  # Temperature for hard-negative weighting
+
+# Adaptive margin
+use_adaptive_margin: true
+adaptive_margin_alpha: 0.5  # Scale for adaptive margin adjustments
+adaptive_margin_min: 0.4  # Minimum allowable margin
+adaptive_margin_max: 2.0  # Maximum allowable margin
+adaptive_margin_norm_scale: 6.0  # Normalization for anchor norm adjustment
+adaptive_margin_distance_scale: 4.0  # Normalization for distance adjustment
+
+# Data sampling parameters (legacy)
+k_total: 48  # Total negatives to sample
+pct_excluded: 0.0
+pct_hard: 0.05
+pct_medium: 0.15
+pct_easy: 0.55
+pct_unrelated: 0.25
+
+n_positive_samples: 2048
+allowed_relations: null  # null = all relations allowed
+min_code_level: null  # null = no filter (values: 2-6)
+max_code_level: null  # null = no filter (values: 2-6)
+
+# Data loader settings
+shuffle: true
+num_workers: 4
+pin_memory: true
+
+# Runtime settings
+device: auto
+seed: 42
+

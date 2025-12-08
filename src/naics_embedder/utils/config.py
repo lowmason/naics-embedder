@@ -308,43 +308,6 @@ class TripletsConfig(BaseModel):
         default='./data/naics_training_pairs', description='Output directory for training pairs'
     )
 
-    # Anchor parameters
-    anchor_level: Optional[List[int]] = Field(
-        default=None, description='Filter anchor codes by hierarchy level'
-    )
-    relation_margin: Optional[List[int]
-                              ] = Field(default=None, description='Filter by relation margin')
-    distance_margin: Optional[List[float]
-                              ] = Field(default=None, description='Filter by distance margin')
-
-    # Margin parameters
-    positive_level: Optional[List[int]] = Field(
-        default=None, description='Filter positive codes by hierarchy level'
-    )
-    positive_relation: Optional[List[int]] = Field(
-        default=None, description='Filter positive pairs by relation'
-    )
-    positive_distance: Optional[List[float]] = Field(
-        default=None, description='Filter positive pairs by distance'
-    )
-    n_positives: int = Field(
-        default=2125, gt=0, le=2125, description='Maximum number of positives per anchor'
-    )
-
-    # Margin parameters
-    negative_level: Optional[List[int]] = Field(
-        default=None, description='Filter negative codes by hierarchy level'
-    )
-    negative_relation: Optional[List[int]] = Field(
-        default=None, description='Filter negative pairs by relation'
-    )
-    negative_distance: Optional[List[int]] = Field(
-        default=None, description='Filter negative pairs by distance'
-    )
-    n_negatives: int = Field(
-        default=2125, gt=0, le=2125, description='Maximum number of negatives per positive'
-    )
-
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'TripletsConfig':
         '''Load configuration from YAML file.'''

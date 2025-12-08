@@ -708,7 +708,107 @@ def create_streaming_generator(
         }
 
 # -------------------------------------------------------------------------------------------------
-# Streaming dataset generator
+# Multi-epoch triplet builder
+# -------------------------------------------------------------------------------------------------
+
+def _get_multi_epoch_cache_path(cfg: StreamingConfig, n_epochs: int) -> Path:
+    '''Get the cache file path for multi-epoch triplet cache.'''
+
+    cache_dict = {
+        'descriptions_parquet': str(cfg.descriptions_parquet),
+        'relations_parquet': str(cfg.relations_parquet),
+        'n_negatives': cfg.n_negatives,
+        'seed': cfg.seed,
+        'n_epochs': n_epochs,
+    }
+
+    config_str = json.dumps(cache_dict, sort_keys=True)
+    cache_key = hashlib.sha256(config_str.encode()).hexdigest()[:16]
+    descriptions_path = Path(cfg.descriptions_parquet)
+    cache_dir = descriptions_path.parent / 'streaming_cache'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f'multi_epoch_{cache_key}.pkl'
+
+
+def _load_multi_epoch_cache(cfg: StreamingConfig, n_epochs: int) -> Optional[List[Dict[str, Any]]]:
+    '''Load cached multi-epoch triplet data if available.'''
+    cache_path = _get_multi_epoch_cache_path(cfg, n_epochs)
+    if not cache_path.exists():
+        return None
+
+    try:
+        with open(cache_path, 'rb') as f:
+            data = pickle.load(f)
+        logger.info(f'Loaded multi-epoch cache from {cache_path}')
+        return data
+    except Exception as e:
+        logger.warning(f'Failed to load multi-epoch cache: {e}')
+        return None
+
+
+def _save_multi_epoch_cache(
+    data: List[Dict[str, Any]], cfg: StreamingConfig, n_epochs: int
+) -> None:
+    '''Save multi-epoch triplet data to cache.'''
+    cache_path = _get_multi_epoch_cache_path(cfg, n_epochs)
+    try:
+        temp_path = cache_path.with_suffix('.tmp')
+        with open(temp_path, 'wb') as f:
+            pickle.dump(data, f)
+        temp_path.replace(cache_path)
+        logger.info(f'Saved multi-epoch cache to {cache_path}')
+    except Exception as e:
+        logger.warning(f'Failed to save multi-epoch cache: {e}')
+
+
+def build_multi_epoch_triplets(
+    cfg: StreamingConfig,
+    sampling_cfg: SamplingConfig,
+    n_epochs: int = 100,
+) -> List[Dict[str, Any]]:
+    '''
+    Build triplet rows for multiple epochs with different seeds per epoch.
+
+    Each epoch gets a different random seed for negative sampling, providing
+    diversity in training examples across epochs.
+
+    Args:
+        cfg: Streaming configuration
+        sampling_cfg: Sampling configuration
+        n_epochs: Number of epochs to pre-sample (default: 100)
+
+    Returns:
+        List of triplet rows for all epochs combined
+    '''
+    # Try to load from cache first
+    cached = _load_multi_epoch_cache(cfg, n_epochs)
+    if cached is not None:
+        logger.info(f'Loaded {len(cached):,} triplet rows from multi-epoch cache')
+        return cached
+
+    logger.info(f'Building triplet rows for {n_epochs} epochs...')
+    all_rows: List[Dict[str, Any]] = []
+    base_seed = cfg.seed
+
+    for epoch in range(n_epochs):
+        # Create epoch-specific config with different seed
+        epoch_cfg = cfg.model_copy()
+        epoch_cfg.seed = base_seed + epoch
+
+        epoch_rows = _build_triplet_rows(epoch_cfg, sampling_cfg, worker_id='Main')
+        logger.info(f'  Epoch {epoch + 1}/{n_epochs}: {len(epoch_rows):,} triplet rows')
+        all_rows.extend(epoch_rows)
+
+    logger.info(f'Built {len(all_rows):,} total triplet rows for {n_epochs} epochs')
+
+    # Save to cache
+    _save_multi_epoch_cache(all_rows, cfg, n_epochs)
+
+    return all_rows
+
+
+# -------------------------------------------------------------------------------------------------
+# Streaming dataset generator (legacy - kept for compatibility)
 # -------------------------------------------------------------------------------------------------
 
 def create_streaming_dataset(

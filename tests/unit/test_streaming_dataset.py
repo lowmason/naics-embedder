@@ -777,6 +777,60 @@ def test_cache_path_in_streaming_cache_dir():
     assert path.name.startswith('streaming_final_')
 
 # -------------------------------------------------------------------------------------------------
+# Multi-Epoch Cache Path Tests
+# -------------------------------------------------------------------------------------------------
+
+def test_multi_epoch_cache_key_deterministic():
+    '''Same config and n_epochs should always produce same cache key.'''
+    from naics_embedder.text_model.dataloader.streaming_dataset import _get_multi_epoch_cache_path
+
+    cfg1 = StreamingConfig(seed=42, n_negatives=5)
+    cfg2 = StreamingConfig(seed=42, n_negatives=5)
+
+    path1 = _get_multi_epoch_cache_path(cfg1, n_epochs=100)
+    path2 = _get_multi_epoch_cache_path(cfg2, n_epochs=100)
+
+    assert path1 == path2
+
+
+def test_multi_epoch_cache_key_changes_with_n_epochs():
+    '''Different n_epochs should produce different cache keys.'''
+    from naics_embedder.text_model.dataloader.streaming_dataset import _get_multi_epoch_cache_path
+
+    cfg = StreamingConfig(seed=42)
+
+    path1 = _get_multi_epoch_cache_path(cfg, n_epochs=100)
+    path2 = _get_multi_epoch_cache_path(cfg, n_epochs=50)
+
+    assert path1 != path2
+
+
+def test_multi_epoch_cache_key_changes_with_seed():
+    '''Different seeds should produce different cache keys.'''
+    from naics_embedder.text_model.dataloader.streaming_dataset import _get_multi_epoch_cache_path
+
+    cfg1 = StreamingConfig(seed=42)
+    cfg2 = StreamingConfig(seed=43)
+
+    path1 = _get_multi_epoch_cache_path(cfg1, n_epochs=100)
+    path2 = _get_multi_epoch_cache_path(cfg2, n_epochs=100)
+
+    assert path1 != path2
+
+
+def test_multi_epoch_cache_path_in_streaming_cache_dir():
+    '''Multi-epoch cache path should be in streaming_cache directory.'''
+    from naics_embedder.text_model.dataloader.streaming_dataset import _get_multi_epoch_cache_path
+
+    cfg = StreamingConfig(descriptions_parquet='./data/naics_descriptions.parquet')
+
+    path = _get_multi_epoch_cache_path(cfg, n_epochs=100)
+
+    assert 'streaming_cache' in str(path)
+    assert path.name.startswith('multi_epoch_')
+
+
+# -------------------------------------------------------------------------------------------------
 # Positive Sampler Tests
 # -------------------------------------------------------------------------------------------------
 

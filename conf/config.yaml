@@ -48,6 +48,26 @@ dirs:
   conf_dir: ./conf
   docs_dir: ./docs
 
+# Data generation configuration
+# NOTE: Individual data configs are in conf/data/*.yaml
+# Include here only if you need to override defaults in a single config file
+data:
+  download:
+    output_parquet: ./data/naics_descriptions.parquet
+  relations:
+    input_parquet: ./data/naics_descriptions.parquet
+    output_parquet: ./data/naics_relations.parquet
+    relation_matrix_parquet: ./data/naics_relation_matrix.parquet
+  distances:
+    input_parquet: ./data/naics_descriptions.parquet
+    distances_parquet: ./data/naics_distances.parquet
+    distance_matrix_parquet: ./data/naics_distance_matrix.parquet
+  triplets:
+    descriptions_parquet: ./data/naics_descriptions.parquet
+    distances_parquet: ./data/naics_distances.parquet
+    relations_parquet: ./data/naics_relations.parquet
+    output_parquet: ./data/naics_training_pairs
+
 # Data loading configuration
 data_loader:
   batch_size: 16
@@ -70,6 +90,12 @@ data_loader:
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
     max_length: 512
     seed: 42
+    # Negative sampling parameters
+    n_negatives: 24  # Maximum number of negatives per positive
+    # Phase 1 tree-distance based sampling
+    use_phase1_sampling: true  # Use inverse weighting, sibling masking, exclusion mining
+    phase1_alpha: 1.5  # Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α
+    phase1_exclusion_weight: 100.0  # High constant weight for excluded codes in Phase 1
 
 # Model configuration
 model:
