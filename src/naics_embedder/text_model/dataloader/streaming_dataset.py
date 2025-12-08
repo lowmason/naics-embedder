@@ -373,6 +373,9 @@ def _load_negative_candidates(
 
     Returns a dictionary mapping (anchor_idx, positive_idx) -> list of negative dicts.
     Each negative dict has: negative_idx, negative_code, relation_margin, distance_margin.
+
+    NOTE: This function loads ALL parquet files at once. For per-anchor streaming,
+    use _load_anchor_negative_candidates instead.
     '''
     logger.info('Loading negative candidates from triplets parquet...')
 
@@ -438,6 +441,57 @@ def _load_negative_candidates(
     logger.info(f'Grouped into {len(result):,} (anchor, positive) pairs')
     return result
 
+
+def _load_anchor_negative_candidates(
+    triplets_parquet: str,
+    anchor_idx: int,
+    required_positive_idxs: Optional[Set[int]] = None,
+) -> Dict[int, List[Dict[str, Any]]]:
+    '''Load negative candidates for a single anchor from its partitioned parquet file.
+
+    Args:
+        triplets_parquet: Base path to partitioned triplets directory
+        anchor_idx: The anchor index to load candidates for
+        required_positive_idxs: Optional set of positive indices to filter to
+
+    Returns:
+        Dictionary mapping positive_idx -> list of negative dicts.
+        Each negative dict has: negative_idx, negative_code, relation_margin, distance_margin.
+    '''
+    anchor_dir = Path(triplets_parquet) / f'anchor={anchor_idx}'
+    if not anchor_dir.exists():
+        return {}
+
+    parquet_files = list(anchor_dir.glob('*.parquet'))
+    if not parquet_files:
+        return {}
+
+    df = pl.read_parquet(parquet_files)
+
+    # Filter to required positives if specified
+    if required_positive_idxs is not None:
+        df = df.filter(pl.col('positive_idx').is_in(list(required_positive_idxs)))
+
+    if df.is_empty():
+        return {}
+
+    # Group by positive_idx
+    result: Dict[int, List[Dict[str, Any]]] = {}
+    for row in df.iter_rows(named=True):
+        positive_idx = row['positive_idx']
+        if positive_idx not in result:
+            result[positive_idx] = []
+        result[positive_idx].append(
+            {
+                'negative_idx': row['negative_idx'],
+                'negative_code': row['negative_code'],
+                'relation_margin': row['relation_margin'],
+                'distance_margin': row['distance_margin'],
+            }
+        )
+
+    return result
+
 # -------------------------------------------------------------------------------------------------
 # Triplet materialization helpers
 # -------------------------------------------------------------------------------------------------
@@ -487,10 +541,9 @@ def _build_triplet_rows(
         seed=cfg.seed,
     )
 
-    # Pre-sample positives once to know which (anchor, positive) pairs are needed.
+    # Pre-sample positives for each anchor
     anchor_positive_map: Dict[int, List[Dict[str, Any]]] = {}
     anchor_code_map: Dict[int, str] = {}
-    required_pairs: Set[Tuple[int, int]] = set()
 
     for anchor_idx in positive_sampler.anchors:
         anchor_code = idx_to_code.get(anchor_idx)
@@ -503,20 +556,15 @@ def _build_triplet_rows(
 
         anchor_code_map[anchor_idx] = anchor_code
         anchor_positive_map[anchor_idx] = positives
-        for positive in positives:
-            required_pairs.add((anchor_idx, positive['positive_idx']))
 
     if not anchor_positive_map:
         logger.warning(f'{worker_id} Positive sampling produced no anchors with positives.')
         return []
 
-    # Load negative candidates from triplets
-    logger.info(f'{worker_id} Loading negative candidates...')
-    negative_candidates = _load_negative_candidates(cfg.triplets_parquet, required_pairs=required_pairs)
-
     triplet_rows: List[Dict[str, Any]] = []
+    n_anchors = len(anchor_positive_map)
 
-    for anchor_idx in positive_sampler.anchors:
+    for i, anchor_idx in enumerate(positive_sampler.anchors):
         positives = anchor_positive_map.get(anchor_idx)
         if not positives:
             continue
@@ -525,13 +573,24 @@ def _build_triplet_rows(
         if anchor_code is None:
             continue
 
+        # Load negative candidates for this anchor only (per-anchor streaming)
+        required_positive_idxs = {p['positive_idx'] for p in positives}
+        anchor_negatives = _load_anchor_negative_candidates(
+            cfg.triplets_parquet, anchor_idx, required_positive_idxs
+        )
+
+        if not anchor_negatives:
+            continue
+
+        if (i + 1) % 100 == 0 or i == 0:
+            logger.info(f'{worker_id} Processing anchor {i + 1}/{n_anchors}...')
+
         for positive in positives:
             positive_idx = positive['positive_idx']
             positive_code = positive['positive_code']
 
-            # Get candidate negatives for this (anchor, positive) pair
-            key = (anchor_idx, positive_idx)
-            candidates = negative_candidates.get(key, [])
+            # Get candidate negatives for this positive
+            candidates = anchor_negatives.get(positive_idx, [])
 
             if not candidates:
                 continue
