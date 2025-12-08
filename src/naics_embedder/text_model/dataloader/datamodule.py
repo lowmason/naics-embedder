@@ -6,17 +6,25 @@ import logging
 import os
 import pickle
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+import numpy as np
 import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
+from naics_embedder.data.positive_sampling import create_positive_sampler
+from naics_embedder.text_model.dataloader.difficulty_sampler import select_by_difficulty
 from naics_embedder.text_model.dataloader.streaming_dataset import (
     _get_multi_epoch_cache_path,
+    _load_distance_matrix,
+    _load_excluded_codes,
+    _load_negative_candidates,
+    _sample_negatives_phase1,
     build_multi_epoch_triplets,
 )
 from naics_embedder.utils.config import SamplingConfig, StreamingConfig, TokenizationConfig
+from naics_embedder.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +153,47 @@ def collate_fn(batch: List[Dict]) -> Dict:
         sampling_accumulator['avg_effective_far_weight'] = effective_far_avg
         result['sampling_metadata'] = sampling_accumulator
 
+    # Include all_candidates for Phase 2+ hard negative mining if present
+    # This contains oversampled negatives from Phase 1 that weren't selected
+    # by the difficulty curriculum but are available for HNM
+    if batch and batch[0].get('all_candidates'):
+        all_candidates_batch = {channel: {} for channel in channels}
+
+        # Find max candidates across batch
+        max_candidates = max(len(item.get('all_candidates', [])) for item in batch)
+
+        # Pad all_candidates lists to same length
+        for item in batch:
+            candidates = item.get('all_candidates', [])
+            if len(candidates) < max_candidates and candidates:
+                last_candidate = candidates[-1]
+                padding_needed = max_candidates - len(candidates)
+                candidates.extend([last_candidate] * padding_needed)
+
+        # Collect candidate embeddings for each channel
+        for channel in channels:
+            all_cand_ids = []
+            all_cand_masks = []
+            for item in batch:
+                for cand_dict in item.get('all_candidates', []):
+                    all_cand_ids.append(cand_dict['negative_embedding'][channel]['input_ids'])
+                    all_cand_masks.append(cand_dict['negative_embedding'][channel]['attention_mask'])
+
+            if all_cand_ids:
+                all_candidates_batch[channel]['input_ids'] = torch.stack(all_cand_ids)
+                all_candidates_batch[channel]['attention_mask'] = torch.stack(all_cand_masks)
+
+        result['all_candidates'] = all_candidates_batch
+        result['k_candidates'] = max_candidates
+
+        # Also collect all_candidate codes
+        all_candidate_codes = []
+        for item in batch:
+            all_candidate_codes.append(
+                [cand['negative_code'] for cand in item.get('all_candidates', [])]
+            )
+        result['all_candidate_codes'] = all_candidate_codes
+
     return result
 
 # -------------------------------------------------------------------------------------------------
@@ -231,6 +280,235 @@ class NAICSMapDataset(Dataset):
 
         return result
 
+
+# -------------------------------------------------------------------------------------------------
+# Phase 1 Map Dataset with On-the-Fly Negative Sampling
+# -------------------------------------------------------------------------------------------------
+
+class Phase1MapDataset(Dataset):
+    """
+    Map-style dataset with on-the-fly Phase 1 negative sampling and difficulty curriculum.
+
+    Instead of pre-computing all negatives for multiple epochs, this dataset:
+    1. Pre-computes (anchor, positive) pairs as the fixed index space
+    2. Samples negatives on-the-fly in __getitem__() with epoch-aware seeds
+    3. Applies difficulty curriculum: easy -> semi-hard -> hard across Phase 1
+    4. Provides oversampled candidates for Phase 2+ hard negative mining
+
+    Attributes:
+        cfg: Streaming configuration
+        sampling_cfg: Sampling strategy configuration
+        token_cache: Pre-computed tokenized embeddings
+        phase1_end_epoch: Epoch at which Phase 1 ends
+        epoch: Current training epoch (updated via set_epoch)
+    """
+
+    def __init__(
+        self,
+        cfg: StreamingConfig,
+        sampling_cfg: SamplingConfig,
+        token_cache: Dict[int, Dict[str, Any]],
+        phase1_end_epoch: int,
+    ):
+        """
+        Initialize the Phase 1 map dataset.
+
+        Args:
+            cfg: Streaming configuration with sampling parameters
+            sampling_cfg: Sampling strategy configuration
+            token_cache: Dictionary mapping index to tokenized embeddings
+            phase1_end_epoch: Epoch at which Phase 1 ends (for curriculum progress)
+        """
+        self.cfg = cfg
+        self.sampling_cfg = sampling_cfg
+        self.token_cache = token_cache
+        self.phase1_end_epoch = max(phase1_end_epoch, 1)
+        self.epoch = 0
+
+        # Load code/index mappings
+        logger.info('Phase1MapDataset: Loading code/index mappings...')
+        code_to_idx_raw = get_indices_codes('code_to_idx')
+        idx_to_code_raw = get_indices_codes('idx_to_code')
+        assert isinstance(code_to_idx_raw, dict), 'code_to_idx must be a dict'
+        assert isinstance(idx_to_code_raw, dict), 'idx_to_code must be a dict'
+        self.code_to_idx: Dict[str, int] = code_to_idx_raw  # type: ignore
+        self.idx_to_code: Dict[int, str] = idx_to_code_raw  # type: ignore
+
+        # Load tree distance matrix for Phase 1 sampling and difficulty bucketing
+        logger.info('Phase1MapDataset: Loading tree distance matrix...')
+        self.distance_lookup = _load_distance_matrix(
+            cfg.distance_matrix_parquet, self.code_to_idx, self.idx_to_code
+        )
+
+        # Load excluded codes for Phase 1 sampling
+        logger.info('Phase1MapDataset: Loading excluded codes...')
+        self.excluded_map = _load_excluded_codes(cfg.descriptions_parquet, self.code_to_idx)
+
+        # Create positive sampler and build (anchor, positive) pair index
+        logger.info('Phase1MapDataset: Creating positive sampler...')
+        self.positive_sampler = create_positive_sampler(
+            descriptions_parquet=cfg.descriptions_parquet,
+            relations_parquet=cfg.relations_parquet,
+            max_per_stratum=4,
+            seed=cfg.seed,
+        )
+
+        # Build the fixed (anchor, positive) pair index
+        logger.info('Phase1MapDataset: Building pair index...')
+        self.pairs: List[Tuple[int, Dict[str, Any]]] = []
+        self._anchor_code_map: Dict[int, str] = {}
+        required_pairs: Set[Tuple[int, int]] = set()
+
+        for anchor_idx in self.positive_sampler.anchors:
+            anchor_code = self.idx_to_code.get(anchor_idx)
+            if anchor_code is None:
+                continue
+
+            positives = self.positive_sampler.sample_positives(anchor_idx)
+            if not positives:
+                continue
+
+            self._anchor_code_map[anchor_idx] = anchor_code
+            for positive in positives:
+                self.pairs.append((anchor_idx, positive))
+                required_pairs.add((anchor_idx, positive['positive_idx']))
+
+        # Load candidate negatives for all required pairs
+        logger.info('Phase1MapDataset: Loading negative candidates...')
+        self.negative_candidates = _load_negative_candidates(
+            cfg.triplets_parquet, required_pairs=required_pairs
+        )
+
+        logger.info(
+            f'Phase1MapDataset: Initialized with {len(self.pairs):,} (anchor, positive) pairs'
+        )
+
+    def set_epoch(self, epoch: int) -> None:
+        """Update the current epoch for different negative sampling."""
+        self.epoch = epoch
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def _extract_embedding(self, idx: int) -> Optional[Dict[str, Any]]:
+        """Extract embedding from token cache, excluding code field."""
+        try:
+            return {k: v for k, v in self.token_cache[idx].items() if k != 'code'}
+        except KeyError:
+            logger.warning(f'Missing token_cache for index {idx}')
+            return None
+
+    def _attach_embeddings(
+        self, negatives: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Attach embeddings to negative dictionaries."""
+        result = []
+        for neg in negatives:
+            neg_idx = int(neg['negative_idx'])
+            neg_embedding = self._extract_embedding(neg_idx)
+            if neg_embedding is None:
+                continue
+
+            result.append({
+                'negative_idx': neg_idx,
+                'negative_code': neg['negative_code'],
+                'negative_embedding': neg_embedding,
+                'relation_margin': neg.get('relation_margin', 0),
+                'distance_margin': neg.get('distance_margin', 0),
+                'explicit_exclusion': neg.get('explicit_exclusion', False),
+            })
+
+        return result
+
+    def __getitem__(self, idx: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a single triplet item by index with on-the-fly negative sampling.
+
+        Returns:
+            Dictionary with anchor, positive, selected negatives (Phase 1),
+            and all candidates (for Phase 2+ HNM). Returns None if embeddings
+            are missing.
+        """
+        anchor_idx, positive = self.pairs[idx]
+        anchor_code = self._anchor_code_map.get(anchor_idx)
+        if anchor_code is None:
+            return None
+
+        # Get anchor and positive embeddings
+        anchor_embedding = self._extract_embedding(anchor_idx)
+        if anchor_embedding is None:
+            return None
+
+        positive_idx = positive['positive_idx']
+        positive_embedding = self._extract_embedding(positive_idx)
+        if positive_embedding is None:
+            return None
+
+        # Deterministic seed per (idx, epoch) for reproducibility
+        seed = self.cfg.seed + self.epoch * len(self) + idx
+        rng = np.random.default_rng(seed)
+
+        # Get raw candidates for this (anchor, positive) pair
+        key = (anchor_idx, positive_idx)
+        raw_candidates = self.negative_candidates.get(key, [])
+
+        if not raw_candidates:
+            return None
+
+        # Sample n_candidates using Phase 1 tree-distance weighting
+        all_candidates = _sample_negatives_phase1(
+            anchor_code=anchor_code,
+            anchor_idx=anchor_idx,
+            candidate_negatives=raw_candidates,
+            n_negatives=self.cfg.n_candidates,
+            distance_lookup=self.distance_lookup,
+            excluded_map=self.excluded_map,
+            code_to_idx=self.code_to_idx,
+            alpha=self.cfg.phase1_alpha,
+            exclusion_weight=self.cfg.phase1_exclusion_weight,
+            seed=seed,
+        )
+
+        if not all_candidates:
+            return None
+
+        # Select n_negatives_phase1 using difficulty curriculum
+        epoch_progress = min(self.epoch / self.phase1_end_epoch, 1.0)
+        selected = select_by_difficulty(
+            candidates=all_candidates,
+            n_select=self.cfg.n_negatives_phase1,
+            distance_lookup=self.distance_lookup,
+            anchor_code=anchor_code,
+            epoch_progress=epoch_progress,
+            cfg=self.cfg,
+            rng=rng,
+        )
+
+        if not selected:
+            return None
+
+        # Attach embeddings to negatives
+        selected_with_emb = self._attach_embeddings(selected)
+        all_with_emb = self._attach_embeddings(all_candidates)
+
+        if not selected_with_emb:
+            return None
+
+        return {
+            'anchor_idx': anchor_idx,
+            'anchor_code': anchor_code,
+            'anchor_embedding': anchor_embedding,
+            'positive_idx': positive_idx,
+            'positive_code': positive['positive_code'],
+            'positive_level': positive.get('positive_level', len(positive['positive_code'])),
+            'stratum_id': positive.get('stratum_id', 0),
+            'stratum_wgt': positive.get('stratum_wgt', 1.0),
+            'positive_embedding': positive_embedding,
+            'negatives': selected_with_emb,  # Phase 1 uses these
+            'all_candidates': all_with_emb,  # Phase 2+ HNM pool
+        }
+
+
 # -------------------------------------------------------------------------------------------------
 # Collate function wrapper to filter None items
 # -------------------------------------------------------------------------------------------------
@@ -248,7 +526,7 @@ def _filter_none_collate_fn(batch: List[Optional[Dict]]) -> Dict:
 # -------------------------------------------------------------------------------------------------
 
 class NAICSDataModule(LightningDataModule):
-    '''DataModule for NAICS embedding training with pre-sampled multi-epoch triplets.'''
+    '''DataModule for NAICS embedding training with pre-sampled or on-the-fly triplets.'''
 
     def __init__(
         self,
@@ -262,6 +540,8 @@ class NAICSDataModule(LightningDataModule):
         seed: int = 42,
         val_split: float = 0.1,
         n_epochs: int = 100,
+        max_epochs: int = 30,
+        phase1_end: float = 0.3,
         **kwargs: Any,
     ):
         super().__init__()
@@ -272,6 +552,8 @@ class NAICSDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.n_epochs = n_epochs
+        self.max_epochs = max_epochs
+        self.phase1_end = phase1_end
 
         # Create streaming configs
         if streaming_config is not None:
@@ -301,8 +583,9 @@ class NAICSDataModule(LightningDataModule):
         self.val_streaming_cfg = val_curriculum
 
         # Datasets will be created in setup() after prepare_data() builds caches
-        self.train_dataset: Optional[NAICSMapDataset] = None
-        self.val_dataset: Optional[NAICSMapDataset] = None
+        # Can be NAICSMapDataset (pre-computed) or Phase1MapDataset (on-the-fly)
+        self.train_dataset: Optional[Dataset] = None
+        self.val_dataset: Optional[Dataset] = None
         self._token_cache: Optional[Dict[int, Dict[str, Any]]] = None
 
     def prepare_data(self):
@@ -310,7 +593,6 @@ class NAICSDataModule(LightningDataModule):
         os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
         from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
-        from naics_embedder.utils.utilities import get_indices_codes
 
         # Build tokenization cache
         logger.info('Preparing tokenization cache in main process...')
@@ -333,9 +615,12 @@ class NAICSDataModule(LightningDataModule):
         else:
             logger.info('Codes/indices cache already exists')
 
-        # Build multi-epoch triplet caches
-        self._build_multi_epoch_cache(self.train_streaming_cfg, 'training')
-        self._build_multi_epoch_cache(self.val_streaming_cfg, 'validation')
+        # Build multi-epoch triplet caches (only if not using on-the-fly sampling)
+        if not self.train_streaming_cfg.use_on_the_fly_sampling:
+            self._build_multi_epoch_cache(self.train_streaming_cfg, 'training')
+            self._build_multi_epoch_cache(self.val_streaming_cfg, 'validation')
+        else:
+            logger.info('On-the-fly sampling enabled, skipping multi-epoch cache build')
 
     def _build_multi_epoch_cache(self, cfg: StreamingConfig, name: str):
         '''Build multi-epoch triplet cache for a given config.'''
@@ -364,23 +649,45 @@ class NAICSDataModule(LightningDataModule):
             if self._token_cache is None:
                 raise RuntimeError('Failed to load tokenization cache')
 
+        # Calculate Phase 1 end epoch for difficulty curriculum
+        phase1_end_epoch = int(self.max_epochs * self.phase1_end)
+
         # Load and create training dataset
         if self.train_dataset is None:
-            logger.info('Loading training triplets...')
-            train_triplets = build_multi_epoch_triplets(
-                self.train_streaming_cfg, self.sampling_cfg, self.n_epochs
-            )
-            logger.info(f'  • Creating training dataset with {len(train_triplets):,} triplets')
-            self.train_dataset = NAICSMapDataset(train_triplets, self._token_cache)
+            if self.train_streaming_cfg.use_on_the_fly_sampling:
+                logger.info('Creating on-the-fly Phase1MapDataset for training...')
+                self.train_dataset = Phase1MapDataset(
+                    cfg=self.train_streaming_cfg,
+                    sampling_cfg=self.sampling_cfg,
+                    token_cache=self._token_cache,
+                    phase1_end_epoch=phase1_end_epoch,
+                )
+            else:
+                logger.info('Loading pre-computed training triplets...')
+                train_triplets = build_multi_epoch_triplets(
+                    self.train_streaming_cfg, self.sampling_cfg, self.n_epochs
+                )
+                logger.info(f'  • Creating training dataset with {len(train_triplets):,} triplets')
+                self.train_dataset = NAICSMapDataset(train_triplets, self._token_cache)
 
         # Load and create validation dataset
+        # Note: Validation always uses pre-computed for consistency
         if self.val_dataset is None:
-            logger.info('Loading validation triplets...')
-            val_triplets = build_multi_epoch_triplets(
-                self.val_streaming_cfg, self.sampling_cfg, self.n_epochs
-            )
-            logger.info(f'  • Creating validation dataset with {len(val_triplets):,} triplets\n')
-            self.val_dataset = NAICSMapDataset(val_triplets, self._token_cache)
+            if self.val_streaming_cfg.use_on_the_fly_sampling:
+                logger.info('Creating on-the-fly Phase1MapDataset for validation...')
+                self.val_dataset = Phase1MapDataset(
+                    cfg=self.val_streaming_cfg,
+                    sampling_cfg=self.sampling_cfg,
+                    token_cache=self._token_cache,
+                    phase1_end_epoch=phase1_end_epoch,
+                )
+            else:
+                logger.info('Loading pre-computed validation triplets...')
+                val_triplets = build_multi_epoch_triplets(
+                    self.val_streaming_cfg, self.sampling_cfg, self.n_epochs
+                )
+                logger.info(f'  • Creating validation dataset with {len(val_triplets):,} triplets\n')
+                self.val_dataset = NAICSMapDataset(val_triplets, self._token_cache)
 
     def train_dataloader(self) -> DataLoader:
         '''Create training dataloader with shuffling enabled.'''
@@ -407,3 +714,10 @@ class NAICSDataModule(LightningDataModule):
             collate_fn=_filter_none_collate_fn,
             persistent_workers=self.num_workers > 0,
         )
+
+    def on_train_epoch_start(self) -> None:
+        '''Update dataset epoch for on-the-fly sampling with difficulty curriculum.'''
+        if self.trainer is not None and hasattr(self.train_dataset, 'set_epoch'):
+            current_epoch = self.trainer.current_epoch
+            self.train_dataset.set_epoch(current_epoch)
+            logger.debug(f'Updated train dataset epoch to {current_epoch}')

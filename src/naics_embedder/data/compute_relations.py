@@ -336,7 +336,7 @@ def calculate_pairwise_relations() -> pl.DataFrame:
 
     (relations_df.write_parquet(cfg.output_parquet))
 
-    #_relation_stats(relations_df)
+    _relation_stats(relations_df)
 
     _parquet_stats(
         parquet_df=relations_df,

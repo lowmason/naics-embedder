@@ -96,6 +96,17 @@ data_loader:
     use_phase1_sampling: true  # Use inverse weighting, sibling masking, exclusion mining
     phase1_alpha: 1.5  # Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α
     phase1_exclusion_weight: 100.0  # High constant weight for excluded codes in Phase 1
+    # On-the-fly sampling with oversampling and difficulty curriculum
+    use_on_the_fly_sampling: false  # Use on-the-fly negative sampling instead of pre-computed cache
+    n_candidates: 48  # Total candidate negatives to sample (for Phase 2+ HNM pool)
+    n_negatives_phase1: 24  # Number of negatives used in Phase 1 loss (selected from candidates)
+    # Phase 1 difficulty curriculum (linear annealing from easy-heavy to hard-heavy)
+    # Buckets: Easy (d>=6), Semi-hard (d=4-5), Hard (d=3), Siblings (d=2) masked
+    # Hard ratio = 1 - easy - semi (derived to ensure sum = 1.0)
+    phase1_easy_start: 0.70  # Easy ratio at start of Phase 1
+    phase1_easy_end: 0.20  # Easy ratio at end of Phase 1
+    phase1_semi_start: 0.20  # Semi-hard ratio at start of Phase 1
+    phase1_semi_end: 0.40  # Semi-hard ratio at end of Phase 1
 
 # Model configuration
 model:
