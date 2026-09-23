@@ -1,6 +1,6 @@
 # Lambda Remote Workflow
 
-**Status:** DRAFT (2026-09-23) — awaiting user review
+**Status:** APPROVED (2026-09-23) — ready for an implementation plan
 
 **Next skill after approval:** `writing-plans` in a fresh session
 
