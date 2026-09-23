@@ -215,23 +215,24 @@ The unit tests are heavily used as executable documentation for geometry, curric
 
 ## Linting & formatting
 
-Python style is checked with Ruff (`[tool.ruff]` in `pyproject.toml`: rules E, F, I, Q). No auto-formatter is configured, so match the surrounding style by hand. Key points:
+YAPF formats Python and Ruff lints it (`[tool.yapf]` and `[tool.ruff]` in `pyproject.toml`; Ruff rules E, F, I, Q). `scripts/format_code.sh` runs both: `ruff check --fix`, then yapf, then `ruff check`. Key points:
 
-- Line length: **105** characters (Ruff E501).
-- Indentation: 4 spaces.
-- Quotes: prefer single quotes for strings and docstrings.
-- Method chaining: split across lines with dots aligned vertically.
+- Line length: YAPF wraps at **100** characters; Ruff's E501 allows up to 105 for lines YAPF can't split.
+- Indentation: 4 spaces; 1 blank line between top-level definitions and after the import block.
+- Quotes: single quotes for strings and docstrings.
+- Method chaining: YAPF packs a chain onto as few lines as fit. To keep a vertical, dot-aligned Polars chain, wrap it in `# yapf: disable` / `# yapf: enable`.
 - Markdown: 100-character lines by convention. `.markdownlint.jsonc` is gitignored, so fresh clones don't have it.
 
 ```bash path=null start=null
-# Lint: the only configured Python check
-uv run ruff check src tests
+# Format the Python files changed on your branch (vs origin/main)
+./scripts/format_code.sh
 
-# Apply safe autofixes (e.g., import order) only to the files you changed
-uv run ruff check --fix path/to/changed_file.py
+# Or specific files; --check changes nothing and exits non-zero on issues
+./scripts/format_code.sh path/to/changed_file.py
+./scripts/format_code.sh --check path/to/changed_file.py
 ```
 
-`ruff check src tests` currently fails on pre-existing violations, so judge a change by the files it touches and don't mass-fix unrelated code. Don't run `ruff format` or `yapf`: their configuration was removed, so `ruff format` switches every string to double quotes and yapf applies its pep8 defaults, and both rewrite code you didn't touch. See CLAUDE.md for the full style guide.
+`ruff check src tests` currently fails on pre-existing violations, so judge a change by the files it touches and don't mass-fix unrelated code (never run `./scripts/format_code.sh --all` in a feature PR). Never run `ruff format`: it switches every string to double quotes and puts 2 blank lines between top-level definitions, so it rewrites code you didn't touch. See CLAUDE.md for the full style guide.
 
 ## Working with configuration
 
