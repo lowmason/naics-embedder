@@ -928,17 +928,12 @@ During training, the model computes validation metrics every epoch:
    - **Output:** <https://lowmason.github.io/naics-embedder/>
 
 2. **Tests** (`.github/workflows/tests.yml`)
-<<<<<<< HEAD
    - **Trigger:** Push to `main`/`master`, and pull requests targeting them
    - **Action:** Lint with `uv run ruff check src tests`, then run pytest with coverage
      (Python 3.10, 3.12)
-=======
-   - **Trigger:** Push, pull request
-   - **Action:** Run pytest with coverage (Python 3.10, 3.12)
    - **Dependencies:** Installs from `uv.lock` (`uv sync --locked`), so CI tests the pinned
      versions, not the newest releases that `pip install` resolves. Upgrade deliberately with
      `uv lock --upgrade-package <name>`.
->>>>>>> origin/main
    - **Reports:** Coverage (`coverage.xml`) uploaded to Codecov
 
 ### Documentation
