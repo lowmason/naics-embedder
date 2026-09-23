@@ -23,10 +23,15 @@ class TestCliSetup:
         assert isinstance(app, typer.Typer)
 
     def test_app_has_help_text(self):
-        '''Test that app has help text configured.'''
-        # The help text is set via Panel.fit() which returns a renderable
-        # We just verify the app was created successfully
-        assert app is not None
+        '''Test that app help resolves to a plain string that keeps the styled banner.'''
+        import typer
+
+        # Typer runs inspect.cleandoc() on the help: a Rich renderable such as a Panel crashes
+        # typer >= 0.21.2 and was silently dropped by earlier releases
+        help_text = typer.main.get_command(app).help
+
+        assert isinstance(help_text, str)
+        assert '[bold cyan]NAICS Embedder[/bold cyan]' in help_text
 
 # -------------------------------------------------------------------------------------------------
 # Tests for CLI commands registration
@@ -85,6 +90,18 @@ class TestCliHelp:
         assert result.exit_code == 0
         # Should mention NAICS somewhere in help
         assert 'naics' in result.output.lower() or 'embedder' in result.output.lower()
+
+    def test_main_help_shows_banner(self):
+        '''Test that main help renders the banner text with its Rich markup applied.'''
+        from typer.testing import CliRunner
+
+        runner = CliRunner()
+        result = runner.invoke(app, ['--help'])
+
+        assert result.exit_code == 0
+        assert 'NAICS Embedder' in result.output
+        assert 'Text-enhanced Hyperbolic NAICS Embedding System' in result.output
+        assert '[bold cyan]' not in result.output
 
     def test_help_shows_available_commands(self):
         '''Test that help shows available commands.'''

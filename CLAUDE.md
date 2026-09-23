@@ -470,6 +470,9 @@ uv run ruff check src/ tests/
 uv run ruff check --fix path/to/changed_file.py
 ```
 
+`ruff check src/ tests/` currently fails on pre-existing violations, so judge a change by the
+files it touches and don't mass-fix unrelated code.
+
 Don't run `ruff format` or `yapf`. Their config sections (`[tool.ruff.format]`, `[tool.yapf]`)
 were removed, so `ruff format` falls back to double quotes (which the Q rules reject) and yapf
 falls back to pep8. Either one would rewrite most files.
@@ -926,6 +929,9 @@ During training, the model computes validation metrics every epoch:
 2. **Tests** (`.github/workflows/tests.yml`)
    - **Trigger:** Push, pull request
    - **Action:** Run pytest with coverage (Python 3.10, 3.12)
+   - **Dependencies:** Installs from `uv.lock` (`uv sync --locked`), so CI tests the pinned
+     versions, not the newest releases that `pip install` resolves. Upgrade deliberately with
+     `uv lock --upgrade-package <name>`.
    - **Reports:** Coverage (`coverage.xml`) uploaded to Codecov
 
 ### Documentation

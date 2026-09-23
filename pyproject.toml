@@ -76,11 +76,8 @@ environments = [
 
 
 # -------------------------------------------------------------------------------------------------
-# Ruff + YAPF configuration:
-#   1. Prefer single quotes
-#   2. Two blank lines after defs/classes, one elsewhere
-#   3. Vertical, dot-aligned method chaining
-#   4. Semantic section dividers preserved
+# Ruff configuration: linting only (rules E, F, I, Q); no formatter is configured.
+# House style (single quotes, dot-aligned chaining, section dividers): see CLAUDE.md
 # -------------------------------------------------------------------------------------------------
 
 [tool.ruff]
