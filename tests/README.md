@@ -9,18 +9,16 @@ performance benchmarking.
 
 ### Current Status
 
-**Test Coverage:** ~33% module coverage (15 test files / 46 source modules)
+**Test files:** 53 unit, 2 integration
 
 - ✅ **Well Tested**: Text model pipeline (encoding, MoE, loss, hyperbolic ops, evaluation)
-- ⚠️ **Partially Tested**: Data processing (distances only)
-- 🔴 **Not Tested**: Graph model (HGCN), clustering, training utilities, CLI commands
+- ✅ **Tested since this file was written**: Data processing, graph model (HGCN), clustering,
+  training and validation utilities, CLI commands
 
 **Recent additions:**
 
 - ✅ **test_evaluation.py** - Comprehensive evaluation metrics testing (Issue #49)
 - ✅ **test_tokenization_cache.py** - Data loading and caching modules testing (Issue #50)
-
-**Priority gaps:** Graph model (HGCN), hyperbolic clustering, training utilities, validation
 
 ## Table of Contents
 
@@ -44,7 +42,7 @@ performance benchmarking.
 
 ```text
 tests/
-├── unit/                      # Unit tests for individual components (15 files)
+├── unit/                      # Unit tests for individual components (53 files)
 │   ├── test_hyperbolic.py    # Hyperbolic geometry operations (CRITICAL) ✅
 │   ├── test_loss.py          # Loss functions ✅
 │   ├── test_moe.py           # Mixture of Experts ✅
@@ -59,8 +57,9 @@ tests/
 │   ├── test_streaming_dataset.py  # Streaming dataset utilities ✅
 │   ├── test_streaming_sampling.py  # Sampling strategies ✅
 │   ├── test_data_distances.py  # Distance computation ✅
-│   └── test_config.py        # Configuration management ✅
-├── integration/              # Integration tests (EMPTY - needs work)
+│   ├── test_config.py        # Configuration management ✅
+│   └── ...
+├── integration/              # Integration tests (2 files)
 ├── fixtures/                 # Test data and fixtures
 └── conftest.py              # Shared pytest fixtures
 
@@ -268,7 +267,8 @@ These modules are **important for reliability** but not immediately critical:
 - Config override parsing
 - Failure causes poor user experience but not data corruption
 
-**Required tests:** See [Detailed Test Recommendations](#3-training-utilities---test_training_utilspy)
+**Required tests:** See
+[Detailed Test Recommendations](#3-training-utilities---test_utils_trainingpy)
 
 #### 4. 🟡 **Validation Utilities**
 
@@ -281,7 +281,8 @@ These modules are **important for reliability** but not immediately critical:
 - Cache compatibility validation
 - Can prevent cryptic runtime errors with actionable messages
 
-**Required tests:** See [Detailed Test Recommendations](#4-validation-utilities---test_validationpy)
+**Required tests:** See
+[Detailed Test Recommendations](#4-validation-utilities---test_utils_validationpy)
 
 #### 5. 🟡 **Data Generation Pipeline**
 
@@ -304,13 +305,13 @@ These modules are **important for reliability** but not immediately critical:
 
 These modules would benefit from testing but are **lower risk**:
 
-#### 6. 🟢 **CLI Commands**
+#### 6. ✅ **CLI Commands**
 
 **Modules:**
 
-- `cli/commands/data.py` - **ZERO COVERAGE**
-- `cli/commands/training.py` - **ZERO COVERAGE**
-- `cli/commands/tools.py` - **ZERO COVERAGE**
+- `cli/commands/data.py` - tested in `test_cli_commands.py`
+- `cli/commands/training.py` - tested in `test_cli_training.py`
+- `cli/commands/tools.py` - tested in `test_cli_commands.py`
 
 **Why test:**
 
@@ -505,7 +506,7 @@ class TestHyperbolicKMeans:
         '''Test numerical stability with extreme curvatures.'''
 ```
 
-### 3. Training Utilities - `test_training_utils.py`
+### 3. Training Utilities - `test_utils_training.py`
 
 #### Priority: 🟡 MEDIUM
 
@@ -574,7 +575,7 @@ class TestConfigOverrides:
         '''Test error handling for invalid syntax.'''
 ```
 
-### 4. Validation Utilities - `test_validation.py`
+### 4. Validation Utilities - `test_utils_validation.py`
 
 #### Priority: 🟡 MEDIUM
 
@@ -648,7 +649,7 @@ class TestTrainingConfigValidation:
 #### Priority: 🟡 MEDIUM
 
 ```python
-# tests/unit/test_compute_relations.py
+# tests/unit/test_data_relations.py
 import pytest
 import polars as pl
 from naics_embedder.data.compute_relations import (
@@ -763,7 +764,7 @@ class TestEndToEnd:
         '''Test data generation → text training → HGCN → evaluation.'''
 ```
 
-### 7. CLI Commands - `test_cli.py`
+### 7. CLI Commands - `test_cli_main.py`, `test_cli_commands.py`, `test_cli_training.py`
 
 #### Priority: 🟢 LOW
 
@@ -827,15 +828,15 @@ See `.github/workflows/tests.yml` for CI configuration.
 
 ### Target Coverage Metrics
 
-| Module Category | Target | Current | Priority |
-|-----------------|--------|---------|----------|
-| **Critical Math** (hyperbolic.py, loss.py) | >80% | ~80% | ✅ Met |
-| **Text Model Pipeline** | >70% | ~70% | ✅ Met |
-| **Graph Model (HGCN)** | >70% | 0% | 🔴 Critical gap |
-| **Data Generation** | >60% | ~20% | 🟡 Needs work |
-| **Training Utilities** | >65% | 0% | 🟡 Needs work |
-| **CLI & Tools** | >50% | 0% | 🟢 Nice to have |
-| **Overall Project** | >70% | ~33% | 🔴 Below target |
+| Module Category | Target |
+|-----------------|--------|
+| **Critical Math** (hyperbolic.py, loss.py) | >80% |
+| **Text Model Pipeline** | >70% |
+| **Graph Model (HGCN)** | >70% |
+| **Data Generation** | >60% |
+| **Training Utilities** | >65% |
+| **CLI & Tools** | >50% |
+| **Overall Project** | >70% |
 
 ### Measuring Coverage
 
@@ -857,22 +858,22 @@ uv run pytest tests/ --cov=src/naics_embedder.graph_model.hgcn --cov-report=term
 
 #### Phase 1: Critical Gaps (Weeks 1-2)
 
-- [ ] Add `test_hgcn.py` - Graph model testing
-- [ ] Add `test_hyperbolic_clustering.py` - Clustering validation
+- [x] Add `test_hgcn.py` - Graph model testing
+- [x] Add `test_hyperbolic_clustering.py` - Clustering validation
 - [ ] Target: Bring overall coverage to >50%
 
 #### Phase 2: Important Gaps (Weeks 3-4)
 
-- [ ] Add `test_training_utils.py` - Training utilities
-- [ ] Add `test_validation.py` - Validation utilities
-- [ ] Add `test_compute_relations.py` - Data relationships
+- [x] Add `test_utils_training.py` - Training utilities
+- [x] Add `test_utils_validation.py` - Validation utilities
+- [x] Add `test_data_relations.py` - Data relationships
 - [ ] Target: Bring overall coverage to >60%
 
 #### Phase 3: Integration & Completeness (Weeks 5-6)
 
 - [ ] Add integration tests for training loops
 - [ ] Add end-to-end pipeline tests
-- [ ] Add CLI command tests
+- [x] Add CLI command tests
 - [ ] Target: Achieve >70% overall coverage
 
 ## Best Practices
@@ -1257,22 +1258,20 @@ uv run pytest tests/ --benchmark-only
 
 | Category | Status |
 |----------|--------|
-| **Total Source Modules** | 46 |
-| **Total Test Files** | 15 |
-| **Module Coverage** | ~33% |
+| **Total Source Modules** | 67 (excluding `__init__.py`) |
+| **Total Test Files** | 53 unit, 2 integration |
 | **Target Coverage** | >70% |
-| **Gap to Target** | ~37% |
 
 ### Critical Missing Tests
 
-1. 🔴 **`tests/unit/test_hgcn.py`** - Graph model (541 lines untested)
-2. 🔴 **`tests/unit/test_hyperbolic_clustering.py`** - Clustering (421 lines untested)
-3. 🟡 **`tests/unit/test_training_utils.py`** - Training utilities (494 lines untested)
-4. 🟡 **`tests/unit/test_validation.py`** - Validation (414 lines untested)
-5. 🟡 **`tests/unit/test_compute_relations.py`** - Data generation (366 lines untested)
-6. 🟡 **`tests/integration/test_*_training.py`** - Integration tests (none exist)
+All six have since been added:
 
-Total untested lines in critical modules: ~2,700 lines
+1. ✅ **`tests/unit/test_hgcn.py`** - Graph model
+2. ✅ **`tests/unit/test_hyperbolic_clustering.py`** - Clustering
+3. ✅ **`tests/unit/test_utils_training.py`** - Training utilities
+4. ✅ **`tests/unit/test_utils_validation.py`** - Validation
+5. ✅ **`tests/unit/test_data_relations.py`** - Data generation
+6. ✅ **`tests/integration/test_stage3_training_step.py`** - Integration tests
 
 ## Contact and Resources
 
