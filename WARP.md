@@ -215,24 +215,23 @@ The unit tests are heavily used as executable documentation for geometry, curric
 
 ## Linting & formatting
 
-Python style is enforced via Ruff and YAPF (see `[tool.ruff]` and dev dependencies in `pyproject.toml`). Key points:
+Python style is checked with Ruff (`[tool.ruff]` in `pyproject.toml`: rules E, F, I, Q). No auto-formatter is configured, so match the surrounding style by hand. Key points:
 
-- Line length: **105** characters.
+- Line length: **105** characters (Ruff E501).
 - Indentation: 4 spaces.
 - Quotes: prefer single quotes for strings and docstrings.
 - Method chaining: split across lines with dots aligned vertically.
-- Markdown linting is configured via `.markdownlint.jsonc` (line length 100, spacing rules, etc.).
-
-Typical formatting workflow:
+- Markdown: 100-character lines by convention. `.markdownlint.jsonc` is gitignored, so fresh clones don't have it.
 
 ```bash path=null start=null
-# Lint and format Python (source + tests)
+# Lint: the only configured Python check
 uv run ruff check src tests
-uv run ruff format src tests
-uv run yapf -i -r src tests
+
+# Apply safe autofixes (e.g., import order) only to the files you changed
+uv run ruff check --fix path/to/changed_file.py
 ```
 
-If CLAUDE.md mentions helper scripts (e.g., a `scripts/format_code.sh` wrapper) but they are not present in the current tree, prefer the explicit uv-based commands above.
+`ruff check src tests` currently fails on pre-existing violations, so judge a change by the files it touches and don't mass-fix unrelated code. Don't run `ruff format` or `yapf`: their configuration was removed, so `ruff format` switches every string to double quotes and yapf applies its pep8 defaults, and both rewrite code you didn't touch. See CLAUDE.md for the full style guide.
 
 ## Working with configuration
 
