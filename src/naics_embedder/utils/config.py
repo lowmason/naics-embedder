@@ -3,6 +3,7 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union
 
@@ -370,6 +371,27 @@ class SupervisionBuildConfig(BaseModel):
         'cross_sector': 99,
     })
 
+class SupervisionRuntimeConfig(BaseModel):
+    '''Which supervision contract training runs under, and the one authoritative bundle.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    mode: Literal['repaired', 'legacy_containment'] = 'repaired'
+    manifest_path: Optional[str] = Field(
+        default=None,
+        description=(
+            'Immutable bundle manifest printed by `naics-embedder data supervision`; required '
+            'before repaired training'
+        ),
+    )
+    contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
+
+class CheckpointLoadMode(str, Enum):
+    '''How a training run may use a checkpoint.'''
+
+    EXACT = 'exact'
+    WEIGHTS_ONLY = 'weights_only'
+
 # -------------------------------------------------------------------------------------------------
 # Data Loader Configuration
 # -------------------------------------------------------------------------------------------------
@@ -646,6 +668,20 @@ class ModelConfig(BaseModel):
 # Loss Configuration
 # -------------------------------------------------------------------------------------------------
 
+class StructuralPreferenceConfig(BaseModel):
+    '''Pairwise structural preference over each anchor's positive plus selected negatives.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    weight: float = Field(
+        default=0.35, ge=0.0, le=1.0, description='Structural preference loss weight'
+    )
+    margin: float = Field(default=0.1, ge=0.0, description='Ordering margin on learned distances')
+    temperature: float = Field(default=1.0, gt=0.0, description='Softplus temperature')
+    tie_tolerance: float = Field(
+        default=1e-6, ge=0.0, description='Structural distances within this tolerance are ties'
+    )
+
 class LossConfig(BaseModel):
     '''Loss function configuration.'''
 
@@ -665,12 +701,17 @@ class LossConfig(BaseModel):
         le=1.0,
         description='Weight for hierarchy preservation loss component (0.0 to disable)',
     )
-    rank_order_weight: float = Field(
-        default=0.15,
+    structural_preference: StructuralPreferenceConfig = Field(
+        default_factory=StructuralPreferenceConfig,
+        description='Structural preference loss (replaces LambdaRank)',
+    )
+    rank_order_weight: Optional[float] = Field(
+        default=None,
         ge=0,
         le=1.0,
         description=(
-            'Weight for rank order preservation loss (Spearman correlation optimization, 0.0 to disable)'
+            'Legacy LambdaRank weight, retained only for legacy containment and so repaired '
+            'configurations can be rejected with a migration message'
         ),
     )
     radius_reg_weight: float = Field(
@@ -1096,6 +1137,26 @@ class Config(BaseModel):
     false_negatives: FalseNegativeConfig = Field(
         default_factory=FalseNegativeConfig, description='False negative mitigation strategy'
     )
+    supervision: SupervisionRuntimeConfig = Field(
+        default_factory=SupervisionRuntimeConfig,
+        description='Stage-3 supervision mode and authoritative bundle',
+    )
+
+    @model_validator(mode='after')
+    def validate_supervision_contract(self) -> 'Config':
+        '''Repaired training rejects settings whose semantics the repaired contract replaced.'''
+        if self.supervision.mode == 'repaired':
+            if self.loss.rank_order_weight is not None:
+                raise ValueError(
+                    'loss.rank_order_weight is a legacy LambdaRank setting; '
+                    'configure loss.structural_preference instead'
+                )
+            if self.data_loader.streaming.phase1_exclusion_weight is not None:
+                raise ValueError(
+                    'data_loader.streaming.phase1_exclusion_weight is invalid in repaired mode; '
+                    'the one-slot exclusion quota owns representation'
+                )
+        return self
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'Config':

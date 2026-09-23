@@ -6,9 +6,11 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli import app as cli_app
 from naics_embedder.cli.commands import training
-from naics_embedder.utils.config import Config
+from naics_embedder.supervision.checkpoints import CheckpointContract, MigrationReport
+from naics_embedder.utils.config import CheckpointLoadMode, Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
-from naics_embedder.utils.validation import ValidationResult
+from naics_embedder.utils.validation import ValidationError, ValidationResult
+
 
 @pytest.fixture
 def cli_runner():
@@ -22,6 +24,26 @@ def training_env(monkeypatch, tmp_path):
     context.save_summary_calls = []
     context.fail_during_fit = False
     context.trainer = None
+    context.events = []
+    context.exact_resume_calls = []
+    context.bundle = SimpleNamespace(
+        manifest=SimpleNamespace(
+            contract_version='stage3-supervision-v1',
+            bundle_id='bundle-a',
+            codebook_fingerprint='a' * 64,
+        )
+    )
+
+    def fake_gate(cfg):
+        context.events.append('supervision_gate')
+        return None if cfg.supervision.mode == 'legacy_containment' else context.bundle
+
+    monkeypatch.setattr(training, 'require_valid_supervision_bundle', fake_gate)
+
+    def fake_validate_exact_resume(path, runtime):
+        context.exact_resume_calls.append((path, runtime))
+
+    monkeypatch.setattr(training, 'validate_exact_resume', fake_validate_exact_resume)
 
     hardware = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
     monkeypatch.setattr(training, 'detect_hardware', lambda log_info=False: hardware)
@@ -41,6 +63,7 @@ def training_env(monkeypatch, tmp_path):
         triplets_dir.mkdir(exist_ok=True)
         cfg.data_loader.streaming.descriptions_parquet = str(desc_path)
         cfg.data_loader.streaming.triplets_parquet = str(triplets_dir)
+        cfg.supervision.manifest_path = str(tmp_path / 'bundle' / 'manifest.json')
         cfg.training.trainer.max_epochs = 1
         cfg.training.trainer.devices = 1
         cfg.training.trainer.log_every_n_steps = 1
@@ -63,6 +86,7 @@ def training_env(monkeypatch, tmp_path):
     monkeypatch.setattr(Config, 'override', override_with_margin, raising=False)
 
     def fake_resolve(ckpt_path, checkpoint_dir, experiment_name):
+        context.events.append('resolve_checkpoint')
         context.resolve_args = (ckpt_path, str(checkpoint_dir), experiment_name)
         return context.checkpoint_info
 
@@ -71,6 +95,7 @@ def training_env(monkeypatch, tmp_path):
     class DummyDataModule:
 
         def __init__(self, *args, **kwargs):
+            context.events.append('datamodule')
             self.kwargs = kwargs
 
     monkeypatch.setattr(training, 'NAICSDataModule', DummyDataModule)
@@ -78,6 +103,7 @@ def training_env(monkeypatch, tmp_path):
     class DummyModel:
 
         def __init__(self, **kwargs):
+            context.events.append('model')
             self.kwargs = kwargs
             self.loaded_from_ckpt = False
 
@@ -161,6 +187,100 @@ def test_training_checkpoint_resume_passes_ckpt(training_env):
     training.train(ckpt_path='last', skip_validation=True)
 
     assert training_env.trainer.fit_calls[0]['ckpt_path'] == 'foo.ckpt'
+    [(path, runtime)] = training_env.exact_resume_calls
+    assert path == 'foo.ckpt'
+    assert runtime == CheckpointContract(
+        supervision_mode='repaired',
+        bundle_id='bundle-a',
+        codebook_fingerprint='a' * 64,
+    )
+
+@pytest.mark.unit
+def test_exact_resume_contract_mismatch_fails_before_training(training_env, monkeypatch):
+    training_env.checkpoint_info = CheckpointInfo(path='foo.ckpt', is_same_stage=True, exists=True)
+
+    def reject(path, runtime):
+        raise ValueError('exact resume contract mismatch')
+
+    monkeypatch.setattr(training, 'validate_exact_resume', reject)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        training.train(ckpt_path='last', skip_validation=True)
+
+    assert excinfo.value.exit_code == 1
+    assert training_env.trainer is None
+
+@pytest.mark.unit
+def test_weights_only_never_passes_checkpoint_to_trainer(training_env, monkeypatch):
+    training_env.checkpoint_info = CheckpointInfo(
+        path='legacy.ckpt',
+        is_same_stage=False,
+        exists=True,
+    )
+    reports = []
+
+    def fake_load_weights_only(model, path):
+        assert path == 'legacy.ckpt'
+        report = MigrationReport(
+            loaded=('encoder.weight', ),
+            skipped=('loss_fn.buffer', ),
+            missing=(),
+            unexpected=(),
+        )
+        reports.append(report)
+        return report
+
+    monkeypatch.setattr(training, 'load_weights_only', fake_load_weights_only)
+
+    training.train(
+        ckpt_path='last',
+        checkpoint_load_mode=CheckpointLoadMode.WEIGHTS_ONLY,
+        skip_validation=True,
+    )
+
+    assert reports
+    assert training_env.exact_resume_calls == []
+    assert training_env.trainer.fit_calls[0]['ckpt_path'] is None
+
+@pytest.mark.unit
+def test_supervision_gate_runs_before_datamodule_checkpoint_and_model(training_env):
+    training.train(skip_validation=True)
+
+    assert training_env.events[0] == 'supervision_gate'
+    assert training_env.events.index('supervision_gate') < training_env.events.index('model')
+
+@pytest.mark.unit
+def test_supervision_gate_failure_stops_before_any_construction(training_env, monkeypatch):
+
+    def fail(cfg):
+        training_env.events.append('supervision_gate')
+        raise ValidationError('Repaired Stage-3 training requires supervision.manifest_path')
+
+    monkeypatch.setattr(training, 'require_valid_supervision_bundle', fail)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        training.train(skip_validation=True)
+
+    assert excinfo.value.exit_code == 1
+    assert training_env.events == ['supervision_gate']
+
+@pytest.mark.unit
+def test_repaired_model_and_datamodule_receive_bundle_supervision(training_env):
+    training.train(skip_validation=True)
+
+    fit = training_env.trainer.fit_calls[0]
+    model_kwargs = fit['model'].kwargs
+    datamodule_kwargs = fit['datamodule'].kwargs
+    assert model_kwargs['supervision_mode'] == 'repaired'
+    assert model_kwargs['supervision_manifest_path'].endswith('manifest.json')
+    assert model_kwargs['supervision_bundle'] is training_env.bundle
+    assert model_kwargs['checkpoint_contract'].bundle_id == 'bundle-a'
+    assert model_kwargs['structural_preference_weight'] == 0.35
+    assert model_kwargs['selection_seed'] == 42
+    for legacy_key in ('rank_order_weight', 'distance_matrix_path', 'relations_parquet_path'):
+        assert legacy_key not in model_kwargs
+    assert datamodule_kwargs['supervision_mode'] == 'repaired'
+    assert datamodule_kwargs['supervision_bundle'] is training_env.bundle
 
 @pytest.mark.unit
 def test_training_error_handling_exits(training_env):

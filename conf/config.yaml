@@ -4,6 +4,13 @@
 experiment_name: sadc_default
 seed: 42
 
+# Stage-3 supervision: one immutable, validated bundle is the only authority for code identity,
+# structural facts, exclusions, and training pairs.
+supervision:
+  mode: repaired  # Options: repaired, legacy_containment (explicit, tagged, never exact-resumes)
+  contract_version: stage3-supervision-v1
+  manifest_path: null  # data supervision prints the exact immutable path to set before training
+
 # Curriculum scheduler configuration (Structure-Aware Dynamic Curriculum)
 curriculum:
   phase1_end: 0.5  # Structural initialization cutoff (fraction of epochs)
@@ -95,7 +102,7 @@ data_loader:
     # Phase 1 tree-distance based sampling
     use_phase1_sampling: true  # Use inverse weighting, sibling masking, exclusion mining
     phase1_alpha: 1.5  # Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α
-    phase1_exclusion_weight: 100.0  # High constant weight for excluded codes in Phase 1
+    # Exclusions are represented by the one-slot exclusion quota at selection time
     # On-the-fly sampling with oversampling and difficulty curriculum
     use_on_the_fly_sampling: false  # Use on-the-fly negative sampling instead of pre-computed cache
     n_candidates: 48  # Total candidate negatives to sample (for Phase 2+ HNM pool)
@@ -134,7 +141,11 @@ loss:
   curvature: 1.0
   base_margin: 0.5
   hierarchy_weight: 0.45  # Weight for hierarchy preservation loss (increased from 0.1)
-  rank_order_weight: 0.35  # Weight for rank order preservation loss (Spearman correlation)
+  structural_preference:  # Pairwise structural ordering over each positive + selected negatives
+    weight: 0.35
+    margin: 0.1
+    temperature: 1.0
+    tie_tolerance: 0.000001
   radius_reg_weight: 0.10  # Weight for radius regularization to prevent instability
   level_radius_weight: 0.15  # Weight for aligning hyperbolic radius with hierarchy depth
 

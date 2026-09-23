@@ -18,6 +18,7 @@ The model is decomposed into functional mixins for maintainability:
 '''
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import polars as pl
@@ -29,7 +30,13 @@ from naics_embedder.metrics import (
     EmbeddingStatistics,
     HierarchyMetrics,
 )
-from naics_embedder.supervision.artifacts import load_validated_bundle
+from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, load_validated_bundle
+from naics_embedder.supervision.checkpoints import (
+    CHECKPOINT_KEY,
+    CheckpointContract,
+    contract_for_bundle,
+    validate_checkpoint_contract,
+)
 from naics_embedder.supervision.index import SupervisionIndex
 from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.supervision.selection import NegativeSelectionCoordinator
@@ -146,6 +153,9 @@ class NAICSContrastiveModel(
         structural_preference_temperature: Softplus temperature for structural preference
         structural_preference_tie_tolerance: Structural distance tie tolerance
         selection_seed: Global seed for deterministic exclusion rotation
+        checkpoint_contract: Optional runtime contract; must match the loaded bundle
+        supervision_bundle: Optional already-validated bundle for ``supervision_manifest_path``
+            (not saved in hyperparameters)
     '''
 
     def __init__(
@@ -193,6 +203,8 @@ class NAICSContrastiveModel(
         structural_preference_temperature: float = 1.0,
         structural_preference_tie_tolerance: float = 1e-6,
         selection_seed: int = 0,
+        checkpoint_contract: Optional[CheckpointContract] = None,
+        supervision_bundle: Optional[ValidatedSupervisionBundle] = None,
     ):
         super().__init__()
 
@@ -210,16 +222,38 @@ class NAICSContrastiveModel(
                 'legacy inputs'
             )
 
-        self.save_hyperparameters()
+        # Bundle and contract objects stay out of hyperparameters: checkpoints record paths and
+        # identifiers, and a restored model re-validates its bundle from the manifest path.
+        self.save_hyperparameters(ignore=['checkpoint_contract', 'supervision_bundle'])
         self.supervision_mode = supervision_mode
 
         # Load the validated supervision bundle before any model construction: the single
         # authority for code identity, structural facts, exclusions, the evaluation hierarchy,
-        # and ground-truth distances.
-        bundle = load_validated_bundle(
-            supervision_manifest_path,
-            expected_contract=supervision_contract_version,
-        )
+        # and ground-truth distances. A caller that already validated it may pass it in.
+        if supervision_bundle is None:
+            bundle = load_validated_bundle(
+                supervision_manifest_path,
+                expected_contract=supervision_contract_version,
+            )
+        else:
+            if supervision_bundle.manifest_path != Path(supervision_manifest_path).resolve():
+                raise ValueError(
+                    f'pre-validated supervision bundle manifest {supervision_bundle.manifest_path} '
+                    f'is not the configured manifest {supervision_manifest_path}'
+                )
+            if supervision_bundle.manifest.contract_version != supervision_contract_version:
+                raise ValueError(
+                    f'pre-validated supervision bundle has contract '
+                    f'{supervision_bundle.manifest.contract_version}, expected '
+                    f'{supervision_contract_version}'
+                )
+            bundle = supervision_bundle
+        self.checkpoint_contract = contract_for_bundle(bundle.manifest, supervision_mode)
+        if checkpoint_contract is not None and checkpoint_contract != self.checkpoint_contract:
+            raise ValueError(
+                f'runtime checkpoint contract {checkpoint_contract.model_dump()} does not match the '
+                f'loaded supervision bundle {self.checkpoint_contract.model_dump()}'
+            )
         self.supervision_bundle_id = bundle.manifest.bundle_id
         self.supervision_index = SupervisionIndex.from_bundle(bundle)
         self.selection_coordinator = NegativeSelectionCoordinator()
@@ -360,6 +394,19 @@ class NAICSContrastiveModel(
             - top_k_indices: Selected expert indices (batch_size, top_k)
         '''
         return self.encoder(channel_inputs)
+
+    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        '''Record the supervision contract this checkpoint was trained under.'''
+        checkpoint[CHECKPOINT_KEY] = self.checkpoint_contract.model_dump()
+
+    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        '''
+        Refuse to restore a checkpoint trained under any other supervision contract.
+
+        Runs for Lightning exact resume and ``load_from_checkpoint``; weights-only migration
+        never reaches this hook.
+        '''
+        validate_checkpoint_contract(checkpoint.get(CHECKPOINT_KEY), self.checkpoint_contract)
 
     def _forward_candidate_pool(
         self, batch: Dict[str, Any]

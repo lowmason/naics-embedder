@@ -780,6 +780,99 @@ class TestCheckpointLoading:
         assert 'temperature' in hparams
 
 # -------------------------------------------------------------------------------------------------
+# Test: Supervision checkpoint contract
+# -------------------------------------------------------------------------------------------------
+
+def _lightning_checkpoint(model) -> dict:
+    checkpoint = {
+        'state_dict': model.state_dict(),
+        'hyper_parameters': dict(model.hparams),
+        'pytorch-lightning_version': pyl.__version__,
+    }
+    model.on_save_checkpoint(checkpoint)
+    return checkpoint
+
+@pytest.mark.unit
+class TestCheckpointContract:
+    '''The supervision contract travels with checkpoints and gates every restore.'''
+
+    def test_model_contract_matches_its_bundle(self, naics_model, validated_bundle):
+        contract = naics_model.checkpoint_contract
+
+        assert contract.supervision_mode == 'repaired'
+        assert contract.bundle_id == validated_bundle.manifest.bundle_id
+        assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
+
+    def test_on_save_checkpoint_writes_contract(self, naics_model):
+        checkpoint = {}
+        naics_model.on_save_checkpoint(checkpoint)
+
+        assert checkpoint['stage3_supervision'] == naics_model.checkpoint_contract.model_dump()
+
+    def test_on_load_checkpoint_rejects_legacy_and_mismatched_contracts(self, naics_model):
+        contract = naics_model.checkpoint_contract.model_dump()
+
+        with pytest.raises(ValueError, match='exact resume'):
+            naics_model.on_load_checkpoint({})
+        with pytest.raises(ValueError, match='exact resume'):
+            naics_model.on_load_checkpoint(
+                {'stage3_supervision': {**contract, 'bundle_id': 'other-bundle'}}
+            )
+        naics_model.on_load_checkpoint({'stage3_supervision': contract})
+
+    def test_runtime_contract_must_match_the_loaded_bundle(self, model_config):
+        from naics_embedder.supervision.checkpoints import CheckpointContract
+
+        other = CheckpointContract(
+            supervision_mode='repaired',
+            bundle_id='other-bundle',
+            codebook_fingerprint='f' * 64,
+        )
+        with pytest.raises(ValueError, match='bundle'):
+            NAICSContrastiveModel(**model_config, checkpoint_contract=other)
+
+    def test_prevalidated_bundle_is_reused_and_kept_out_of_hparams(
+        self, model_config, validated_bundle, monkeypatch
+    ):
+        import naics_embedder.text_model.naics_model as model_module
+
+        monkeypatch.setattr(
+            model_module,
+            'load_validated_bundle',
+            Mock(side_effect=AssertionError('bundle validated twice')),
+        )
+        model = NAICSContrastiveModel(**model_config, supervision_bundle=validated_bundle)
+
+        assert model.supervision_bundle_id == validated_bundle.manifest.bundle_id
+        assert 'supervision_bundle' not in model.hparams
+        assert 'checkpoint_contract' not in model.hparams
+
+    def test_prevalidated_bundle_must_be_the_configured_manifest(
+        self, model_config, validated_bundle, tmp_path
+    ):
+        model_config['supervision_manifest_path'] = str(tmp_path / 'other' / 'manifest.json')
+
+        with pytest.raises(ValueError, match='manifest'):
+            NAICSContrastiveModel(**model_config, supervision_bundle=validated_bundle)
+
+    def test_load_from_checkpoint_round_trips_the_contract(self, naics_model, tmp_path):
+        path = tmp_path / 'repaired.ckpt'
+        torch.save(_lightning_checkpoint(naics_model), path)
+
+        restored = NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
+
+        assert restored.checkpoint_contract == naics_model.checkpoint_contract
+
+    def test_load_from_checkpoint_rejects_a_legacy_checkpoint(self, naics_model, tmp_path):
+        checkpoint = _lightning_checkpoint(naics_model)
+        del checkpoint['stage3_supervision']
+        path = tmp_path / 'legacy.ckpt'
+        torch.save(checkpoint, path)
+
+        with pytest.raises(ValueError, match='exact resume'):
+            NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
+
+# -------------------------------------------------------------------------------------------------
 # Test: Numerical Stability
 # -------------------------------------------------------------------------------------------------
 
