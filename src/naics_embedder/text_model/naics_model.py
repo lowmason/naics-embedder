@@ -18,7 +18,7 @@ The model is decomposed into functional mixins for maintainability:
 '''
 
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import polars as pl
 import pytorch_lightning as pyl
@@ -29,6 +29,10 @@ from naics_embedder.metrics import (
     EmbeddingStatistics,
     HierarchyMetrics,
 )
+from naics_embedder.supervision.artifacts import load_validated_bundle
+from naics_embedder.supervision.index import SupervisionIndex
+from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.supervision.selection import NegativeSelectionCoordinator
 from naics_embedder.text_model.curriculum import CurriculumScheduler
 from naics_embedder.text_model.encoder import MultiChannelEncoder
 from naics_embedder.text_model.hard_negative_mining import (
@@ -36,25 +40,25 @@ from naics_embedder.text_model.hard_negative_mining import (
     NormAdaptiveMargin,
     RouterGuidedNegativeMiner,
 )
-from naics_embedder.text_model.loss import HyperbolicInfoNCELoss
+from naics_embedder.text_model.loss import (
+    HierarchyPreservationLoss,
+    HyperbolicInfoNCELoss,
+    StructuralPreferenceLoss,
+)
 from naics_embedder.text_model.mixins import (
     CurriculumMixin,
     DistributedMixin,
-    GlobalNegativeContext,
     LoggingMixin,
     LossMixin,
     OptimizerMixin,
     ValidationMixin,
     gather_embeddings_global,
-    gather_negative_codes_global,
 )
 
 # Re-export distributed utilities for backward compatibility
 __all__ = [
     'NAICSContrastiveModel',
     'gather_embeddings_global',
-    'gather_negative_codes_global',
-    'GlobalNegativeContext',
 ]
 from naics_embedder.utils.config import FalseNegativeConfig
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy, load_naics_hierarchy
@@ -81,12 +85,16 @@ class NAICSContrastiveModel(
     - MultiChannelEncoder: LoRA-tuned transformer with Mixture of Experts
     - Hyperbolic embeddings: Lorentz model for hierarchical representation
     - Curriculum learning: Structure-aware dynamic curriculum (SADC)
-    - Multiple loss functions: Contrastive, hierarchy preservation, LambdaRank
+    - Multiple loss functions: Contrastive, hierarchy preservation, structural preference
+
+    Repaired Stage-3 supervision comes only from one validated supervision bundle: every training
+    step encodes one canonical candidate pool, joins pair-dependent supervision by code identity,
+    and gathers every loss field through one checked negative selection.
 
     The implementation is decomposed into functional mixins:
     - DistributedMixin: Multi-GPU global batch sampling
-    - LossMixin: Loss computation (hierarchy, ranking, regularization)
-    - CurriculumMixin: Hard negative mining, router-guided sampling
+    - LossMixin: Loss computation (hierarchy, structural preference, regularization)
+    - CurriculumMixin: Checked negative selection and pseudo-related candidates
     - LoggingMixin: Training and validation metric logging
     - ValidationMixin: Validation step and evaluation metrics
     - OptimizerMixin: Optimizer and scheduler configuration
@@ -102,7 +110,6 @@ class NAICSContrastiveModel(
         temperature: Temperature for InfoNCE loss
         curvature: Hyperbolic space curvature
         hierarchy_weight: Weight for hierarchy preservation loss
-        rank_order_weight: Weight for LambdaRank loss
         radius_reg_weight: Weight for radius regularization
         level_radius_weight: Weight for level-aware radius prior
         learning_rate: Base learning rate
@@ -113,7 +120,8 @@ class NAICSContrastiveModel(
         fn_curriculum_start_epoch: Epoch to start false negative curriculum
         fn_cluster_every_n_epochs: Clustering frequency for pseudo-labels
         fn_num_clusters: Number of clusters for pseudo-labeling
-        distance_matrix_path: Path to ground truth distance matrix
+        distance_matrix_path: Legacy ground truth distance matrix (not allowed in repaired mode,
+            which reads structural distances from the supervision bundle)
         eval_every_n_epochs: Evaluation frequency
         eval_sample_size: Number of samples for evaluation
         tree_distance_alpha: Tree distance scaling factor
@@ -125,9 +133,19 @@ class NAICSContrastiveModel(
         curriculum_phase_mode: Curriculum phase mode
         curriculum_anneal: Annealing configuration for curriculum
         false_negative_config: Configuration for false negative handling
-        relations_parquet_path: Path to NAICS relations parquet
+        relations_parquet_path: Legacy NAICS relations parquet (not allowed in repaired mode, which
+            reads the hierarchy from the supervision bundle)
         parent_eval_top_k: Top-k for parent retrieval evaluation
         child_eval_top_k: Top-k for child retrieval evaluation
+        supervision_manifest_path: Manifest of the validated supervision bundle (required in
+            repaired mode)
+        supervision_contract_version: Expected supervision contract version
+        supervision_mode: Supervision mode; ``'repaired'``
+        structural_preference_weight: Weight for the structural preference loss
+        structural_preference_margin: Ordering margin for structural preference
+        structural_preference_temperature: Softplus temperature for structural preference
+        structural_preference_tie_tolerance: Structural distance tie tolerance
+        selection_seed: Global seed for deterministic exclusion rotation
     '''
 
     def __init__(
@@ -142,7 +160,6 @@ class NAICSContrastiveModel(
         temperature: float = 0.07,
         curvature: float = 1.0,
         hierarchy_weight: float = 0.1,
-        rank_order_weight: float = 0.15,
         radius_reg_weight: float = 0.01,
         level_radius_weight: float = 0.05,
         learning_rate: float = 2e-4,
@@ -168,10 +185,47 @@ class NAICSContrastiveModel(
         relations_parquet_path: Optional[str] = None,
         parent_eval_top_k: int = 1,
         child_eval_top_k: int = 5,
+        supervision_manifest_path: Optional[str] = None,
+        supervision_contract_version: str = CONTRACT_VERSION,
+        supervision_mode: str = 'repaired',
+        structural_preference_weight: float = 0.35,
+        structural_preference_margin: float = 0.1,
+        structural_preference_temperature: float = 1.0,
+        structural_preference_tie_tolerance: float = 1e-6,
+        selection_seed: int = 0,
     ):
         super().__init__()
 
+        if supervision_mode != 'repaired':
+            raise ValueError(f'unsupported supervision mode {supervision_mode!r}')
+        if supervision_manifest_path is None:
+            raise ValueError(
+                'repaired supervision requires supervision_manifest_path; generate a bundle '
+                'with `naics-embedder data supervision` and set the printed manifest path'
+            )
+        if distance_matrix_path is not None or relations_parquet_path is not None:
+            raise ValueError(
+                'repaired supervision reads structural distances and the NAICS hierarchy from '
+                'the supervision bundle; distance_matrix_path and relations_parquet_path are '
+                'legacy inputs'
+            )
+
         self.save_hyperparameters()
+        self.supervision_mode = supervision_mode
+
+        # Load the validated supervision bundle before any model construction: the single
+        # authority for code identity, structural facts, exclusions, the evaluation hierarchy,
+        # and ground-truth distances.
+        bundle = load_validated_bundle(
+            supervision_manifest_path,
+            expected_contract=supervision_contract_version,
+        )
+        self.supervision_bundle_id = bundle.manifest.bundle_id
+        self.supervision_index = SupervisionIndex.from_bundle(bundle)
+        self.selection_coordinator = NegativeSelectionCoordinator()
+        self.naics_hierarchy: Optional[NaicsHierarchy] = load_naics_hierarchy(
+            str(bundle.artifact_path('relations'))
+        )
 
         # Initialize encoder
         self.encoder = MultiChannelEncoder(
@@ -206,59 +260,34 @@ class NAICSContrastiveModel(
         self.parent_eval_top_k = parent_eval_top_k
         self.child_eval_top_k = child_eval_top_k
 
-        # Load NAICS hierarchy if available
-        self.naics_hierarchy: Optional[NaicsHierarchy] = None
-        if relations_parquet_path:
-            try:
-                self.naics_hierarchy = load_naics_hierarchy(relations_parquet_path)
-            except FileNotFoundError:
-                logger.warning(
-                    'NAICS relations parquet not found at %s; hierarchy diagnostics disabled',
-                    relations_parquet_path,
-                )
-
         # Initialize evaluation components
         self.embedding_eval = EmbeddingEvaluator()
         self.embedding_stats = EmbeddingStatistics()
         self.hierarchy_metrics = HierarchyMetrics()
 
-        # Load ground truth distances
-        self.ground_truth_distances = None
-        self.code_to_idx = None
-        if distance_matrix_path:
-            self._load_ground_truth_distances(distance_matrix_path)
+        # Ground truth distances: the validated structural matrix in codebook order
+        self.ground_truth_distances: Optional[torch.Tensor] = (
+            self.supervision_index.structural_distance
+        )
+        self.code_to_idx: Optional[Dict[str, int]] = dict(self.supervision_index.code_to_id)
 
         # Initialize hierarchy preservation loss
         self.hierarchy_loss_fn = None
-        hierarchy_weight = getattr(self.hparams, 'hierarchy_weight', 0.1)
-        if (
-            self.ground_truth_distances is not None and self.code_to_idx is not None
-            and hierarchy_weight > 0
-        ):
-            from naics_embedder.text_model.loss import HierarchyPreservationLoss
-
+        if hierarchy_weight > 0:
             self.hierarchy_loss_fn = HierarchyPreservationLoss(
-                tree_distances=self.ground_truth_distances,
+                tree_distances=self.supervision_index.structural_distance,
                 code_to_idx=self.code_to_idx,
                 weight=hierarchy_weight,
             )
 
-        # Initialize LambdaRank loss
-        self.lambdarank_loss_fn = None
-        rank_order_weight = getattr(self.hparams, 'rank_order_weight', 0.15)
-        if (
-            self.ground_truth_distances is not None and self.code_to_idx is not None
-            and rank_order_weight > 0
-        ):
-            from naics_embedder.text_model.loss import LambdaRankLoss
-
-            self.lambdarank_loss_fn = LambdaRankLoss(
-                tree_distances=self.ground_truth_distances,
-                code_to_idx=self.code_to_idx,
-                weight=rank_order_weight,
-                sigma=1.0,
-                ndcg_k=10,
-            )
+        # Initialize structural preference loss over each anchor's positive plus selected negatives
+        self.structural_preference_loss_fn = StructuralPreferenceLoss(
+            curvature=curvature,
+            margin=structural_preference_margin,
+            temperature=structural_preference_temperature,
+            tie_tolerance=structural_preference_tie_tolerance,
+            weight=structural_preference_weight,
+        )
 
         # Initialize validation state
         self.validation_embeddings: Dict[str, torch.Tensor] = {}
@@ -332,110 +361,119 @@ class NAICSContrastiveModel(
         '''
         return self.encoder(channel_inputs)
 
-    def _forward_batch(self, batch: Dict[str, Any]) -> List[Dict[str, torch.Tensor]]:
+    def _forward_candidate_pool(
+        self, batch: Dict[str, Any]
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
         '''
-        Forward pass for anchor, positive, and negative samples.
+        Encode the collated candidate pool once and build occurrence UIDs.
+
+        Only valid candidate rows are encoded; invalid padding rows receive zero outputs (the same
+        convention as distributed padding) and are never selectable. UIDs are
+        ``[rank, batch_row, source_slot]``, so invalid rows keep source slot ``-1``.
 
         Args:
-            batch: Training batch with anchor, positive, and negatives
+            batch: Repaired collated batch
 
         Returns:
-            List of [anchor_output, positive_output, negative_output]
+            Tuple of (flat candidate encoder output, ``[batch, candidate, 3]`` UIDs)
         '''
-        anchor_output = self(batch['anchor'])
-        positive_output = self(batch['positive'])
-        negative_output = self(batch['negatives'])
-        return [anchor_output, positive_output, negative_output]
+        valid = batch['candidate_valid_mask'].reshape(-1)
+        valid_inputs = {
+            channel: {name: value[valid] for name, value in inputs.items()}
+            for channel, inputs in batch['candidate_inputs'].items()
+        }
+        valid_output = self(valid_inputs)
+        candidate_output: Dict[str, torch.Tensor] = {}
+        for name, value in valid_output.items():
+            full = value.new_zeros((valid.shape[0], *value.shape[1:]))
+            full[valid] = value
+            candidate_output[name] = full
+
+        source_slot = batch['candidate_source_slot']
+        rank = (
+            torch.distributed.get_rank()
+            if torch.distributed.is_available() and torch.distributed.is_initialized() else 0
+        )
+        rank_component = torch.full_like(source_slot, rank)
+        batch_component = torch.arange(
+            int(batch['batch_size']), device=source_slot.device
+        ).unsqueeze(1).expand_as(source_slot)
+        candidate_uid = torch.stack([rank_component, batch_component, source_slot], dim=-1)
+        return candidate_output, candidate_uid
 
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         '''
-        Perform a single training step.
+        Perform a single repaired training step over one checked negative selection.
+
+        Order: encode anchors, positives, and the candidate pool once; select negatives by
+        candidate identity; derive pseudo-related candidates from the selection only; then every
+        loss consumes the same selected batch.
 
         Args:
-            batch: Training batch with anchor, positive, negatives, and metadata
+            batch: Repaired collated batch (see ``collate_fn(..., supervision_mode='repaired')``)
             batch_idx: Batch index
 
         Returns:
             Total loss for optimization
         '''
-        batch_size = batch['batch_size']
-        k_negatives = batch['k_negatives']
+        batch_size = int(batch['batch_size'])
 
         # Update curriculum state
         self._update_curriculum_state(batch_idx, batch_size)
 
-        # Forward pass
-        anchor_output, positive_output, negative_output = self._forward_batch(batch)
+        # Forward pass: anchors, positives, and the canonical candidate pool
+        anchor_output = self(batch['anchor'])
+        positive_output = self(batch['positive'])
+        candidate_output, candidate_uid = self._forward_candidate_pool(batch)
         anchor_emb = anchor_output['embedding']
         positive_emb = positive_output['embedding']
-        negative_emb = negative_output['embedding']
 
         # Log training statistics
         self._log_multilevel_supervision_stats(batch, batch_idx, batch_size)
-        false_negative_mask = self._build_false_negative_mask(batch, batch_size)
         self._log_sampling_metadata(batch, batch_size)
-        self._log_negative_sample_stats_if_needed(batch, batch_idx)
 
-        # Prepare negatives with hard negative mining
-        negative_emb, negative_emb_reshaped = self._prepare_negative_embeddings(
-            anchor_output,
-            negative_output,
+        # One checked selection; every negative field below is gathered by the same UIDs
+        selected = self._select_negative_batch(
+            batch=batch,
+            anchor_output=anchor_output,
+            candidate_output=candidate_output,
+            candidate_uid=candidate_uid,
+            batch_idx=batch_idx,
+        )
+        self._log_selected_negative_stats(batch, anchor_emb, selected, batch_idx, batch_size)
+
+        # Pseudo-related candidates exist only after selection; exclusions are never eligible
+        pseudo_related = self._build_selected_pseudo_related_mask(batch['anchor_code_id'], selected)
+        effective_mask, auxiliary_fn_loss = self._apply_false_negative_strategy_wrapper(
             anchor_emb,
-            negative_emb,
-            batch_size,
-            k_negatives,
-            batch_idx,
+            selected,
+            pseudo_related,
+        )
+        contrastive_loss = self._compute_contrastive_loss(
+            anchor_emb,
+            positive_emb,
+            selected,
+            effective_mask,
+        )
+        if auxiliary_fn_loss is not None:
+            contrastive_loss = contrastive_loss + auxiliary_fn_loss
+        structural_preference_loss = self._compute_structural_preference_loss(
+            anchor_emb,
+            positive_emb,
+            batch,
+            selected,
         )
 
-        # Apply false negative strategy
-        false_negative_mask, auxiliary_fn_loss = self._apply_false_negative_strategy_wrapper(
-            anchor_emb,
-            negative_emb_reshaped,
-            false_negative_mask,
-        )
-
-        # Compute adaptive margins
+        # Adaptive margin diagnostics (feed metric-triggered curriculum annealing)
         adaptive_margins = self.norm_adaptive_margin(anchor_emb)
         self._log_adaptive_margin_stats(adaptive_margins, batch_idx, batch_size)
 
-        # Compute contrastive loss
-        contrastive_loss = self.loss_fn(
-            anchor_emb,
-            positive_emb,
-            negative_emb,
-            batch_size,
-            k_negatives,
-            false_negative_mask=false_negative_mask,
-        )
-
-        if auxiliary_fn_loss is not None:
-            contrastive_loss = contrastive_loss + auxiliary_fn_loss
-
-        # Compute MoE load balancing loss
-        gate_probs_list, topk_indices_list = self._collect_gate_outputs(
-            [anchor_output, positive_output, negative_output]
-        )
-        self._log_router_diversity(gate_probs_list, batch_size)
-        raw_load_balancing_loss = self._compute_load_balancing_loss(
-            gate_probs_list,
-            topk_indices_list,
-            batch_size,
-        )
-
-        # Compute auxiliary losses
+        # Auxiliary losses; selected-candidate regularizers see only valid selections
         hierarchy_loss = self._compute_hierarchy_loss(anchor_emb, positive_emb, batch, batch_size)
-        lambdarank_loss = self._compute_lambdarank_loss(
-            anchor_emb,
-            positive_emb,
-            negative_emb,
-            batch,
-            batch_size,
-            k_negatives,
-        )
         radius_reg_loss = self._compute_radius_regularization(
             anchor_emb,
             positive_emb,
-            negative_emb,
+            selected.embedding[selected.valid_mask],
             batch_size,
         )
         level_radius_loss = self._compute_level_radius_alignment_loss(
@@ -445,12 +483,28 @@ class NAICSContrastiveModel(
             batch_size,
         )
 
+        # MoE load balancing over anchors, positives, and valid candidate rows only
+        valid_candidates = batch['candidate_valid_mask'].reshape(-1)
+        valid_candidate_output = {
+            name: candidate_output[name][valid_candidates]
+            for name in ('gate_probs', 'top_k_indices') if name in candidate_output
+        }
+        gate_probs_list, topk_indices_list = self._collect_gate_outputs(
+            [anchor_output, positive_output, valid_candidate_output]
+        )
+        self._log_router_diversity(gate_probs_list, batch_size)
+        raw_load_balancing_loss = self._compute_load_balancing_loss(
+            gate_probs_list,
+            topk_indices_list,
+            batch_size,
+        )
+
         # Combine losses
         total_loss, scaled_load_balancing_loss = self._combine_loss_terms(
             contrastive_loss,
             raw_load_balancing_loss,
             hierarchy_loss,
-            lambdarank_loss,
+            structural_preference_loss,
             radius_reg_loss,
             level_radius_loss,
         )
@@ -460,7 +514,7 @@ class NAICSContrastiveModel(
             contrastive_loss,
             scaled_load_balancing_loss,
             hierarchy_loss,
-            lambdarank_loss,
+            structural_preference_loss,
             radius_reg_loss,
             level_radius_loss,
             total_loss,

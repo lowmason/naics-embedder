@@ -27,6 +27,7 @@ class ValidationMixin:
     - device: torch.device
     - hparams: hyperparameters
     - loss_fn: contrastive loss function
+    - supervision_index: SupervisionIndex for anchor-relative exclusion joins
     - embedding_eval: EmbeddingEvaluator
     - embedding_stats: EmbeddingStatistics
     - hierarchy_metrics: HierarchyMetrics
@@ -64,8 +65,12 @@ class ValidationMixin:
         '''
         Perform a single validation step.
 
+        The contrastive loss covers every valid candidate in the collated pool. Validation uses
+        no mining, selection, or pseudo-labels, so ``val/contrastive_loss`` depends only on the
+        model and the (epoch-independent) validation pools. Explicit exclusions stay repulsive.
+
         Args:
-            batch: Validation batch with anchor, positive, and negatives
+            batch: Repaired validation batch with anchor, positive, and candidate pool
             batch_idx: Batch index
 
         Returns:
@@ -73,17 +78,28 @@ class ValidationMixin:
         '''
         anchor_output = self(batch['anchor'])
         positive_output = self(batch['positive'])
-        negative_output = self(batch['negatives'])
+        candidate_output, _ = self._forward_candidate_pool(batch)
 
         anchor_emb = anchor_output['embedding']
         positive_emb = positive_output['embedding']
-        negative_emb = negative_output['embedding']
 
-        batch_size = batch['batch_size']
-        k_negatives = batch['k_negatives']
+        batch_size = int(batch['batch_size'])
+        valid_mask = batch['candidate_valid_mask']
+        candidate_emb = candidate_output['embedding'].reshape(
+            batch_size, int(batch['k_candidates']), -1
+        )
+        pair = self.supervision_index.join(
+            batch['anchor_code_id'],
+            batch['candidate_code_id'],
+            valid_mask,
+        )
 
         contrastive_loss = self.loss_fn(
-            anchor_emb, positive_emb, negative_emb, batch_size, k_negatives
+            anchor_emb,
+            positive_emb,
+            candidate_emb,
+            valid_mask=valid_mask,
+            is_explicit_exclusion=pair.is_explicit_exclusion,
         )
 
         self.log(

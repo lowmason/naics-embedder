@@ -4,20 +4,17 @@
 '''
 Distributed training utilities for global batch sampling across multiple GPUs.
 
-This module provides functions for gathering embeddings and metadata across
-distributed workers, enabling hard negative mining over the global batch.
+This module provides functions for gathering candidate entities across distributed workers,
+enabling checked negative selection over the global candidate pool.
 '''
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional
+from typing import Optional
 
 import torch
 import torch.distributed as dist
 
 from naics_embedder.supervision.candidates import CandidateEntityBatch
 
-if TYPE_CHECKING:
-    from naics_embedder.text_model.mixins.logging import LoggingMixin
 
 def _all_gather_fixed(tensor: torch.Tensor, world_size: int) -> torch.Tensor:
     '''Non-differentiable all_gather of equal-shape tensors, concatenated rank-major.'''
@@ -131,114 +128,18 @@ def gather_embeddings_global(
 
     return global_embeddings
 
-def gather_negative_codes_global(
-    local_negative_codes: List[List[str]], world_size: Optional[int] = None
-) -> List[List[str]]:
-    '''
-    Gather negative codes from all GPUs for false negative masking.
-
-    Args:
-        local_negative_codes: Local negative codes (batch_size, k_negatives)
-        world_size: Number of GPUs (auto-detected if None)
-
-    Returns:
-        Global negative codes list
-    '''
-    if not dist.is_initialized():
-        return local_negative_codes
-
-    if world_size is None:
-        world_size = dist.get_world_size()
-
-    if world_size == 1:
-        return local_negative_codes
-
-    # Gather negative codes from all ranks
-    # Note: all_gather_object is used for Python objects like lists
-    gathered_codes: List[List[str]] = [None] * world_size  # type: ignore
-    dist.all_gather_object(gathered_codes, local_negative_codes)
-
-    # Flatten the list of lists from all ranks
-    global_negative_codes = []
-    for codes_per_rank in gathered_codes:
-        if codes_per_rank is not None:
-            global_negative_codes.extend(codes_per_rank)
-
-    return global_negative_codes
-
-@dataclass
-class GlobalNegativeContext:
-    '''Container for global negative embedding context in distributed training.'''
-
-    negatives_reshaped: torch.Tensor
-    negatives_flat: torch.Tensor
-    global_batch_size: int
-    global_k_negatives: int
-
 class DistributedMixin:
     '''
     Mixin providing distributed training utilities for global batch sampling.
 
-    This mixin adds methods for gathering embeddings across workers and
-    managing global negative pools for hard negative mining.
-
-    Note: This mixin is designed to be used with NAICSContrastiveModel which
-    inherits from LightningModule. The type annotations use string forward
-    references to avoid circular imports.
+    Global selection gathers candidate entities with :func:`gather_candidate_entities` and rejoins
+    pair-dependent supervision for each local anchor.
     '''
 
-    # Type hints for attributes provided by LightningModule or other mixins
-    if TYPE_CHECKING:
-        _log_global_batch_stats: 'LoggingMixin._log_global_batch_stats'
-
     def _should_use_global_batch(self, enable_hnm: bool, enable_router: bool) -> bool:
-        '''Determine if global batch sampling should be used.'''
+        '''Whether mining should select from the global candidate pool across ranks.'''
         if not (enable_hnm or enable_router):
             return False
-        if not torch.distributed.is_initialized():
+        if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
             return False
         return torch.distributed.get_world_size() > 1
-
-    def _gather_global_negative_pool(
-        self,
-        negative_emb: torch.Tensor,
-        batch_size: int,
-        k_negatives: int,
-        batch_idx: int,
-    ) -> Optional[GlobalNegativeContext]:
-        '''
-        Gather negative embeddings from all workers into a global pool.
-
-        Args:
-            negative_emb: Local negative embeddings
-            batch_size: Local batch size
-            k_negatives: Number of negatives per sample
-            batch_idx: Current batch index
-
-        Returns:
-            GlobalNegativeContext with reshaped global negatives, or None if not distributed
-        '''
-        if not torch.distributed.is_initialized():
-            return None
-
-        global_negative_emb = gather_embeddings_global(negative_emb)
-        world_size = torch.distributed.get_world_size()
-        global_batch_size = batch_size * world_size
-        if global_batch_size == 0:
-            return None
-
-        global_k_negatives = global_negative_emb.shape[0] // global_batch_size
-        reshaped = global_negative_emb.view(global_batch_size, global_k_negatives, -1)
-        flat = reshaped.view(-1, global_negative_emb.shape[-1])
-
-        if batch_idx == 0:
-            self._log_global_batch_stats(
-                global_negative_emb, batch_size, global_batch_size, global_k_negatives
-            )
-
-        return GlobalNegativeContext(
-            negatives_reshaped=reshaped,
-            negatives_flat=flat,
-            global_batch_size=global_batch_size,
-            global_k_negatives=global_k_negatives,
-        )

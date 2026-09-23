@@ -119,6 +119,34 @@ class LossMixin:
             valid_mask=selected.valid_mask,
         )
 
+    def _compute_contrastive_loss(
+        self,
+        anchor_emb: torch.Tensor,
+        positive_emb: torch.Tensor,
+        selected: SelectedNegativeBatch,
+        effective_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        '''
+        Hyperbolic InfoNCE over the checked selected negatives.
+
+        Args:
+            anchor_emb: Anchor embeddings
+            positive_emb: Positive embeddings
+            selected: The checked selected-negative batch
+            effective_mask: Optional effective false-negative mask aligned with ``selected``
+
+        Returns:
+            Contrastive loss (scalar)
+        '''
+        return self.loss_fn(
+            anchor_emb,
+            positive_emb,
+            selected.embedding,
+            valid_mask=selected.valid_mask,
+            is_explicit_exclusion=selected.is_explicit_exclusion,
+            pseudo_related_mask=effective_mask,
+        )
+
     def _compute_structural_preference_loss(
         self,
         anchor_emb: torch.Tensor,

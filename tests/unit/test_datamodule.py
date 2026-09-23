@@ -360,6 +360,60 @@ def test_repaired_rows_never_use_an_exclusion_as_the_positive(
         assert row['raw_candidates']
 
 
+def test_validation_pools_are_stable_across_training_epochs(
+    tmp_path,
+    hierarchy_bundle,
+    hierarchy_token_cache,
+    hierarchy_descriptions_parquet,
+    repaired_streaming_config,
+):
+    # val/contrastive_loss scores whole validation pools and drives checkpointing, so epoch
+    # progress may only change training pools.
+    from unittest.mock import Mock
+
+    from naics_embedder.text_model.dataloader.datamodule import (
+        NAICSDataModule,
+        RepairedPhase1Dataset,
+    )
+    from naics_embedder.utils.config import SamplingConfig
+
+    bundle, index = hierarchy_bundle
+
+    def on_the_fly_dataset():
+        return RepairedPhase1Dataset(
+            cfg=repaired_streaming_config,
+            sampling_cfg=SamplingConfig(),
+            token_cache=hierarchy_token_cache,
+            bundle=bundle,
+            index=index,
+            phase1_end_epoch=4,
+        )
+
+    def pools(dataset):
+        return [
+            None if item is None else [c['negative_code_id'] for c in item['candidate_pool']]
+            for item in (dataset[position] for position in range(len(dataset)))
+        ]
+
+    datamodule = NAICSDataModule(
+        descriptions_path=hierarchy_descriptions_parquet,
+        triplets_path=str(tmp_path / 'unused_triplets'),
+        batch_size=2,
+        num_workers=0,
+    )
+    datamodule.train_dataset = on_the_fly_dataset()
+    datamodule.val_dataset = on_the_fly_dataset()
+    before = pools(datamodule.val_dataset)
+    assert any(before)
+
+    datamodule.trainer = Mock(current_epoch=3)
+    datamodule.on_train_epoch_start()
+
+    assert datamodule.train_dataset.epoch == 3
+    assert datamodule.val_dataset.epoch == 0
+    assert pools(datamodule.val_dataset) == before
+
+
 # -------------------------------------------------------------------------------------------------
 # Basic Collate Tests
 # -------------------------------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from naics_embedder.text_model.mixins.curriculum import (
     CurriculumMixin,
     _proposal_from_local_uids,
 )
+from naics_embedder.text_model.mixins.distributed import DistributedMixin
 
 
 def test_geometric_miner_returns_source_indices_not_embeddings(candidate_batch):
@@ -158,7 +159,7 @@ def test_local_difficulty_proposals_translate_by_occurrence_uid(candidate_batch)
     assert proposal.scores[0, 2] == float('-inf')
 
 
-class _SelectionHost(CurriculumMixin):
+class _SelectionHost(DistributedMixin, CurriculumMixin):
     def __init__(self, index: SupervisionIndex, flags: dict):
         self.supervision_index = index
         self.current_curriculum_flags = flags
@@ -270,43 +271,30 @@ def test_select_negative_batch_rejects_router_mining_without_gate_probs(validate
             batch_idx=0,
         )
 
-def test_router_miner_kl_prefers_matching_distribution():
-    '''KL-divergence metric should favor negatives with similar gate probs.'''
+def test_router_miner_kl_prefers_matching_distribution(candidate_batch):
+    '''KL-divergence metric should favor candidates with similar gate probs.'''
 
     miner = RouterGuidedNegativeMiner(metric='kl_divergence')
 
     anchor_gate_probs = torch.tensor([[0.7, 0.3]])
     negative_gate_probs = torch.tensor(
         [[
-            [0.7, 0.3],  # Matching distribution
             [0.2, 0.8],  # Divergent distribution
+            [0.7, 0.3],  # Matching distribution
+            [0.5, 0.5],
         ]]
     )
+    candidates = replace(candidate_batch, router_gate_probs=negative_gate_probs)
 
-    candidate_negatives = torch.tensor([[
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-    ]])
+    proposal = miner.propose(anchor_gate_probs, candidates, k=1)
 
-    router_negatives, scores = miner.mine_router_hard_negatives(
-        anchor_gate_probs=anchor_gate_probs,
-        negative_gate_probs=negative_gate_probs,
-        candidate_negatives=candidate_negatives,
-        k=1,
-        return_scores=True,
-    )
-
-    assert router_negatives.shape == (1, 1, 3)
-    assert scores is not None
-    assert scores.shape == (1, 1)
-    # First negative has the matching distribution, so it should be selected
-    assert torch.allclose(router_negatives[0, 0], candidate_negatives[0, 0])
-    # Confusion score for matching distribution should be higher
+    # The matching distribution is proposed by source index, never as a gathered embedding
+    assert proposal.source_indices.tolist() == [[1]]
     full_scores = miner.compute_confusion_scores(anchor_gate_probs, negative_gate_probs)
-    assert full_scores[0, 0] > full_scores[0, 1]
+    assert full_scores[0, 1] > full_scores[0, 2] > full_scores[0, 0]
 
-def test_router_miner_cosine_prefers_high_similarity():
-    '''Cosine metric should select the highest-similarity gate distribution.'''
+def test_router_miner_cosine_prefers_high_similarity(candidate_batch):
+    '''Cosine metric should propose the highest-similarity gate distribution first.'''
 
     miner = RouterGuidedNegativeMiner(metric='cosine_similarity')
 
@@ -320,22 +308,12 @@ def test_router_miner_cosine_prefers_high_similarity():
             ]
         ]
     )
+    candidates = replace(candidate_batch, router_gate_probs=negative_gate_probs)
 
-    candidate_negatives = torch.arange(3 * 4, dtype=torch.float32).view(1, 3, 4)
+    proposal = miner.propose(anchor_gate_probs, candidates, k=3)
 
-    router_negatives, scores = miner.mine_router_hard_negatives(
-        anchor_gate_probs=anchor_gate_probs,
-        negative_gate_probs=negative_gate_probs,
-        candidate_negatives=candidate_negatives,
-        k=1,
-        return_scores=True,
-    )
-
-    assert router_negatives.shape == (1, 1, 4)
-    assert scores is not None
-    # First candidate matches anchor distribution, should be chosen
-    assert torch.allclose(router_negatives[0, 0], candidate_negatives[0, 0])
-    # Score ordering should follow similarity
+    # Proposals are ranked by similarity
+    assert proposal.source_indices.tolist() == [[0, 1, 2]]
     full_scores = miner.compute_confusion_scores(anchor_gate_probs, negative_gate_probs)
     assert full_scores[0, 0] >= full_scores[0, 1]
     assert full_scores[0, 1] >= full_scores[0, 2]

@@ -4,7 +4,7 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -86,10 +86,11 @@ def _cosine_similarity_compiled(
 
 class LorentzianHardNegativeMiner(nn.Module):
     '''
-    Phase 2 Hard Negative Mining: Select negatives that are geometrically close
+    Phase 2 Hard Negative Mining: Propose negatives that are geometrically close
     in the learned hyperbolic space using Lorentzian distance.
 
-    For each anchor, selects the top-k negatives with the smallest Lorentzian distance.
+    For each anchor, proposes the top-k eligible candidates with the smallest Lorentzian distance
+    as source indices; the selection coordinator performs the only gather.
     '''
 
     def __init__(self, curvature: float = 1.0, safety_epsilon: float = 1e-5):
@@ -185,90 +186,13 @@ class LorentzianHardNegativeMiner(nn.Module):
 
         return safe_dot_product, is_valid
 
-    def mine_hard_negatives(
-        self,
-        anchor_emb: torch.Tensor,
-        candidate_negatives: torch.Tensor,
-        k: int,
-        return_distances: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        '''
-        Mine top-k hardest negatives for each anchor based on Lorentzian distance.
-
-        Args:
-            anchor_emb: Anchor embeddings (batch_size, embedding_dim+1)
-            candidate_negatives: Candidate negative embeddings
-                (batch_size, num_candidates, embedding_dim+1) or
-                (batch_size * num_candidates, embedding_dim+1)
-            k: Number of hard negatives to select (top-k)
-            return_distances: If True, also return the distances
-
-        Returns:
-            Tuple of:
-            - hard_negatives: Selected hard negatives (batch_size, k, embedding_dim+1)
-            - distances: Optional distances (batch_size, k) if return_distances=True
-        '''
-        batch_size = anchor_emb.shape[0]
-
-        # Reshape candidate_negatives if needed
-        if candidate_negatives.dim() == 2:
-            # Flattened: (batch_size * num_candidates, embedding_dim+1)
-            num_candidates = candidate_negatives.shape[0] // batch_size
-            candidate_negatives = candidate_negatives.view(batch_size, num_candidates, -1)
-        elif candidate_negatives.dim() == 3:
-            # Already batched: (batch_size, num_candidates, embedding_dim+1)
-            num_candidates = candidate_negatives.shape[1]
-        else:
-            raise ValueError(f'Invalid candidate_negatives shape: {candidate_negatives.shape}')
-
-        # Safety check: ensure Lorentz inner products are valid
-        safe_dot, is_valid = self.check_lorentz_inner_product_safety(
-            anchor_emb, candidate_negatives
-        )
-
-        if not is_valid:
-            logger.warning(
-                'Some anchor-negative pairs violate Lorentz constraint '
-                '(⟨u, v⟩_L < -1). Clamping applied.'
-            )
-
-        # Compute Lorentzian distances for all anchor-candidate pairs
-        # anchor_emb: (batch_size, embedding_dim+1)
-        # candidate_negatives: (batch_size, num_candidates, embedding_dim+1)
-        distances = self.lorentz_distance.batched_forward(
-            anchor_emb, candidate_negatives
-        )  # (batch_size, num_candidates)
-
-        # Select top-k hardest negatives (smallest distances = hardest)
-        # Use topk to get indices and values
-        k_actual = min(k, num_candidates)
-        topk_distances, topk_indices = torch.topk(
-            distances,
-            k=k_actual,
-            dim=1,
-            largest=False,  # Smallest distances = hardest negatives
-        )
-
-        # Gather selected negatives
-        # Create index tensor for gathering
-        batch_indices = (
-            torch.arange(batch_size, device=anchor_emb.device).unsqueeze(1).expand(-1, k_actual)
-        )  # (batch_size, k)
-
-        hard_negatives = candidate_negatives[batch_indices, topk_indices]
-
-        if return_distances:
-            return hard_negatives, topk_distances
-        else:
-            return hard_negatives, None
-
 # -------------------------------------------------------------------------------------------------
 # Router-Guided Negative Mining
 # -------------------------------------------------------------------------------------------------
 
 class RouterGuidedNegativeMiner(nn.Module):
     '''
-    Router-Guided Negative Mining: Select negatives that confuse the Gating Network.
+    Router-Guided Negative Mining: Propose negatives that confuse the Gating Network.
 
     Prevents "Expert Collapse" where a single expert handles all easy negatives by
     mining negatives where the router assigns high probability to the same experts as the anchor.
@@ -408,61 +332,6 @@ class RouterGuidedNegativeMiner(nn.Module):
             return scores
         else:
             raise ValueError(f'Unknown metric: {self.metric}')
-
-    def mine_router_hard_negatives(
-        self,
-        anchor_gate_probs: torch.Tensor,
-        negative_gate_probs: torch.Tensor,
-        candidate_negatives: torch.Tensor,
-        k: int,
-        return_scores: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        '''
-        Mine top-k router-hard negatives that confuse the gating network.
-
-        Args:
-            anchor_gate_probs: Anchor gate probabilities (batch_size, num_experts)
-            negative_gate_probs: Negative gate probabilities
-                (batch_size, k_negatives, num_experts)
-            candidate_negatives: Candidate negative embeddings
-                (batch_size, k_negatives, embedding_dim+1)
-            k: Number of router-hard negatives to select
-            return_scores: If True, also return confusion scores
-
-        Returns:
-            Tuple of:
-            - router_hard_negatives: Selected router-hard negatives (batch_size, k, embedding_dim+1)
-            - scores: Optional confusion scores (batch_size, k) if return_scores=True
-        '''
-        batch_size = anchor_gate_probs.shape[0]
-        num_candidates = negative_gate_probs.shape[1]
-
-        # Compute confusion scores
-        confusion_scores = self.compute_confusion_scores(
-            anchor_gate_probs, negative_gate_probs
-        )  # (batch_size, k_negatives)
-
-        # Select top-k negatives with highest confusion (most similar gate distributions)
-        k_actual = min(k, num_candidates)
-        topk_scores, topk_indices = torch.topk(
-            confusion_scores,
-            k=k_actual,
-            dim=1,
-            largest=True,  # Higher confusion = better
-        )
-
-        # Gather selected negatives
-        batch_indices = (
-            torch.arange(batch_size,
-                         device=anchor_gate_probs.device).unsqueeze(1).expand(-1, k_actual)
-        )  # (batch_size, k)
-
-        router_hard_negatives = candidate_negatives[batch_indices, topk_indices]
-
-        if return_scores:
-            return router_hard_negatives, topk_scores
-        else:
-            return router_hard_negatives, None
 
 # -------------------------------------------------------------------------------------------------
 # Norm-Adaptive Margin

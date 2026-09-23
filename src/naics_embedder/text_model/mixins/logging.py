@@ -5,10 +5,10 @@
 Logging mixin for NAICSContrastiveModel.
 
 Provides methods for logging various training and validation metrics:
-- Negative sample distribution
-- Tree distance distribution
+- Negative sample distribution (over the checked selection)
+- Tree distance distribution (over the checked selection)
 - Adaptive margin statistics
-- Global batch statistics
+- Selection health counters
 - Hard negative mining statistics
 - Router diversity metrics
 - Loss breakdown
@@ -18,6 +18,9 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence
 
 import torch
+
+from naics_embedder.supervision.candidates import NegativeCandidateBatch, SelectedNegativeBatch
+from naics_embedder.supervision.schema import SelectionReason
 
 logger = logging.getLogger(__name__)
 
@@ -248,47 +251,82 @@ class LoggingMixin:
         except Exception as e:
             logger.debug(f'Failed to log tree distance distribution: {e}')
 
-    def _log_global_batch_stats(
+    def _log_selection_health(
         self,
-        global_negative_emb: torch.Tensor,
+        candidates: NegativeCandidateBatch,
+        selected: SelectedNegativeBatch,
         batch_size: int,
-        global_batch_size: int,
-        global_k_negatives: int,
     ) -> None:
-        '''Log memory usage and size statistics for global batch sampling.'''
-        global_negatives_memory_mb = (
-            global_negative_emb.numel() * global_negative_emb.element_size() / (1024**2)
+        '''
+        Log low-cardinality integrity counters for one checked selection as epoch sums.
+
+        Counters carry no candidate identities in their names or values.
+        '''
+        duplicates = sum(
+            int(valid.sum()) - len(set(codes[valid].detach().cpu().tolist()))
+            for codes, valid in zip(candidates.code_id, candidates.valid_mask)
         )
-        similarity_matrix_memory_mb = batch_size * global_batch_size * global_k_negatives * 4 / (
-            1024**2
+        selection_metrics = {
+            'train/integrity/anchors_with_exclusions':
+            candidates.is_explicit_exclusion.any(dim=1).sum(),
+            'train/integrity/quota_selections':
+            selected.selection_reasons.eq(int(SelectionReason.EXCLUSION_QUOTA)).sum(),
+            'train/integrity/invalid_candidates_ignored': (~candidates.valid_mask).sum(),
+            'train/integrity/deterministic_backfills':
+            selected.selection_reasons.eq(int(SelectionReason.BACKFILL)).sum(),
+            'train/integrity/duplicate_candidates_removed':
+            torch.tensor(duplicates, device=candidates.code_id.device),
+        }
+        for name, value in selection_metrics.items():
+            self.log(
+                name,
+                value.to(torch.float32),
+                on_step=False,
+                on_epoch=True,
+                reduce_fx='sum',
+                batch_size=batch_size,
+            )
+
+    def _log_selected_negative_stats(
+        self,
+        batch: Dict[str, Any],
+        anchor_emb: torch.Tensor,
+        selected: SelectedNegativeBatch,
+        batch_idx: int,
+        batch_size: int,
+    ) -> None:
+        '''
+        Epoch-start negative diagnostics computed on the checked selection.
+
+        Codes and embeddings come from the same selected identities, so relation-type, tree
+        distance, and hard-negative distance statistics describe the negatives actually used.
+        '''
+        if batch_idx != 0:
+            return
+        id_to_code = self.supervision_index.id_to_code
+        negative_codes = [
+            [id_to_code[code_id] for code_id in codes[valid].tolist()]
+            for codes, valid in zip(selected.code_id, selected.valid_mask)
+        ]
+        self._log_negative_sample_stats_if_needed(
+            {'anchor_code': batch['anchor_code'], 'negative_codes': negative_codes},
+            batch_idx,
         )
-        self.log(
-            'train/global_batch/global_negatives_memory_mb',
-            global_negatives_memory_mb,
-            batch_size=batch_size,
-            on_step=False,
-            on_epoch=True,
-        )
-        self.log(
-            'train/global_batch/similarity_matrix_memory_mb',
-            similarity_matrix_memory_mb,
-            batch_size=batch_size,
-            on_step=False,
-            on_epoch=True,
-        )
-        self.log(
-            'train/global_batch/global_batch_size',
-            global_batch_size,
-            batch_size=batch_size,
-            on_step=False,
-            on_epoch=True,
-        )
-        self.log(
-            'train/global_batch/global_k_negatives',
-            global_k_negatives,
-            batch_size=batch_size,
-            on_step=False,
-            on_epoch=True,
+
+        enable_hnm = self.current_curriculum_flags.get('enable_hard_negative_mining', False)
+        if not enable_hnm:
+            return
+        enable_router = self.current_curriculum_flags.get('enable_router_guided_sampling', False)
+        with torch.no_grad():
+            distances = self.hard_negative_miner.lorentz_distance.batched_forward(
+                anchor_emb,
+                selected.embedding,
+            )
+        self._log_hard_negative_stats(
+            distances[selected.valid_mask],
+            batch_idx,
+            batch_size,
+            used_global_batch=self._should_use_global_batch(enable_hnm, enable_router),
         )
 
     def _log_hard_negative_stats(
