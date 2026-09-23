@@ -5,196 +5,259 @@
 import logging
 import os
 import pickle
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
+import polars as pl
 import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
 from naics_embedder.data.positive_sampling import create_positive_sampler
-from naics_embedder.text_model.dataloader.difficulty_sampler import select_by_difficulty
+from naics_embedder.data.supervision_bundle import build_codebook
+from naics_embedder.supervision.artifacts import (
+    ValidatedSupervisionBundle,
+    codebook_fingerprint,
+    load_validated_bundle,
+    sha256_file,
+)
+from naics_embedder.supervision.index import SupervisionIndex
+from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.text_model.dataloader.difficulty_sampler import (
+    propose_by_difficulty,
+    select_by_difficulty,
+)
 from naics_embedder.text_model.dataloader.streaming_dataset import (
+    IndexDistanceLookup,
     _get_multi_epoch_cache_path,
     _load_distance_matrix,
     _load_excluded_codes,
     _load_negative_candidates,
     _sample_negatives_phase1,
+    build_candidate_pool,
     build_multi_epoch_triplets,
+    build_repaired_multi_epoch_rows,
+    load_bundle_candidates,
+    repaired_positive_sampler,
+    sample_raw_candidates,
+    sampled_positive_pairs,
 )
 from naics_embedder.utils.config import SamplingConfig, StreamingConfig, TokenizationConfig
 from naics_embedder.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
 
+SUPERVISION_MODES = ('repaired', 'legacy_containment')
+CHANNELS = ('title', 'description', 'excluded', 'examples')
+
 # -------------------------------------------------------------------------------------------------
 # Collate function for DataLoader
 # -------------------------------------------------------------------------------------------------
 
-def collate_fn(batch: List[Dict]) -> Dict:
-    '''Collate function to batch triplets for training. Each batch item represents a single positive.'''
-    channels = ['title', 'description', 'excluded', 'examples']
+def _stack_text_inputs(
+    embeddings: List[Dict[str, Dict[str, torch.Tensor]]]
+) -> Dict[str, Dict[str, torch.Tensor]]:
+    return {
+        channel: {
+            'input_ids': torch.stack([embedding[channel]['input_ids'] for embedding in embeddings]),
+            'attention_mask':
+            torch.stack([embedding[channel]['attention_mask'] for embedding in embeddings]),
+        }
+        for channel in CHANNELS
+    }
 
-    # Find maximum number of negatives in batch and pad shorter lists
+def _accumulate_sampling_metadata(batch: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    '''Average SANS sampling diagnostics across the batch items that carry them.'''
+
+    accumulator: Optional[Dict[str, Any]] = None
+    for item in batch:
+        metadata = item.get('sampling_metadata')
+        if not metadata:
+            continue
+        if accumulator is None:
+            accumulator = {
+                'strategy': metadata.get('strategy', 'unknown'),
+                'candidates_near': 0,
+                'candidates_far': 0,
+                'sampled_near': 0,
+                'sampled_far': 0,
+                'effective_near_weight_sum': 0.0,
+                'effective_far_weight_sum': 0.0,
+                'records': 0,
+            }
+        accumulator['candidates_near'] += metadata.get('candidates_near', 0)
+        accumulator['candidates_far'] += metadata.get('candidates_far', 0)
+        accumulator['sampled_near'] += metadata.get('sampled_near', 0)
+        accumulator['sampled_far'] += metadata.get('sampled_far', 0)
+        accumulator['effective_near_weight_sum'] += metadata.get('effective_near_weight', 0.0)
+        accumulator['effective_far_weight_sum'] += metadata.get('effective_far_weight', 0.0)
+        accumulator['records'] += 1
+
+    if accumulator is None or accumulator['records'] == 0:
+        return None
+    records = accumulator.pop('records')
+    accumulator['avg_effective_near_weight'] = (
+        accumulator.pop('effective_near_weight_sum') / records
+    )
+    accumulator['avg_effective_far_weight'] = accumulator.pop('effective_far_weight_sum') / records
+    return accumulator
+
+def _collate_legacy(batch: List[Dict]) -> Dict:
+    '''Legacy-containment collation: local negatives, repeat-last padding, inputs never mutated.'''
+
     max_negatives = max(len(item['negatives']) for item in batch) if batch else 0
     if max_negatives == 0:
         raise ValueError('Batch contains items with no negatives - cannot create training batch')
 
+    padded_negatives: List[List[Dict[str, Any]]] = []
     for item in batch:
-        if len(item['negatives']) < max_negatives:
-            # Pad by repeating the last negative
-            last_negative = item['negatives'][-1] if item['negatives'] else None
-            if last_negative is None:
-                anchor_code = item.get('anchor_code', 'unknown')
-                raise ValueError(f'Item has no negatives to pad from: {anchor_code}')
-            padding_needed = max_negatives - len(item['negatives'])
-            item['negatives'].extend([last_negative] * padding_needed)
-
-    sampling_accumulator: Optional[Dict[str, Any]] = None
-
-    # Initialize batch dictionaries
-    anchor_batch = {channel: {} for channel in channels}
-    positive_batch = {channel: {} for channel in channels}
-    negatives_batch = {channel: {} for channel in channels}
-
-    # Collect codes and indices for evaluation tracking
-    anchor_codes = []
-    positive_codes = []
-    negative_codes = []
-    positive_levels: List[int] = []
-
-    # Process each channel
-    for channel in channels:
-        anchor_ids = []
-        anchor_masks = []
-        positive_ids = []
-        positive_masks = []
-
-        # Collect anchor and positive for this channel
-        for item in batch:
-            anchor_ids.append(item['anchor_embedding'][channel]['input_ids'])
-            anchor_masks.append(item['anchor_embedding'][channel]['attention_mask'])
-            positive_ids.append(item['positive_embedding'][channel]['input_ids'])
-            positive_masks.append(item['positive_embedding'][channel]['attention_mask'])
-
-        # Stack anchor
-        anchor_batch[channel]['input_ids'] = torch.stack(anchor_ids)
-        anchor_batch[channel]['attention_mask'] = torch.stack(anchor_masks)
-
-        # Stack positive
-        positive_batch[channel]['input_ids'] = torch.stack(positive_ids)
-        positive_batch[channel]['attention_mask'] = torch.stack(positive_masks)
-
-        # Collect all negatives for this channel
-        all_neg_ids = []
-        all_neg_masks = []
-        for item in batch:
-            for neg_dict in item['negatives']:
-                all_neg_ids.append(neg_dict['negative_embedding'][channel]['input_ids'])
-                all_neg_masks.append(neg_dict['negative_embedding'][channel]['attention_mask'])
-
-        # Stack negatives
-        negatives_batch[channel]['input_ids'] = torch.stack(all_neg_ids)
-        negatives_batch[channel]['attention_mask'] = torch.stack(all_neg_masks)
-
-    # Extract codes from batch items
-    for item in batch:
-        anchor_codes.append(item['anchor_code'])
-        positive_codes.append(item['positive_code'])
-        negative_codes.append([neg_dict['negative_code'] for neg_dict in item['negatives']])
-        positive_levels.append(item.get('positive_level', len(item['positive_code'])))
-
-        metadata = item.get('sampling_metadata')
-        if metadata:
-            if sampling_accumulator is None:
-                sampling_accumulator = {
-                    'strategy': metadata.get('strategy', 'unknown'),
-                    'candidates_near': 0,
-                    'candidates_far': 0,
-                    'sampled_near': 0,
-                    'sampled_far': 0,
-                    'effective_near_weight_sum': 0.0,
-                    'effective_far_weight_sum': 0.0,
-                    'records': 0,
-                }
-
-            sampling_accumulator['candidates_near'] += metadata.get('candidates_near', 0)
-            sampling_accumulator['candidates_far'] += metadata.get('candidates_far', 0)
-            sampling_accumulator['sampled_near'] += metadata.get('sampled_near', 0)
-            sampling_accumulator['sampled_far'] += metadata.get('sampled_far', 0)
-            sampling_accumulator['effective_near_weight_sum'] += metadata.get(
-                'effective_near_weight', 0.0
-            )
-            sampling_accumulator['effective_far_weight_sum'] += metadata.get(
-                'effective_far_weight', 0.0
-            )
-            sampling_accumulator['records'] += 1
+        negatives = list(item['negatives'])
+        if not negatives:
+            anchor_code = item.get('anchor_code', 'unknown')
+            raise ValueError(f'Item has no negatives to pad from: {anchor_code}')
+        negatives.extend([negatives[-1]] * (max_negatives - len(negatives)))
+        padded_negatives.append(negatives)
 
     result = {
-        'anchor': anchor_batch,
-        'positive': positive_batch,
-        'negatives': negatives_batch,
+        'anchor': _stack_text_inputs([item['anchor_embedding'] for item in batch]),
+        'positive': _stack_text_inputs([item['positive_embedding'] for item in batch]),
+        'negatives': _stack_text_inputs(
+            [negative['negative_embedding'] for negatives in padded_negatives
+             for negative in negatives]
+        ),
         'batch_size': len(batch),
         'k_negatives': max_negatives,
-        'anchor_code': anchor_codes,
-        'positive_code': positive_codes,
-        'negative_codes': negative_codes,
+        'anchor_code': [item['anchor_code'] for item in batch],
+        'positive_code': [item['positive_code'] for item in batch],
+        'negative_codes': [
+            [negative['negative_code'] for negative in negatives] for negatives in padded_negatives
+        ],
+        'positive_levels': [
+            item.get('positive_level', len(item['positive_code'])) for item in batch
+        ],
+    }
+    sampling_metadata = _accumulate_sampling_metadata(batch)
+    if sampling_metadata:
+        result['sampling_metadata'] = sampling_metadata
+    return result
+
+def _collate_repaired(batch: List[Dict]) -> Dict:
+    '''
+    Repaired collation: one candidate pool per item, flattened row-major, with explicit invalid
+    rows (zero input IDs and attention mask, code ID -1, source slot -1) instead of repeated
+    padding. Pair-dependent supervision is joined later, after any distributed entity gather.
+    '''
+
+    if not batch:
+        raise ValueError('cannot collate an empty batch')
+    for item in batch:
+        if 'candidate_pool' not in item:
+            raise ValueError(
+                'repaired collation requires candidate_pool items; legacy negatives require '
+                "supervision_mode='legacy_containment'"
+            )
+    max_candidates = max(len(item['candidate_pool']) for item in batch)
+    if max_candidates == 0:
+        raise ValueError('Batch contains items with empty candidate pools')
+    selection_k = min(int(item['selection_k']) for item in batch)
+    if selection_k < 1:
+        raise ValueError('selection_k must be at least one')
+
+    template = next(
+        candidate['negative_embedding'] for item in batch for candidate in item['candidate_pool']
+    )
+    invalid_row = {
+        channel: {
+            'input_ids': torch.zeros_like(template[channel]['input_ids']),
+            'attention_mask': torch.zeros_like(template[channel]['attention_mask']),
+        }
+        for channel in CHANNELS
     }
 
-    # Add positive_levels for multi-level supervision tracking
-    result['positive_levels'] = positive_levels
+    candidate_rows: List[Dict[str, Dict[str, torch.Tensor]]] = []
+    candidate_code_ids: List[List[int]] = []
+    candidate_valid_mask: List[List[bool]] = []
+    candidate_source_slots: List[List[int]] = []
+    candidate_roles: List[List[int]] = []
+    candidate_provenance: List[List[int]] = []
+    for item in batch:
+        pool = item['candidate_pool']
+        padding = max_candidates - len(pool)
+        candidate_rows.extend(candidate['negative_embedding'] for candidate in pool)
+        candidate_rows.extend([invalid_row] * padding)
+        candidate_code_ids.append(
+            [int(candidate['negative_code_id']) for candidate in pool] + [-1] * padding
+        )
+        candidate_valid_mask.append([True] * len(pool) + [False] * padding)
+        candidate_source_slots.append(list(range(len(pool))) + [-1] * padding)
+        candidate_roles.append(
+            [int(candidate['sampling_role_id']) for candidate in pool] + [0] * padding
+        )
+        candidate_provenance.append(
+            [int(candidate['sampling_provenance_id']) for candidate in pool] + [0] * padding
+        )
 
-    if sampling_accumulator and sampling_accumulator['records'] > 0:
-        records = sampling_accumulator.pop('records')
-        effective_near_avg = sampling_accumulator.pop('effective_near_weight_sum') / records
-        effective_far_avg = sampling_accumulator.pop('effective_far_weight_sum') / records
-        sampling_accumulator['avg_effective_near_weight'] = effective_near_avg
-        sampling_accumulator['avg_effective_far_weight'] = effective_far_avg
-        result['sampling_metadata'] = sampling_accumulator
+    proposal_width = max(len(item['difficulty_proposal_indices']) for item in batch)
+    difficulty_indices = [
+        [int(slot) for slot in item['difficulty_proposal_indices']] +
+        [-1] * (proposal_width - len(item['difficulty_proposal_indices'])) for item in batch
+    ]
 
-    # Include all_candidates for Phase 2+ hard negative mining if present
-    # This contains oversampled negatives from Phase 1 that weren't selected
-    # by the difficulty curriculum but are available for HNM
-    if batch and batch[0].get('all_candidates'):
-        all_candidates_batch = {channel: {} for channel in channels}
-
-        # Find max candidates across batch
-        max_candidates = max(len(item.get('all_candidates', [])) for item in batch)
-
-        # Pad all_candidates lists to same length
-        for item in batch:
-            candidates = item.get('all_candidates', [])
-            if len(candidates) < max_candidates and candidates:
-                last_candidate = candidates[-1]
-                padding_needed = max_candidates - len(candidates)
-                candidates.extend([last_candidate] * padding_needed)
-
-        # Collect candidate embeddings for each channel
-        for channel in channels:
-            all_cand_ids = []
-            all_cand_masks = []
-            for item in batch:
-                for cand_dict in item.get('all_candidates', []):
-                    all_cand_ids.append(cand_dict['negative_embedding'][channel]['input_ids'])
-                    all_cand_masks.append(cand_dict['negative_embedding'][channel]['attention_mask'])
-
-            if all_cand_ids:
-                all_candidates_batch[channel]['input_ids'] = torch.stack(all_cand_ids)
-                all_candidates_batch[channel]['attention_mask'] = torch.stack(all_cand_masks)
-
-        result['all_candidates'] = all_candidates_batch
-        result['k_candidates'] = max_candidates
-
-        # Also collect all_candidate codes
-        all_candidate_codes = []
-        for item in batch:
-            all_candidate_codes.append(
-                [cand['negative_code'] for cand in item.get('all_candidates', [])]
-            )
-        result['all_candidate_codes'] = all_candidate_codes
-
+    result = {
+        'anchor': _stack_text_inputs([item['anchor_embedding'] for item in batch]),
+        'positive': _stack_text_inputs([item['positive_embedding'] for item in batch]),
+        'candidate_inputs': _stack_text_inputs(candidate_rows),
+        'batch_size': len(batch),
+        'k_candidates': max_candidates,
+        'selection_k': selection_k,
+        'anchor_code_id': torch.tensor(
+            [int(item['anchor_code_id']) for item in batch], dtype=torch.long
+        ),
+        'positive_code_id': torch.tensor(
+            [int(item['positive_code_id']) for item in batch], dtype=torch.long
+        ),
+        'positive_structural_distance': torch.tensor(
+            [float(item['positive_structural_distance']) for item in batch], dtype=torch.float32
+        ),
+        'positive_structural_relation_id': torch.tensor(
+            [int(item['positive_structural_relation_id']) for item in batch], dtype=torch.int16
+        ),
+        'candidate_code_id': torch.tensor(candidate_code_ids, dtype=torch.long),
+        'candidate_valid_mask': torch.tensor(candidate_valid_mask, dtype=torch.bool),
+        'candidate_source_slot': torch.tensor(candidate_source_slots, dtype=torch.long),
+        'candidate_sampling_role_id': torch.tensor(candidate_roles, dtype=torch.int8),
+        'candidate_sampling_provenance_id': torch.tensor(candidate_provenance, dtype=torch.int8),
+        'difficulty_proposal_indices': torch.tensor(
+            difficulty_indices, dtype=torch.long
+        ).reshape(len(batch), proposal_width),
+        'anchor_code': [item['anchor_code'] for item in batch],
+        'positive_code': [item['positive_code'] for item in batch],
+        'positive_levels': [
+            item.get('positive_level', len(item['positive_code'])) for item in batch
+        ],
+    }
+    sampling_metadata = _accumulate_sampling_metadata(batch)
+    if sampling_metadata:
+        result['sampling_metadata'] = sampling_metadata
     return result
+
+def collate_fn(batch: List[Dict], supervision_mode: str = 'repaired') -> Dict:
+    '''
+    Collate batch items; each item represents a single (anchor, positive).
+
+    Args:
+        batch: Dataset items.
+        supervision_mode: ``'repaired'`` (one candidate pool per item) or the explicit
+            ``'legacy_containment'`` mode (local legacy negatives).
+    '''
+
+    if supervision_mode == 'repaired':
+        return _collate_repaired(batch)
+    if supervision_mode == 'legacy_containment':
+        return _collate_legacy(batch)
+    raise ValueError(f'unknown supervision mode {supervision_mode!r}; expected {SUPERVISION_MODES}')
 
 # -------------------------------------------------------------------------------------------------
 # Map-style Dataset for pre-sampled triplets
@@ -286,7 +349,7 @@ class NAICSMapDataset(Dataset):
 # -------------------------------------------------------------------------------------------------
 
 class Phase1MapDataset(Dataset):
-    """
+    '''
     Map-style dataset with on-the-fly Phase 1 negative sampling and difficulty curriculum.
 
     Instead of pre-computing all negatives for multiple epochs, this dataset:
@@ -301,7 +364,7 @@ class Phase1MapDataset(Dataset):
         token_cache: Pre-computed tokenized embeddings
         phase1_end_epoch: Epoch at which Phase 1 ends
         epoch: Current training epoch (updated via set_epoch)
-    """
+    '''
 
     def __init__(
         self,
@@ -310,7 +373,7 @@ class Phase1MapDataset(Dataset):
         token_cache: Dict[int, Dict[str, Any]],
         phase1_end_epoch: int,
     ):
-        """
+        '''
         Initialize the Phase 1 map dataset.
 
         Args:
@@ -318,7 +381,7 @@ class Phase1MapDataset(Dataset):
             sampling_cfg: Sampling strategy configuration
             token_cache: Dictionary mapping index to tokenized embeddings
             phase1_end_epoch: Epoch at which Phase 1 ends (for curriculum progress)
-        """
+        '''
         self.cfg = cfg
         self.sampling_cfg = sampling_cfg
         self.token_cache = token_cache
@@ -384,14 +447,14 @@ class Phase1MapDataset(Dataset):
         )
 
     def set_epoch(self, epoch: int) -> None:
-        """Update the current epoch for different negative sampling."""
+        '''Update the current epoch for different negative sampling.'''
         self.epoch = epoch
 
     def __len__(self) -> int:
         return len(self.pairs)
 
     def _extract_embedding(self, idx: int) -> Optional[Dict[str, Any]]:
-        """Extract embedding from token cache, excluding code field."""
+        '''Extract embedding from token cache, excluding code field.'''
         try:
             return {k: v for k, v in self.token_cache[idx].items() if k != 'code'}
         except KeyError:
@@ -401,7 +464,7 @@ class Phase1MapDataset(Dataset):
     def _attach_embeddings(
         self, negatives: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Attach embeddings to negative dictionaries."""
+        '''Attach embeddings to negative dictionaries.'''
         result = []
         for neg in negatives:
             neg_idx = int(neg['negative_idx'])
@@ -421,14 +484,14 @@ class Phase1MapDataset(Dataset):
         return result
 
     def __getitem__(self, idx: int) -> Optional[Dict[str, Any]]:
-        """
+        '''
         Get a single triplet item by index with on-the-fly negative sampling.
 
         Returns:
             Dictionary with anchor, positive, selected negatives (Phase 1),
             and all candidates (for Phase 2+ HNM). Returns None if embeddings
             are missing.
-        """
+        '''
         anchor_idx, positive = self.pairs[idx]
         anchor_code = self._anchor_code_map.get(anchor_idx)
         if anchor_code is None:
@@ -510,15 +573,206 @@ class Phase1MapDataset(Dataset):
 
 
 # -------------------------------------------------------------------------------------------------
+# Repaired Stage-3 datasets: one bundle-backed candidate pool per item
+# -------------------------------------------------------------------------------------------------
+
+def _token_embedding(token_cache: Dict[int, Dict[str, Any]], code_id: int) -> Dict[str, Any]:
+    try:
+        entry = token_cache[int(code_id)]
+    except KeyError as exc:
+        raise KeyError(
+            f'token cache has no entry for code ID {code_id}; the cache must match the '
+            'supervision codebook'
+        ) from exc
+    return {key: value for key, value in entry.items() if key != 'code'}
+
+def _repaired_item(
+    *,
+    anchor_code_id: int,
+    positive: Dict[str, Any],
+    pool: List[Dict[str, Any]],
+    proposals: List[int],
+    selection_k: int,
+    index: SupervisionIndex,
+    token_cache: Dict[int, Dict[str, Any]],
+    sampling_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    positive_code_id = int(positive['positive_code_id'])
+    item: Dict[str, Any] = {
+        'anchor_code_id': anchor_code_id,
+        'anchor_code': index.id_to_code[anchor_code_id],
+        'anchor_embedding': _token_embedding(token_cache, anchor_code_id),
+        'positive_code_id': positive_code_id,
+        'positive_code': index.id_to_code[positive_code_id],
+        'positive_embedding': _token_embedding(token_cache, positive_code_id),
+        'positive_level': positive['positive_level'],
+        'stratum_id': positive['stratum_id'],
+        'stratum_wgt': positive['stratum_wgt'],
+        'positive_structural_distance': float(
+            index.structural_distance[anchor_code_id, positive_code_id]
+        ),
+        'positive_structural_relation_id': int(
+            index.structural_relation_id[anchor_code_id, positive_code_id]
+        ),
+        'candidate_pool': [
+            {
+                **candidate,
+                'negative_embedding': _token_embedding(token_cache, candidate['negative_code_id']),
+            } for candidate in pool
+        ],
+        'difficulty_proposal_indices': proposals,
+        'selection_k': selection_k,
+    }
+    if sampling_metadata:
+        item['sampling_metadata'] = sampling_metadata
+    return item
+
+class RepairedMapDataset(Dataset):
+    '''
+    Pre-sampled repaired rows. Each access builds one canonical candidate pool from the row's raw
+    candidates (deterministic for the row's sampling epoch) and proposes every pool position.
+    '''
+
+    def __init__(
+        self,
+        rows: List[Dict[str, Any]],
+        token_cache: Dict[int, Dict[str, Any]],
+        index: SupervisionIndex,
+        cfg: StreamingConfig,
+        selection_k: int,
+    ):
+        self.rows = rows
+        self.token_cache = token_cache
+        self.index = index
+        self.cfg = cfg
+        self.selection_k = selection_k
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        row = self.rows[idx]
+        pool = build_candidate_pool(
+            anchor_code_id=int(row['anchor_code_id']),
+            positive_code_id=int(row['positive_code_id']),
+            raw_candidates=row['raw_candidates'],
+            supervision_index=self.index,
+            n_candidates=self.cfg.n_negatives,
+            final_k=self.selection_k,
+            epoch=int(row['sampling_epoch']),
+            seed=self.cfg.seed,
+        )
+        return _repaired_item(
+            anchor_code_id=int(row['anchor_code_id']),
+            positive=row,
+            pool=pool,
+            proposals=list(range(len(pool))),
+            selection_k=self.selection_k,
+            index=self.index,
+            token_cache=self.token_cache,
+            sampling_metadata=row.get('sampling_metadata'),
+        )
+
+class RepairedPhase1Dataset(Dataset):
+    '''
+    On-the-fly repaired sampling. Each access samples raw candidates for the epoch, builds one
+    canonical candidate pool, and proposes pool positions by the difficulty curriculum.
+    '''
+
+    def __init__(
+        self,
+        cfg: StreamingConfig,
+        sampling_cfg: SamplingConfig,
+        token_cache: Dict[int, Dict[str, Any]],
+        bundle: ValidatedSupervisionBundle,
+        index: SupervisionIndex,
+        phase1_end_epoch: int,
+    ):
+        self.cfg = cfg
+        self.sampling_cfg = sampling_cfg
+        self.token_cache = token_cache
+        self.index = index
+        self.phase1_end_epoch = max(phase1_end_epoch, 1)
+        self.epoch = 0
+        self.distance_lookup = IndexDistanceLookup(index)
+
+        sampler = repaired_positive_sampler(cfg, bundle, index)
+        pairs, dropped = sampled_positive_pairs(sampler, index)
+        if dropped:
+            logger.info(f'Dropped {dropped:,} sampled positives that are explicit exclusions')
+        self.negative_candidates = load_bundle_candidates(
+            bundle, {(anchor, int(positive['positive_idx'])) for anchor, positive in pairs}
+        )
+        self.pairs: List[Tuple[int, Dict[str, Any]]] = [
+            (anchor, positive)
+            for anchor, positive in pairs
+            if self.negative_candidates.get((anchor, int(positive['positive_idx'])))
+        ]
+        logger.info(f'RepairedPhase1Dataset: {len(self.pairs):,} (anchor, positive) pairs')
+
+    def set_epoch(self, epoch: int) -> None:
+        '''Update the current epoch for epoch-dependent sampling.'''
+        self.epoch = epoch
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        anchor_code_id, positive = self.pairs[idx]
+        positive_code_id = int(positive['positive_idx'])
+        seed = self.cfg.seed + self.epoch * len(self) + idx
+        raw, metadata = sample_raw_candidates(
+            anchor_code=self.index.id_to_code[anchor_code_id],
+            anchor_code_id=anchor_code_id,
+            candidates=self.negative_candidates[(anchor_code_id, positive_code_id)],
+            n_sample=self.cfg.n_candidates,
+            cfg=self.cfg,
+            sampling_cfg=self.sampling_cfg,
+            distance_lookup=self.distance_lookup,
+            index=self.index,
+            seed=seed,
+        )
+        pool = build_candidate_pool(
+            anchor_code_id=anchor_code_id,
+            positive_code_id=positive_code_id,
+            raw_candidates=raw,
+            supervision_index=self.index,
+            n_candidates=self.cfg.n_candidates,
+            final_k=self.cfg.n_negatives_phase1,
+            epoch=self.epoch,
+            seed=self.cfg.seed,
+        )
+        proposals = propose_by_difficulty(
+            candidates=pool,
+            n_propose=self.cfg.n_negatives_phase1,
+            epoch_progress=min(self.epoch / self.phase1_end_epoch, 1.0),
+            cfg=self.cfg,
+            rng=np.random.default_rng(seed),
+        )
+        return _repaired_item(
+            anchor_code_id=anchor_code_id,
+            positive={**positive, 'positive_code_id': positive_code_id},
+            pool=pool,
+            proposals=proposals,
+            selection_k=self.cfg.n_negatives_phase1,
+            index=self.index,
+            token_cache=self.token_cache,
+            sampling_metadata=metadata,
+        )
+
+# -------------------------------------------------------------------------------------------------
 # Collate function wrapper to filter None items
 # -------------------------------------------------------------------------------------------------
 
-def _filter_none_collate_fn(batch: List[Optional[Dict]]) -> Dict:
+def _filter_none_collate_fn(
+    batch: List[Optional[Dict]],
+    supervision_mode: str = 'repaired',
+) -> Dict:
     '''Filter out None items before calling the main collate function.'''
     filtered = [item for item in batch if item is not None]
     if not filtered:
         raise ValueError('All items in batch were None - no valid triplets')
-    return collate_fn(filtered)
+    return collate_fn(filtered, supervision_mode=supervision_mode)
 
 
 # -------------------------------------------------------------------------------------------------
@@ -542,9 +796,25 @@ class NAICSDataModule(LightningDataModule):
         n_epochs: int = 100,
         max_epochs: int = 30,
         phase1_end: float = 0.3,
+        supervision_mode: str = 'repaired',
+        supervision_manifest_path: Optional[str] = None,
+        supervision_contract_version: str = CONTRACT_VERSION,
+        supervision_bundle: Optional[ValidatedSupervisionBundle] = None,
         **kwargs: Any,
     ):
         super().__init__()
+
+        if supervision_mode not in SUPERVISION_MODES:
+            raise ValueError(
+                f'unknown supervision mode {supervision_mode!r}; expected {SUPERVISION_MODES}'
+            )
+        # Repaired mode requires a validated bundle; it is loaded (and fails closed) in
+        # prepare_data()/setup(), so construction stays side-effect free.
+        self.supervision_mode = supervision_mode
+        self.supervision_manifest_path = supervision_manifest_path
+        self.supervision_contract_version = supervision_contract_version
+        self._bundle: Optional[ValidatedSupervisionBundle] = supervision_bundle
+        self._index: Optional[SupervisionIndex] = None
 
         self.descriptions_path = descriptions_path
         self.triplets_path = triplets_path
@@ -588,6 +858,54 @@ class NAICSDataModule(LightningDataModule):
         self.val_dataset: Optional[Dataset] = None
         self._token_cache: Optional[Dict[int, Dict[str, Any]]] = None
 
+    # ---------------------------------------------------------------------------------------------
+    # Supervision identity
+    # ---------------------------------------------------------------------------------------------
+
+    def _supervision(self) -> Tuple[ValidatedSupervisionBundle, SupervisionIndex]:
+        '''The validated bundle and its index (repaired mode only; fails closed).'''
+
+        if self._bundle is None:
+            if not self.supervision_manifest_path:
+                raise ValueError(
+                    'Repaired Stage-3 data loading requires a supervision manifest: run '
+                    '`naics-embedder data supervision` and set supervision.manifest_path'
+                )
+            self._bundle = load_validated_bundle(
+                self.supervision_manifest_path,
+                expected_contract=self.supervision_contract_version,
+            )
+        descriptions_hash = sha256_file(Path(self.tokenization_cfg.descriptions_parquet))
+        if descriptions_hash != self._bundle.manifest.description_fingerprint:
+            raise ValueError(
+                f'descriptions input {self.tokenization_cfg.descriptions_parquet} does not match '
+                f'supervision bundle {self._bundle.manifest.bundle_id}: expected '
+                f'{self._bundle.manifest.description_fingerprint}, found {descriptions_hash}'
+            )
+        if self._index is None:
+            self._index = SupervisionIndex.from_bundle(self._bundle)
+        return self._bundle, self._index
+
+    def _token_fingerprints(self) -> Dict[str, str]:
+        '''Fingerprints the tokenization cache must record to be reused.'''
+
+        if self.supervision_mode == 'repaired':
+            manifest = self._supervision()[0].manifest
+            return {
+                'description_fingerprint': manifest.description_fingerprint,
+                'codebook_fingerprint': manifest.codebook_fingerprint,
+            }
+        descriptions_path = Path(self.tokenization_cfg.descriptions_parquet)
+        return {
+            'description_fingerprint': sha256_file(descriptions_path),
+            'codebook_fingerprint': codebook_fingerprint(
+                build_codebook(pl.read_parquet(descriptions_path))
+            ),
+        }
+
+    def _collate(self):
+        return partial(_filter_none_collate_fn, supervision_mode=self.supervision_mode)
+
     def prepare_data(self):
         '''Build all caches before worker processes are spawned.'''
         os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -596,7 +914,20 @@ class NAICSDataModule(LightningDataModule):
 
         # Build tokenization cache
         logger.info('Preparing tokenization cache in main process...')
-        tokenization_cache(self.tokenization_cfg)
+        tokenization_cache(self.tokenization_cfg, **self._token_fingerprints())
+
+        if self.supervision_mode == 'repaired':
+            if not self.train_streaming_cfg.use_on_the_fly_sampling:
+                bundle, index = self._supervision()
+                for name, cfg in (
+                    ('training', self.train_streaming_cfg),
+                    ('validation', self.val_streaming_cfg),
+                ):
+                    logger.info(f'Preparing repaired {name} rows in main process...')
+                    build_repaired_multi_epoch_rows(
+                        cfg, self.sampling_cfg, bundle, index, self.n_epochs
+                    )
+            return
 
         # Build codes/indices cache
         logger.info('Preparing codes/indices cache in main process...')
@@ -638,19 +969,23 @@ class NAICSDataModule(LightningDataModule):
 
     def setup(self, stage: Optional[str] = None):
         '''Load caches and create datasets.'''
-        from naics_embedder.text_model.dataloader.tokenization_cache import _load_tokenization_cache
+        from naics_embedder.text_model.dataloader.tokenization_cache import (
+            load_verified_tokenization_cache,
+        )
 
         # Load token cache (shared between train and val)
         if self._token_cache is None:
             logger.info('Loading tokenization cache...')
-            self._token_cache = _load_tokenization_cache(
-                self.tokenization_cfg.output_path, verbose=True
+            self._token_cache = load_verified_tokenization_cache(
+                self.tokenization_cfg, **self._token_fingerprints()
             )
-            if self._token_cache is None:
-                raise RuntimeError('Failed to load tokenization cache')
 
         # Calculate Phase 1 end epoch for difficulty curriculum
         phase1_end_epoch = int(self.max_epochs * self.phase1_end)
+
+        if self.supervision_mode == 'repaired':
+            self._setup_repaired(phase1_end_epoch)
+            return
 
         # Load and create training dataset
         if self.train_dataset is None:
@@ -689,6 +1024,29 @@ class NAICSDataModule(LightningDataModule):
                 logger.info(f'  • Creating validation dataset with {len(val_triplets):,} triplets\n')
                 self.val_dataset = NAICSMapDataset(val_triplets, self._token_cache)
 
+    def _repaired_dataset(self, cfg: StreamingConfig, phase1_end_epoch: int) -> Dataset:
+        bundle, index = self._supervision()
+        assert self._token_cache is not None
+        if cfg.use_on_the_fly_sampling:
+            return RepairedPhase1Dataset(
+                cfg=cfg,
+                sampling_cfg=self.sampling_cfg,
+                token_cache=self._token_cache,
+                bundle=bundle,
+                index=index,
+                phase1_end_epoch=phase1_end_epoch,
+            )
+        rows = build_repaired_multi_epoch_rows(cfg, self.sampling_cfg, bundle, index, self.n_epochs)
+        return RepairedMapDataset(rows, self._token_cache, index, cfg, selection_k=cfg.n_negatives)
+
+    def _setup_repaired(self, phase1_end_epoch: int) -> None:
+        if self.train_dataset is None:
+            logger.info('Creating repaired training dataset from the supervision bundle...')
+            self.train_dataset = self._repaired_dataset(self.train_streaming_cfg, phase1_end_epoch)
+        if self.val_dataset is None:
+            logger.info('Creating repaired validation dataset from the supervision bundle...')
+            self.val_dataset = self._repaired_dataset(self.val_streaming_cfg, phase1_end_epoch)
+
     def train_dataloader(self) -> DataLoader:
         '''Create training dataloader with shuffling enabled.'''
         if self.train_dataset is None:
@@ -698,7 +1056,7 @@ class NAICSDataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,  # Enable shuffling for map-style dataset
             num_workers=self.num_workers,
-            collate_fn=_filter_none_collate_fn,
+            collate_fn=self._collate(),
             persistent_workers=self.num_workers > 0,
         )
 
@@ -711,7 +1069,7 @@ class NAICSDataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            collate_fn=_filter_none_collate_fn,
+            collate_fn=self._collate(),
             persistent_workers=self.num_workers > 0,
         )
 

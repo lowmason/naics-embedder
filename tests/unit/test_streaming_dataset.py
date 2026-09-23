@@ -25,8 +25,9 @@ from naics_embedder.text_model.dataloader.streaming_dataset import (
     _load_negative_candidates,
     _sample_negatives_phase1,
     _sample_negatives_sans_static,
+    _validate_streaming_cache_envelope,
 )
-from naics_embedder.utils.config import SansStaticConfig, SamplingConfig, StreamingConfig
+from naics_embedder.utils.config import SamplingConfig, SansStaticConfig, StreamingConfig
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -921,3 +922,76 @@ class TestPositiveSampler:
                 assert 'positive_code' in p
                 assert 'stratum_id' in p
                 assert 'stratum_wgt' in p
+
+
+# -------------------------------------------------------------------------------------------------
+# Versioned repaired streaming caches
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    'missing',
+    ['contract_version', 'bundle_id', 'codebook_fingerprint'],
+)
+def test_repaired_streaming_cache_rejects_missing_identity(missing):
+    envelope = {
+        'contract_version': 'stage3-supervision-v1',
+        'bundle_id': 'bundle-a',
+        'codebook_fingerprint': 'a' * 64,
+        'cache_schema_version': 'streaming-candidates-v1',
+        'payload': [],
+    }
+    del envelope[missing]
+
+    with pytest.raises(ValueError, match=missing):
+        _validate_streaming_cache_envelope(
+            envelope,
+            expected_contract='stage3-supervision-v1',
+            expected_bundle_id='bundle-a',
+            expected_codebook_fingerprint='a' * 64,
+        )
+
+
+def test_repaired_streaming_cache_rejects_another_bundle():
+    envelope = {
+        'contract_version': 'stage3-supervision-v1',
+        'bundle_id': 'bundle-b',
+        'codebook_fingerprint': 'a' * 64,
+        'cache_schema_version': 'streaming-candidates-v1',
+        'payload': [],
+    }
+
+    with pytest.raises(ValueError, match='bundle_id mismatch'):
+        _validate_streaming_cache_envelope(
+            envelope,
+            expected_contract='stage3-supervision-v1',
+            expected_bundle_id='bundle-a',
+            expected_codebook_fingerprint='a' * 64,
+        )
+
+
+def test_repaired_streaming_cache_returns_a_valid_payload():
+    rows = [{'anchor_code_id': 0}]
+    envelope = {
+        'contract_version': 'stage3-supervision-v1',
+        'bundle_id': 'bundle-a',
+        'codebook_fingerprint': 'a' * 64,
+        'cache_schema_version': 'streaming-candidates-v1',
+        'payload': rows,
+    }
+
+    assert _validate_streaming_cache_envelope(
+        envelope,
+        expected_contract='stage3-supervision-v1',
+        expected_bundle_id='bundle-a',
+        expected_codebook_fingerprint='a' * 64,
+    ) is rows
+
+
+def test_repaired_streaming_cache_rejects_unversioned_payloads():
+    with pytest.raises(ValueError, match='envelope'):
+        _validate_streaming_cache_envelope(
+            [{'anchor_idx': 0}],
+            expected_contract='stage3-supervision-v1',
+            expected_bundle_id='bundle-a',
+            expected_codebook_fingerprint='a' * 64,
+        )

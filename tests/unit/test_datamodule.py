@@ -8,7 +8,8 @@ Tests cover:
 - NAICSMapDataset indexing and __getitem__
 '''
 
-from unittest.mock import MagicMock, patch
+import copy
+from typing import Any
 
 import pytest
 import torch
@@ -68,6 +69,297 @@ def make_batch_item(make_embedding):
     return _create
 
 
+@pytest.fixture
+def make_repaired_batch_item():
+    channels = ('title', 'description', 'excluded', 'examples')
+
+    def encoded(value: int) -> dict[str, dict[str, torch.Tensor]]:
+        return {
+            channel: {
+                'input_ids': torch.tensor([value, value + 1], dtype=torch.long),
+                'attention_mask': torch.ones(2, dtype=torch.long),
+            }
+            for channel in channels
+        }
+
+    def make(
+        candidate_code_ids: list[int],
+        anchor_code_id: int = 100,
+        positive_code_id: int = 104,
+        positive_structural_distance: float = 1.0,
+    ) -> dict[str, Any]:
+        candidates = [
+            {
+                'negative_code_id': code_id,
+                'negative_code': str(code_id),
+                'negative_embedding': encoded(code_id),
+                'sampling_role_id': 2,
+                'sampling_provenance_id': 2,
+            }
+            for code_id in candidate_code_ids
+        ]
+        difficulty_order = sorted(
+            range(len(candidate_code_ids)),
+            key=lambda index: candidate_code_ids[index],
+        )
+        return {
+            'anchor_code_id': anchor_code_id,
+            'anchor_code': str(anchor_code_id),
+            'anchor_embedding': encoded(anchor_code_id),
+            'positive_code_id': positive_code_id,
+            'positive_code': str(positive_code_id),
+            'positive_embedding': encoded(positive_code_id),
+            'positive_structural_distance': positive_structural_distance,
+            'positive_structural_relation_id': 1,
+            'candidate_pool': candidates,
+            'difficulty_proposal_indices': difficulty_order,
+            'selection_k': min(3, len(candidates)),
+        }
+
+    return make
+
+
+# -------------------------------------------------------------------------------------------------
+# Repaired candidate-pool collation
+# -------------------------------------------------------------------------------------------------
+
+def test_collate_does_not_mutate_input_and_uses_invalid_rows(make_repaired_batch_item):
+    short = make_repaired_batch_item(candidate_code_ids=[101])
+    long = make_repaired_batch_item(candidate_code_ids=[201, 202, 203])
+    original_short = copy.deepcopy(short)
+
+    batch = collate_fn([short, long], supervision_mode='repaired')
+
+    assert len(short['candidate_pool']) == 1
+    assert short['candidate_pool'][0]['negative_code_id'] == 101
+    assert torch.equal(
+        short['candidate_pool'][0]['negative_embedding']['title']['input_ids'],
+        original_short['candidate_pool'][0]['negative_embedding']['title']['input_ids'],
+    )
+    assert batch['candidate_code_id'].tolist()[0] == [101, -1, -1]
+    assert batch['candidate_valid_mask'].tolist()[0] == [True, False, False]
+    assert batch['candidate_source_slot'].tolist()[0] == [0, -1, -1]
+    assert batch['candidate_inputs']['title']['attention_mask'][1].count_nonzero() == 0
+    assert batch['candidate_inputs']['title']['attention_mask'][2].count_nonzero() == 0
+
+
+def test_collate_carries_every_candidate_field_in_one_order(make_repaired_batch_item):
+    item = make_repaired_batch_item(candidate_code_ids=[103, 101, 102])
+
+    batch = collate_fn([item], supervision_mode='repaired')
+
+    assert batch['candidate_code_id'].tolist() == [[103, 101, 102]]
+    assert batch['candidate_sampling_provenance_id'].tolist() == [[2, 2, 2]]
+    assert batch['difficulty_proposal_indices'].tolist() == [[1, 2, 0]]
+    assert batch['positive_code_id'].tolist() == [104]
+    assert batch['positive_structural_distance'].tolist() == [1.0]
+
+
+def test_repaired_collate_pads_proposals_and_flattens_candidates_row_major(
+    make_repaired_batch_item,
+):
+    short = make_repaired_batch_item(candidate_code_ids=[7])
+    long = make_repaired_batch_item(candidate_code_ids=[9, 8])
+
+    batch = collate_fn([short, long], supervision_mode='repaired')
+
+    assert batch['k_candidates'] == 2
+    assert batch['batch_size'] == 2
+    assert batch['difficulty_proposal_indices'].tolist() == [[0, -1], [1, 0]]
+    assert batch['candidate_inputs']['title']['input_ids'][:, 0].tolist() == [7, 0, 9, 8]
+    assert 'negatives' not in batch and 'negative_codes' not in batch
+    assert 'all_candidates' not in batch
+
+
+def test_repaired_collate_rejects_legacy_items(make_batch_item):
+    with pytest.raises(ValueError, match='candidate_pool'):
+        collate_fn([make_batch_item('111', '11', ['222'])], supervision_mode='repaired')
+
+
+def test_repaired_collate_uses_the_smallest_selection_k(make_repaired_batch_item):
+    first = make_repaired_batch_item(candidate_code_ids=[1, 2, 3])
+    second = make_repaired_batch_item(candidate_code_ids=[4, 5])
+
+    batch = collate_fn([first, second], supervision_mode='repaired')
+
+    assert batch['selection_k'] == 2
+
+
+def test_repaired_collate_requires_a_positive_selection_k(make_repaired_batch_item):
+    item = make_repaired_batch_item(candidate_code_ids=[1, 2])
+    item['selection_k'] = 0
+
+    with pytest.raises(ValueError, match='selection_k'):
+        collate_fn([item], supervision_mode='repaired')
+
+
+def test_legacy_collate_pads_without_mutating_input(make_batch_item):
+    short = make_batch_item('111', '11', ['222'])
+    long = make_batch_item('555', '55', ['666', '777'])
+
+    batch = collate_fn([short, long], supervision_mode='legacy_containment')
+
+    assert len(short['negatives']) == 1
+    assert batch['negative_codes'] == [['222', '222'], ['666', '777']]
+
+
+def test_collate_rejects_an_unknown_mode(make_repaired_batch_item):
+    with pytest.raises(ValueError, match='supervision mode'):
+        collate_fn([make_repaired_batch_item([1])], supervision_mode='legacy')
+
+
+# -------------------------------------------------------------------------------------------------
+# Bundle-backed repaired datasets
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def hierarchy_bundle(tmp_path, hierarchy_descriptions_parquet):
+    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+    from naics_embedder.supervision.artifacts import load_validated_bundle
+    from naics_embedder.supervision.index import SupervisionIndex
+    from naics_embedder.utils.config import SupervisionBuildConfig
+
+    manifest = generate_supervision_bundle(
+        SupervisionBuildConfig(
+            descriptions_parquet=hierarchy_descriptions_parquet,
+            output_root=str(tmp_path / 'bundles'),
+        )
+    )
+    bundle = load_validated_bundle(manifest)
+    return bundle, SupervisionIndex.from_bundle(bundle)
+
+
+@pytest.fixture
+def hierarchy_token_cache(hierarchy_descriptions):
+    channels = ('title', 'description', 'excluded', 'examples')
+    return {
+        int(index): {
+            'code': code,
+            **{
+                channel: {
+                    'input_ids': torch.full((4, ), int(index), dtype=torch.long),
+                    'attention_mask': torch.ones(4, dtype=torch.long),
+                }
+                for channel in channels
+            },
+        }
+        for index, code in hierarchy_descriptions.select('index', 'code').rows()
+    }
+
+
+@pytest.fixture
+def repaired_streaming_config(hierarchy_descriptions_parquet):
+    from naics_embedder.utils.config import StreamingConfig
+
+    return StreamingConfig(
+        descriptions_parquet=hierarchy_descriptions_parquet,
+        n_negatives=3,
+        n_candidates=4,
+        n_negatives_phase1=3,
+        seed=5,
+    )
+
+
+def _assert_repaired_item(item, index, selection_k):
+    codes = [candidate['negative_code_id'] for candidate in item['candidate_pool']]
+    assert 'negatives' not in item and 'all_candidates' not in item
+    assert item['selection_k'] == selection_k
+    assert len(set(codes)) == len(codes)
+    assert item['anchor_code_id'] not in codes
+    assert item['positive_code_id'] not in codes
+    exclusions = set(index.exclusion_code_ids(item['anchor_code_id']))
+    assert exclusions - {item['positive_code_id']} <= set(codes)
+    assert item['positive_code_id'] not in exclusions
+    for candidate in item['candidate_pool']:
+        assert candidate['negative_is_explicit_exclusion'] == (
+            candidate['negative_code_id'] in exclusions
+        )
+        assert torch.equal(
+            candidate['negative_embedding']['title']['input_ids'],
+            torch.full((4, ), candidate['negative_code_id'], dtype=torch.long),
+        )
+    assert item['positive_structural_distance'] == pytest.approx(
+        float(index.structural_distance[item['anchor_code_id'], item['positive_code_id']])
+    )
+
+
+def test_repaired_map_dataset_emits_one_bundle_backed_pool(
+    hierarchy_bundle, hierarchy_token_cache, repaired_streaming_config
+):
+    from naics_embedder.text_model.dataloader.datamodule import RepairedMapDataset
+    from naics_embedder.text_model.dataloader.streaming_dataset import (
+        build_repaired_triplet_rows,
+    )
+    from naics_embedder.utils.config import SamplingConfig
+
+    bundle, index = hierarchy_bundle
+    rows = build_repaired_triplet_rows(
+        repaired_streaming_config, SamplingConfig(), bundle, index, sampling_epoch=0
+    )
+    dataset = RepairedMapDataset(
+        rows, hierarchy_token_cache, index, repaired_streaming_config, selection_k=3
+    )
+
+    assert len(dataset) > 0
+    items = [dataset[position] for position in range(len(dataset))]
+    for item in items:
+        _assert_repaired_item(item, index, selection_k=3)
+        assert item['difficulty_proposal_indices'] == list(range(len(item['candidate_pool'])))
+
+    batch = collate_fn(items, supervision_mode='repaired')
+    assert batch['candidate_valid_mask'].sum().item() == sum(
+        len(item['candidate_pool']) for item in items
+    )
+
+
+def test_repaired_phase1_dataset_proposes_by_difficulty_over_the_pool(
+    hierarchy_bundle, hierarchy_token_cache, repaired_streaming_config
+):
+    from naics_embedder.text_model.dataloader.datamodule import RepairedPhase1Dataset
+    from naics_embedder.utils.config import SamplingConfig
+
+    bundle, index = hierarchy_bundle
+    dataset = RepairedPhase1Dataset(
+        cfg=repaired_streaming_config,
+        sampling_cfg=SamplingConfig(),
+        token_cache=hierarchy_token_cache,
+        bundle=bundle,
+        index=index,
+        phase1_end_epoch=4,
+    )
+
+    assert len(dataset) > 0
+    for position in range(len(dataset)):
+        item = dataset[position]
+        if item is None:
+            continue
+        _assert_repaired_item(item, index, selection_k=3)
+        proposals = item['difficulty_proposal_indices']
+        assert len(set(proposals)) == len(proposals)
+        assert all(
+            not item['candidate_pool'][slot]['negative_is_explicit_exclusion']
+            for slot in proposals
+        )
+
+
+def test_repaired_rows_never_use_an_exclusion_as_the_positive(
+    hierarchy_bundle, repaired_streaming_config
+):
+    from naics_embedder.text_model.dataloader.streaming_dataset import (
+        build_repaired_triplet_rows,
+    )
+    from naics_embedder.utils.config import SamplingConfig
+
+    bundle, index = hierarchy_bundle
+    rows = build_repaired_triplet_rows(
+        repaired_streaming_config, SamplingConfig(), bundle, index, sampling_epoch=0
+    )
+
+    for row in rows:
+        assert row['positive_code_id'] not in index.exclusion_code_ids(row['anchor_code_id'])
+        assert row['raw_candidates']
+
+
 # -------------------------------------------------------------------------------------------------
 # Basic Collate Tests
 # -------------------------------------------------------------------------------------------------
@@ -79,7 +371,7 @@ def test_collate_stacks_embeddings_correctly(make_batch_item):
         make_batch_item('444', '44', ['555', '666']),
     ]
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     # Check anchor shape: (batch_size, seq_len)
     assert result['anchor']['title']['input_ids'].shape == (2, 128)
@@ -95,7 +387,7 @@ def test_collate_preserves_all_channels(make_batch_item, channels):
     '''All four channels should be present in output.'''
     batch = [make_batch_item('111', '11', ['222'])]
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     for channel in channels:
         assert channel in result['anchor']
@@ -109,7 +401,7 @@ def test_collate_includes_metadata(make_batch_item):
         make_batch_item('444', '44', ['555', '666']),
     ]
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert result['batch_size'] == 2
     assert result['k_negatives'] == 2
@@ -129,7 +421,7 @@ def test_collate_pads_uneven_negatives(make_batch_item):
         make_batch_item('555', '55', ['666']),  # 1 negative
     ]
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert result['k_negatives'] == 3
     # Total negatives: 3 + 3 (padded) = 6
@@ -180,7 +472,7 @@ def test_collate_padding_repeats_last_negative(make_batch_item, make_embedding):
     }
 
     batch = [item, item2]
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     # After collation, first item should have 3 negatives (padded from 1)
     assert result['k_negatives'] == 3
@@ -204,13 +496,13 @@ def test_collate_raises_on_empty_negatives(make_embedding):
     ]
 
     with pytest.raises(ValueError, match='no negatives'):
-        collate_fn(batch)
+        collate_fn(batch, supervision_mode='legacy_containment')
 
 def test_collate_handles_single_item_batch(make_batch_item):
     '''Single item batch should work correctly.'''
     batch = [make_batch_item('111', '11', ['222', '333'])]
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert result['batch_size'] == 1
     assert result['k_negatives'] == 2
@@ -226,7 +518,7 @@ def test_collate_extracts_positive_level(make_batch_item):
     # Add positive_level to the item
     batch[0]['positive_level'] = 5
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert 'positive_levels' in result
     assert result['positive_levels'] == [5]
@@ -236,7 +528,7 @@ def test_collate_infers_positive_level_from_code_length(make_batch_item):
     batch = [make_batch_item('311111', '3111', ['222'])]
     # positive_level not explicitly set, should use len(positive_code)
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert 'positive_levels' in result
     # Default is len(positive_code) = 4
@@ -251,7 +543,7 @@ def test_collate_multiple_positive_levels(make_batch_item):
     batch[0]['positive_level'] = 5
     batch[1]['positive_level'] = 4
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert result['positive_levels'] == [5, 4]
 
@@ -286,7 +578,7 @@ def test_collate_accumulates_sampling_metadata(make_batch_item):
         'effective_far_weight': 0.5,
     }
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert 'sampling_metadata' in result
     assert result['sampling_metadata']['candidates_near'] == 18
@@ -320,7 +612,7 @@ def test_collate_computes_average_weights(make_batch_item):
         'effective_far_weight': 0.6,
     }
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     # Average weights: (0.8 + 0.4) / 2 = 0.6, (0.2 + 0.6) / 2 = 0.4
     assert abs(result['sampling_metadata']['avg_effective_near_weight'] - 0.6) < 1e-6
@@ -330,7 +622,7 @@ def test_collate_no_metadata_when_missing(make_batch_item):
     '''No sampling_metadata key when items have no metadata.'''
     batch = [make_batch_item('111', '11', ['222'])]
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert 'sampling_metadata' not in result
 
@@ -368,8 +660,14 @@ def mock_triplet_rows():
             'stratum_id': 0,
             'stratum_wgt': 1.0,
             'negatives': [
-                {'negative_idx': 2, 'negative_code': '000002', 'relation_margin': 0, 'distance_margin': 4},
-                {'negative_idx': 3, 'negative_code': '000003', 'relation_margin': 0, 'distance_margin': 4},
+                {
+                    'negative_idx': 2, 'negative_code': '000002', 'relation_margin': 0,
+                    'distance_margin': 4,
+                },
+                {
+                    'negative_idx': 3, 'negative_code': '000003', 'relation_margin': 0,
+                    'distance_margin': 4,
+                },
             ],
         },
         {
@@ -381,7 +679,10 @@ def mock_triplet_rows():
             'stratum_id': 1,
             'stratum_wgt': 1.0,
             'negatives': [
-                {'negative_idx': 4, 'negative_code': '000004', 'relation_margin': 0, 'distance_margin': 4},
+                {
+                    'negative_idx': 4, 'negative_code': '000004', 'relation_margin': 0,
+                    'distance_margin': 4,
+                },
             ],
         },
     ]
@@ -502,7 +803,10 @@ def test_map_dataset_includes_sampling_metadata(mock_token_cache):
             'positive_idx': 1,
             'positive_code': '000001',
             'negatives': [
-                {'negative_idx': 2, 'negative_code': '000002', 'relation_margin': 0, 'distance_margin': 4},
+                {
+                    'negative_idx': 2, 'negative_code': '000002', 'relation_margin': 0,
+                    'distance_margin': 4,
+                },
             ],
             'sampling_metadata': {'strategy': 'sans_static', 'sampled_near': 1},
         },
@@ -553,14 +857,14 @@ def test_collate_different_sequence_lengths(make_embedding):
 
     # Same sequence length should work
     batch = [make_item(64), make_item(64)]
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
     assert result['anchor']['title']['input_ids'].shape == (2, 64)
 
 def test_collate_preserves_tensor_dtype(make_batch_item):
     '''Tensor dtypes should be preserved after collation.'''
     batch = [make_batch_item('111', '11', ['222'])]
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert result['anchor']['title']['input_ids'].dtype == torch.long
     assert result['anchor']['title']['attention_mask'].dtype == torch.long
@@ -569,7 +873,7 @@ def test_collate_large_batch(make_batch_item):
     '''Should handle larger batches efficiently.'''
     batch = [make_batch_item(f'{i:03d}', f'{i:02d}', [f'{i + 100}']) for i in range(64)]
 
-    result = collate_fn(batch)
+    result = collate_fn(batch, supervision_mode='legacy_containment')
 
     assert result['batch_size'] == 64
     assert result['anchor']['title']['input_ids'].shape == (64, 128)

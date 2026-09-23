@@ -22,10 +22,17 @@ from naics_embedder.text_model.dataloader.tokenization_cache import (
     _load_tokenization_cache,
     _release_lock,
     _save_tokenization_cache,
+    _write_cache_sidecar,
     get_tokens,
     tokenization_cache,
 )
 from naics_embedder.utils.config import TokenizationConfig
+
+FINGERPRINTS = {'description_fingerprint': 'd' * 64, 'codebook_fingerprint': 'c' * 64}
+
+def _write_matching_sidecar(cfg: TokenizationConfig) -> None:
+    '''Record the sidecar a completed build for FINGERPRINTS would have written.'''
+    _write_cache_sidecar(cfg, **FINGERPRINTS)
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -299,13 +306,14 @@ class TestTokenizationCache:
         self, tokenization_config, sample_tokenization_cache
     ):
         '''Test loading existing cache.'''
-        # Create cache file
+        # Create cache file and the sidecar a completed build records
         cache_path = Path(tokenization_config.output_path)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(sample_tokenization_cache, cache_path)
+        _write_matching_sidecar(tokenization_config)
 
         # Load cache
-        cache = tokenization_cache(tokenization_config, use_locking=False)
+        cache = tokenization_cache(tokenization_config, **FINGERPRINTS, use_locking=False)
 
         assert cache is not None
         assert len(cache) == len(sample_tokenization_cache)
@@ -317,7 +325,7 @@ class TestTokenizationCache:
             cache_path.unlink()
 
         # Build cache
-        cache = tokenization_cache(tokenization_config, use_locking=True)
+        cache = tokenization_cache(tokenization_config, **FINGERPRINTS, use_locking=True)
 
         assert cache is not None
         assert len(cache) == 3  # From sample_descriptions_parquet
@@ -330,7 +338,7 @@ class TestTokenizationCache:
             cache_path.unlink()
 
         with pytest.raises(RuntimeError, match='Tokenization cache not found'):
-            tokenization_cache(tokenization_config, use_locking=False)
+            tokenization_cache(tokenization_config, **FINGERPRINTS, use_locking=False)
 
     @patch('naics_embedder.text_model.dataloader.tokenization_cache._acquire_lock')
     @patch('naics_embedder.text_model.dataloader.tokenization_cache._load_tokenization_cache')
@@ -340,6 +348,7 @@ class TestTokenizationCache:
         '''Test waiting for another worker to build cache.'''
         cache_path = Path(tokenization_config.output_path)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_matching_sidecar(tokenization_config)
 
         # Simulate another worker building cache
         mock_acquire.return_value = None  # Can't acquire lock
@@ -348,7 +357,7 @@ class TestTokenizationCache:
 
         # Use a short timeout for testing
         with patch('naics_embedder.text_model.dataloader.tokenization_cache.time.sleep'):
-            cache = tokenization_cache(tokenization_config, use_locking=True)
+            cache = tokenization_cache(tokenization_config, **FINGERPRINTS, use_locking=True)
 
         assert cache is not None
         assert mock_load.call_count >= 2  # Should retry loading
@@ -360,7 +369,7 @@ class TestTokenizationCache:
             cache_path.unlink()
 
         # Build cache
-        tokenization_cache(tokenization_config, use_locking=True)
+        tokenization_cache(tokenization_config, **FINGERPRINTS, use_locking=True)
 
         assert cache_path.exists()
         # Verify no .tmp file remains
@@ -587,7 +596,7 @@ class TestCacheInvalidation:
         )
 
         # Build initial cache
-        cache_v1 = tokenization_cache(cfg, use_locking=True)
+        cache_v1 = tokenization_cache(cfg, **FINGERPRINTS, use_locking=True)
         assert cache_path.exists()
         assert len(cache_v1) == 2
 
@@ -596,7 +605,7 @@ class TestCacheInvalidation:
         assert not cache_path.exists()
 
         # Should rebuild cache
-        cache_v2 = tokenization_cache(cfg, use_locking=True)
+        cache_v2 = tokenization_cache(cfg, **FINGERPRINTS, use_locking=True)
         assert cache_path.exists()
         assert cache_v2 is not None
         assert len(cache_v2) == 2
@@ -632,3 +641,77 @@ class TestCacheInvalidation:
         desc_dict_a = cache_a[0]['description']  # type: ignore
         desc_dict_b = cache_b[0]['description']  # type: ignore
         assert desc_dict_a['input_ids'].shape != desc_dict_b['input_ids'].shape  # type: ignore
+
+# -------------------------------------------------------------------------------------------------
+# Fingerprinted cache sidecar
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def counted_builds(monkeypatch):
+    builds = []
+
+    def fake_build(*_args):
+        builds.append(object())
+        return {0: {'code': '111111'}}
+
+    monkeypatch.setattr(
+        'naics_embedder.text_model.dataloader.tokenization_cache._build_tokenization_cache',
+        fake_build,
+    )
+    return builds
+
+def test_token_cache_rebuilds_when_description_fingerprint_changes(
+    tokenization_config, monkeypatch
+):
+    builds = []
+
+    def fake_build(*_args):
+        builds.append(object())
+        return {0: {'code': '111111'}}
+
+    monkeypatch.setattr(
+        'naics_embedder.text_model.dataloader.tokenization_cache._build_tokenization_cache',
+        fake_build,
+    )
+    tokenization_cache(
+        tokenization_config,
+        description_fingerprint='a' * 64,
+        codebook_fingerprint='b' * 64,
+    )
+    tokenization_cache(
+        tokenization_config,
+        description_fingerprint='c' * 64,
+        codebook_fingerprint='b' * 64,
+    )
+
+    assert len(builds) == 2
+
+def test_token_cache_is_reused_for_matching_fingerprints(tokenization_config, counted_builds):
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+    cache = tokenization_cache(tokenization_config, **FINGERPRINTS)
+
+    assert len(counted_builds) == 1
+    assert cache == {0: {'code': '111111'}}
+
+def test_token_cache_rebuilds_when_codebook_fingerprint_changes(
+    tokenization_config, counted_builds
+):
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+    tokenization_cache(
+        tokenization_config,
+        description_fingerprint=FINGERPRINTS['description_fingerprint'],
+        codebook_fingerprint='e' * 64,
+    )
+
+    assert len(counted_builds) == 2
+
+def test_token_cache_without_a_sidecar_is_rebuilt(
+    tokenization_config, sample_tokenization_cache, counted_builds
+):
+    cache_path = Path(tokenization_config.output_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(sample_tokenization_cache, cache_path)
+
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+
+    assert len(counted_builds) == 1

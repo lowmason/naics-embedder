@@ -7,13 +7,21 @@ import json
 import logging
 import pickle
 import random
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import numpy as np
 import polars as pl
 
-from naics_embedder.data.positive_sampling import create_positive_sampler
+from naics_embedder.data.positive_sampling import PositiveSampler, create_positive_sampler
+from naics_embedder.supervision.artifacts import (
+    ValidatedSupervisionBundle,
+    aggregate_fingerprint,
+)
+from naics_embedder.supervision.index import SupervisionIndex
+from naics_embedder.supervision.schema import SAMPLING_ROLE_TO_ID, SamplingProvenance, SamplingRole
+from naics_embedder.supervision.selection import stable_hash
 from naics_embedder.utils.config import SamplingConfig, SansStaticConfig, StreamingConfig
 from naics_embedder.utils.utilities import get_indices_codes
 
@@ -137,7 +145,7 @@ def _compute_phase1_weights(
     excluded_map: Dict[str, Set[str]],
     code_to_idx: Dict[str, int],
     alpha: float = 1.5,
-    exclusion_weight: float = 100.0,
+    exclusion_weight: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     '''
     Compute Phase 1 sampling weights for candidate negatives.
@@ -145,13 +153,14 @@ def _compute_phase1_weights(
     Args:
         anchor_code: Anchor code
         anchor_idx: Anchor index
-        candidate_negatives: List of candidate negative dictionaries with
-            'negative_code' and 'negative_idx'
+        candidate_negatives: List of candidate negative dictionaries with 'negative_code'
         distance_lookup: Dictionary mapping (anchor_idx, negative_idx) -> tree_distance
         excluded_map: Dictionary mapping code -> set of excluded codes
         code_to_idx: Mapping from code to index
         alpha: Exponent for inverse tree distance weighting
-        exclusion_weight: High constant weight for excluded codes
+        exclusion_weight: Legacy-containment constant weight for excluded codes. ``None`` gives
+            exclusions no special weight (repaired training reserves exactly one exclusion slot
+            at selection time instead).
 
     Returns:
         Array of sampling weights (unnormalized)
@@ -161,10 +170,12 @@ def _compute_phase1_weights(
 
     for i, neg in enumerate(candidate_negatives):
         negative_code = neg['negative_code']
-        neg['negative_idx']
 
         # Check if anchor excludes this negative
-        if anchor_code in excluded_map and negative_code in excluded_map[anchor_code]:
+        if (
+            exclusion_weight is not None and anchor_code in excluded_map
+            and negative_code in excluded_map[anchor_code]
+        ):
             weights[i] = exclusion_weight
             excluded_mask[i] = True
             continue
@@ -199,7 +210,7 @@ def _sample_negatives_phase1(
     excluded_map: Dict[str, Set[str]],
     code_to_idx: Dict[str, int],
     alpha: float = 1.5,
-    exclusion_weight: float = 100.0,
+    exclusion_weight: Optional[float] = None,
     seed: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     '''
@@ -936,3 +947,466 @@ def create_streaming_dataset(
             result['sampling_metadata'] = sampling_metadata
 
         yield result
+
+
+# -------------------------------------------------------------------------------------------------
+# Repaired Stage-3: bundle-backed candidate pools
+# -------------------------------------------------------------------------------------------------
+
+NEGATIVE_ROLE_ID = SAMPLING_ROLE_TO_ID[SamplingRole.NEGATIVE]
+STREAMING_CACHE_SCHEMA_VERSION = 'streaming-candidates-v1'
+RAW_CANDIDATE_KEYS = (
+    'negative_code_id',
+    'negative_code',
+    'negative_structural_distance',
+    'sampling_role_id',
+    'sampling_provenance_id',
+)
+
+class IndexDistanceLookup(Mapping):
+    '''
+    ``(anchor_code, candidate_code) -> structural distance`` view over a ``SupervisionIndex``.
+
+    Lets the legacy sampling strategies read validated bundle structure without materializing a
+    per-pair dictionary.
+    '''
+
+    def __init__(self, index: SupervisionIndex):
+        self._index = index
+
+    def __getitem__(self, key: Tuple[str, str]) -> float:
+        anchor_code, candidate_code = key
+        return float(
+            self._index.structural_distance[
+                self._index.code_to_id[anchor_code], self._index.code_to_id[candidate_code]
+            ]
+        )
+
+    def __contains__(self, key: object) -> bool:
+        return (
+            isinstance(key, tuple) and len(key) == 2 and key[0] in self._index.code_to_id
+            and key[1] in self._index.code_to_id
+        )
+
+    def __iter__(self) -> Iterator[Tuple[str, str]]:
+        codes = self._index.id_to_code
+        return ((anchor, candidate) for anchor in codes for candidate in codes)
+
+    def __len__(self) -> int:
+        return len(self._index.id_to_code)**2
+
+def build_candidate_pool(
+    *,
+    anchor_code_id: int,
+    positive_code_id: int,
+    raw_candidates: List[Dict[str, Any]],
+    supervision_index: SupervisionIndex,
+    n_candidates: int,
+    final_k: int,
+    epoch: int,
+    seed: int,
+) -> List[Dict[str, Any]]:
+    '''
+    Build one canonical candidate pool for an (anchor, positive) pair.
+
+    The pool contains every explicit exclusion of the anchor (either direction) and unique
+    ordinary codes: the raw candidates in a stable, epoch-dependent shuffle, backfilled from the
+    remaining non-exclusion universe when needed. Because final selection admits exactly one
+    exclusion, the pool keeps at least ``final_k - 1`` ordinary codes when any exclusion exists (or
+    ``final_k`` when none does), and at least ``n_candidates - exclusions``. The anchor and positive
+    codes never appear.
+
+    Raises:
+        ValueError: If ``final_k < 1`` or the universe cannot supply ``final_k`` selectable codes.
+    '''
+
+    if final_k < 1:
+        raise ValueError('final negative count must be at least one')
+    forbidden = {anchor_code_id, positive_code_id}
+    exclusion_ids = tuple(
+        code_id
+        for code_id in supervision_index.exclusion_code_ids(anchor_code_id)
+        if code_id not in forbidden
+    )
+    exclusion_set = set(exclusion_ids)
+
+    def normalized_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = {key: item[key] for key in RAW_CANDIDATE_KEYS if key in item}
+        normalized['negative_code_id'] = int(item['negative_code_id'])
+        normalized['negative_is_explicit_exclusion'] = normalized['negative_code_id'] in exclusion_set
+        return normalized
+
+    def backfill_candidate(code_id: int) -> Dict[str, Any]:
+        return {
+            'negative_code_id': code_id,
+            'negative_code': supervision_index.id_to_code[code_id],
+            'negative_structural_distance': float(
+                supervision_index.structural_distance[anchor_code_id, code_id]
+            ),
+            'negative_is_explicit_exclusion': code_id in exclusion_set,
+            'sampling_role_id': NEGATIVE_ROLE_ID,
+            'sampling_provenance_id': int(SamplingProvenance.BACKFILL),
+        }
+
+    by_code: Dict[int, Dict[str, Any]] = {}
+    for item in raw_candidates:
+        code_id = int(item['negative_code_id'])
+        if code_id not in forbidden:
+            by_code.setdefault(code_id, normalized_candidate(item))
+    for code_id in exclusion_ids:
+        by_code.setdefault(code_id, backfill_candidate(code_id))
+
+    exclusion_slots = min(len(exclusion_ids), 1)
+    ordinary_target = max(n_candidates - len(exclusion_ids), final_k - exclusion_slots, 0)
+    rng = np.random.default_rng((stable_hash(seed, anchor_code_id) + epoch) % (2**63))
+    ordinary_ids = sorted(code_id for code_id in by_code if code_id not in exclusion_set)
+    rng.shuffle(ordinary_ids)
+    kept_ordinary = ordinary_ids[:ordinary_target]
+
+    if len(kept_ordinary) < ordinary_target:
+        universe = [
+            code_id
+            for code_id in range(len(supervision_index.id_to_code))
+            if code_id not in forbidden and code_id not in exclusion_set
+            and code_id not in by_code
+        ]
+        rng.shuffle(universe)
+        for code_id in universe[:ordinary_target - len(kept_ordinary)]:
+            by_code[code_id] = backfill_candidate(code_id)
+            kept_ordinary.append(code_id)
+
+    if len(kept_ordinary) + exclusion_slots < final_k:
+        raise ValueError(
+            f'anchor code ID {anchor_code_id} requires {final_k} selectable candidates; only '
+            f'{len(kept_ordinary) + exclusion_slots} exist (one exclusion slot plus unique '
+            'non-exclusion codes)'
+        )
+    return [by_code[code_id] for code_id in (*exclusion_ids, *kept_ordinary)]
+
+def _validate_streaming_cache_envelope(
+    envelope: Any,
+    *,
+    expected_contract: str,
+    expected_bundle_id: str,
+    expected_codebook_fingerprint: str,
+    expected_source_fingerprints: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
+    '''
+    Validate a repaired streaming-cache envelope and return its payload.
+
+    Raises:
+        ValueError: If the cache is unversioned, belongs to another bundle/contract/codebook, was
+            derived from other source artifacts, or carries a malformed payload.
+    '''
+
+    if not isinstance(envelope, dict):
+        raise ValueError('repaired streaming cache is not a versioned envelope')
+    expected = {
+        'contract_version': expected_contract,
+        'bundle_id': expected_bundle_id,
+        'codebook_fingerprint': expected_codebook_fingerprint,
+        'cache_schema_version': STREAMING_CACHE_SCHEMA_VERSION,
+    }
+    if expected_source_fingerprints is not None:
+        expected['source_fingerprints'] = expected_source_fingerprints
+    for field, expected_value in expected.items():
+        if field not in envelope:
+            raise ValueError(f'repaired streaming cache lacks {field}')
+        if envelope[field] != expected_value:
+            raise ValueError(
+                f'repaired streaming cache {field} mismatch: '
+                f'expected {expected_value!r}, found {envelope[field]!r}'
+            )
+    payload = envelope.get('payload')
+    if not isinstance(payload, list):
+        raise ValueError('repaired streaming cache payload must be a list')
+    return payload
+
+def training_pair_partitions(bundle: ValidatedSupervisionBundle) -> Dict[int, Path]:
+    '''Map anchor code ID -> its training-pair member file, from the manifest member list only.'''
+
+    partitions: Dict[int, Path] = {}
+    for path in bundle.member_paths('training_pairs'):
+        directory = path.parent.name
+        if not directory.startswith('anchor='):
+            raise ValueError(f'unexpected training-pair member layout: {path}')
+        partitions[int(directory.split('=', 1)[1])] = path
+    return partitions
+
+_RAW_CANDIDATE_COLUMNS = (
+    'anchor_code_id',
+    'positive_code_id',
+    'negative_code_id',
+    'negative_code',
+    'negative_structural_distance',
+)
+
+def _raw_candidates_by_pair(frame: pl.DataFrame) -> Dict[Tuple[int, int], List[Dict[str, Any]]]:
+    grouped: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
+    for anchor, positive, negative, code, distance in frame.select(_RAW_CANDIDATE_COLUMNS).rows():
+        grouped.setdefault((int(anchor), int(positive)), []).append(
+            {
+                'negative_code_id': int(negative),
+                'negative_code': code,
+                'negative_structural_distance': float(distance),
+                'sampling_role_id': NEGATIVE_ROLE_ID,
+                'sampling_provenance_id': int(SamplingProvenance.GENERATED),
+            }
+        )
+    return grouped
+
+def load_bundle_candidates(
+    bundle: ValidatedSupervisionBundle,
+    required_pairs: Set[Tuple[int, int]],
+) -> Dict[Tuple[int, int], List[Dict[str, Any]]]:
+    '''Raw generated negatives for the required (anchor, positive) code-ID pairs.'''
+
+    if not required_pairs:
+        return {}
+    partitions = training_pair_partitions(bundle)
+    files = sorted(
+        {str(partitions[anchor]) for anchor, _ in required_pairs if anchor in partitions}
+    )
+    if not files:
+        return {}
+    pairs = pl.DataFrame(
+        sorted(required_pairs),
+        schema={'anchor_code_id': pl.Int32, 'positive_code_id': pl.Int32},
+        orient='row',
+    )
+    frame = pl.scan_parquet(files).select(_RAW_CANDIDATE_COLUMNS).with_columns(
+        pl.col('anchor_code_id').cast(pl.Int32),
+        pl.col('positive_code_id').cast(pl.Int32),
+    ).join(pairs.lazy(), on=['anchor_code_id', 'positive_code_id'], how='semi').collect()
+    return _raw_candidates_by_pair(frame)
+
+def repaired_positive_sampler(
+    cfg: StreamingConfig,
+    bundle: ValidatedSupervisionBundle,
+    index: SupervisionIndex,
+) -> PositiveSampler:
+    '''Positive sampler whose relations and code identity come only from the bundle.'''
+
+    return create_positive_sampler(
+        descriptions_parquet=cfg.descriptions_parquet,
+        relations_parquet=str(bundle.artifact_path('relations')),
+        max_per_stratum=4,
+        seed=cfg.seed,
+        code_to_idx=dict(index.code_to_id),
+    )
+
+def sampled_positive_pairs(
+    sampler: PositiveSampler,
+    index: SupervisionIndex,
+) -> Tuple[List[Tuple[int, Dict[str, Any]]], int]:
+    '''
+    Sample positives per anchor, dropping any positive that is an explicit exclusion of its anchor.
+
+    Returns:
+        ``(anchor_code_id, positive)`` pairs and the number of dropped exclusion positives.
+    '''
+
+    pairs: List[Tuple[int, Dict[str, Any]]] = []
+    dropped = 0
+    for anchor_code_id in sampler.anchors:
+        exclusions = set(index.exclusion_code_ids(anchor_code_id))
+        for positive in sampler.sample_positives(anchor_code_id):
+            if int(positive['positive_idx']) in exclusions:
+                dropped += 1
+                continue
+            pairs.append((anchor_code_id, positive))
+    return pairs, dropped
+
+def sample_raw_candidates(
+    *,
+    anchor_code: str,
+    anchor_code_id: int,
+    candidates: List[Dict[str, Any]],
+    n_sample: int,
+    cfg: StreamingConfig,
+    sampling_cfg: SamplingConfig,
+    distance_lookup: IndexDistanceLookup,
+    index: SupervisionIndex,
+    seed: int,
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    '''
+    Apply the configured raw sampling strategy without any exclusion weighting.
+
+    Exclusion representation belongs to the candidate pool (every exclusion) and the selection
+    quota (exactly one), never to a sampling weight.
+    '''
+
+    metadata: Optional[Dict[str, Any]] = None
+    if sampling_cfg.strategy == 'sans_static':
+        sampled, metadata = _sample_negatives_sans_static(
+            anchor_code=anchor_code,
+            candidate_negatives=candidates,
+            n_negatives=n_sample,
+            distance_lookup=distance_lookup,  # type: ignore[arg-type]
+            sans_cfg=sampling_cfg.sans_static,
+            seed=seed,
+        )
+    elif cfg.use_phase1_sampling:
+        sampled = _sample_negatives_phase1(
+            anchor_code=anchor_code,
+            anchor_idx=anchor_code_id,
+            candidate_negatives=candidates,
+            n_negatives=n_sample,
+            distance_lookup=distance_lookup,  # type: ignore[arg-type]
+            excluded_map={},
+            code_to_idx=index.code_to_id,
+            alpha=cfg.phase1_alpha,
+            exclusion_weight=None,
+            seed=seed,
+        )
+    else:
+        sampled = random.Random(seed).sample(candidates, min(n_sample, len(candidates)))
+    return [{key: item[key] for key in RAW_CANDIDATE_KEYS} for item in sampled], metadata
+
+def build_repaired_triplet_rows(
+    cfg: StreamingConfig,
+    sampling_cfg: SamplingConfig,
+    bundle: ValidatedSupervisionBundle,
+    index: SupervisionIndex,
+    *,
+    sampling_epoch: int,
+) -> List[Dict[str, Any]]:
+    '''
+    Raw (anchor, positive, raw candidates) rows for one pre-sampled epoch.
+
+    Pairs whose positive is an explicit exclusion, or which have no generated raw candidates, are
+    skipped. Candidate pools are built per item at dataset access time, not here.
+    '''
+
+    sampler = repaired_positive_sampler(cfg, bundle, index)
+    pairs, dropped = sampled_positive_pairs(sampler, index)
+    if dropped:
+        logger.info(f'Dropped {dropped:,} sampled positives that are explicit exclusions')
+    candidates_by_pair = load_bundle_candidates(
+        bundle,
+        {(anchor, int(positive['positive_idx'])) for anchor, positive in pairs},
+    )
+    distance_lookup = IndexDistanceLookup(index)
+    rows: List[Dict[str, Any]] = []
+    for anchor_code_id, positive in pairs:
+        positive_code_id = int(positive['positive_idx'])
+        candidates = candidates_by_pair.get((anchor_code_id, positive_code_id))
+        if not candidates:
+            continue
+        anchor_code = index.id_to_code[anchor_code_id]
+        raw, metadata = sample_raw_candidates(
+            anchor_code=anchor_code,
+            anchor_code_id=anchor_code_id,
+            candidates=candidates,
+            n_sample=cfg.n_negatives,
+            cfg=cfg,
+            sampling_cfg=sampling_cfg,
+            distance_lookup=distance_lookup,
+            index=index,
+            seed=cfg.seed,
+        )
+        if not raw:
+            continue
+        row: Dict[str, Any] = {
+            'anchor_code_id': anchor_code_id,
+            'anchor_code': anchor_code,
+            'positive_code_id': positive_code_id,
+            'positive_code': index.id_to_code[positive_code_id],
+            'positive_level': positive['positive_level'],
+            'stratum_id': positive['stratum_id'],
+            'stratum_wgt': positive['stratum_wgt'],
+            'sampling_epoch': sampling_epoch,
+            'raw_candidates': raw,
+        }
+        if metadata:
+            row['sampling_metadata'] = metadata
+        rows.append(row)
+    logger.info(f'Built {len(rows):,} repaired triplet rows for sampling epoch {sampling_epoch}')
+    return rows
+
+def _repaired_source_fingerprints(bundle: ValidatedSupervisionBundle) -> Dict[str, str]:
+    artifacts = bundle.manifest.artifacts
+    return {
+        name: aggregate_fingerprint(artifacts[name].files) for name in ('relations', 'training_pairs')
+    }
+
+def _get_repaired_multi_epoch_cache_path(
+    cfg: StreamingConfig,
+    sampling_cfg: SamplingConfig,
+    bundle: ValidatedSupervisionBundle,
+    n_epochs: int,
+) -> Path:
+    '''Cache path keyed by bundle identity, source fingerprints, and every sampling parameter.'''
+
+    manifest = bundle.manifest
+    cache_dict = {
+        'contract_version': manifest.contract_version,
+        'bundle_id': manifest.bundle_id,
+        'codebook_fingerprint': manifest.codebook_fingerprint,
+        'cache_schema_version': STREAMING_CACHE_SCHEMA_VERSION,
+        'source_fingerprints': _repaired_source_fingerprints(bundle),
+        'descriptions_parquet': str(cfg.descriptions_parquet),
+        'n_negatives': cfg.n_negatives,
+        'seed': cfg.seed,
+        'use_phase1_sampling': cfg.use_phase1_sampling,
+        'phase1_alpha': cfg.phase1_alpha,
+        'sampling': sampling_cfg.model_dump(),
+        'n_epochs': n_epochs,
+    }
+    config_str = json.dumps(cache_dict, sort_keys=True)
+    cache_key = hashlib.sha256(config_str.encode()).hexdigest()[:16]
+    cache_dir = Path(cfg.descriptions_parquet).parent / 'streaming_cache'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f'repaired_multi_epoch_{cache_key}.pkl'
+
+def build_repaired_multi_epoch_rows(
+    cfg: StreamingConfig,
+    sampling_cfg: SamplingConfig,
+    bundle: ValidatedSupervisionBundle,
+    index: SupervisionIndex,
+    n_epochs: int,
+) -> List[Dict[str, Any]]:
+    '''
+    Raw repaired rows for ``n_epochs`` pre-sampled epochs, cached in a versioned envelope.
+
+    A cached envelope is accepted only when it matches this bundle's contract, ID, codebook
+    fingerprint, cache schema, and source-artifact fingerprints; anything else is fatal.
+    '''
+
+    manifest = bundle.manifest
+    cache_path = _get_repaired_multi_epoch_cache_path(cfg, sampling_cfg, bundle, n_epochs)
+    if cache_path.exists():
+        with open(cache_path, 'rb') as stream:
+            envelope = pickle.load(stream)
+        rows = _validate_streaming_cache_envelope(
+            envelope,
+            expected_contract=manifest.contract_version,
+            expected_bundle_id=manifest.bundle_id,
+            expected_codebook_fingerprint=manifest.codebook_fingerprint,
+            expected_source_fingerprints=_repaired_source_fingerprints(bundle),
+        )
+        logger.info(f'Loaded {len(rows):,} repaired rows from {cache_path}')
+        return rows
+
+    rows: List[Dict[str, Any]] = []
+    for epoch in range(n_epochs):
+        epoch_cfg = cfg.model_copy(update={'seed': cfg.seed + epoch})
+        rows.extend(
+            build_repaired_triplet_rows(
+                epoch_cfg, sampling_cfg, bundle, index, sampling_epoch=epoch
+            )
+        )
+    envelope = {
+        'contract_version': manifest.contract_version,
+        'bundle_id': manifest.bundle_id,
+        'codebook_fingerprint': manifest.codebook_fingerprint,
+        'cache_schema_version': STREAMING_CACHE_SCHEMA_VERSION,
+        'source_fingerprints': _repaired_source_fingerprints(bundle),
+        'payload': rows,
+    }
+    temp_path = cache_path.with_suffix('.tmp')
+    with open(temp_path, 'wb') as stream:
+        pickle.dump(envelope, stream)
+    temp_path.replace(cache_path)
+    logger.info(f'Saved {len(rows):,} repaired rows to {cache_path}')
+    return rows

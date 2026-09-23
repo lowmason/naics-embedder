@@ -452,10 +452,13 @@ class StreamingConfig(BaseModel):
         gt=0.0,
         description='Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α',
     )
-    phase1_exclusion_weight: float = Field(
-        default=100.0,
+    phase1_exclusion_weight: Optional[float] = Field(
+        default=None,
         gt=0.0,
-        description='High constant weight for excluded codes in Phase 1 sampling',
+        description=(
+            'Legacy-containment only: constant sampling weight for excluded codes. Repaired '
+            'Stage-3 training rejects it; the one-slot exclusion quota owns representation.'
+        ),
     )
 
     # On-the-fly sampling with oversampling

@@ -19,6 +19,7 @@ from naics_embedder.data.positive_sampling import (
     _linear_skip,
     build_anchor_list,
     build_taxonomy,
+    create_positive_sampler,
     enumerate_positives,
 )
 
@@ -513,6 +514,30 @@ class TestBuildAncestorsLevel:
 class TestBuildSiblings:
     '''Tests for _build_siblings() function.'''
 
+    def test_build_siblings_drops_explicit_exclusions(self, tmp_path, anchors_df):
+        '''A sibling pair that is an explicit exclusion can never become a direct positive.'''
+        path = tmp_path / 'bundle_relations.parquet'
+        pl.DataFrame(
+            {
+                'code_i': ['311111', '311111'],
+                'code_j': ['311112', '311113'],
+                'relation_id': [2, 2],
+                'is_explicit_exclusion': [False, True],
+            }
+        ).write_parquet(path)
+
+        siblings = _build_siblings(str(path), anchors_df)
+        positives = siblings.explode('positive').unnest('positive').get_column('positive')
+
+        assert positives.to_list() == ['311112']
+
+    def test_build_siblings_without_exclusion_columns_keeps_legacy_rows(
+        self, relations_parquet, anchors_df
+    ):
+        siblings = _build_siblings(relations_parquet, anchors_df)
+
+        assert siblings.explode('positive').unnest('positive').height >= 1
+
     def test_build_siblings_filters_relation_id_2(self, relations_parquet, anchors_df):
         '''Test that siblings only include relation_id=2 (sibling) relationships.'''
         siblings = _build_siblings(relations_parquet, anchors_df)
@@ -926,3 +951,26 @@ class TestIntegration:
         # Should have sampled some positives
         if positives_df.height > 0:
             assert len(all_samples) >= 0  # May be empty if anchors don't match
+
+
+@pytest.mark.unit
+def test_enumerate_positives_uses_a_supplied_codebook(
+    descriptions_parquet, relations_parquet, sample_descriptions_df, monkeypatch
+):
+    '''A supervision-bundle codebook replaces the hard-coded descriptions lookup.'''
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError('get_indices_codes must not be used when a codebook is supplied')
+
+    monkeypatch.setattr('naics_embedder.data.positive_sampling.get_indices_codes', unexpected)
+    codes = sample_descriptions_df.get_column('code').to_list()
+    code_to_idx = {code: 1000 + position for position, code in enumerate(codes)}
+
+    result = enumerate_positives(descriptions_parquet, relations_parquet, code_to_idx=code_to_idx)
+
+    assert result.height > 0
+    assert set(result.get_column('anchor_idx').to_list()) <= set(code_to_idx.values())
+    sampler = create_positive_sampler(
+        descriptions_parquet, relations_parquet, code_to_idx=code_to_idx
+    )
+    assert set(sampler.anchors) <= set(code_to_idx.values())
