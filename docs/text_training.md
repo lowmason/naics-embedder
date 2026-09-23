@@ -117,6 +117,13 @@ Undefined results emit one warning with the exact reason and omit the numeric sc
 Malformed inputs raise `StructuralMetricInputError` and fail validation rather than being
 swallowed by the epoch-end evaluation handler.
 
+In distributed text training, structural Spearman and its counts describe **rank 0's sampled
+validation population**. All ranks validate their own matrices, but only rank 0 publishes these
+fields and undefined warnings and writes `evaluation_metrics.json`. The scalar and counts are
+not reduced across ranks: averaging local correlations is not a global Spearman coefficient, and
+undefined local populations must not select different collective operations. This rank-zero-only
+metric is for reporting, not a distributed early-stopping monitor.
+
 The existing `evaluation_metrics.json` history includes these fields. For example, a valid
 four-node evaluation with a constant target produces:
 

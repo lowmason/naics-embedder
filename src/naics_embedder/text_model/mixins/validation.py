@@ -364,31 +364,35 @@ class ValidationMixin:
             f'{STRUCTURAL_SPEARMAN_KEY}_reason': spearman_result['reason'],
             f'{STRUCTURAL_SPEARMAN_KEY}_definition': spearman_result['definition'],
         }
-        if spearman_value is not None:
-            self.log(
-                f'val/{STRUCTURAL_SPEARMAN_KEY}',
-                spearman_value,
-                batch_size=num_samples,
-                sync_dist=True,
-            )
-        else:
-            logger.warning(
-                '%s undefined: %s (n_pairs=%d, n_total=%d)',
-                spearman_result['definition'],
-                spearman_result['reason'],
-                spearman_result['n_pairs'],
-                spearman_result['n_total'],
-            )
-        for count, value in (
-            ('n_pairs', spearman_result['n_pairs']),
-            ('n_total', spearman_result['n_total']),
-        ):
-            self.log(
-                f'val/{STRUCTURAL_SPEARMAN_KEY}_{count}',
-                value,
-                batch_size=num_samples,
-                sync_dist=True,
-            )
+        # Rank-local populations can disagree on whether the correlation is defined.
+        if self.trainer.is_global_zero:
+            if spearman_value is not None:
+                self.log(
+                    f'val/{STRUCTURAL_SPEARMAN_KEY}',
+                    spearman_value,
+                    batch_size=num_samples,
+                    sync_dist=False,
+                    rank_zero_only=True,
+                )
+            else:
+                logger.warning(
+                    '%s undefined: %s (n_pairs=%d, n_total=%d)',
+                    spearman_result['definition'],
+                    spearman_result['reason'],
+                    spearman_result['n_pairs'],
+                    spearman_result['n_total'],
+                )
+            for count, value in (
+                ('n_pairs', spearman_result['n_pairs']),
+                ('n_total', spearman_result['n_total']),
+            ):
+                self.log(
+                    f'val/{STRUCTURAL_SPEARMAN_KEY}_{count}',
+                    value,
+                    batch_size=num_samples,
+                    sync_dist=False,
+                    rank_zero_only=True,
+                )
 
         radius_metrics = self._log_radius_structure_metrics(embeddings, codes, num_samples)
         retrieval_metrics = self._log_hierarchy_retrieval_metrics(
@@ -549,7 +553,9 @@ class ValidationMixin:
                         self._update_pseudo_labels()
 
     def _save_evaluation_metrics(self, epoch_metrics: Dict[str, Any]) -> None:
-        '''Save evaluation metrics to JSON file.'''
+        '''Save rank zero's evaluation history without competing distributed writers.'''
+        if not self.trainer.is_global_zero:
+            return
         self.evaluation_metrics_history.append(epoch_metrics)
 
         metrics_file = self._get_metrics_file_path()
