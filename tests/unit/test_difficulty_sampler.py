@@ -34,10 +34,8 @@ def _pool(distances: List[float], exclusions: Tuple[int, ...] = ()) -> List[Dict
             'negative_code_id': position,
             'negative_structural_distance': distance,
             'negative_is_explicit_exclusion': position in exclusions,
-        }
-        for position, distance in enumerate(distances)
+        } for position, distance in enumerate(distances)
     ]
-
 
 def test_proposals_are_unique_source_positions_that_skip_exclusions(default_config):
     pool = _pool([8.0] * 5 + [4.0] * 5 + [3.0] * 5, exclusions=(0, 5, 10))
@@ -55,7 +53,6 @@ def test_proposals_are_unique_source_positions_that_skip_exclusions(default_conf
     assert not {0, 5, 10} & set(proposal)
     assert all(0 <= position < len(pool) for position in proposal)
 
-
 def test_proposals_follow_the_starting_bucket_ratios(default_config):
     pool = _pool([8.0] * 10 + [4.0] * 10 + [3.0] * 10)
 
@@ -72,7 +69,6 @@ def test_proposals_follow_the_starting_bucket_ratios(default_config):
     assert distances.count(4.0) == 2
     assert distances.count(3.0) == 1
 
-
 def test_proposal_shortfall_cascades_to_remaining_candidates(default_config):
     # Only two bucketed candidates; siblings (d = 2) fill the remaining shortfall.
     pool = _pool([8.0, 4.0, 2.0, 2.0, 2.0])
@@ -88,7 +84,6 @@ def test_proposal_shortfall_cascades_to_remaining_candidates(default_config):
     assert len(proposal) == 4
     assert {0, 1} <= set(proposal)
 
-
 def test_proposals_are_reproducible(default_config):
     pool = _pool([8.0] * 10 + [4.0] * 10 + [3.0] * 10)
     kwargs = {'candidates': pool, 'n_propose': 8, 'epoch_progress': 0.3, 'cfg': default_config}
@@ -97,7 +92,6 @@ def test_proposals_are_reproducible(default_config):
     second = propose_by_difficulty(**kwargs, rng=np.random.default_rng(42))
 
     assert first == second
-
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -109,30 +103,35 @@ def sample_candidates() -> List[Dict]:
     candidates = []
     # Easy negatives (d >= 6)
     for i in range(20):
-        candidates.append({
-            'negative_idx': i,
-            'negative_code': f'easy_{i}',
-            'relation_margin': 0.1,
-            'distance_margin': 0.1,
-        })
+        candidates.append(
+            {
+                'negative_idx': i,
+                'negative_code': f'easy_{i}',
+                'relation_margin': 0.1,
+                'distance_margin': 0.1,
+            }
+        )
     # Semi-hard negatives (d = 4-5)
     for i in range(15):
-        candidates.append({
-            'negative_idx': 100 + i,
-            'negative_code': f'semi_{i}',
-            'relation_margin': 0.2,
-            'distance_margin': 0.2,
-        })
+        candidates.append(
+            {
+                'negative_idx': 100 + i,
+                'negative_code': f'semi_{i}',
+                'relation_margin': 0.2,
+                'distance_margin': 0.2,
+            }
+        )
     # Hard negatives (d = 3)
     for i in range(10):
-        candidates.append({
-            'negative_idx': 200 + i,
-            'negative_code': f'hard_{i}',
-            'relation_margin': 0.3,
-            'distance_margin': 0.3,
-        })
+        candidates.append(
+            {
+                'negative_idx': 200 + i,
+                'negative_code': f'hard_{i}',
+                'relation_margin': 0.3,
+                'distance_margin': 0.3,
+            }
+        )
     return candidates
-
 
 @pytest.fixture
 def distance_lookup() -> Dict[Tuple[str, str], float]:
@@ -150,7 +149,6 @@ def distance_lookup() -> Dict[Tuple[str, str], float]:
         lookup[(anchor, f'hard_{i}')] = 3.0
     return lookup
 
-
 @pytest.fixture
 def default_config() -> StreamingConfig:
     '''Create default streaming config.'''
@@ -161,7 +159,6 @@ def default_config() -> StreamingConfig:
         phase1_semi_end=0.40,
     )
 
-
 # -------------------------------------------------------------------------------------------------
 # Test: Count Guarantees
 # -------------------------------------------------------------------------------------------------
@@ -170,9 +167,7 @@ class TestCountGuarantees:
     '''Tests that exactly n_select negatives are returned.'''
 
     @pytest.mark.unit
-    def test_exact_count_returned(
-        self, sample_candidates, distance_lookup, default_config
-    ):
+    def test_exact_count_returned(self, sample_candidates, distance_lookup, default_config):
         '''Verify exactly n_select negatives are returned.'''
         rng = np.random.default_rng(42)
         n_select = 24
@@ -190,9 +185,7 @@ class TestCountGuarantees:
         assert len(result) == n_select
 
     @pytest.mark.unit
-    def test_exact_count_at_start(
-        self, sample_candidates, distance_lookup, default_config
-    ):
+    def test_exact_count_at_start(self, sample_candidates, distance_lookup, default_config):
         '''Verify exact count at epoch start (easy-heavy).'''
         rng = np.random.default_rng(42)
         n_select = 20
@@ -210,9 +203,7 @@ class TestCountGuarantees:
         assert len(result) == n_select
 
     @pytest.mark.unit
-    def test_exact_count_at_end(
-        self, sample_candidates, distance_lookup, default_config
-    ):
+    def test_exact_count_at_end(self, sample_candidates, distance_lookup, default_config):
         '''Verify exact count at epoch end (hard-heavy).'''
         rng = np.random.default_rng(42)
         n_select = 20
@@ -249,7 +240,6 @@ class TestCountGuarantees:
 
         # Should return all available (with warning logged)
         assert len(result) <= len(sample_candidates)
-
 
 # -------------------------------------------------------------------------------------------------
 # Test: Annealing
@@ -300,9 +290,7 @@ class TestAnnealing:
             assert abs(easy + semi + hard - 1.0) < 1e-6
 
     @pytest.mark.unit
-    def test_more_easy_at_start(
-        self, sample_candidates, distance_lookup, default_config
-    ):
+    def test_more_easy_at_start(self, sample_candidates, distance_lookup, default_config):
         '''Early epochs should have more easy negatives.'''
         rng = np.random.default_rng(42)
         n_select = 30
@@ -324,9 +312,7 @@ class TestAnnealing:
         assert easy_count >= 15  # At least half should be easy
 
     @pytest.mark.unit
-    def test_more_hard_at_end(
-        self, sample_candidates, distance_lookup, default_config
-    ):
+    def test_more_hard_at_end(self, sample_candidates, distance_lookup, default_config):
         '''Late epochs should have more hard negatives.'''
         rng = np.random.default_rng(42)
         n_select = 30
@@ -348,7 +334,6 @@ class TestAnnealing:
         # But we only have 10 hard candidates, so expect all of them
         assert hard_count >= 8
 
-
 # -------------------------------------------------------------------------------------------------
 # Test: Reproducibility
 # -------------------------------------------------------------------------------------------------
@@ -357,9 +342,7 @@ class TestReproducibility:
     '''Tests that same seed produces identical results.'''
 
     @pytest.mark.unit
-    def test_same_seed_same_result(
-        self, sample_candidates, distance_lookup, default_config
-    ):
+    def test_same_seed_same_result(self, sample_candidates, distance_lookup, default_config):
         '''Same seed should produce identical selections.'''
         seed = 12345
         n_select = 20
@@ -426,7 +409,6 @@ class TestReproducibility:
         # Very unlikely to be identical with different seeds
         assert codes1 != codes2
 
-
 # -------------------------------------------------------------------------------------------------
 # Test: Edge Cases
 # -------------------------------------------------------------------------------------------------
@@ -452,9 +434,7 @@ class TestEdgeCases:
         assert result == []
 
     @pytest.mark.unit
-    def test_zero_n_select(
-        self, sample_candidates, distance_lookup, default_config
-    ):
+    def test_zero_n_select(self, sample_candidates, distance_lookup, default_config):
         '''n_select=0 should return empty list.'''
         rng = np.random.default_rng(42)
 
@@ -474,10 +454,7 @@ class TestEdgeCases:
     def test_bucket_with_no_candidates(self, distance_lookup, default_config):
         '''Handles buckets with no candidates gracefully.'''
         # Only easy candidates
-        easy_only = [
-            {'negative_idx': i, 'negative_code': f'easy_{i}'}
-            for i in range(10)
-        ]
+        easy_only = [{'negative_idx': i, 'negative_code': f'easy_{i}'} for i in range(10)]
 
         rng = np.random.default_rng(42)
 
@@ -498,8 +475,14 @@ class TestEdgeCases:
     def test_missing_distance_uses_default(self, default_config):
         '''Missing distances default to 12.0 (easy).'''
         candidates = [
-            {'negative_idx': 1, 'negative_code': 'unknown_1'},
-            {'negative_idx': 2, 'negative_code': 'unknown_2'},
+            {
+                'negative_idx': 1,
+                'negative_code': 'unknown_1'
+            },
+            {
+                'negative_idx': 2,
+                'negative_code': 'unknown_2'
+            },
         ]
         empty_lookup: Dict[Tuple[str, str], float] = {}
 
@@ -509,7 +492,6 @@ class TestEdgeCases:
         assert len(easy) == 2
         assert len(semi) == 0
         assert len(hard) == 0
-
 
 # -------------------------------------------------------------------------------------------------
 # Test: Config Validation
@@ -556,4 +538,3 @@ class TestConfigValidation:
                 n_candidates=24,
                 n_negatives_phase1=48,  # More than candidates
             )
-

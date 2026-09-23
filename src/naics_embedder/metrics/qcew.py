@@ -206,16 +206,13 @@ def run_qcew_employment_benchmark(config: QCEWBenchmarkConfig) -> Dict[str, Dict
         raise ValueError('Cold-start split produced an empty train/test partition.')
 
     results = {
-        'embedding':
-        _fit_ridge_model(
+        'embedding': _fit_ridge_model(
             X_embed, y, train_idx=train_idx, test_idx=test_idx, alpha=config.ridge_alpha
         ),
-        'one_hot':
-        _fit_ridge_model(
+        'one_hot': _fit_ridge_model(
             X_one_hot, y, train_idx=train_idx, test_idx=test_idx, alpha=config.ridge_alpha
         ),
-        'hybrid':
-        _fit_ridge_model(
+        'hybrid': _fit_ridge_model(
             X_hybrid, y, train_idx=train_idx, test_idx=test_idx, alpha=config.ridge_alpha
         ),
         'metadata': {
@@ -228,7 +225,6 @@ def run_qcew_employment_benchmark(config: QCEWBenchmarkConfig) -> Dict[str, Dict
 
     return results
 
-
 # -------------------------------------------------------------------------------------------------
 # Multi-level benchmark
 # -------------------------------------------------------------------------------------------------
@@ -240,7 +236,6 @@ NAICS_LEVEL_NAMES = {
     5: 'naics_industry',
     6: 'national_industry',
 }
-
 
 @dataclass
 class QCEWMultilevelConfig:
@@ -264,7 +259,6 @@ class QCEWMultilevelConfig:
         self.embedding_parquet = Path(self.embedding_parquet)
         self.levels = tuple(sorted(set(self.levels)))
 
-
 def _run_single_level_benchmark(
     qcew_df: pl.DataFrame,
     embed_df: pl.DataFrame,
@@ -277,9 +271,7 @@ def _run_single_level_benchmark(
     Returns None if insufficient data for the level.
     '''
     # Filter embeddings to codes of the target length
-    level_embed_df = embed_df.filter(
-        pl.col(config.code_column).str.len_chars() == level
-    )
+    level_embed_df = embed_df.filter(pl.col(config.code_column).str.len_chars() == level)
 
     if level_embed_df.is_empty():
         logger.warning(f'No embeddings found for {level}-digit codes')
@@ -346,10 +338,7 @@ def _run_single_level_benchmark(
         },
     }
 
-
-def run_qcew_multilevel_benchmark(
-    config: QCEWMultilevelConfig,
-) -> Dict[str, Any]:
+def run_qcew_multilevel_benchmark(config: QCEWMultilevelConfig, ) -> Dict[str, Any]:
     '''Compare embedding vs one-hot encoding across all NAICS levels.
 
     This benchmark evaluates how well learned embeddings generalize across
@@ -424,9 +413,7 @@ def run_qcew_multilevel_benchmark(
             logger.warning(f'No QCEW data found for {level}-digit codes')
             continue
 
-        level_results = _run_single_level_benchmark(
-            qcew_df, embed_df, embed_cols, config, level
-        )
+        level_results = _run_single_level_benchmark(qcew_df, embed_df, embed_cols, config, level)
 
         if level_results is not None:
             results[level_name] = level_results
@@ -484,7 +471,9 @@ def run_qcew_multilevel_benchmark(
                 'embedding_vs_onehot_r2_diff': float(
                     np.mean(embed_r2_values) - np.mean(onehot_r2_values)
                 ),
-                'embedding_wins': sum(1 for e, o in zip(embed_r2_values, onehot_r2_values) if e > o),
+                'embedding_wins': sum(
+                    1 for e, o in zip(embed_r2_values, onehot_r2_values) if e > o
+                ),
                 'onehot_wins': sum(1 for e, o in zip(embed_r2_values, onehot_r2_values) if o > e),
                 'per_level_r2_diff': {
                     f'level_{level}': float(e - o)
@@ -494,7 +483,6 @@ def run_qcew_multilevel_benchmark(
         }
 
     return results
-
 
 def print_multilevel_comparison(results: Dict[str, Any]) -> None:
     '''Print a formatted comparison table of multi-level benchmark results.'''

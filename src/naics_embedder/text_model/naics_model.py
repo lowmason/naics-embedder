@@ -443,9 +443,8 @@ class NAICSContrastiveModel(
         '''
         validate_checkpoint_contract(checkpoint.get(CHECKPOINT_KEY), self.checkpoint_contract)
 
-    def _forward_candidate_pool(
-        self, batch: Dict[str, Any]
-    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    def _forward_candidate_pool(self, batch: Dict[str, Any]
+                                ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
         '''
         Encode the collated candidate pool once and build occurrence UIDs.
 
@@ -461,7 +460,10 @@ class NAICSContrastiveModel(
         '''
         valid = batch['candidate_valid_mask'].reshape(-1)
         valid_inputs = {
-            channel: {name: value[valid] for name, value in inputs.items()}
+            channel: {
+                name: value[valid]
+                for name, value in inputs.items()
+            }
             for channel, inputs in batch['candidate_inputs'].items()
         }
         valid_output = self(valid_inputs)
@@ -477,9 +479,8 @@ class NAICSContrastiveModel(
             if torch.distributed.is_available() and torch.distributed.is_initialized() else 0
         )
         rank_component = torch.full_like(source_slot, rank)
-        batch_component = torch.arange(
-            int(batch['batch_size']), device=source_slot.device
-        ).unsqueeze(1).expand_as(source_slot)
+        batch_component = torch.arange(int(batch['batch_size']), device=source_slot.device
+                                       ).unsqueeze(1).expand_as(source_slot)
         candidate_uid = torch.stack([rank_component, batch_component, source_slot], dim=-1)
         return candidate_output, candidate_uid
 

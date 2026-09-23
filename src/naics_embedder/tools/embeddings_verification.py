@@ -162,12 +162,10 @@ def verify_stage4(
     parent_key = f'parent_retrieval@{config.parent_top_k}'
 
     delta = {
-        'cophenetic_correlation':
-        post_metrics['cophenetic_correlation'] - pre_metrics['cophenetic_correlation'],
-        ndcg_key:
-        post_metrics[ndcg_key] - pre_metrics[ndcg_key],
-        parent_key:
-        post_metrics[parent_key] - pre_metrics[parent_key],
+        'cophenetic_correlation': post_metrics['cophenetic_correlation']
+        - pre_metrics['cophenetic_correlation'],
+        ndcg_key: post_metrics[ndcg_key] - pre_metrics[ndcg_key],
+        parent_key: post_metrics[parent_key] - pre_metrics[parent_key],
     }
 
     checks = {
@@ -185,4 +183,3 @@ def verify_stage4(
         'passed': all(checks.values()),
         'codes': codes,
     }
-

@@ -118,20 +118,16 @@ class OptimizerMixin:
             Configuration dictionary with optimizer and scheduler
         '''
         scheduler = {
-            'scheduler':
-            torch.optim.lr_scheduler.ReduceLROnPlateau(
+            'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
                 mode='min',
                 factor=0.5,  # Reduce LR by 50%
                 patience=3,  # Wait 3 epochs without improvement
                 min_lr=1e-6,
             ),
-            'monitor':
-            'val/contrastive_loss',
-            'interval':
-            'epoch',
-            'frequency':
-            1,
+            'monitor': 'val/contrastive_loss',
+            'interval': 'epoch',
+            'frequency': 1,
         }
 
         return {'optimizer': optimizer, 'lr_scheduler': scheduler}

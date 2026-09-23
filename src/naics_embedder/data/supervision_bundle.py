@@ -112,9 +112,7 @@ def _directed_exclusions(descriptions: pl.DataFrame, codebook: pl.DataFrame) -> 
             target_ids, on='target_code', how='inner', validate='m:1'
         ).select('source_code_id', 'target_code_id').unique()
     )
-    dropped = published.height - published.join(
-        target_ids, on='target_code', how='semi'
-    ).height
+    dropped = published.height - published.join(target_ids, on='target_code', how='semi').height
     if dropped:
         logger.info(f'{dropped:,} published exclusion references name codes outside the codebook')
     return directed
@@ -132,12 +130,14 @@ def attach_exclusion_provenance(
     '''
 
     directed = _directed_exclusions(descriptions, codebook)
-    forward = directed.rename(
-        {'source_code_id': 'code_i_id', 'target_code_id': 'code_j_id'}
-    ).with_columns(code_i_excludes_code_j=pl.lit(True))
-    reverse = directed.rename(
-        {'source_code_id': 'code_j_id', 'target_code_id': 'code_i_id'}
-    ).with_columns(code_j_excludes_code_i=pl.lit(True))
+    forward = directed.rename({
+        'source_code_id': 'code_i_id',
+        'target_code_id': 'code_j_id'
+    }).with_columns(code_i_excludes_code_j=pl.lit(True))
+    reverse = directed.rename({
+        'source_code_id': 'code_j_id',
+        'target_code_id': 'code_i_id'
+    }).with_columns(code_j_excludes_code_i=pl.lit(True))
 
     facts = (
         pair_facts.join(forward, on=['code_i_id', 'code_j_id'], how='left').join(
@@ -307,11 +307,8 @@ def exclusion_input_fingerprint(descriptions: pl.DataFrame) -> str:
     '''SHA-256 over every published (code, excluded code) reference, sorted.'''
 
     published = (
-        descriptions.select(
-            source=pl.col('code').cast(pl.Utf8), target=pl.col('excluded_codes')
-        ).explode('target').filter(pl.col('target').is_not_null()).unique().sort(
-            'source', 'target'
-        )
+        descriptions.select(source=pl.col('code').cast(pl.Utf8), target=pl.col('excluded_codes'))
+        .explode('target').filter(pl.col('target').is_not_null()).unique().sort('source', 'target')
     )
     payload = '\n'.join(f'{source}\t{target}' for source, target in published.rows())
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()

@@ -28,12 +28,9 @@ def test_quota_selects_exactly_one_exclusion_and_rotates(candidate_batch_with_ex
         )
         selected = candidate_batch_with_exclusions.select(selection)
         assert selected.is_explicit_exclusion.sum().item() == 1
-        chosen.append(
-            selected.code_id[selected.is_explicit_exclusion].item()
-        )
+        chosen.append(selected.code_id[selected.is_explicit_exclusion].item())
 
     assert len(set(chosen)) == 3
-
 
 def test_rotation_is_reproducible_for_same_seed_anchor_and_epoch(candidate_batch_with_exclusions):
     coordinator = NegativeSelectionCoordinator()
@@ -53,7 +50,6 @@ def test_rotation_is_reproducible_for_same_seed_anchor_and_epoch(candidate_batch
     assert torch.equal(first.source_indices, second.source_indices)
     assert first.reasons.item() == SelectionReason.EXCLUSION_QUOTA
 
-
 def test_no_exclusion_uses_all_slots_for_ordinary_candidates(candidate_batch):
     selection = NegativeSelectionCoordinator().select(
         candidate_batch,
@@ -69,7 +65,6 @@ def test_no_exclusion_uses_all_slots_for_ordinary_candidates(candidate_batch):
     assert selected.code_id.unique().numel() == 3
     assert not selected.is_explicit_exclusion.any()
 
-
 def test_proposal_ties_break_by_code_then_uid(candidate_batch):
     proposal = CandidateProposal(
         source_indices=torch.tensor([[2, 1, 0]]),
@@ -83,10 +78,9 @@ def test_proposal_ties_break_by_code_then_uid(candidate_batch):
         k=3,
         epoch=0,
         global_seed=7,
-        proposals=(proposal,),
+        proposals=(proposal, ),
     )
     assert candidate_batch.select(selection).code_id.tolist() == [[101, 102, 103]]
-
 
 def test_geometric_then_router_merge_is_deterministic_and_code_unique(candidate_batch):
     geometric = CandidateProposal(
@@ -111,12 +105,13 @@ def test_geometric_then_router_merge_is_deterministic_and_code_unique(candidate_
     )
 
     assert candidate_batch.select(selection).code_id.tolist() == [[103, 102, 101]]
-    assert selection.reasons.tolist() == [[
-        SelectionReason.GEOMETRIC,
-        SelectionReason.GEOMETRIC,
-        SelectionReason.ROUTER,
-    ]]
-
+    assert selection.reasons.tolist() == [
+        [
+            SelectionReason.GEOMETRIC,
+            SelectionReason.GEOMETRIC,
+            SelectionReason.ROUTER,
+        ]
+    ]
 
 def test_duplicate_codes_collapse_to_smallest_occurrence_uid(candidate_batch_with_duplicate_code):
     selection = NegativeSelectionCoordinator().select(
@@ -135,7 +130,6 @@ def test_duplicate_codes_collapse_to_smallest_occurrence_uid(candidate_batch_wit
     # One selected occurrence of code 101: a [1, 3] UID row, the smallest occurrence UID.
     assert selected.candidate_uid[duplicate_slot].tolist() == [[0, 0, 0]]
 
-
 def test_insufficient_unique_candidates_is_fatal(candidate_batch):
     with pytest.raises(
         ValueError,
@@ -150,7 +144,6 @@ def test_insufficient_unique_candidates_is_fatal(candidate_batch):
             global_seed=7,
             proposals=(),
         )
-
 
 # -------------------------------------------------------------------------------------------------
 # Quota protection and eligibility
@@ -167,7 +160,6 @@ def _select(batch, *, k, proposals=(), anchor=10, positive=11, epoch=0):
         proposals=proposals,
     )
 
-
 def test_proposals_cannot_add_a_second_exclusion(candidate_batch_with_exclusions):
     batch = candidate_batch_with_exclusions
     greedy = CandidateProposal(
@@ -176,13 +168,12 @@ def test_proposals_cannot_add_a_second_exclusion(candidate_batch_with_exclusions
         reason=SelectionReason.GEOMETRIC,
     )
 
-    selected = batch.select(_select(batch, k=3, proposals=(greedy,)))
+    selected = batch.select(_select(batch, k=3, proposals=(greedy, )))
 
     assert selected.is_explicit_exclusion.sum().item() == 1
     assert selected.code_id.unique().numel() == 3
     assert selected.selection_reasons.tolist()[0][0] == SelectionReason.EXCLUSION_QUOTA
     assert 30 in selected.code_id.tolist()[0]
-
 
 def test_one_slot_is_enough_for_the_reserved_exclusion(candidate_batch_with_exclusions):
     batch = candidate_batch_with_exclusions
@@ -192,20 +183,16 @@ def test_one_slot_is_enough_for_the_reserved_exclusion(candidate_batch_with_excl
         reason=SelectionReason.GEOMETRIC,
     )
 
-    selected = batch.select(_select(batch, k=1, proposals=(ordinary_only,)))
+    selected = batch.select(_select(batch, k=1, proposals=(ordinary_only, )))
 
     assert selected.is_explicit_exclusion.tolist() == [[True]]
 
-
 def test_rotation_covers_every_exclusion_cyclically(candidate_batch_with_exclusions):
     batch = candidate_batch_with_exclusions
-    chosen = [
-        batch.select(_select(batch, k=1, epoch=epoch)).code_id.item() for epoch in range(6)
-    ]
+    chosen = [batch.select(_select(batch, k=1, epoch=epoch)).code_id.item() for epoch in range(6)]
 
     assert sorted(chosen[:3]) == [20, 21, 22]
     assert chosen[3:] == chosen[:3]
-
 
 def test_anchor_positive_and_invalid_candidates_are_never_selected(candidate_batch):
     batch = replace(candidate_batch, valid_mask=torch.tensor([[True, True, False]]))
@@ -216,11 +203,9 @@ def test_anchor_positive_and_invalid_candidates_are_never_selected(candidate_bat
     with pytest.raises(ValueError, match='requested 2.*available 1'):
         _select(batch, k=2, anchor=101, positive=999)
 
-
 def test_k_must_be_at_least_one(candidate_batch):
     with pytest.raises(ValueError, match='at least one'):
         _select(candidate_batch, k=0)
-
 
 @pytest.mark.parametrize('bad_score', [float('nan'), float('inf')])
 def test_malformed_proposal_scores_are_fatal(candidate_batch, bad_score):
@@ -240,7 +225,6 @@ def test_malformed_proposal_scores_are_fatal(candidate_batch, bad_score):
             global_seed=7,
             proposals=(proposal, ),
         )
-
 
 def test_negative_infinity_marks_an_ineligible_proposal_entry(candidate_batch):
     proposal = CandidateProposal(
@@ -262,7 +246,6 @@ def test_negative_infinity_marks_an_ineligible_proposal_entry(candidate_batch):
     reasons = [SelectionReason(reason) for reason in selection.reasons[0].tolist()]
     assert candidate_batch.select(selection).code_id.tolist() == [[103, 101, 102]]
     assert reasons == [SelectionReason.GEOMETRIC] * 2 + [SelectionReason.BACKFILL]
-
 
 def test_canonical_occurrence_is_the_smallest_valid_uid_per_code():
     generator = torch.Generator().manual_seed(11)
@@ -290,9 +273,9 @@ def test_canonical_occurrence_is_the_smallest_valid_uid_per_code():
                 if code not in smallest or key < smallest[code][0]:
                     smallest[code] = (key, slot)
             assert set(torch.where(mask[row])[0].tolist()) == {
-                slot for _, slot in smallest.values()
+                slot
+                for _, slot in smallest.values()
             }
-
 
 def test_canonical_occurrence_handles_empty_pools_and_narrow_dtypes():
     empty = canonical_occurrence_mask(
@@ -310,7 +293,6 @@ def test_canonical_occurrence_handles_empty_pools_and_narrow_dtypes():
 
     assert empty.shape == (2, 0)
     assert narrow.tolist() == [[True, True, False]]
-
 
 def test_malformed_score_in_an_unreached_proposal_is_still_fatal(candidate_batch):
     filling = CandidateProposal(
@@ -334,7 +316,6 @@ def test_malformed_score_in_an_unreached_proposal_is_still_fatal(candidate_batch
             global_seed=7,
             proposals=(filling, unreached),
         )
-
 
 def test_stable_hash_matches_a_sha256_of_the_packed_seed_and_anchor():
     digest = hashlib.sha256(struct.pack('>qq', 7, 10)).digest()

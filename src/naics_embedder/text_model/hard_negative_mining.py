@@ -233,9 +233,10 @@ class RouterGuidedNegativeMiner(nn.Module):
         if candidates.router_gate_probs is None:
             raise ValueError('router-guided proposals require candidate gate probabilities')
         with torch.no_grad():
-            scores = self.compute_confusion_scores(
-                anchor_gate_probs, candidates.router_gate_probs
-            ).masked_fill(_ineligible(candidates), -torch.inf)
+            scores = self.compute_confusion_scores(anchor_gate_probs,
+                                                   candidates.router_gate_probs).masked_fill(
+                                                       _ineligible(candidates), -torch.inf
+                                                   )
         return _top_k_proposal(scores, k, SelectionReason.ROUTER)
 
     def compute_kl_divergence(

@@ -29,7 +29,6 @@ def _embedding() -> Dict[str, Dict[str, torch.Tensor]]:
         for channel in CHANNELS
     }
 
-
 class EpochRecordingDataset(Dataset):
     '''
     Stand-in for Phase1MapDataset: exposes set_epoch() and samples items that depend on the
@@ -53,5 +52,8 @@ class EpochRecordingDataset(Dataset):
             'anchor_embedding': _embedding(),
             'positive_code': f'{idx:06d}',
             'positive_embedding': _embedding(),
-            'negatives': [{'negative_code': '999999', 'negative_embedding': _embedding()}],
+            'negatives': [{
+                'negative_code': '999999',
+                'negative_embedding': _embedding()
+            }],
         }

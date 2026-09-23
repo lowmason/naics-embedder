@@ -416,7 +416,6 @@ class TestSupervisionBuildConfig:
         with pytest.raises(ValidationError):
             SupervisionBuildConfig(rank_order_weight=0.35)
 
-
 # -------------------------------------------------------------------------------------------------
 # Repaired Stage-3 runtime configuration
 # -------------------------------------------------------------------------------------------------
@@ -424,7 +423,6 @@ class TestSupervisionBuildConfig:
 @pytest.fixture
 def valid_config_dict():
     return yaml.safe_load(Path('conf/config.yaml').read_text())
-
 
 def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
     cfg = Config.model_validate(valid_config_dict)
@@ -435,7 +433,6 @@ def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
     assert cfg.loss.structural_preference == StructuralPreferenceConfig()
     assert cfg.loss.rank_order_weight is None
     assert cfg.data_loader.streaming.phase1_exclusion_weight is None
-
 
 def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
     valid_config_dict['supervision'] = {
@@ -450,7 +447,6 @@ def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
     ):
         Config.model_validate(valid_config_dict)
 
-
 def test_repaired_config_rejects_high_exclusion_weight(valid_config_dict):
     valid_config_dict['supervision'] = {
         'mode': 'repaired',
@@ -464,11 +460,9 @@ def test_repaired_config_rejects_high_exclusion_weight(valid_config_dict):
     ):
         Config.model_validate(valid_config_dict)
 
-
 def test_overrides_cannot_reintroduce_legacy_keys_in_repaired_mode():
     with pytest.raises(ValidationError, match='rank_order_weight'):
         Config().override({'loss.rank_order_weight': 0.35})
-
 
 def test_legacy_containment_is_the_only_mode_accepting_legacy_keys(valid_config_dict):
     valid_config_dict['supervision'] = {'mode': 'legacy_containment'}
@@ -480,23 +474,26 @@ def test_legacy_containment_is_the_only_mode_accepting_legacy_keys(valid_config_
     assert cfg.supervision.mode == 'legacy_containment'
     assert cfg.loss.rank_order_weight == 0.35
 
-
 @pytest.mark.parametrize(
     'supervision',
     [
-        {'mode': 'legacy'},
-        {'contract_version': 'stage3-supervision-v0'},
-        {'manifest': '/tmp/bundle/manifest.json'},
+        {
+            'mode': 'legacy'
+        },
+        {
+            'contract_version': 'stage3-supervision-v0'
+        },
+        {
+            'manifest': '/tmp/bundle/manifest.json'
+        },
     ],
 )
 def test_supervision_runtime_config_rejects_unknown_values(supervision):
     with pytest.raises(ValidationError):
         SupervisionRuntimeConfig(**supervision)
 
-
 def test_checkpoint_load_modes_are_explicit():
     assert [mode.value for mode in CheckpointLoadMode] == ['exact', 'weights_only']
-
 
 @pytest.mark.parametrize(
     ('field', 'value', 'message'),

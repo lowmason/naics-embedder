@@ -707,7 +707,8 @@ def train(
             accumulate_grad_batches=cfg.training.trainer.accumulate_grad_batches,
             log_every_n_steps=cfg.training.trainer.log_every_n_steps,
             val_check_interval=cfg.training.trainer.val_check_interval,
-            callbacks=[checkpoint_callback, early_stopping, TrainDatasetEpochCallback()],
+            callbacks=[checkpoint_callback, early_stopping,
+                       TrainDatasetEpochCallback()],
             logger=tb_logger,
             default_root_dir=cfg.dirs.output_dir,
         )

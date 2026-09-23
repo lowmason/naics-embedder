@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 # Validation Metrics
 # -------------------------------------------------------------------------------------------------
 
-
 def compute_validation_metrics(
     emb: torch.Tensor,
     anchors: torch.Tensor,
@@ -109,11 +108,9 @@ def compute_validation_metrics(
 
     return {k: float(v.detach().cpu()) for k, v in metrics.items()}
 
-
 # -------------------------------------------------------------------------------------------------
 # Downstream evaluation data structures
 # -------------------------------------------------------------------------------------------------
-
 
 def _sorted_embedding_columns(columns: Sequence[str], prefix: str) -> List[str]:
     '''Return embedding columns sorted numerically by suffix.'''
@@ -127,7 +124,6 @@ def _sorted_embedding_columns(columns: Sequence[str], prefix: str) -> List[str]:
         return (0, int(suffix)) if suffix.isdigit() else (1, suffix)
 
     return sorted(relevant, key=_sort_key)
-
 
 @dataclass
 class GraphEmbeddingDataset:
@@ -179,7 +175,6 @@ class GraphEmbeddingDataset:
         levels = frame.get_column(level_column).to_list()
 
         return cls(embeddings=tensor, codes=codes, levels=levels)
-
 
 class GraphDownstreamEvaluator:
     '''Evaluate downstream metrics for graph-refined NAICS embeddings.'''
@@ -400,7 +395,6 @@ class GraphDownstreamEvaluator:
             'n_train': float(len(y_train)),
             'n_test': float(len(y_test)),
         }
-
 
 def run_graph_downstream_suite(
     dataset: GraphEmbeddingDataset,

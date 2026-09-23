@@ -196,8 +196,14 @@ def test_description_drops_whole_illustrative_examples_section(
         }
     )
     examples_df = pl.DataFrame(
-        {'code': ['111199'] * len(sheet_examples), 'examples': sheet_examples},
-        schema={'code': pl.Utf8, 'examples': pl.Utf8},
+        {
+            'code': ['111199'] * len(sheet_examples),
+            'examples': sheet_examples
+        },
+        schema={
+            'code': pl.Utf8,
+            'examples': pl.Utf8
+        },
     )
     descriptions_exclusions = pl.DataFrame(schema={'code': pl.Utf8, 'description_id': pl.UInt32})
 

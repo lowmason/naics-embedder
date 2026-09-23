@@ -41,23 +41,56 @@ EMPTY_SLICE_LEVELS = {6}
 # values fails.
 LEVEL_RESULTS: dict[int, dict[str, dict[str, float]] | None] = {
     1: {
-        'embedding': {'r2': 0.82, 'rmse': 0.40},
-        'one_hot': {'r2': 0.61, 'rmse': 0.55},
-        'hybrid': {'r2': 0.85, 'rmse': 0.38},
-        'metadata': {'n_samples': 40.0},
+        'embedding': {
+            'r2': 0.82,
+            'rmse': 0.40
+        },
+        'one_hot': {
+            'r2': 0.61,
+            'rmse': 0.55
+        },
+        'hybrid': {
+            'r2': 0.85,
+            'rmse': 0.38
+        },
+        'metadata': {
+            'n_samples': 40.0
+        },
     },
     2: {
-        'embedding': {'r2': 0.70, 'rmse': 0.50},
-        'one_hot': {'r2': 0.52, 'rmse': 0.65},
-        'hybrid': {'r2': 0.75, 'rmse': 0.46},
-        'metadata': {'n_samples': 20.0},
+        'embedding': {
+            'r2': 0.70,
+            'rmse': 0.50
+        },
+        'one_hot': {
+            'r2': 0.52,
+            'rmse': 0.65
+        },
+        'hybrid': {
+            'r2': 0.75,
+            'rmse': 0.46
+        },
+        'metadata': {
+            'n_samples': 20.0
+        },
     },
     3: None,
     4: {
-        'embedding': {'r2': 0.45, 'rmse': 0.80},
-        'one_hot': {'r2': 0.58, 'rmse': 0.70},
-        'hybrid': {'r2': 0.60, 'rmse': 0.66},
-        'metadata': {'n_samples': 300.0},
+        'embedding': {
+            'r2': 0.45,
+            'rmse': 0.80
+        },
+        'one_hot': {
+            'r2': 0.58,
+            'rmse': 0.70
+        },
+        'hybrid': {
+            'r2': 0.60,
+            'rmse': 0.66
+        },
+        'metadata': {
+            'n_samples': 300.0
+        },
     },
 }
 
@@ -129,7 +162,11 @@ def test_summary_aggregates_only_evaluated_levels(tmp_path: Path):
     # pytest.approx rejects nested dicts, so it wraps each float instead. std_r2 is the
     # population standard deviation (numpy's default, ddof=0).
     assert summary == {
-        'levels_evaluated': {'1': 'unknown', '2': 'sector', '4': 'industry_group'},
+        'levels_evaluated': {
+            '1': 'unknown',
+            '2': 'sector',
+            '4': 'industry_group'
+        },
         'embedding': {
             'avg_r2': pytest.approx(mean(embedding_r2)),
             'std_r2': pytest.approx(pstdev(embedding_r2)),

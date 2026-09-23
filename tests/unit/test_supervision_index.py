@@ -28,7 +28,6 @@ def test_loader_rejects_mixed_bundle_metadata(generated_bundle):
             expected_contract='stage3-supervision-v1',
         )
 
-
 def test_join_maps_canonical_directions_into_anchor_view(validated_bundle):
     index = SupervisionIndex.from_bundle(validated_bundle)
     anchor = torch.tensor([0, 3])
@@ -45,7 +44,6 @@ def test_join_maps_canonical_directions_into_anchor_view(validated_bundle):
     )
     assert joined.structural_distance.tolist() == [[2.0], [99.0]]
 
-
 def test_join_rejects_unknown_ids_with_anchor_context(validated_bundle):
     index = SupervisionIndex.from_bundle(validated_bundle)
 
@@ -55,7 +53,6 @@ def test_join_rejects_unknown_ids_with_anchor_context(validated_bundle):
             torch.tensor([[999]]),
             torch.tensor([[True]]),
         )
-
 
 # -------------------------------------------------------------------------------------------------
 # Additional index behavior
@@ -72,7 +69,6 @@ def test_join_is_directional_from_the_candidate_side(validated_bundle):
     assert joined.semantic_target_id.tolist() == [[2]]
     assert joined.semantic_source_id.tolist() == [[2]]
 
-
 def test_join_ignores_invalid_padding_ids(validated_bundle):
     index = SupervisionIndex.from_bundle(validated_bundle)
 
@@ -85,17 +81,15 @@ def test_join_ignores_invalid_padding_ids(validated_bundle):
     assert joined.is_explicit_exclusion.tolist() == [[True, False]]
     assert joined.semantic_target_id.tolist() == [[2, 0]]
 
-
 def test_exclusion_code_ids_are_symmetric_and_sorted(validated_bundle):
     index = SupervisionIndex.from_bundle(validated_bundle)
 
-    assert index.exclusion_code_ids(0) == (2,)
-    assert index.exclusion_code_ids(1) == (3,)
-    assert index.exclusion_code_ids(3) == (1,)
+    assert index.exclusion_code_ids(0) == (2, )
+    assert index.exclusion_code_ids(1) == (3, )
+    assert index.exclusion_code_ids(3) == (1, )
     assert index.exclusion_code_ids(4) == ()
     with pytest.raises(ValueError, match='unknown anchor code ID 5'):
         index.exclusion_code_ids(5)
-
 
 def test_index_matrices_match_the_pair_facts(validated_bundle):
     index = SupervisionIndex.from_bundle(validated_bundle)

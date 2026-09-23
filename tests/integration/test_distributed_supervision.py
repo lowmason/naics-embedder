@@ -28,7 +28,6 @@ def make_entity_batch(rank: int, code_id: int) -> CandidateEntityBatch:
         valid_mask=torch.ones((1, 1), dtype=torch.bool),
     )
 
-
 def _worker(rank, world_size, init_file, queue):
     dist.init_process_group(
         backend='gloo',
@@ -50,7 +49,6 @@ def _worker(rank, world_size, init_file, queue):
     finally:
         dist.destroy_process_group()
 
-
 @pytest.mark.integration
 def test_two_rank_gather_preserves_intrinsic_identity_only(tmp_path):
     init_file = tmp_path / 'gloo-init'
@@ -62,7 +60,6 @@ def test_two_rank_gather_preserves_intrinsic_identity_only(tmp_path):
     assert results[0][2][0][0] == 0
     assert results[0][2][1][0] == 1
     assert results[0][3] == [True, True]
-
 
 def _uneven_worker(rank, world_size, init_file, queue):
     dist.init_process_group(
@@ -96,7 +93,6 @@ def _uneven_worker(rank, world_size, init_file, queue):
     finally:
         dist.destroy_process_group()
 
-
 @pytest.mark.integration
 def test_uneven_entity_counts_are_padded_with_invalid_rows(tmp_path):
     init_file = tmp_path / 'gloo-init'
@@ -110,7 +106,6 @@ def test_uneven_entity_counts_are_padded_with_invalid_rows(tmp_path):
         assert no_router
         assert requires_grad
 
-
 # -------------------------------------------------------------------------------------------------
 # End-to-end distributed selection: gather -> per-anchor join and eligibility -> one selection
 # -------------------------------------------------------------------------------------------------
@@ -121,15 +116,23 @@ def test_uneven_entity_counts_are_padded_with_invalid_rows(tmp_path):
 # grandparent '4411' (14) and holds its exclusion '311211' (7), rank 0's parent '31111' (3), and
 # '311'/'31' (1, 0). Each anchor embedding sits nearest the other rank's candidates.
 RANK_SETUPS = {
-    0: {'anchor': 4, 'positive': 2, 'pool': [11, 12, 13], 'anchor_value': 0.3},
-    1: {'anchor': 16, 'positive': 14, 'pool': [7, 3, 1, 0], 'anchor_value': 1.5},
+    0: {
+        'anchor': 4,
+        'positive': 2,
+        'pool': [11, 12, 13],
+        'anchor_value': 0.3
+    },
+    1: {
+        'anchor': 16,
+        'positive': 14,
+        'pool': [7, 3, 1, 0],
+        'anchor_value': 1.5
+    },
 }
-
 
 def _lorentz_points(values: torch.Tensor) -> torch.Tensor:
     spatial = torch.stack([values, torch.zeros_like(values)], dim=1)
     return torch.cat([torch.sqrt(1.0 + spatial.square().sum(1, keepdim=True)), spatial], dim=1)
-
 
 class _DistributedSelectionHost(DistributedMixin, CurriculumMixin):
 
@@ -146,7 +149,6 @@ class _DistributedSelectionHost(DistributedMixin, CurriculumMixin):
 
     def _log_selection_health(self, candidates, selected, batch_size, *, entity_valid_mask):
         self.ineligible.append(int((entity_valid_mask & ~candidates.valid_mask).sum()))
-
 
 def _selection_worker(rank, world_size, init_file, manifest, queue):
     dist.init_process_group(
@@ -167,9 +169,8 @@ def _selection_worker(rank, world_size, init_file, manifest, queue):
             'anchor_code_id': torch.tensor([anchor]),
             'positive_code_id': torch.tensor([positive]),
             'positive_structural_distance': index.structural_distance[anchor, positive].reshape(1),
-            'positive_structural_relation_id': index.structural_relation_id[
-                anchor, positive
-            ].reshape(1),
+            'positive_structural_relation_id': index.structural_relation_id[anchor,
+                                                                            positive].reshape(1),
             'candidate_code_id': torch.tensor([pool]),
             'candidate_valid_mask': torch.ones((1, len(pool)), dtype=torch.bool),
             'candidate_source_slot': slots.unsqueeze(0),
@@ -182,9 +183,8 @@ def _selection_worker(rank, world_size, init_file, manifest, queue):
             'embedding': _lorentz_points(values),
             'gate_probs': torch.stack([values / 2.0, 1.0 - values / 2.0], dim=1),
         }
-        uid = torch.stack(
-            [torch.full_like(slots, rank), torch.zeros_like(slots), slots], dim=-1
-        ).unsqueeze(0)
+        uid = torch.stack([torch.full_like(slots, rank),
+                           torch.zeros_like(slots), slots], dim=-1).unsqueeze(0)
         host = _DistributedSelectionHost(index)
         selected = host._select_negative_batch(
             batch=batch,
@@ -212,7 +212,6 @@ def _selection_worker(rank, world_size, init_file, manifest, queue):
     finally:
         dist.destroy_process_group()
 
-
 @pytest.mark.integration
 def test_two_rank_selection_mines_the_global_pool_under_local_eligibility(
     tmp_path, hierarchy_descriptions_parquet
@@ -228,9 +227,7 @@ def test_two_rank_selection_mines_the_global_pool_under_local_eligibility(
     )
     init_file = tmp_path / 'gloo-init'
     queue = mp.get_context('spawn').SimpleQueue()
-    mp.spawn(
-        _selection_worker, args=(2, init_file, str(manifest), queue), nprocs=2, join=True
-    )
+    mp.spawn(_selection_worker, args=(2, init_file, str(manifest), queue), nprocs=2, join=True)
     rank0, rank1 = sorted(queue.get() for _ in range(2))
 
     # Rank 0: its exclusion by quota, then the two geometrically nearest eligible codes, both

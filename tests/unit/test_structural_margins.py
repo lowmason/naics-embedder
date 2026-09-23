@@ -25,7 +25,6 @@ def _margins(negative_distance, negative_relation, positive_distance, positive_r
         positive_relation_id=torch.tensor([positive_relation], dtype=torch.int16),
     )
 
-
 @pytest.mark.parametrize(
     ('negative', 'positive', 'expected'),
     [
@@ -45,7 +44,6 @@ def test_structural_margins_follow_the_generator_special_cases(negative, positiv
     assert relation_margin.item() == pytest.approx(expected[0])
     assert distance_margin.item() == pytest.approx(expected[1])
 
-
 @pytest.mark.parametrize(
     ('negative', 'positive'),
     [
@@ -64,7 +62,6 @@ def test_structurally_closer_or_equal_negatives_are_ineligible(negative, positiv
 
     assert eligible.tolist() == [False]
 
-
 def test_runtime_rule_equals_the_generator_rule_over_every_hierarchy_triple(
     tmp_path, hierarchy_descriptions_parquet
 ):
@@ -77,11 +74,8 @@ def test_runtime_rule_equals_the_generator_rule_over_every_hierarchy_triple(
     index = SupervisionIndex.from_bundle(load_validated_bundle(manifest))
     size = len(index.id_to_code)
     rows = [
-        (anchor, positive, negative)
-        for anchor in range(size)
-        for positive in range(size)
-        for negative in range(size)
-        if len({anchor, positive, negative}) == 3
+        (anchor, positive, negative) for anchor in range(size) for positive in range(size)
+        for negative in range(size) if len({anchor, positive, negative}) == 3
     ]
     anchor, positive, negative = (torch.tensor(column) for column in zip(*rows))
     distance = index.structural_distance
@@ -114,14 +108,14 @@ def test_runtime_rule_equals_the_generator_rule_over_every_hierarchy_triple(
     )
 
     generator = {
-        (row['anchor'], row['positive'], row['negative']):
-        (row['relation_margin'], row['distance_margin'])
+        (row['anchor'], row['positive'], row['negative']): (
+            row['relation_margin'], row['distance_margin']
+        )
         for row in kept.iter_rows(named=True)
     }
     runtime = {
         (a, p, n): (relation_margin[i].item(), distance_margin[i].item())
-        for i, (a, p, n) in enumerate(rows)
-        if eligible[i]
+        for i, (a, p, n) in enumerate(rows) if eligible[i]
     }
     assert 0 < len(generator) < len(rows)
     assert runtime.keys() == generator.keys()

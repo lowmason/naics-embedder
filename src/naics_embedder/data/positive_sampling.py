@@ -101,12 +101,9 @@ def _build_descendants(anchors: pl.DataFrame, taxonomy: pl.DataFrame) -> pl.Data
         # Return empty dataframe with correct schema
         return pl.DataFrame(
             schema={
-                'level':
-                pl.Int64,
-                'anchor':
-                pl.Utf8,
-                'positive':
-                pl.List(
+                'level': pl.Int64,
+                'anchor': pl.Utf8,
+                'positive': pl.List(
                     pl.Struct(
                         {
                             'stratum_id': pl.Int32,
@@ -115,8 +112,7 @@ def _build_descendants(anchors: pl.DataFrame, taxonomy: pl.DataFrame) -> pl.Data
                         }
                     )
                 ),
-                'num_positives':
-                pl.UInt32,
+                'num_positives': pl.UInt32,
             }
         )
 
@@ -292,10 +288,14 @@ def enumerate_positives(
     siblings = _normalize_schema(siblings)
 
     # Combine all strata
-    combined = pl.concat([descendants, ancestors, siblings],
-                         how='diagonal_relaxed').explode('positive').unnest('positive')
+    combined = pl.concat([descendants, ancestors, siblings], how='diagonal_relaxed').explode(
+        'positive'
+    ).unnest('positive')
     if codebook_supplied:
-        mapping = {code: int(code_id) for code, code_id in code_to_idx.items()}  # type: ignore[union-attr]
+        mapping = {
+            code: int(code_id)
+            for code, code_id in code_to_idx.items()
+        }  # type: ignore[union-attr]
         anchor_idx = pl.col('anchor').replace_strict(mapping, default=None).cast(pl.UInt32)
         positive_idx = pl.col('positive').replace_strict(mapping, default=None).cast(pl.UInt32)
     else:

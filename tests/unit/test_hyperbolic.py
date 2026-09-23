@@ -238,8 +238,8 @@ class TestLorentzDistance:
         dim = sample_lorentz_embeddings.shape[1]
 
         anchor = sample_lorentz_embeddings[:batch_size]  # (4, dim)
-        negatives = sample_lorentz_embeddings[:batch_size *
-                                              k_negatives].view(batch_size, k_negatives, dim)
+        negatives = sample_lorentz_embeddings[:batch_size
+                                              * k_negatives].view(batch_size, k_negatives, dim)
 
         distances = distance_fn.batched_forward(anchor, negatives)
 

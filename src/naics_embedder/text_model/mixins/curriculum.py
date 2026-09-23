@@ -62,9 +62,7 @@ def _proposal_from_local_uids(
         1,
         safe.unsqueeze(-1).expand(-1, -1, 3),
     )
-    matches = active_candidates.candidate_uid.unsqueeze(2).eq(
-        local_uids.unsqueeze(1)
-    ).all(dim=-1)
+    matches = active_candidates.candidate_uid.unsqueeze(2).eq(local_uids.unsqueeze(1)).all(dim=-1)
     expected = local_source_indices.ge(0)
     match_count = matches.sum(dim=1)
     if (match_count[expected] != 1).any():
@@ -185,8 +183,7 @@ class CurriculumMixin:
         raw_gate_probs = candidate_output.get('gate_probs')
         gate_probs = (
             None
-            if raw_gate_probs is None
-            else raw_gate_probs.reshape(batch_size, candidate_count, -1)
+            if raw_gate_probs is None else raw_gate_probs.reshape(batch_size, candidate_count, -1)
         )
         local_entities = CandidateEntityBatch(
             candidate_uid=candidate_uid,
@@ -196,12 +193,8 @@ class CurriculumMixin:
             valid_mask=batch['candidate_valid_mask'],
         )
 
-        enable_geometric = self.current_curriculum_flags.get(
-            'enable_hard_negative_mining', False
-        )
-        enable_router = self.current_curriculum_flags.get(
-            'enable_router_guided_sampling', False
-        )
+        enable_geometric = self.current_curriculum_flags.get('enable_hard_negative_mining', False)
+        enable_router = self.current_curriculum_flags.get('enable_router_guided_sampling', False)
         if self._should_use_global_batch(enable_geometric, enable_router):
             gathered = gather_candidate_entities(local_entities)
             entities = CandidateEntityBatch(
@@ -210,8 +203,9 @@ class CurriculumMixin:
                 embedding=gathered.embedding.expand(batch_size, -1, -1),
                 router_gate_probs=(
                     None
-                    if gathered.router_gate_probs is None
-                    else gathered.router_gate_probs.expand(batch_size, -1, -1)
+                    if gathered.router_gate_probs is None else gathered.router_gate_probs.expand(
+                        batch_size, -1, -1
+                    )
                 ),
                 valid_mask=gathered.valid_mask.expand(batch_size, -1),
             )

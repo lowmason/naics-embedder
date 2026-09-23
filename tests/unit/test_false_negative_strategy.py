@@ -13,7 +13,6 @@ def _no_exclusions(mask: torch.Tensor) -> dict:
         'valid_mask': torch.ones_like(mask),
     }
 
-
 def test_eliminate_strategy_leaves_mask_untouched():
     config = FalseNegativeConfig(strategy='eliminate')
     anchors = torch.randn(2, 4)
@@ -27,7 +26,6 @@ def test_eliminate_strategy_leaves_mask_untouched():
     assert updated_mask is not None
     assert torch.equal(updated_mask, mask)
     assert aux_loss is None
-
 
 def test_attract_strategy_returns_aux_loss_and_disables_mask():
     config = FalseNegativeConfig(strategy='attract', attraction_weight=0.5, attraction_metric='l2')
@@ -43,7 +41,6 @@ def test_attract_strategy_returns_aux_loss_and_disables_mask():
     assert aux_loss is not None
     assert aux_loss.item() >= 0
 
-
 # -------------------------------------------------------------------------------------------------
 # Explicit exclusions are never false negatives
 # -------------------------------------------------------------------------------------------------
@@ -56,7 +53,6 @@ def test_explicit_exclusion_overrides_pseudo_related_mask():
     effective = effective_false_negative_mask(pseudo_related, explicit, valid)
 
     assert effective.tolist() == [[False, True, False]]
-
 
 def test_attraction_uses_only_valid_non_exclusion_pairs():
     anchor = torch.tensor([[1.0, 0.0]])
@@ -77,7 +73,6 @@ def test_attraction_uses_only_valid_non_exclusion_pairs():
     assert updated_mask is None
     assert attraction is not None and torch.isfinite(attraction)
 
-
 def test_attraction_never_pulls_an_explicit_exclusion():
     anchor = torch.tensor([[1.0, 0.0]], requires_grad=True)
     negatives = torch.tensor([[[0.0, 1.0], [0.5, 0.5]]], requires_grad=True)
@@ -95,7 +90,6 @@ def test_attraction_never_pulls_an_explicit_exclusion():
     assert torch.count_nonzero(negatives.grad[0, 0]) == 0
     assert torch.count_nonzero(negatives.grad[0, 1]) > 0
 
-
 def test_hybrid_strategy_returns_the_exclusion_cleared_mask():
     mask = torch.tensor([[True, True]])
 
@@ -111,7 +105,6 @@ def test_hybrid_strategy_returns_the_exclusion_cleared_mask():
     assert updated_mask.tolist() == [[False, True]]
     assert attraction is not None
 
-
 def test_mask_shapes_must_align():
     with pytest.raises(ValueError, match='align'):
         apply_false_negative_strategy(
@@ -123,7 +116,6 @@ def test_mask_shapes_must_align():
             valid_mask=torch.tensor([[True, True]]),
         )
 
-
 # -------------------------------------------------------------------------------------------------
 # Contrastive denominator: exclusions stay repulsive, padding never contributes
 # -------------------------------------------------------------------------------------------------
@@ -131,7 +123,6 @@ def test_mask_shapes_must_align():
 def _lorentz_point(value: float) -> torch.Tensor:
     spatial = torch.tensor([value])
     return torch.cat([torch.sqrt(1.0 + spatial.square()), spatial])
-
 
 def test_explicit_pseudo_related_negative_remains_in_contrastive_denominator():
     loss_fn = HyperbolicInfoNCELoss(embedding_dim=1, temperature=0.5, curvature=1.0)
@@ -158,16 +149,14 @@ def test_explicit_pseudo_related_negative_remains_in_contrastive_denominator():
     assert torch.isfinite(near_loss) and torch.isfinite(far_loss)
     assert not torch.allclose(near_loss, far_loss)
 
-
 def test_invalid_padding_cannot_change_contrastive_loss_or_gradients():
     loss_fn = HyperbolicInfoNCELoss(embedding_dim=1, temperature=0.5, curvature=1.0)
 
     def run(invalid_value: float):
         anchor = _lorentz_point(0.0).unsqueeze(0).requires_grad_()
         positive = _lorentz_point(0.1).unsqueeze(0).requires_grad_()
-        negatives = torch.stack(
-            [_lorentz_point(0.8), _lorentz_point(invalid_value)]
-        ).unsqueeze(0).requires_grad_()
+        negatives = torch.stack([_lorentz_point(0.8),
+                                 _lorentz_point(invalid_value)]).unsqueeze(0).requires_grad_()
         loss = loss_fn(
             anchor,
             positive,

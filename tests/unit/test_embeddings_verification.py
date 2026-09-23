@@ -110,4 +110,3 @@ def test_verify_stage4_threshold_failure(tmp_path):
 
     assert result['passed'] is False
     assert result['checks']['local_improvement'] is False
-

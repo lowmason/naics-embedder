@@ -24,7 +24,6 @@ from naics_embedder.utils.config import StreamingConfig
 
 logger = logging.getLogger(__name__)
 
-
 def _bucket_candidates(
     candidates: List[Dict[str, Any]],
     distance_lookup: Dict[Tuple[str, str], float],
@@ -59,7 +58,6 @@ def _bucket_candidates(
 
     return easy, semi_hard, hard
 
-
 def _interpolate_ratios(
     epoch_progress: float,
     cfg: StreamingConfig,
@@ -81,7 +79,6 @@ def _interpolate_ratios(
     hard_ratio = 1.0 - easy_ratio - semi_ratio  # Derived to guarantee sum = 1.0
 
     return easy_ratio, semi_ratio, hard_ratio
-
 
 def _sample_from_bucket(
     bucket: List[Dict[str, Any]],
@@ -108,7 +105,6 @@ def _sample_from_bucket(
     sampled = [bucket[i] for i in indices]
 
     return sampled, n_want - n_take
-
 
 def select_by_difficulty(
     candidates: List[Dict[str, Any]],
@@ -185,17 +181,14 @@ def select_by_difficulty(
 
     return selected
 
-
 # -------------------------------------------------------------------------------------------------
 # Indexed difficulty proposals (repaired Stage-3)
 # -------------------------------------------------------------------------------------------------
 
 IndexedCandidate = Tuple[int, Dict[str, Any]]
 
-
-def _bucket_indexed_candidates(
-    indexed: List[IndexedCandidate],
-) -> Tuple[List[IndexedCandidate], List[IndexedCandidate], List[IndexedCandidate]]:
+def _bucket_indexed_candidates(indexed: List[IndexedCandidate], ) -> Tuple[
+    List[IndexedCandidate], List[IndexedCandidate], List[IndexedCandidate]]:
     '''Bucket (pool position, candidate) pairs by the candidate's own structural distance.'''
 
     easy: List[IndexedCandidate] = []
@@ -210,7 +203,6 @@ def _bucket_indexed_candidates(
         elif distance >= 3.0:
             hard.append(entry)
     return easy, semi_hard, hard
-
 
 def propose_by_difficulty(
     *,
@@ -237,8 +229,7 @@ def propose_by_difficulty(
     '''
 
     ordinary = [
-        (position, item)
-        for position, item in enumerate(candidates)
+        (position, item) for position, item in enumerate(candidates)
         if not item['negative_is_explicit_exclusion']
     ]
     if n_propose <= 0 or not ordinary:
@@ -265,4 +256,3 @@ def propose_by_difficulty(
         extra = rng.choice(remaining, size=min(shortfall, len(remaining)), replace=False)
         selected.extend(int(position) for position in extra.tolist())
     return selected
-

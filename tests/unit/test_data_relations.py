@@ -69,9 +69,7 @@ RELATION_IDS = {
 }
 
 def _relation(frame: pl.DataFrame, code_i: str, code_j: str) -> tuple[int, str]:
-    row = frame.filter(pl.col('code_i').eq(code_i) & pl.col('code_j').eq(code_j)).row(
-        0, named=True
-    )
+    row = frame.filter(pl.col('code_i').eq(code_i) & pl.col('code_j').eq(code_j)).row(0, named=True)
     return row['structural_relation_id'], row['structural_relation_name']
 
 @pytest.fixture

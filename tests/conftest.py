@@ -11,7 +11,7 @@ import polars as pl
 import pytest
 import torch
 
-pytest_plugins = ('tests.fixtures.supervision',)
+pytest_plugins = ('tests.fixtures.supervision', )
 
 # -------------------------------------------------------------------------------------------------
 # Test Configuration
@@ -102,8 +102,7 @@ def sample_naics_data(tmp_path):
     '''Create minimal NAICS data for testing.'''
 
     data = {
-        'index':
-        list(range(15)),
+        'index': list(range(15)),
         'code': [
             '31',
             '311',

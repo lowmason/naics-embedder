@@ -106,7 +106,9 @@ class TestHyperbolicInfoNCELoss:
         negatives = LorentzOps.exp_map_zero(negative_tan, c=1.0)
 
         # Compute losses
-        loss_close = _contrastive(loss_fn, anchor, close_positive, negatives, batch_size, k_negatives)
+        loss_close = _contrastive(
+            loss_fn, anchor, close_positive, negatives, batch_size, k_negatives
+        )
         loss_far = _contrastive(loss_fn, anchor, far_positive, negatives, batch_size, k_negatives)
 
         assert loss_close < loss_far, 'Loss should be lower for closer positives'
@@ -123,9 +125,7 @@ class TestHyperbolicInfoNCELoss:
         pseudo_related = torch.zeros(batch_size, k_negatives, dtype=torch.bool, device=test_device)
         pseudo_related[:, :4] = True  # Mask first 4 negatives for each anchor
 
-        loss_with_mask = _contrastive(
-            loss_fn, *sample_triplet, pseudo_related_mask=pseudo_related
-        )
+        loss_with_mask = _contrastive(loss_fn, *sample_triplet, pseudo_related_mask=pseudo_related)
 
         # Loss with masking should be different (typically lower)
         assert loss_with_mask != loss_no_mask
@@ -347,7 +347,6 @@ def test_structural_preference_gradient_corrects_an_inversion():
     assert learned.grad[0, 0] > 0
     assert learned.grad[0, 1] < 0
 
-
 def test_structural_preference_is_lower_for_correct_order():
     kwargs = {
         'structural_distances': torch.tensor([[1.0, 3.0]]),
@@ -367,7 +366,6 @@ def test_structural_preference_is_lower_for_correct_order():
     )
 
     assert correct < inverted
-
 
 @pytest.mark.parametrize(
     ('structural', 'explicit', 'valid', 'codes'),
@@ -401,7 +399,6 @@ def test_structural_preference_returns_differentiable_zero_when_fully_masked(
     assert loss.item() == 0.0
     assert torch.equal(learned.grad, torch.zeros_like(learned))
 
-
 def test_structural_preference_detaches_importance_weights():
     learned = torch.tensor([[3.0, 1.0]], requires_grad=True)
     weights = torch.tensor([[2.0]], requires_grad=True)
@@ -420,7 +417,6 @@ def test_structural_preference_detaches_importance_weights():
     loss.backward()
 
     assert weights.grad is None
-
 
 def test_structural_preference_is_invariant_to_joint_candidate_permutation():
     kwargs = {
@@ -449,7 +445,6 @@ def test_structural_preference_is_invariant_to_joint_candidate_permutation():
 
     assert torch.allclose(original, permuted)
 
-
 def test_structural_preference_normalizes_each_anchor_before_batch_mean():
     kwargs = {
         'learned_distances': torch.tensor([[3.0, 2.0, 1.0], [2.0, 1.0, 9.0]]),
@@ -468,16 +463,13 @@ def test_structural_preference_normalizes_each_anchor_before_batch_mean():
         individual.append(
             structural_preference_from_distances(
                 **{
-                    key: value[row : row + 1]
-                    if isinstance(value, torch.Tensor)
-                    else value
+                    key: value[row:row + 1] if isinstance(value, torch.Tensor) else value
                     for key, value in kwargs.items()
                 }
             )
         )
 
     assert torch.allclose(combined, torch.stack(individual).mean())
-
 
 def test_structural_preference_rejects_invalid_hyperparameters():
     kwargs = {
@@ -495,11 +487,9 @@ def test_structural_preference_rejects_invalid_hyperparameters():
     with pytest.raises(ValueError, match='margin'):
         structural_preference_from_distances(**kwargs, margin=-0.1, temperature=1.0)
 
-
 def _lorentz_row(values: list[float]) -> torch.Tensor:
     spatial = torch.tensor(values).unsqueeze(1)
     return torch.cat([torch.sqrt(1.0 + spatial.square()), spatial], dim=1)
-
 
 def test_structural_preference_module_never_compares_an_exclusion():
     # The positive (structure 0.5) and two negatives; the structurally closest negative is an

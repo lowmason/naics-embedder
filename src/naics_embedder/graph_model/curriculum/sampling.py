@@ -452,8 +452,9 @@ class CurriculumSampler:
         # Initialize samplers
         self._samplers: Dict[CurriculumPhase, NegativeSampler] = {
             CurriculumPhase.PHASE_1_ANCHORING: HubUniformSampler(config, node_scores, event_bus),
-            CurriculumPhase.PHASE_2_EXPANSION:
-            DifficultyWeightedSampler(config, node_scores, event_bus),
+            CurriculumPhase.PHASE_2_EXPANSION: DifficultyWeightedSampler(
+                config, node_scores, event_bus
+            ),
             CurriculumPhase.PHASE_3_DISCRIMINATION: HardNegativeSampler(config, event_bus),
             CurriculumPhase.PHASE_4_STABILIZATION: BlendedSampler(config, event_bus=event_bus),
         }

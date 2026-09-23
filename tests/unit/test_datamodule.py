@@ -56,14 +56,10 @@ def make_batch_item(make_embedding):
 
     def _create(anchor_code, positive_code, negative_codes, seq_len=128):
         return {
-            'anchor_code':
-            anchor_code,
-            'anchor_embedding':
-            make_embedding(seq_len),
-            'positive_code':
-            positive_code,
-            'positive_embedding':
-            make_embedding(seq_len),
+            'anchor_code': anchor_code,
+            'anchor_embedding': make_embedding(seq_len),
+            'positive_code': positive_code,
+            'positive_embedding': make_embedding(seq_len),
             'negatives': [
                 {
                     'negative_code': nc,
@@ -77,7 +73,6 @@ def make_batch_item(make_embedding):
         }
 
     return _create
-
 
 @pytest.fixture
 def make_repaired_batch_item():
@@ -105,8 +100,7 @@ def make_repaired_batch_item():
                 'negative_embedding': encoded(code_id),
                 'sampling_role_id': 2,
                 'sampling_provenance_id': 2,
-            }
-            for code_id in candidate_code_ids
+            } for code_id in candidate_code_ids
         ]
         difficulty_order = sorted(
             range(len(candidate_code_ids)),
@@ -127,7 +121,6 @@ def make_repaired_batch_item():
         }
 
     return make
-
 
 # -------------------------------------------------------------------------------------------------
 # Repaired candidate-pool collation
@@ -152,7 +145,6 @@ def test_collate_does_not_mutate_input_and_uses_invalid_rows(make_repaired_batch
     assert batch['candidate_inputs']['title']['attention_mask'][1].count_nonzero() == 0
     assert batch['candidate_inputs']['title']['attention_mask'][2].count_nonzero() == 0
 
-
 def test_collate_carries_every_candidate_field_in_one_order(make_repaired_batch_item):
     item = make_repaired_batch_item(candidate_code_ids=[103, 101, 102])
 
@@ -163,7 +155,6 @@ def test_collate_carries_every_candidate_field_in_one_order(make_repaired_batch_
     assert batch['difficulty_proposal_indices'].tolist() == [[1, 2, 0]]
     assert batch['positive_code_id'].tolist() == [104]
     assert batch['positive_structural_distance'].tolist() == [1.0]
-
 
 def test_repaired_collate_pads_proposals_and_flattens_candidates_row_major(
     make_repaired_batch_item,
@@ -180,11 +171,9 @@ def test_repaired_collate_pads_proposals_and_flattens_candidates_row_major(
     assert 'negatives' not in batch and 'negative_codes' not in batch
     assert 'all_candidates' not in batch
 
-
 def test_repaired_collate_rejects_legacy_items(make_batch_item):
     with pytest.raises(ValueError, match='candidate_pool'):
         collate_fn([make_batch_item('111', '11', ['222'])], supervision_mode='repaired')
-
 
 def test_repaired_collate_uses_the_smallest_selection_k(make_repaired_batch_item):
     first = make_repaired_batch_item(candidate_code_ids=[1, 2, 3])
@@ -194,14 +183,12 @@ def test_repaired_collate_uses_the_smallest_selection_k(make_repaired_batch_item
 
     assert batch['selection_k'] == 2
 
-
 def test_repaired_collate_requires_a_positive_selection_k(make_repaired_batch_item):
     item = make_repaired_batch_item(candidate_code_ids=[1, 2])
     item['selection_k'] = 0
 
     with pytest.raises(ValueError, match='selection_k'):
         collate_fn([item], supervision_mode='repaired')
-
 
 def test_legacy_collate_pads_without_mutating_input(make_batch_item):
     short = make_batch_item('111', '11', ['222'])
@@ -211,7 +198,6 @@ def test_legacy_collate_pads_without_mutating_input(make_batch_item):
 
     assert len(short['negatives']) == 1
     assert batch['negative_codes'] == [['222', '222'], ['666', '777']]
-
 
 def test_legacy_containment_ignores_all_candidates(make_batch_item):
     item = make_batch_item('111', '11', ['222', '333'])
@@ -229,11 +215,9 @@ def test_legacy_containment_ignores_all_candidates(make_batch_item):
     assert 'all_candidates' not in batch
     assert 'candidate_inputs' not in batch
 
-
 def test_collate_rejects_an_unknown_mode(make_repaired_batch_item):
     with pytest.raises(ValueError, match='supervision mode'):
         collate_fn([make_repaired_batch_item([1])], supervision_mode='legacy')
-
 
 # -------------------------------------------------------------------------------------------------
 # Bundle-backed repaired datasets
@@ -255,7 +239,6 @@ def hierarchy_bundle(tmp_path, hierarchy_descriptions_parquet):
     bundle = load_validated_bundle(manifest)
     return bundle, SupervisionIndex.from_bundle(bundle)
 
-
 @pytest.fixture
 def hierarchy_token_cache(hierarchy_descriptions):
     channels = ('title', 'description', 'excluded', 'examples')
@@ -273,7 +256,6 @@ def hierarchy_token_cache(hierarchy_descriptions):
         for index, code in hierarchy_descriptions.select('index', 'code').rows()
     }
 
-
 @pytest.fixture
 def repaired_streaming_config(hierarchy_descriptions_parquet):
     from naics_embedder.utils.config import StreamingConfig
@@ -285,7 +267,6 @@ def repaired_streaming_config(hierarchy_descriptions_parquet):
         n_negatives_phase1=3,
         seed=5,
     )
-
 
 def _assert_repaired_item(item, index, selection_k):
     codes = [candidate['negative_code_id'] for candidate in item['candidate_pool']]
@@ -308,7 +289,6 @@ def _assert_repaired_item(item, index, selection_k):
     assert item['positive_structural_distance'] == pytest.approx(
         float(index.structural_distance[item['anchor_code_id'], item['positive_code_id']])
     )
-
 
 def test_repaired_map_dataset_emits_one_bundle_backed_pool(
     hierarchy_bundle, hierarchy_token_cache, repaired_streaming_config
@@ -338,7 +318,6 @@ def test_repaired_map_dataset_emits_one_bundle_backed_pool(
         len(item['candidate_pool']) for item in items
     )
 
-
 def test_repaired_phase1_dataset_proposes_by_difficulty_over_the_pool(
     hierarchy_bundle, hierarchy_token_cache, repaired_streaming_config
 ):
@@ -364,10 +343,8 @@ def test_repaired_phase1_dataset_proposes_by_difficulty_over_the_pool(
         proposals = item['difficulty_proposal_indices']
         assert len(set(proposals)) == len(proposals)
         assert all(
-            not item['candidate_pool'][slot]['negative_is_explicit_exclusion']
-            for slot in proposals
+            not item['candidate_pool'][slot]['negative_is_explicit_exclusion'] for slot in proposals
         )
-
 
 def test_repaired_rows_never_use_an_exclusion_as_the_positive(
     hierarchy_bundle, repaired_streaming_config
@@ -385,7 +362,6 @@ def test_repaired_rows_never_use_an_exclusion_as_the_positive(
     for row in rows:
         assert row['positive_code_id'] not in index.exclusion_code_ids(row['anchor_code_id'])
         assert row['raw_candidates']
-
 
 def test_validation_pools_are_stable_across_training_epochs(
     tmp_path,
@@ -437,7 +413,6 @@ def test_validation_pools_are_stable_across_training_epochs(
     assert datamodule.train_dataset.epoch == 3
     assert datamodule.val_dataset.epoch == 0
     assert pools(datamodule.val_dataset) == before
-
 
 # -------------------------------------------------------------------------------------------------
 # Basic Collate Tests
@@ -510,14 +485,10 @@ def test_collate_padding_repeats_last_negative(make_batch_item, make_embedding):
     '''Padding should repeat the last negative.'''
     # Create item with single known negative
     item = {
-        'anchor_code':
-        '111',
-        'anchor_embedding':
-        make_embedding(),
-        'positive_code':
-        '11',
-        'positive_embedding':
-        make_embedding(),
+        'anchor_code': '111',
+        'anchor_embedding': make_embedding(),
+        'positive_code': '11',
+        'positive_embedding': make_embedding(),
         'negatives': [
             {
                 'negative_code': 'LAST',
@@ -531,14 +502,10 @@ def test_collate_padding_repeats_last_negative(make_batch_item, make_embedding):
 
     # Create item with multiple negatives to force padding
     item2 = {
-        'anchor_code':
-        '222',
-        'anchor_embedding':
-        make_embedding(),
-        'positive_code':
-        '22',
-        'positive_embedding':
-        make_embedding(),
+        'anchor_code': '222',
+        'anchor_embedding': make_embedding(),
+        'positive_code': '22',
+        'positive_embedding': make_embedding(),
         'negatives': [
             {
                 'negative_code': f'NEG{i}',
@@ -717,14 +684,13 @@ def mock_token_cache():
     def make_embedding(idx):
         return {
             ch: {
-                'input_ids': torch.randint(0, 1000, (128,)),
+                'input_ids': torch.randint(0, 1000, (128, )),
                 'attention_mask': torch.ones(128, dtype=torch.long),
             }
             for ch in channels
         }
 
     return {i: {'code': f'{i:06d}', **make_embedding(i)} for i in range(5)}
-
 
 @pytest.fixture
 def mock_triplet_rows():
@@ -740,11 +706,15 @@ def mock_triplet_rows():
             'stratum_wgt': 1.0,
             'negatives': [
                 {
-                    'negative_idx': 2, 'negative_code': '000002', 'relation_margin': 0,
+                    'negative_idx': 2,
+                    'negative_code': '000002',
+                    'relation_margin': 0,
                     'distance_margin': 4,
                 },
                 {
-                    'negative_idx': 3, 'negative_code': '000003', 'relation_margin': 0,
+                    'negative_idx': 3,
+                    'negative_code': '000003',
+                    'relation_margin': 0,
                     'distance_margin': 4,
                 },
             ],
@@ -759,19 +729,19 @@ def mock_triplet_rows():
             'stratum_wgt': 1.0,
             'negatives': [
                 {
-                    'negative_idx': 4, 'negative_code': '000004', 'relation_margin': 0,
+                    'negative_idx': 4,
+                    'negative_code': '000004',
+                    'relation_margin': 0,
                     'distance_margin': 4,
                 },
             ],
         },
     ]
 
-
 def test_map_dataset_len(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset should return correct length.'''
     dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
     assert len(dataset) == 2
-
 
 def test_map_dataset_getitem_returns_correct_structure(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset __getitem__ should return correctly structured item.'''
@@ -788,7 +758,6 @@ def test_map_dataset_getitem_returns_correct_structure(mock_triplet_rows, mock_t
     assert 'positive_embedding' in item
     assert len(item['negatives']) == 2
 
-
 def test_map_dataset_getitem_extracts_embeddings(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset should extract embeddings from token cache.'''
     dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
@@ -803,7 +772,6 @@ def test_map_dataset_getitem_extracts_embeddings(mock_triplet_rows, mock_token_c
         assert 'input_ids' in item['anchor_embedding'][channel]
         assert 'attention_mask' in item['anchor_embedding'][channel]
 
-
 def test_map_dataset_getitem_excludes_code_from_embedding(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset should exclude 'code' field from embeddings.'''
     dataset = NAICSMapDataset(mock_triplet_rows, mock_token_cache)
@@ -814,7 +782,6 @@ def test_map_dataset_getitem_excludes_code_from_embedding(mock_triplet_rows, moc
     assert 'code' not in item['anchor_embedding']
     assert 'code' not in item['positive_embedding']
 
-
 def test_map_dataset_getitem_returns_none_for_missing_anchor(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset should return None if anchor not in token cache.'''
     # Remove anchor idx 0 from token cache
@@ -824,7 +791,6 @@ def test_map_dataset_getitem_returns_none_for_missing_anchor(mock_triplet_rows, 
     item = dataset[0]
     assert item is None
 
-
 def test_map_dataset_getitem_returns_none_for_missing_positive(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset should return None if positive not in token cache.'''
     # Remove positive idx 1 from token cache
@@ -833,7 +799,6 @@ def test_map_dataset_getitem_returns_none_for_missing_positive(mock_triplet_rows
 
     item = dataset[0]
     assert item is None
-
 
 def test_map_dataset_getitem_filters_missing_negatives(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset should filter out negatives not in token cache.'''
@@ -848,7 +813,6 @@ def test_map_dataset_getitem_filters_missing_negatives(mock_triplet_rows, mock_t
     assert len(item['negatives']) == 1
     assert item['negatives'][0]['negative_idx'] == 3
 
-
 def test_map_dataset_getitem_returns_none_for_no_negatives(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset should return None if all negatives are missing.'''
     # Remove all negative indices from token cache
@@ -857,7 +821,6 @@ def test_map_dataset_getitem_returns_none_for_no_negatives(mock_triplet_rows, mo
 
     item = dataset[0]
     assert item is None
-
 
 def test_map_dataset_random_access(mock_triplet_rows, mock_token_cache):
     '''NAICSMapDataset should support random access (any order).'''
@@ -872,7 +835,6 @@ def test_map_dataset_random_access(mock_triplet_rows, mock_token_cache):
     assert item0['anchor_idx'] == 0
     assert item1['anchor_idx'] == 1
 
-
 def test_map_dataset_includes_sampling_metadata(mock_token_cache):
     '''NAICSMapDataset should include sampling_metadata if present.'''
     triplet_rows = [
@@ -883,11 +845,16 @@ def test_map_dataset_includes_sampling_metadata(mock_token_cache):
             'positive_code': '000001',
             'negatives': [
                 {
-                    'negative_idx': 2, 'negative_code': '000002', 'relation_margin': 0,
+                    'negative_idx': 2,
+                    'negative_code': '000002',
+                    'relation_margin': 0,
                     'distance_margin': 4,
                 },
             ],
-            'sampling_metadata': {'strategy': 'sans_static', 'sampled_near': 1},
+            'sampling_metadata': {
+                'strategy': 'sans_static',
+                'sampled_near': 1
+            },
         },
     ]
     dataset = NAICSMapDataset(triplet_rows, mock_token_cache)
@@ -915,14 +882,10 @@ def test_collate_different_sequence_lengths(make_embedding):
             for ch in channels
         }
         return {
-            'anchor_code':
-            '111',
-            'anchor_embedding':
-            embedding,
-            'positive_code':
-            '11',
-            'positive_embedding':
-            embedding,
+            'anchor_code': '111',
+            'anchor_embedding': embedding,
+            'positive_code': '11',
+            'positive_embedding': embedding,
             'negatives': [
                 {
                     'negative_code': '222',
@@ -1195,7 +1158,7 @@ class TestDataLoaderCreation:
         def make_embedding():
             return {
                 ch: {
-                    'input_ids': torch.randint(0, 1000, (128,)),
+                    'input_ids': torch.randint(0, 1000, (128, )),
                     'attention_mask': torch.ones(128, dtype=torch.long),
                 }
                 for ch in channels
@@ -1316,9 +1279,16 @@ class TestDataLoaderCreation:
         from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
 
         # Create minimal parquet file
-        desc_data = {'index': [0], 'code': ['311111'], 'level': [6], 'title': ['Test'],
-                     'description': [''], 'excluded': [''], 'examples': [''],
-                     'excluded_codes': [None]}
+        desc_data = {
+            'index': [0],
+            'code': ['311111'],
+            'level': [6],
+            'title': ['Test'],
+            'description': [''],
+            'excluded': [''],
+            'examples': [''],
+            'excluded_codes': [None]
+        }
         desc_df = pl.DataFrame(desc_data)
         desc_path = tmp_path / 'desc.parquet'
         desc_df.write_parquet(desc_path)
@@ -1333,7 +1303,6 @@ class TestDataLoaderCreation:
         with pytest.raises(RuntimeError, match='train_dataset is None'):
             datamodule.train_dataloader()
 
-
 # -------------------------------------------------------------------------------------------------
 # Train Epoch Propagation Tests
 # -------------------------------------------------------------------------------------------------
@@ -1347,11 +1316,9 @@ class _InjectedDataModule(NAICSDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         pass
 
-
 def _sampled_epochs(batch: Dict[str, Any]) -> Set[int]:
     '''Epochs that the items of a collated EpochRecordingDataset batch were sampled with.'''
     return {int(code) for code in batch['anchor_code']}
-
 
 class _EpochRecorder(pyl.LightningModule):
     '''Records, per trainer epoch, the dataset epochs that train and val batches were sampled at.'''
@@ -1372,7 +1339,6 @@ class _EpochRecorder(pyl.LightningModule):
     def configure_optimizers(self):
         return torch.optim.SGD(self.parameters(), lr=0.1)
 
-
 def _epoch_aware_datamodule(tmp_path, num_workers: int) -> NAICSDataModule:
     datamodule = _InjectedDataModule(
         descriptions_path=str(tmp_path / 'descriptions.parquet'),
@@ -1385,7 +1351,6 @@ def _epoch_aware_datamodule(tmp_path, num_workers: int) -> NAICSDataModule:
     datamodule.train_dataset = EpochRecordingDataset(n_items=16)
     datamodule.val_dataset = EpochRecordingDataset(n_items=16)
     return datamodule
-
 
 def _fit(tmp_path, datamodule, max_epochs, ckpt_path=None, extra_callbacks=(), **trainer_kwargs):
     '''Fit an _EpochRecorder with a real Trainer; returns (trainer, model).'''
@@ -1408,7 +1373,6 @@ def _fit(tmp_path, datamodule, max_epochs, ckpt_path=None, extra_callbacks=(), *
     trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
     return trainer, model
 
-
 @pytest.mark.unit
 def test_train_dataset_epoch_advances_under_real_trainer(tmp_path):
     '''Lightning never calls LightningDataModule epoch hooks; the epoch must still arrive.'''
@@ -1419,7 +1383,6 @@ def test_train_dataset_epoch_advances_under_real_trainer(tmp_path):
     assert datamodule.train_dataset.epoch == 1
     assert model.train_epochs == {0: {0}, 1: {1}}
 
-
 @pytest.mark.unit
 def test_persistent_workers_sample_with_current_epoch(tmp_path):
     '''Persistent workers keep their own dataset copies; each new epoch must still reach them.'''
@@ -1429,7 +1392,6 @@ def test_persistent_workers_sample_with_current_epoch(tmp_path):
 
     assert trainer.train_dataloader.persistent_workers
     assert model.train_epochs == {0: {0}, 1: {1}, 2: {2}}
-
 
 @pytest.mark.unit
 def test_validation_pools_stay_at_epoch_zero(tmp_path):
@@ -1442,7 +1404,6 @@ def test_validation_pools_stay_at_epoch_zero(tmp_path):
     assert model.val_epochs == {0: {0}, 1: {0}, 2: {0}}
     assert datamodule.val_dataset.epoch == 0
 
-
 @pytest.mark.unit
 def test_resume_with_workers_samples_with_restored_epoch(tmp_path):
     '''Workers spawn and prefetch in setup_data(), before any epoch hook of the resumed run.'''
@@ -1454,7 +1415,6 @@ def test_resume_with_workers_samples_with_restored_epoch(tmp_path):
     _, model = _fit(tmp_path, datamodule, max_epochs=3, ckpt_path=ckpt_path)
 
     assert model.train_epochs == {2: {2}}
-
 
 @pytest.mark.unit
 def test_mid_epoch_resume_samples_with_restored_epoch(tmp_path):

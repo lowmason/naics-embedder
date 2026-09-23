@@ -23,7 +23,6 @@ def descriptions_fixture() -> pl.DataFrame:
         }
     )
 
-
 @pytest.fixture
 def structural_frames_fixture() -> tuple[pl.DataFrame, pl.DataFrame]:
     pair_columns = {
@@ -56,20 +55,18 @@ def structural_frames_fixture() -> tuple[pl.DataFrame, pl.DataFrame]:
     }
     distances = pl.DataFrame(
         pair_columns
-        | {
-            'structural_distance': [
-                0.5,
-                2.0,
-                99.0,
-                99.0,
-                3.0,
-                99.0,
-                99.0,
-                99.0,
-                99.0,
-                99.0,
-            ]
-        }
+        | {'structural_distance': [
+            0.5,
+            2.0,
+            99.0,
+            99.0,
+            3.0,
+            99.0,
+            99.0,
+            99.0,
+            99.0,
+            99.0,
+        ]}
     )
     relations = pl.DataFrame(
         pair_columns
@@ -90,7 +87,6 @@ def structural_frames_fixture() -> tuple[pl.DataFrame, pl.DataFrame]:
         }
     )
     return distances, relations
-
 
 @pytest.fixture
 def pair_facts_fixture() -> pl.DataFrame:
@@ -159,7 +155,6 @@ def pair_facts_fixture() -> pl.DataFrame:
         }
     )
 
-
 @pytest.fixture
 def generated_bundle(tmp_path, descriptions_fixture, pair_facts_fixture):
     return generate_supervision_bundle_from_frames(
@@ -171,14 +166,12 @@ def generated_bundle(tmp_path, descriptions_fixture, pair_facts_fixture):
         pair_facts=pair_facts_fixture,
     )
 
-
 @pytest.fixture
 def validated_bundle(generated_bundle):
     return load_validated_bundle(
         generated_bundle,
         expected_contract='stage3-supervision-v1',
     )
-
 
 # -------------------------------------------------------------------------------------------------
 # Candidate batches: every aligned field carries a distinguishable per-slot ordinal (1, 2, 3, ...)
@@ -191,9 +184,8 @@ def _negative_candidate_batch(
     count = len(code_ids)
     shape = (1, count)
     slots = torch.arange(count, dtype=torch.long)
-    candidate_uid = torch.stack(
-        [torch.zeros_like(slots), torch.zeros_like(slots), slots], dim=-1
-    ).unsqueeze(0)
+    candidate_uid = torch.stack([torch.zeros_like(slots),
+                                 torch.zeros_like(slots), slots], dim=-1).unsqueeze(0)
     ordinal = torch.arange(1, count + 1, dtype=torch.float64).unsqueeze(0)
     anchor_excludes = torch.tensor([explicit_exclusions], dtype=torch.bool)
     candidate_excludes = torch.zeros(shape, dtype=torch.bool)
@@ -213,18 +205,14 @@ def _negative_candidate_batch(
         sampling_provenance_id=torch.full(shape, 2, dtype=torch.int8),
         relation_margin=ordinal.clone(),
         distance_margin=ordinal.clone(),
-        router_gate_probs=torch.stack(
-            [ordinal / 10.0, 1.0 - ordinal / 10.0], dim=-1
-        ),
+        router_gate_probs=torch.stack([ordinal / 10.0, 1.0 - ordinal / 10.0], dim=-1),
         valid_mask=torch.ones(shape, dtype=torch.bool),
         runtime_fields={'difficulty': ordinal * 10.0},
     )
 
-
 @pytest.fixture
 def candidate_batch() -> NegativeCandidateBatch:
     return _negative_candidate_batch([101, 102, 103], [False, False, False])
-
 
 @pytest.fixture
 def candidate_batch_with_exclusions() -> NegativeCandidateBatch:
@@ -233,11 +221,9 @@ def candidate_batch_with_exclusions() -> NegativeCandidateBatch:
         [True, True, True, False, False, False],
     )
 
-
 @pytest.fixture
 def candidate_batch_with_duplicate_code() -> NegativeCandidateBatch:
     return _negative_candidate_batch([101, 101, 102], [False, False, False])
-
 
 # -------------------------------------------------------------------------------------------------
 # Production-shaped hierarchy
@@ -270,7 +256,6 @@ HIERARCHY_CODES = (
     '441111',
 )
 
-
 @pytest.fixture
 def hierarchy_descriptions() -> pl.DataFrame:
     excluded_codes = {
@@ -291,7 +276,6 @@ def hierarchy_descriptions() -> pl.DataFrame:
             'excluded_codes': pl.List(pl.Utf8),
         },
     )
-
 
 @pytest.fixture
 def hierarchy_descriptions_parquet(tmp_path, hierarchy_descriptions) -> str:
