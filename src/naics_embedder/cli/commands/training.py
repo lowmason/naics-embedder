@@ -58,10 +58,6 @@ from naics_embedder.utils.validation import (
     require_valid_supervision_bundle,
     validate_training_config,
 )
-from naics_embedder.utils.warnings import configure_warnings
-
-# Apply centralized warning configuration
-configure_warnings()
 
 console = Console()
 logger = logging.getLogger(__name__)

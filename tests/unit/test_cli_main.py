@@ -32,9 +32,8 @@ class TestCliSetup:
 
     def test_app_has_help_text(self):
         '''Test that app has help text configured.'''
-        # The help text is set via Panel.fit() which returns a renderable
-        # We just verify the app was created successfully
-        assert app is not None
+        # Must be a plain string: typer >= 0.21.2 calls str methods on help, so a Rich Panel crashes
+        assert isinstance(app.info.help, str)
 
 # -------------------------------------------------------------------------------------------------
 # Tests for CLI commands registration
