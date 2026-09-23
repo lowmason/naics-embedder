@@ -179,7 +179,10 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
         descriptions_1
         .with_columns(
             description=pl.col('description')
-            .str.split('\n\n')
+            .str.replace_all('\r\n', '\n')
+            .str.replace_all('\r', '\n')
+            .str.replace_all('\n\n', '\n')
+            .str.split('\n')
             .list.eval(pl.element().filter(pl.element().str.len_chars() > 0))
         )
         .explode('description')
