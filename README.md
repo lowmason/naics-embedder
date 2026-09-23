@@ -174,7 +174,13 @@ uv run naics-embedder tools verify-stage4 \
   --relations ./data/naics_relations.parquet
 ```
 
-The verifier reports cophenetic correlation, NDCG\@K, and parent-retrieval accuracy deltas and fails when degradation exceeds the configurable thresholds (`--max-cophenetic-drop`, `--max-ndcg-drop`, `--min-local-improvement`, `--parent-top-k`). Integrate this command into your pipeline to guarantee that Stage 4 only ships when it demonstrably preserves the global NAICS hierarchy.
+The verifier reports cophenetic correlation, NDCG\@K, parent-retrieval accuracy, and
+`structural_spearman_v1` pre/post/delta values at fixed curvature `1.0`. Only cophenetic, NDCG,
+and local parent-retrieval checks determine pass/fail; structural Spearman is report-only, with
+no threshold option. Undefined values or deltas display as `N/A` and serialize as JSON `null`.
+Definition, status, reason, and pair counts live under
+`metric_metadata['structural_spearman_v1']`; see the
+[verification output contract](docs/hgcn_training.md#9-prepost-verification-workflow).
 
 ------------------------------------------------------------------------
 

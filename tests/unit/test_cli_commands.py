@@ -3,6 +3,7 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
+from naics_embedder.metrics import StructuralMetricInputError
 
 @pytest.fixture
 def runner():
@@ -141,3 +142,55 @@ def test_verify_stage4_failure_sets_exit_code(monkeypatch, runner):
 
     assert result.exit_code == 1
     assert 'Verification failed' in result.output or 'failed thresholds' in result.output
+
+@pytest.mark.unit
+@pytest.mark.parametrize('undefined', [False, True])
+def test_verify_stage4_formats_versioned_spearman(monkeypatch, runner, undefined):
+    key = 'structural_spearman_v1'
+    value = None if undefined else 0.87831006565368
+    delta = None if undefined else 0.125
+    payload = {
+        'pre': {
+            key: value
+        },
+        'post': {
+            key: value
+        },
+        'delta': {
+            key: delta
+        },
+        'checks': {
+            'cophenetic': True,
+            'ndcg': True,
+            'local_improvement': True
+        },
+        'passed': True,
+    }
+    monkeypatch.setattr(tools_cli, 'verify_stage4', lambda *_, **__: payload)
+    result = runner.invoke(tools_cli.app, ['verify-stage4'])
+    assert result.exit_code == 0, result.output
+    if undefined:
+        assert result.output.count(f'{key}: N/A') == 3
+    else:
+        assert result.output.count(f'{key}: 0.8783') == 2
+        assert f'{key}: +0.1250' in result.output
+    assert 'spearman_correlation' not in result.output
+
+@pytest.mark.unit
+def test_verify_stage4_input_error_is_fatal(monkeypatch, runner):
+
+    def invalid(*_args, **_kwargs):
+        raise StructuralMetricInputError('structural-spearman-v1: invalid tree_distances')
+
+    monkeypatch.setattr(tools_cli, 'verify_stage4', invalid)
+    result = runner.invoke(tools_cli.app, ['verify-stage4'])
+    assert result.exit_code == 1
+    assert 'Verification failed' in result.output
+    assert 'invalid tree_distances' in result.output
+
+@pytest.mark.unit
+def test_verify_stage4_has_no_spearman_threshold_option(runner):
+    result = runner.invoke(tools_cli.app, ['verify-stage4', '--help'])
+    assert result.exit_code == 0
+    assert '--max-spearman-drop' not in result.output
+    assert '--min-spearman' not in result.output

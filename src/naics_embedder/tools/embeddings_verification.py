@@ -10,6 +10,11 @@ import torch
 
 from naics_embedder.graph_model.hgcn import load_embeddings
 from naics_embedder.metrics import EmbeddingEvaluator, HierarchyMetrics
+from naics_embedder.metrics.structural_spearman import (
+    STRUCTURAL_SPEARMAN_DEFINITION,
+    STRUCTURAL_SPEARMAN_KEY,
+    StructuralSpearmanResult,
+)
 from naics_embedder.utils.distance_matrix import load_distance_submatrix
 
 logger = logging.getLogger(__name__)
@@ -71,12 +76,13 @@ def _compute_global_metrics(
     evaluator: EmbeddingEvaluator,
     hierarchy: HierarchyMetrics,
     top_k: int,
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], StructuralSpearmanResult]:
     with torch.no_grad():
         emb_dists = evaluator.compute_pairwise_distances(
             embeddings, metric='lorentz', curvature=1.0
         )
 
+    spearman = hierarchy.spearman_correlation(emb_dists, tree_distances)
     cophenetic = hierarchy.cophenetic_correlation(emb_dists, tree_distances)
     ndcg = hierarchy.ndcg_ranking(emb_dists, tree_distances, k_values=[ndcg_k])
     parent_retrieval = _parent_retrieval_accuracy(emb_dists, parent_pairs, top_k=top_k)
@@ -86,7 +92,7 @@ def _compute_global_metrics(
         f'ndcg@{ndcg_k}': _to_float(ndcg[f'ndcg@{ndcg_k}']),
         f'parent_retrieval@{top_k}': parent_retrieval,
     }
-    return metrics
+    return metrics, spearman
 
 def _load_embeddings_with_codes(parquet_path: Path,
                                 ) -> Tuple[torch.Tensor, List[str], pl.DataFrame]:
@@ -139,7 +145,7 @@ def verify_stage4(
     evaluator = EmbeddingEvaluator()
     hierarchy = HierarchyMetrics()
 
-    pre_metrics = _compute_global_metrics(
+    pre_metrics, pre_spearman = _compute_global_metrics(
         emb_stage3,
         tree_distances,
         config.ndcg_k,
@@ -148,7 +154,7 @@ def verify_stage4(
         hierarchy,
         config.parent_top_k,
     )
-    post_metrics = _compute_global_metrics(
+    post_metrics, post_spearman = _compute_global_metrics(
         emb_stage4,
         tree_distances,
         config.ndcg_k,
@@ -174,10 +180,43 @@ def verify_stage4(
         'local_improvement': delta[parent_key] >= config.min_local_improvement,
     }
 
+    pre_value = (
+        _to_float(pre_spearman['correlation']) if pre_spearman['status'] == 'defined' else None
+    )
+    post_value = (
+        _to_float(post_spearman['correlation']) if post_spearman['status'] == 'defined' else None
+    )
+    spearman_delta = (
+        post_value - pre_value if pre_value is not None and post_value is not None else None
+    )
+    spearman_metadata = {
+        'definition': STRUCTURAL_SPEARMAN_DEFINITION,
+        'pre': {
+            'status': pre_spearman['status'],
+            'reason': pre_spearman['reason'],
+            'n_pairs': pre_spearman['n_pairs'],
+            'n_total': pre_spearman['n_total'],
+        },
+        'post': {
+            'status': post_spearman['status'],
+            'reason': post_spearman['reason'],
+            'n_pairs': post_spearman['n_pairs'],
+            'n_total': post_spearman['n_total'],
+        },
+    }
     return {
-        'pre': pre_metrics,
-        'post': post_metrics,
-        'delta': delta,
+        'pre': {
+            **pre_metrics, STRUCTURAL_SPEARMAN_KEY: pre_value
+        },
+        'post': {
+            **post_metrics, STRUCTURAL_SPEARMAN_KEY: post_value
+        },
+        'delta': {
+            **delta, STRUCTURAL_SPEARMAN_KEY: spearman_delta
+        },
+        'metric_metadata': {
+            STRUCTURAL_SPEARMAN_KEY: spearman_metadata
+        },
         'checks': checks,
         'thresholds': asdict(config),
         'passed': all(checks.values()),

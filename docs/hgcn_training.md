@@ -126,3 +126,38 @@ Additional options let you override the distance matrix, relations parquet, or t
 | `--parent-top-k` | Size of the neighborhood used for parent retrieval (default `1`). |
 
 The command prints pre/post metrics, deltas, and PASS/FAIL indicators for each threshold. Integrate it into CI to prevent regressions before shipping updated embeddings.
+
+### Structural Spearman reporting
+
+The verifier adds `structural_spearman_v1` to `pre`, `post`, and `delta`. A delta is computed
+only if both phase values are defined. Otherwise it is `null` in the Python/JSON report and
+`N/A` in the CLI. Definition, statuses, reasons, and pair counts are recorded separately:
+
+```json
+{
+  "pre": {"structural_spearman_v1": 0.8783101},
+  "post": {"structural_spearman_v1": null},
+  "delta": {"structural_spearman_v1": null},
+  "metric_metadata": {
+    "structural_spearman_v1": {
+      "definition": "structural-spearman-v1",
+      "pre": {
+        "status": "defined", "reason": null, "n_pairs": 6, "n_total": 6
+      },
+      "post": {
+        "status": "undefined", "reason": "constant_prediction", "n_pairs": 6, "n_total": 6
+      }
+    }
+  }
+}
+```
+
+This excerpt omits the existing non-Spearman metrics, checks, thresholds, pass/fail flag, and
+code list; those remain in the full report. Structural Spearman does not add a fourth check.
+Only cophenetic degradation, NDCG degradation, and local parent-retrieval improvement govern
+acceptance, using the same options and defaults as before.
+
+Malformed inputs raise `StructuralMetricInputError`; the CLI prints the failure and exits
+nonzero instead of printing a partial success report. Undefined correlation alone is
+non-fatal. Both phase evaluations stay explicitly fixed at curvature `1.0`, regardless of
+training configuration. The rank correction does not fix non-unit-curvature geometry.
