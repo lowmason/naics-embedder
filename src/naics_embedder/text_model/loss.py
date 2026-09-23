@@ -7,10 +7,38 @@ from typing import Callable, Dict, List, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
+from naics_embedder.supervision.candidates import SelectedNegativeBatch
 from naics_embedder.text_model.hyperbolic import LorentzDistance
 
 logger = logging.getLogger(__name__)
+
+# -------------------------------------------------------------------------------------------------
+# False-negative eligibility
+# -------------------------------------------------------------------------------------------------
+
+def effective_false_negative_mask(
+    pseudo_related: Optional[torch.Tensor],
+    is_explicit_exclusion: torch.Tensor,
+    valid_mask: torch.Tensor,
+) -> Optional[torch.Tensor]:
+    '''
+    Pseudo-related candidates that may be masked or attracted as false negatives.
+
+    ``effective = pseudo_related AND NOT is_explicit_exclusion AND valid``: an explicit exclusion
+    is always a repulsive negative, and invalid padding is never a candidate.
+
+    Raises:
+        ValueError: If the masks are not aligned on ``[batch, candidate]``.
+    '''
+    if is_explicit_exclusion.shape != valid_mask.shape:
+        raise ValueError('explicit-exclusion and validity masks must align')
+    if pseudo_related is None:
+        return None
+    if pseudo_related.shape != valid_mask.shape:
+        raise ValueError('pseudo-related mask must align with selected candidates')
+    return pseudo_related & ~is_explicit_exclusion & valid_mask
 
 # -------------------------------------------------------------------------------------------------
 # Hyperbolic InfoNCE Loss
@@ -38,46 +66,38 @@ class HyperbolicInfoNCELoss(nn.Module):
         anchor_emb: torch.Tensor,
         positive_emb: torch.Tensor,
         negative_embs: torch.Tensor,
-        batch_size: int,
-        k_negatives: int,
-        false_negative_mask: Optional[torch.Tensor] = None,
+        *,
+        valid_mask: torch.Tensor,
+        is_explicit_exclusion: torch.Tensor,
+        pseudo_related_mask: Optional[torch.Tensor] = None,
         adaptive_margins: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         '''
-        Compute Hyperbolic InfoNCE loss.
+        Compute Hyperbolic InfoNCE loss over selected negatives.
+
+        Explicit exclusions always stay in the contrastive denominator; only eligible pseudo-related
+        candidates (never exclusions) are removed; invalid padding never contributes to the loss or
+        its gradients. Anchors without any eligible negative are skipped.
 
         Args:
             anchor_emb: Anchor hyperbolic embeddings (batch_size, embedding_dim+1)
-            positive_emb: Positive hyperbolic embeddings
-                (batch_size, embedding_dim+1)
-            negative_embs: Negative hyperbolic embeddings
-                (batch_size * k_negatives, embedding_dim+1)
-            batch_size: Batch size
-            k_negatives: Number of negatives per anchor
-            false_negative_mask: Optional mask for false negatives (batch_size, k_negatives)
+            positive_emb: Positive hyperbolic embeddings (batch_size, embedding_dim+1)
+            negative_embs: Selected negative embeddings (batch_size, selected, embedding_dim+1)
+            valid_mask: Negative validity (batch_size, selected)
+            is_explicit_exclusion: Explicit-exclusion flags (batch_size, selected)
+            pseudo_related_mask: Optional model-derived relatedness (batch_size, selected)
             adaptive_margins: Optional per-anchor adaptive margins (batch_size,)
 
         Returns:
             Loss scalar
         '''
-        # Embeddings are already in hyperbolic space (Lorentz model)
-        anchor_hyp = anchor_emb
-        positive_hyp = positive_emb
-        negative_hyp = negative_embs
+        if negative_embs.ndim != 3:
+            raise ValueError('negative embeddings must have shape [batch, selected, dim]')
+        if valid_mask.shape != negative_embs.shape[:2]:
+            raise ValueError('valid mask must align with negative embeddings')
 
-        pos_distances = self.lorentz_distance(anchor_hyp, positive_hyp)
-
-        # Compute negative distances using batched operations
-        # Reshape negative_hyp from (batch_size * k_negatives, embedding_dim+1)
-        # to (batch_size, k_negatives, embedding_dim+1)
-        negative_hyp_reshaped = negative_hyp.view(batch_size, k_negatives, -1)
-
-        # Use batched forward to compute all anchor-negative distances at once
-        # anchor_hyp: (batch_size, embedding_dim+1) -> (batch_size, 1, embedding_dim+1)
-        #   via broadcasting
-        # negative_hyp_reshaped: (batch_size, k_negatives, embedding_dim+1)
-        # Result: (batch_size, k_negatives)
-        neg_distances = self.lorentz_distance.batched_forward(anchor_hyp, negative_hyp_reshaped)
+        pos_distances = self.lorentz_distance(anchor_emb, positive_emb)
+        neg_distances = self.lorentz_distance.batched_forward(anchor_emb, negative_embs)
 
         if adaptive_margins is not None:
             # Subtract per-anchor margin from negative distances (triplet-style)
@@ -86,26 +106,26 @@ class HyperbolicInfoNCELoss(nn.Module):
         pos_similarities = -pos_distances / self.temperature
         neg_similarities = -neg_distances / self.temperature
 
-        if false_negative_mask is not None:
-            # Retain false negative masking (-inf on known false negatives)
-            neg_similarities = neg_similarities.masked_fill(
-                false_negative_mask, -torch.finfo(neg_similarities.dtype).max
-            )
+        effective_false_negative = effective_false_negative_mask(
+            pseudo_related_mask,
+            is_explicit_exclusion,
+            valid_mask,
+        )
+        eligible = valid_mask
+        if effective_false_negative is not None:
+            eligible = eligible & ~effective_false_negative
+        neg_similarities = neg_similarities.masked_fill(~eligible, -torch.inf)
+        has_negative = eligible.any(dim=1)
+        if not has_negative.any():
+            return (anchor_emb.sum() + positive_emb.sum() + negative_embs.sum()) * 0.0
 
-        # Decoupled Contrastive Learning (DCL) loss
-        # pos_term = -pos_sim
-        # neg_term = logsumexp(neg_sims)
-        # loss = (pos_term + neg_term).mean()
-        pos_term = -pos_similarities  # (batch_size,)
-
-        # Compute logsumexp over negatives: log(sum(exp(neg_sims)))
-        # Use logsumexp for numerical stability
-        neg_term = torch.logsumexp(neg_similarities, dim=1)  # (batch_size,)
-
-        # DCL loss: pos_term + neg_term
-        loss = (pos_term + neg_term).mean()
-
-        return loss
+        # Decoupled Contrastive Learning (DCL) loss: -pos_sim + logsumexp(neg_sims). Rows without
+        # an eligible negative are excluded *before* logsumexp so an all -inf row cannot produce a
+        # NaN gradient.
+        per_anchor = -pos_similarities[has_negative] + torch.logsumexp(
+            neg_similarities[has_negative], dim=1
+        )
+        return per_anchor.mean()
 
 # -------------------------------------------------------------------------------------------------
 # Hierarchy Preservation Loss
@@ -207,395 +227,174 @@ class HierarchyPreservationLoss(nn.Module):
         return self.weight * mse_loss
 
 # -------------------------------------------------------------------------------------------------
-# Rank Order Preservation Loss
+# Structural Preference Loss (replaces LambdaRank)
 # -------------------------------------------------------------------------------------------------
 
-class RankOrderPreservationLoss(nn.Module):
+def structural_preference_from_distances(
+    *,
+    learned_distances: torch.Tensor,
+    structural_distances: torch.Tensor,
+    candidate_code_ids: torch.Tensor,
+    anchor_code_ids: torch.Tensor,
+    is_explicit_exclusion: torch.Tensor,
+    valid_mask: torch.Tensor,
+    margin: float,
+    temperature: float,
+    tie_tolerance: float,
+    pair_weights: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     '''
-    Loss component that explicitly optimizes for rank order preservation (Spearman correlation).
+    Pairwise structural-preference loss with a correction-direction gradient.
 
-    This loss penalizes violations of rank order: if code A is closer to code B than to code C
-    in the tree (ground truth), then the embedding distance A-B should be smaller than A-C.
+    For every unordered pair of eligible candidates with unequal structural distance, orient the
+    pair so candidate ``i`` is structurally closer than ``j`` and penalize
+    ``softplus((d_i - d_j + margin) / temperature)`` on learned distances. The gradient is
+    positive for ``d_i`` and negative for ``d_j``, so descent pulls the structurally closer
+    candidate in and pushes the farther one out.
 
-    This directly optimizes for Spearman correlation by ensuring relative distance ordering
-    matches ground truth ordering.
+    Explicit exclusions, invalid padding, self-candidates, and repeated code identities never
+    participate; structural ties within ``tie_tolerance`` are ignored; optional importance weights
+    are detached. Comparisons are normalized per anchor, then averaged over anchors with at least
+    one comparison; with none, a finite differentiable zero is returned.
+
+    Args:
+        learned_distances: ``[batch, candidate]`` learned anchor-candidate distances
+        structural_distances: ``[batch, candidate]`` raw structural distances
+        candidate_code_ids: ``[batch, candidate]`` canonical code IDs
+        anchor_code_ids: ``[batch]`` anchor code IDs
+        is_explicit_exclusion: ``[batch, candidate]`` explicit-exclusion flags
+        valid_mask: ``[batch, candidate]`` validity
+        margin: Nonnegative ordering margin
+        temperature: Positive softplus temperature
+        tie_tolerance: Nonnegative structural tie tolerance
+        pair_weights: Optional ``[batch, pairs]`` importance weights (upper-triangle order)
     '''
-
-    def __init__(
-        self,
-        tree_distances: torch.Tensor,
-        code_to_idx: Dict[str, int],
-        weight: float = 0.1,
-        min_distance: float = 0.1,
-        margin: float = 0.1,
-    ):
-        super().__init__()
-        # Register as buffer so it moves with model to correct device
-        self.register_buffer('tree_distances', tree_distances)
-        self.code_to_idx = code_to_idx
-        self.weight = weight
-        self.min_distance = min_distance
-        self.margin = margin  # Margin for ranking loss
-
-    def forward(
-        self,
-        embeddings: torch.Tensor,
-        codes: List[str],
-        lorentz_distance_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        '''
-        Compute rank order preservation loss.
-
-        For each anchor code, we check if the relative ordering of distances to other codes
-        matches the ground truth ordering. We penalize violations using a margin-based ranking loss.
-
-        Args:
-            embeddings: Hyperbolic embeddings (N, D+1)
-            codes: List of NAICS codes corresponding to embeddings
-            lorentz_distance_fn: Function to compute Lorentz distances
-
-        Returns:
-            Loss scalar
-        '''
-        # Get indices for codes that exist in ground truth
-        valid_indices = []
-        valid_codes = []
-        for i, code in enumerate(codes):
-            if code in self.code_to_idx:
-                valid_indices.append(i)
-                valid_codes.append(code)
-
-        if len(valid_indices) < 3:  # Need at least 3 codes for ranking
-            return torch.tensor(0.0, device=embeddings.device)
-
-        # Get embeddings for valid codes
-        valid_embeddings = embeddings[valid_indices]
-        N = valid_embeddings.shape[0]
-
-        # Get ground truth distance matrix indices
-        gt_indices = torch.tensor(
-            [self.code_to_idx[code] for code in valid_codes], device=embeddings.device
+    if temperature <= 0:
+        raise ValueError('structural preference temperature must be positive')
+    if margin < 0 or tie_tolerance < 0:
+        raise ValueError('structural preference margin and tie tolerance must be nonnegative')
+    shape = learned_distances.shape
+    aligned = (
+        structural_distances,
+        candidate_code_ids,
+        is_explicit_exclusion,
+        valid_mask,
+    )
+    if learned_distances.ndim != 2 or any(value.shape != shape for value in aligned):
+        raise ValueError(
+            'structural preference candidate tensors must share [batch, candidate] shape'
         )
+    if anchor_code_ids.shape != (shape[0], ):
+        raise ValueError('structural preference requires one anchor code ID per row')
 
-        # Get ground truth distances for these codes
-        gt_dists = self.tree_distances[gt_indices][:, gt_indices]  # type: ignore[index]
+    count = shape[1]
+    left, right = torch.triu_indices(count, count, offset=1, device=learned_distances.device)
+    learned_left = learned_distances[:, left]
+    learned_right = learned_distances[:, right]
+    structural_delta = structural_distances[:, left] - structural_distances[:, right]
 
-        # Compute embedding distances (efficiently using vectorized operations)
-        # For each pair (i, j), compute distance
-        emb_dists = torch.zeros((N, N), device=embeddings.device)
+    closer_left = structural_delta < -tie_tolerance
+    closer_right = structural_delta > tie_tolerance
+    learned_close = torch.where(closer_left, learned_left, learned_right)
+    learned_far = torch.where(closer_left, learned_right, learned_left)
 
-        # Use vectorized computation if possible, otherwise loop
-        for i in range(N):
-            for j in range(i + 1, N):
-                dist = lorentz_distance_fn(valid_embeddings[i:i + 1], valid_embeddings[j:j + 1])
-                emb_dists[i, j] = dist
-                emb_dists[j, i] = dist
+    duplicate_matrix = candidate_code_ids.unsqueeze(2).eq(candidate_code_ids.unsqueeze(1))
+    seen_before = torch.tril(duplicate_matrix, diagonal=-1).any(dim=2)
+    non_self = candidate_code_ids.ne(anchor_code_ids.unsqueeze(1))
+    candidate_eligible = valid_mask & ~is_explicit_exclusion & ~seen_before & non_self
+    pair_mask = (
+        candidate_eligible[:, left]
+        & candidate_eligible[:, right]
+        & (closer_left | closer_right)
+        & candidate_code_ids[:, left].ne(candidate_code_ids[:, right])
+    )
 
-        # Ranking loss: for each anchor i, compare all pairs (j, k) where j != k != i
-        # If gt_dists[i, j] < gt_dists[i, k], then emb_dists[i, j] should be
-        # < emb_dists[i, k] + margin
-        total_loss = torch.tensor(0.0, device=embeddings.device)
-        num_violations = 0
+    penalties = F.softplus((learned_close - learned_far + margin) / temperature)
+    if pair_weights is None:
+        weights = torch.ones_like(penalties)
+    else:
+        if pair_weights.shape != penalties.shape:
+            raise ValueError('pair importance weights must align with unordered comparisons')
+        weights = pair_weights.detach().to(penalties)
+    weights = weights * pair_mask
+    denominator = weights.sum(dim=1)
+    contributing = denominator.gt(0)
+    if not contributing.any():
+        return learned_distances.sum() * 0.0
+    per_anchor = (penalties * weights).sum(dim=1) / torch.where(
+        contributing, denominator, torch.ones_like(denominator)
+    )
+    return per_anchor[contributing].mean()
 
-        for anchor_idx in range(N):
-            # Get distances from anchor to all other codes
-            anchor_gt_dists = gt_dists[anchor_idx]  # (N,)
-            anchor_emb_dists = emb_dists[anchor_idx]  # (N,)
-
-            # Filter out pairs with very small tree distances
-            valid_mask = anchor_gt_dists >= self.min_distance
-            valid_mask[anchor_idx] = False  # Exclude self
-
-            if valid_mask.sum() < 2:
-                continue
-
-            # Get valid indices
-            valid_j = torch.where(valid_mask)[0]
-
-            # For each pair (j, k) where j < k and both are valid
-            for idx_j, j in enumerate(valid_j):
-                for k in valid_j[idx_j + 1:]:
-                    gt_dist_j = anchor_gt_dists[j]
-                    gt_dist_k = anchor_gt_dists[k]
-                    emb_dist_j = anchor_emb_dists[j]
-                    emb_dist_k = anchor_emb_dists[k]
-
-                    # Check if rank order is violated
-                    if gt_dist_j < gt_dist_k:
-                        # j should be closer than k
-                        # Penalize if emb_dist_j >= emb_dist_k (violation)
-                        violation = torch.clamp(emb_dist_j - emb_dist_k + self.margin, min=0.0)
-                        total_loss = total_loss + violation
-                        if violation > 0:
-                            num_violations += 1
-                    elif gt_dist_k < gt_dist_j:
-                        # k should be closer than j
-                        # Penalize if emb_dist_k >= emb_dist_j (violation)
-                        violation = torch.clamp(emb_dist_k - emb_dist_j + self.margin, min=0.0)
-                        total_loss = total_loss + violation
-                        if violation > 0:
-                            num_violations += 1
-                    # If gt_dist_j == gt_dist_k, no constraint (ties are allowed)
-
-        # Average loss over all violations
-        if num_violations > 0:
-            avg_loss = total_loss / num_violations
-        else:
-            avg_loss = torch.tensor(0.0, device=embeddings.device)
-
-        return self.weight * avg_loss
-
-# -------------------------------------------------------------------------------------------------
-# LambdaRank Loss (Global Ranking)
-# -------------------------------------------------------------------------------------------------
-
-class LambdaRankLoss(nn.Module):
+class StructuralPreferenceLoss(nn.Module):
     '''
-    LambdaRank loss for global ranking optimization.
+    Structural preference over each anchor's positive plus its selected negatives.
 
-    Unlike pairwise ranking loss, LambdaRank considers the full ranking list
-    (1 positive + k negatives) for each anchor and directly optimizes for NDCG.
-
-    Key advantages:
-    1. Position-aware: Top positions matter more (via NDCG)
-    2. Global optimization: Considers entire ranking list, not just pairs
-    3. Direct NDCG optimization: Gradients scaled by NDCG change from swapping
-
-    This is particularly effective for contrastive learning where we have
-    1 positive and k negatives (e.g., 24-32 negatives) per anchor.
+    Explicit exclusions are carried as candidates but never compared; see
+    :func:`structural_preference_from_distances`.
     '''
 
     def __init__(
         self,
-        tree_distances: torch.Tensor,
-        code_to_idx: Dict[str, int],
-        weight: float = 0.15,
-        sigma: float = 1.0,
-        ndcg_k: int = 10,
+        *,
+        curvature: float,
+        margin: float,
+        temperature: float,
+        tie_tolerance: float,
+        weight: float,
     ):
         super().__init__()
-        # Register as buffer so it moves with model to correct device
-        self.register_buffer('tree_distances', tree_distances)
-        self.code_to_idx = code_to_idx
+        self.lorentz_distance = LorentzDistance(curvature)
+        self.margin = margin
+        self.temperature = temperature
+        self.tie_tolerance = tie_tolerance
         self.weight = weight
-        self.sigma = sigma  # Smoothing parameter for RankNet probability
-        self.ndcg_k = ndcg_k  # Top-k for NDCG computation
-
-    def _compute_ndcg(
-        self, relevance_scores: torch.Tensor, distances: torch.Tensor, k: Optional[int] = None
-    ) -> torch.Tensor:
-        '''
-        Compute NDCG (Normalized Discounted Cumulative Gain).
-
-        Args:
-            relevance_scores: Ground truth relevance (higher = more relevant) (N,)
-            distances: Predicted distances (lower = more relevant) (N,)
-            k: Top-k for NDCG (None = all)
-
-        Returns:
-            NDCG score (scalar)
-        '''
-        if k is None:
-            k = len(relevance_scores)
-        k = min(k, len(relevance_scores))
-
-        # Sort by distances (ascending) to get ranking
-        _, sorted_indices = torch.sort(distances, descending=False)
-
-        # Get relevance scores in ranked order
-        sorted_relevance = relevance_scores[sorted_indices[:k]]
-
-        # Compute DCG: sum of (relevance / log2(position + 1))
-        positions = torch.arange(1, k + 1, dtype=torch.float32, device=distances.device)
-        dcg = torch.sum(sorted_relevance / torch.log2(positions + 1))
-
-        # Compute ideal DCG (IDCG): sort relevance descending
-        ideal_relevance, _ = torch.sort(relevance_scores, descending=True)
-        ideal_dcg = torch.sum(ideal_relevance[:k] / torch.log2(positions + 1))
-
-        # NDCG = DCG / IDCG
-        if ideal_dcg > 0:
-            ndcg = dcg / ideal_dcg
-        else:
-            ndcg = torch.tensor(0.0, device=distances.device)
-
-        return ndcg
-
-    def _compute_lambdas(
-        self, relevance_scores: torch.Tensor, distances: torch.Tensor, ndcg_k: int
-    ) -> torch.Tensor:
-        '''
-        Compute LambdaRank lambdas (gradients).
-
-        Lambda for pair (i, j) = |delta_NDCG| * (1 / (1 + exp(sigma * (s_i - s_j))))
-        where delta_NDCG is the change in NDCG from swapping i and j.
-
-        Args:
-            relevance_scores: Ground truth relevance (N,)
-            distances: Predicted distances (N,)
-            ndcg_k: Top-k for NDCG computation
-
-        Returns:
-            Lambdas for each pair (N, N)
-        '''
-        N = len(relevance_scores)
-        lambdas = torch.zeros((N, N), device=distances.device)
-
-        # Current NDCG
-        current_ndcg = self._compute_ndcg(relevance_scores, distances, ndcg_k)
-
-        for i in range(N):
-            for j in range(i + 1, N):
-                # Swap i and j in ranking
-                swapped_distances = distances.clone()
-                swapped_distances[i], swapped_distances[j] = distances[j], distances[i]
-
-                # Compute NDCG after swap
-                swapped_ndcg = self._compute_ndcg(relevance_scores, swapped_distances, ndcg_k)
-
-                # Delta NDCG
-                delta_ndcg = torch.abs(swapped_ndcg - current_ndcg)
-
-                # RankNet probability: P(i > j) = 1 / (1 + exp(sigma * (s_i - s_j)))
-                # where s_i = -distance_i (higher score = more relevant)
-                score_i = -distances[i]
-                score_j = -distances[j]
-                prob_i_beats_j = 1.0 / (1.0 + torch.exp(self.sigma * (score_i - score_j)))
-
-                # Lambda: gradient scaled by delta_NDCG
-                if relevance_scores[i] > relevance_scores[j]:
-                    # i should be ranked higher than j
-                    lambda_ij = delta_ndcg * (1.0 - prob_i_beats_j)
-                    lambdas[i, j] = lambda_ij
-                    lambdas[j, i] = -lambda_ij
-                elif relevance_scores[j] > relevance_scores[i]:
-                    # j should be ranked higher than i
-                    lambda_ij = delta_ndcg * (1.0 - (1.0 - prob_i_beats_j))
-                    lambdas[i, j] = -lambda_ij
-                    lambdas[j, i] = lambda_ij
-
-        return lambdas
 
     def forward(
         self,
+        *,
         anchor_emb: torch.Tensor,
         positive_emb: torch.Tensor,
-        negative_embs: torch.Tensor,
-        anchor_codes: List[str],
-        positive_codes: List[str],
-        negative_codes: List[List[str]],
-        lorentz_distance_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-        batch_size: int,
-        k_negatives: int,
+        anchor_code_id: torch.Tensor,
+        positive_code_id: torch.Tensor,
+        positive_structural_distance: torch.Tensor,
+        selected: SelectedNegativeBatch,
+        pair_weights: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        '''
-        Compute LambdaRank loss.
-
-        For each anchor, creates a ranking list: [positive, negative_1, ..., negative_k]
-        and optimizes for NDCG using LambdaRank gradients.
-
-        Args:
-            anchor_emb: Anchor embeddings (batch_size, embedding_dim+1)
-            positive_emb: Positive embeddings (batch_size, embedding_dim+1)
-            negative_embs: Negative embeddings (batch_size * k_negatives, embedding_dim+1)
-            anchor_codes: List of anchor NAICS codes (batch_size,)
-            positive_codes: List of positive NAICS codes (batch_size,)
-            negative_codes: List of lists of negative codes (batch_size, k_negatives)
-            lorentz_distance_fn: Function to compute Lorentz distances
-            batch_size: Batch size
-            k_negatives: Number of negatives per anchor
-
-        Returns:
-            Loss scalar
-        '''
-        # Reshape negatives: (batch_size * k_negatives, D+1) -> (batch_size, k_negatives, D+1)
-        negative_embs_reshaped = negative_embs.view(batch_size, k_negatives, -1)
-
-        total_loss = torch.tensor(0.0, device=anchor_emb.device)
-        num_valid_anchors = 0
-
-        for b in range(batch_size):
-            anchor_code = anchor_codes[b]
-            positive_code = positive_codes[b]
-            negative_codes_b = negative_codes[b]
-
-            # Skip if anchor or positive not in ground truth
-            if anchor_code not in self.code_to_idx or positive_code not in self.code_to_idx:
-                continue
-
-            # Get embeddings for this anchor
-            anchor_emb_b = anchor_emb[b:b + 1]  # (1, D+1)
-            positive_emb_b = positive_emb[b:b + 1]  # (1, D+1)
-            negative_embs_b = negative_embs_reshaped[b]  # (k_negatives, D+1)
-
-            # Compute distances from anchor to positive and negatives
-            pos_dist = lorentz_distance_fn(anchor_emb_b, positive_emb_b).squeeze()  # scalar
-
-            # Compute distances to all negatives
-            neg_dists = []
-            valid_neg_indices = []
-            valid_neg_codes = []
-
-            for i, neg_code in enumerate(negative_codes_b):
-                if neg_code in self.code_to_idx:
-                    neg_emb = negative_embs_b[i:i + 1]  # (1, D+1)
-                    neg_dist = lorentz_distance_fn(anchor_emb_b, neg_emb).squeeze()  # scalar
-                    neg_dists.append(neg_dist)
-                    valid_neg_indices.append(i)
-                    valid_neg_codes.append(neg_code)
-
-            if len(valid_neg_indices) < 1:
-                continue
-
-            # Create ranking list: [positive, negative_1, ..., negative_k]
-            # Distances: [pos_dist, neg_dist_1, ..., neg_dist_k]
-            all_distances = torch.cat([pos_dist.unsqueeze(0), torch.stack(neg_dists)])
-
-            # Compute relevance scores based on tree distances
-            # Lower tree distance = higher relevance
-            anchor_idx = self.code_to_idx[anchor_code]
-            pos_idx = self.code_to_idx[positive_code]
-
-            # Get tree distance for positive
-            pos_tree_dist = self.tree_distances[anchor_idx, pos_idx]  # type: ignore[index]
-
-            # Get tree distances for negatives
-            neg_tree_dists = []
-            for neg_code in valid_neg_codes:
-                neg_idx = self.code_to_idx[neg_code]
-                neg_tree_dist = self.tree_distances[anchor_idx, neg_idx]  # type: ignore[index]
-                neg_tree_dists.append(neg_tree_dist)
-
-            all_tree_dists = torch.cat([pos_tree_dist.unsqueeze(0), torch.stack(neg_tree_dists)])
-
-            # Convert tree distances to relevance scores
-            # Lower distance = higher relevance
-            # Use inverse distance as relevance (add small epsilon to avoid division by zero)
-            max_dist = all_tree_dists.max()
-            relevance_scores = (max_dist - all_tree_dists + 1e-6) / (max_dist + 1e-6)
-
-            # Compute lambdas
-            lambdas = self._compute_lambdas(relevance_scores, all_distances, self.ndcg_k)
-
-            # LambdaRank loss: sum of lambdas * distance differences
-            # For each pair (i, j), loss contribution = lambda_ij * (distance_i - distance_j)
-            loss_contrib = torch.tensor(0.0, device=anchor_emb.device)
-            N = len(all_distances)
-
-            for i in range(N):
-                for j in range(i + 1, N):
-                    if lambdas[i, j] != 0:
-                        # Loss = lambda * (distance_i - distance_j)
-                        # This encourages correct ranking based on NDCG gradients
-                        loss_contrib += lambdas[i, j] * (all_distances[i] - all_distances[j])
-
-            total_loss += loss_contrib
-            num_valid_anchors += 1
-
-        # Average over valid anchors
-        if num_valid_anchors > 0:
-            avg_loss = total_loss / num_valid_anchors
-        else:
-            avg_loss = torch.tensor(0.0, device=anchor_emb.device)
-
-        return self.weight * avg_loss
+        positive_learned = self.lorentz_distance(anchor_emb, positive_emb).unsqueeze(1)
+        negative_learned = self.lorentz_distance.batched_forward(anchor_emb, selected.embedding)
+        learned = torch.cat([positive_learned, negative_learned], dim=1)
+        structural = torch.cat(
+            [
+                positive_structural_distance.to(selected.structural_distance.dtype).unsqueeze(1),
+                selected.structural_distance,
+            ],
+            dim=1,
+        )
+        code_ids = torch.cat([positive_code_id.unsqueeze(1), selected.code_id], dim=1)
+        explicit = torch.cat(
+            [
+                torch.zeros_like(positive_code_id.unsqueeze(1), dtype=torch.bool),
+                selected.is_explicit_exclusion,
+            ],
+            dim=1,
+        )
+        valid = torch.cat(
+            [
+                torch.ones_like(positive_code_id.unsqueeze(1), dtype=torch.bool),
+                selected.valid_mask,
+            ],
+            dim=1,
+        )
+        return self.weight * structural_preference_from_distances(
+            learned_distances=learned,
+            structural_distances=structural,
+            candidate_code_ids=code_ids,
+            anchor_code_ids=anchor_code_id,
+            is_explicit_exclusion=explicit,
+            valid_mask=valid,
+            margin=self.margin,
+            temperature=self.temperature,
+            tie_tolerance=self.tie_tolerance,
+            pair_weights=pair_weights,
+        )

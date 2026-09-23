@@ -8,7 +8,7 @@ This module provides functional mixins that decompose the model into smaller,
 maintainable components:
 
 - DistributedMixin: Global batch sampling utilities for multi-GPU training
-- LossMixin: Loss computation methods (hierarchy, LambdaRank, radius regularization)
+- LossMixin: Loss computation methods (hierarchy, structural preference, radius regularization)
 - CurriculumMixin: Curriculum learning logic (hard negative mining, router-guided sampling)
 - LoggingMixin: Logging utilities for training and validation metrics
 - ValidationMixin: Validation step and evaluation logic

@@ -2,24 +2,38 @@
 Unit tests for loss functions.
 
 Tests hyperbolic contrastive learning losses, hierarchy preservation losses,
-and ranking-based losses used in training.
+and the structural-preference ranking loss used in training.
 '''
 
 import pytest
 import torch
 
+from naics_embedder.supervision.candidates import SelectedNegativeBatch
 from naics_embedder.text_model.hard_negative_mining import NormAdaptiveMargin
 from naics_embedder.text_model.hyperbolic import LorentzOps
 from naics_embedder.text_model.loss import (
     HierarchyPreservationLoss,
     HyperbolicInfoNCELoss,
-    LambdaRankLoss,
-    RankOrderPreservationLoss,
+    StructuralPreferenceLoss,
+    structural_preference_from_distances,
 )
 
 # -------------------------------------------------------------------------------------------------
 # HyperbolicInfoNCELoss Tests
 # -------------------------------------------------------------------------------------------------
+
+def _contrastive(loss_fn, anchor, positive, negatives, batch_size, k_negatives, **kwargs):
+    '''Call the loss with every negative valid and no explicit exclusion.'''
+    negatives = negatives.view(batch_size, k_negatives, -1)
+    mask_shape = (batch_size, k_negatives)
+    return loss_fn(
+        anchor,
+        positive,
+        negatives,
+        valid_mask=torch.ones(mask_shape, dtype=torch.bool, device=anchor.device),
+        is_explicit_exclusion=torch.zeros(mask_shape, dtype=torch.bool, device=anchor.device),
+        **kwargs,
+    )
 
 @pytest.mark.unit
 class TestHyperbolicInfoNCELoss:
@@ -56,9 +70,7 @@ class TestHyperbolicInfoNCELoss:
     def test_loss_is_scalar(self, loss_fn, sample_triplet):
         '''Test that loss returns a scalar value.'''
 
-        anchor, positive, negatives, batch_size, k_negatives = sample_triplet
-
-        loss = loss_fn(anchor, positive, negatives, batch_size, k_negatives)
+        loss = _contrastive(loss_fn, *sample_triplet)
 
         assert loss.dim() == 0, 'Loss should be a scalar'
         assert loss.numel() == 1
@@ -66,9 +78,7 @@ class TestHyperbolicInfoNCELoss:
     def test_loss_is_positive(self, loss_fn, sample_triplet):
         '''Test that loss is always non-negative.'''
 
-        anchor, positive, negatives, batch_size, k_negatives = sample_triplet
-
-        loss = loss_fn(anchor, positive, negatives, batch_size, k_negatives)
+        loss = _contrastive(loss_fn, *sample_triplet)
 
         assert loss >= 0, 'Loss should be non-negative'
 
@@ -96,27 +106,25 @@ class TestHyperbolicInfoNCELoss:
         negatives = LorentzOps.exp_map_zero(negative_tan, c=1.0)
 
         # Compute losses
-        loss_close = loss_fn(anchor, close_positive, negatives, batch_size, k_negatives)
-        loss_far = loss_fn(anchor, far_positive, negatives, batch_size, k_negatives)
+        loss_close = _contrastive(loss_fn, anchor, close_positive, negatives, batch_size, k_negatives)
+        loss_far = _contrastive(loss_fn, anchor, far_positive, negatives, batch_size, k_negatives)
 
         assert loss_close < loss_far, 'Loss should be lower for closer positives'
 
     def test_false_negative_masking(self, loss_fn, sample_triplet, test_device):
-        '''Test that false negative masking reduces loss.'''
+        '''Test that pseudo-related masking of non-exclusion negatives changes the loss.'''
 
         anchor, positive, negatives, batch_size, k_negatives = sample_triplet
 
         # Loss without masking
-        loss_no_mask = loss_fn(anchor, positive, negatives, batch_size, k_negatives)
+        loss_no_mask = _contrastive(loss_fn, *sample_triplet)
 
         # Loss with masking (mask out some negatives)
-        false_negative_mask = torch.zeros(
-            batch_size, k_negatives, dtype=torch.bool, device=test_device
-        )
-        false_negative_mask[:, :4] = True  # Mask first 4 negatives for each anchor
+        pseudo_related = torch.zeros(batch_size, k_negatives, dtype=torch.bool, device=test_device)
+        pseudo_related[:, :4] = True  # Mask first 4 negatives for each anchor
 
-        loss_with_mask = loss_fn(
-            anchor, positive, negatives, batch_size, k_negatives, false_negative_mask
+        loss_with_mask = _contrastive(
+            loss_fn, *sample_triplet, pseudo_related_mask=pseudo_related
         )
 
         # Loss with masking should be different (typically lower)
@@ -127,9 +135,8 @@ class TestHyperbolicInfoNCELoss:
         '''Test that temperature scaling affects loss magnitude.'''
 
         loss_fn = HyperbolicInfoNCELoss(embedding_dim=384, temperature=temperature, curvature=1.0)
-        anchor, positive, negatives, batch_size, k_negatives = sample_triplet
 
-        loss = loss_fn(anchor, positive, negatives, batch_size, k_negatives)
+        loss = _contrastive(loss_fn, *sample_triplet)
 
         # Loss should be computable for all valid temperatures
         assert not torch.isnan(loss)
@@ -145,7 +152,7 @@ class TestHyperbolicInfoNCELoss:
         positive.requires_grad_(True)
         negatives.requires_grad_(True)
 
-        loss = loss_fn(anchor, positive, negatives, batch_size, k_negatives)
+        loss = _contrastive(loss_fn, anchor, positive, negatives, batch_size, k_negatives)
         loss.backward()
 
         # Check that gradients exist and are non-zero
@@ -163,12 +170,41 @@ class TestHyperbolicInfoNCELoss:
 
         adaptive_margins = torch.full((batch_size, ), 0.5, device=anchor.device)
 
-        loss_nomargin = loss_fn(anchor, positive, negatives, batch_size, k_negatives)
-        loss_margin = loss_fn(
-            anchor, positive, negatives, batch_size, k_negatives, adaptive_margins=adaptive_margins
-        )
+        loss_nomargin = _contrastive(loss_fn, *sample_triplet)
+        loss_margin = _contrastive(loss_fn, *sample_triplet, adaptive_margins=adaptive_margins)
 
         assert loss_margin > loss_nomargin
+
+    def test_negatives_must_be_batched(self, loss_fn, sample_triplet):
+        anchor, positive, negatives, batch_size, k_negatives = sample_triplet
+
+        with pytest.raises(ValueError, match='batch, selected'):
+            loss_fn(
+                anchor,
+                positive,
+                negatives,
+                valid_mask=torch.ones((batch_size, k_negatives), dtype=torch.bool),
+                is_explicit_exclusion=torch.zeros((batch_size, k_negatives), dtype=torch.bool),
+            )
+
+    def test_rows_without_eligible_negatives_keep_gradients_finite(self, loss_fn, sample_triplet):
+        anchor, positive, negatives, batch_size, k_negatives = sample_triplet
+        negatives = negatives.view(batch_size, k_negatives, -1).clone().requires_grad_()
+        valid = torch.ones((batch_size, k_negatives), dtype=torch.bool)
+        valid[0] = False
+
+        loss = loss_fn(
+            anchor,
+            positive,
+            negatives,
+            valid_mask=valid,
+            is_explicit_exclusion=torch.zeros_like(valid),
+        )
+        loss.backward()
+
+        assert torch.isfinite(loss)
+        assert torch.isfinite(negatives.grad).all()
+        assert torch.count_nonzero(negatives.grad[0]) == 0
 
 class TestNormAdaptiveMargin:
     '''Tests for norm-adaptive margin computation.'''
@@ -288,282 +324,225 @@ class TestHierarchyPreservationLoss:
         assert torch.allclose(loss_2, 2 * loss_1, rtol=0.01)
 
 # -------------------------------------------------------------------------------------------------
-# RankOrderPreservationLoss Tests
+# Structural preference (replaces LambdaRank): direct gradient-contract tests
 # -------------------------------------------------------------------------------------------------
 
-@pytest.mark.unit
-class TestRankOrderPreservationLoss:
-    '''Test suite for Rank Order Preservation loss.'''
+def test_structural_preference_gradient_corrects_an_inversion():
+    learned = torch.tensor([[4.0, 1.0]], requires_grad=True)
+    structural = torch.tensor([[1.0, 3.0]])
+    loss = structural_preference_from_distances(
+        learned_distances=learned,
+        structural_distances=structural,
+        candidate_code_ids=torch.tensor([[11, 12]]),
+        anchor_code_ids=torch.tensor([10]),
+        is_explicit_exclusion=torch.zeros((1, 2), dtype=torch.bool),
+        valid_mask=torch.ones((1, 2), dtype=torch.bool),
+        margin=0.2,
+        temperature=1.0,
+        tie_tolerance=1e-6,
+    )
 
-    @pytest.fixture
-    def rank_loss_fn(self, sample_tree_distances):
-        '''Create rank order preservation loss function.'''
+    loss.backward()
 
-        distances, code_to_idx = sample_tree_distances
+    assert learned.grad[0, 0] > 0
+    assert learned.grad[0, 1] < 0
 
-        return RankOrderPreservationLoss(
-            tree_distances=distances,
-            code_to_idx=code_to_idx,
-            weight=0.1,
-            min_distance=0.1,
-            margin=0.1,
-        )
 
-    @pytest.fixture
-    def sample_tree_distances(self, test_device):
-        '''Create sample tree distance matrix.'''
+def test_structural_preference_is_lower_for_correct_order():
+    kwargs = {
+        'structural_distances': torch.tensor([[1.0, 3.0]]),
+        'candidate_code_ids': torch.tensor([[11, 12]]),
+        'anchor_code_ids': torch.tensor([10]),
+        'is_explicit_exclusion': torch.zeros((1, 2), dtype=torch.bool),
+        'valid_mask': torch.ones((1, 2), dtype=torch.bool),
+        'margin': 0.2,
+        'temperature': 1.0,
+        'tie_tolerance': 1e-6,
+    }
+    correct = structural_preference_from_distances(
+        learned_distances=torch.tensor([[1.0, 4.0]]), **kwargs
+    )
+    inverted = structural_preference_from_distances(
+        learned_distances=torch.tensor([[4.0, 1.0]]), **kwargs
+    )
 
-        distances = torch.tensor(
-            [
-                [0.0, 0.5, 1.5, 2.5],
-                [0.5, 0.0, 0.5, 1.5],
-                [1.5, 0.5, 0.0, 0.5],
-                [2.5, 1.5, 0.5, 0.0],
-            ],
-            device=test_device,
-        )
+    assert correct < inverted
 
-        code_to_idx = {
-            '31': 0,
-            '311': 1,
-            '3111': 2,
-            '31111': 3,
+
+@pytest.mark.parametrize(
+    ('structural', 'explicit', 'valid', 'codes'),
+    [
+        ([2.0, 2.0], [False, False], [True, True], [11, 12]),
+        ([1.0, 3.0], [True, False], [True, True], [11, 12]),
+        ([1.0, 3.0], [False, False], [True, False], [11, 12]),
+        ([1.0, 3.0], [False, False], [True, True], [10, 12]),
+        ([1.0, 3.0], [False, False], [True, True], [11, 11]),
+    ],
+)
+def test_structural_preference_returns_differentiable_zero_when_fully_masked(
+    structural, explicit, valid, codes
+):
+    learned = torch.tensor([[1.0, 2.0]], requires_grad=True)
+    loss = structural_preference_from_distances(
+        learned_distances=learned,
+        structural_distances=torch.tensor([structural]),
+        candidate_code_ids=torch.tensor([codes]),
+        anchor_code_ids=torch.tensor([10]),
+        is_explicit_exclusion=torch.tensor([explicit]),
+        valid_mask=torch.tensor([valid]),
+        margin=0.2,
+        temperature=1.0,
+        tie_tolerance=1e-6,
+    )
+
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert loss.item() == 0.0
+    assert torch.equal(learned.grad, torch.zeros_like(learned))
+
+
+def test_structural_preference_detaches_importance_weights():
+    learned = torch.tensor([[3.0, 1.0]], requires_grad=True)
+    weights = torch.tensor([[2.0]], requires_grad=True)
+    loss = structural_preference_from_distances(
+        learned_distances=learned,
+        structural_distances=torch.tensor([[1.0, 3.0]]),
+        candidate_code_ids=torch.tensor([[11, 12]]),
+        anchor_code_ids=torch.tensor([10]),
+        is_explicit_exclusion=torch.zeros((1, 2), dtype=torch.bool),
+        valid_mask=torch.ones((1, 2), dtype=torch.bool),
+        margin=0.2,
+        temperature=1.0,
+        tie_tolerance=1e-6,
+        pair_weights=weights,
+    )
+    loss.backward()
+
+    assert weights.grad is None
+
+
+def test_structural_preference_is_invariant_to_joint_candidate_permutation():
+    kwargs = {
+        'learned_distances': torch.tensor([[3.0, 1.0, 2.0]]),
+        'structural_distances': torch.tensor([[1.0, 3.0, 5.0]]),
+        'candidate_code_ids': torch.tensor([[11, 12, 13]]),
+        'anchor_code_ids': torch.tensor([10]),
+        'is_explicit_exclusion': torch.tensor([[False, False, False]]),
+        'valid_mask': torch.tensor([[True, True, True]]),
+        'margin': 0.2,
+        'temperature': 1.0,
+        'tie_tolerance': 1e-6,
+    }
+    original = structural_preference_from_distances(**kwargs)
+    permutation = torch.tensor([2, 0, 1])
+    permuted = structural_preference_from_distances(
+        **{
+            **kwargs,
+            'learned_distances': kwargs['learned_distances'][:, permutation],
+            'structural_distances': kwargs['structural_distances'][:, permutation],
+            'candidate_code_ids': kwargs['candidate_code_ids'][:, permutation],
+            'is_explicit_exclusion': kwargs['is_explicit_exclusion'][:, permutation],
+            'valid_mask': kwargs['valid_mask'][:, permutation],
         }
+    )
 
-        return distances, code_to_idx
+    assert torch.allclose(original, permuted)
 
-    def test_loss_is_scalar(self, rank_loss_fn, test_device):
-        '''Test that rank order loss returns a scalar.'''
 
-        embeddings = torch.randn(4, 385, device=test_device)
-        embeddings = LorentzOps.exp_map_zero(embeddings, c=1.0)
-
-        codes = ['31', '311', '3111', '31111']
-
-        loss = rank_loss_fn(embeddings, codes, LorentzOps.lorentz_distance)
-
-        assert loss.dim() == 0
-
-    def test_loss_is_non_negative(self, rank_loss_fn, test_device):
-        '''Test that rank order loss is non-negative.'''
-
-        embeddings = torch.randn(4, 385, device=test_device)
-        embeddings = LorentzOps.exp_map_zero(embeddings, c=1.0)
-
-        codes = ['31', '311', '3111', '31111']
-
-        loss = rank_loss_fn(embeddings, codes, LorentzOps.lorentz_distance)
-
-        assert loss >= 0
-
-    def test_loss_zero_for_insufficient_codes(self, rank_loss_fn, test_device):
-        '''Test that loss is zero when there are fewer than 3 valid codes.'''
-
-        embeddings = torch.randn(3, 385, device=test_device)
-        embeddings = LorentzOps.exp_map_zero(embeddings, c=1.0)
-
-        # Only 2 valid codes
-        codes = ['31', '311', 'invalid_code']
-
-        loss = rank_loss_fn(embeddings, codes, LorentzOps.lorentz_distance)
-
-        assert loss == 0.0
-
-    def test_margin_parameter_effect(self, sample_tree_distances, test_device):
-        '''Test that margin parameter affects loss magnitude.'''
-
-        distances, code_to_idx = sample_tree_distances
-
-        loss_fn_small = RankOrderPreservationLoss(distances, code_to_idx, weight=0.1, margin=0.1)
-        loss_fn_large = RankOrderPreservationLoss(distances, code_to_idx, weight=0.1, margin=0.5)
-
-        embeddings = torch.randn(4, 385, device=test_device)
-        embeddings = LorentzOps.exp_map_zero(embeddings, c=1.0)
-        codes = ['31', '311', '3111', '31111']
-
-        loss_small = loss_fn_small(embeddings, codes, LorentzOps.lorentz_distance)
-        loss_large = loss_fn_large(embeddings, codes, LorentzOps.lorentz_distance)
-
-        # Both losses should be valid (may be zero if no violations)
-        assert not torch.isnan(loss_small)
-        assert not torch.isnan(loss_large)
-
-# -------------------------------------------------------------------------------------------------
-# LambdaRankLoss Tests
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestLambdaRankLoss:
-    '''Test suite for LambdaRank loss.'''
-
-    @pytest.fixture
-    def sample_tree_distances(self, test_device):
-        '''Create sample tree distance matrix.'''
-
-        distances = torch.tensor(
-            [
-                [0.0, 0.5, 1.5, 2.5, 3.5],
-                [0.5, 0.0, 0.5, 1.5, 2.5],
-                [1.5, 0.5, 0.0, 0.5, 1.5],
-                [2.5, 1.5, 0.5, 0.0, 0.5],
-                [3.5, 2.5, 1.5, 0.5, 0.0],
-            ],
-            device=test_device,
+def test_structural_preference_normalizes_each_anchor_before_batch_mean():
+    kwargs = {
+        'learned_distances': torch.tensor([[3.0, 2.0, 1.0], [2.0, 1.0, 9.0]]),
+        'structural_distances': torch.tensor([[1.0, 2.0, 3.0], [1.0, 3.0, 7.0]]),
+        'candidate_code_ids': torch.tensor([[11, 12, 13], [21, 22, 23]]),
+        'anchor_code_ids': torch.tensor([10, 20]),
+        'is_explicit_exclusion': torch.zeros((2, 3), dtype=torch.bool),
+        'valid_mask': torch.tensor([[True, True, True], [True, True, False]]),
+        'margin': 0.2,
+        'temperature': 1.0,
+        'tie_tolerance': 1e-6,
+    }
+    combined = structural_preference_from_distances(**kwargs)
+    individual = []
+    for row in range(2):
+        individual.append(
+            structural_preference_from_distances(
+                **{
+                    key: value[row : row + 1]
+                    if isinstance(value, torch.Tensor)
+                    else value
+                    for key, value in kwargs.items()
+                }
+            )
         )
 
-        code_to_idx = {
-            '31': 0,
-            '311': 1,
-            '3111': 2,
-            '31111': 3,
-            '311111': 4,
-        }
+    assert torch.allclose(combined, torch.stack(individual).mean())
 
-        return distances, code_to_idx
 
-    @pytest.fixture
-    def lambda_rank_loss_fn(self, sample_tree_distances):
-        '''Create LambdaRank loss function.'''
+def test_structural_preference_rejects_invalid_hyperparameters():
+    kwargs = {
+        'learned_distances': torch.tensor([[1.0, 2.0]]),
+        'structural_distances': torch.tensor([[1.0, 3.0]]),
+        'candidate_code_ids': torch.tensor([[11, 12]]),
+        'anchor_code_ids': torch.tensor([10]),
+        'is_explicit_exclusion': torch.zeros((1, 2), dtype=torch.bool),
+        'valid_mask': torch.ones((1, 2), dtype=torch.bool),
+        'tie_tolerance': 1e-6,
+    }
 
-        distances, code_to_idx = sample_tree_distances
+    with pytest.raises(ValueError, match='temperature'):
+        structural_preference_from_distances(**kwargs, margin=0.2, temperature=0.0)
+    with pytest.raises(ValueError, match='margin'):
+        structural_preference_from_distances(**kwargs, margin=-0.1, temperature=1.0)
 
-        return LambdaRankLoss(
-            tree_distances=distances, code_to_idx=code_to_idx, weight=0.15, sigma=1.0, ndcg_k=10
-        )
 
-    def test_ndcg_computation(self, lambda_rank_loss_fn, test_device):
-        '''Test NDCG computation correctness.'''
+def _lorentz_row(values: list[float]) -> torch.Tensor:
+    spatial = torch.tensor(values).unsqueeze(1)
+    return torch.cat([torch.sqrt(1.0 + spatial.square()), spatial], dim=1)
 
-        # Perfect ranking (relevance descending)
-        relevance = torch.tensor([4.0, 3.0, 2.0, 1.0], device=test_device)
-        distances = torch.tensor([0.5, 1.0, 1.5, 2.0], device=test_device)  # Ascending
 
-        ndcg = lambda_rank_loss_fn._compute_ndcg(relevance, distances, k=4)
+def test_structural_preference_module_never_compares_an_exclusion():
+    # The positive (structure 0.5) and two negatives; the structurally closest negative is an
+    # explicit exclusion and must not participate in any comparison.
+    selected_embedding = _lorentz_row([0.2, 3.0]).unsqueeze(0).requires_grad_()
+    selected = SelectedNegativeBatch(
+        candidate_uid=torch.tensor([[[0, 0, 0], [0, 0, 1]]]),
+        code_id=torch.tensor([[12, 13]]),
+        embedding=selected_embedding,
+        structural_distance=torch.tensor([[1.0, 4.0]]),
+        structural_relation_id=torch.tensor([[2, 7]], dtype=torch.int16),
+        anchor_excludes_candidate=torch.tensor([[True, False]]),
+        candidate_excludes_anchor=torch.tensor([[False, False]]),
+        is_explicit_exclusion=torch.tensor([[True, False]]),
+        semantic_target_id=torch.tensor([[2, 0]], dtype=torch.int8),
+        semantic_source_id=torch.tensor([[2, 0]], dtype=torch.int8),
+        sampling_role_id=torch.full((1, 2), 2, dtype=torch.int8),
+        sampling_provenance_id=torch.full((1, 2), 1, dtype=torch.int8),
+        relation_margin=torch.tensor([[1.0, 6.0]]),
+        distance_margin=torch.tensor([[0.5, 3.5]]),
+        router_gate_probs=None,
+        valid_mask=torch.tensor([[True, True]]),
+        selection_scores=torch.zeros((1, 2)),
+        selection_reasons=torch.ones((1, 2), dtype=torch.int8),
+        runtime_fields={},
+    )
+    loss_fn = StructuralPreferenceLoss(
+        curvature=1.0, margin=0.1, temperature=1.0, tie_tolerance=1e-6, weight=0.35
+    )
 
-        # Perfect ranking should have NDCG = 1.0
-        assert torch.allclose(ndcg, torch.tensor(1.0, device=test_device), atol=1e-4)
+    loss = loss_fn(
+        anchor_emb=_lorentz_row([0.0]),
+        positive_emb=_lorentz_row([0.1]),
+        anchor_code_id=torch.tensor([10]),
+        positive_code_id=torch.tensor([11]),
+        positive_structural_distance=torch.tensor([0.5]),
+        selected=selected,
+    )
+    loss.backward()
 
-    def test_ndcg_imperfect_ranking(self, lambda_rank_loss_fn, test_device):
-        '''Test NDCG for imperfect ranking.'''
-
-        # Relevance: high to low
-        relevance = torch.tensor([4.0, 3.0, 2.0, 1.0], device=test_device)
-
-        # Imperfect distances (not sorted properly)
-        distances = torch.tensor([1.0, 0.5, 2.0, 1.5], device=test_device)
-
-        ndcg = lambda_rank_loss_fn._compute_ndcg(relevance, distances, k=4)
-
-        # Imperfect ranking should have NDCG < 1.0
-        assert ndcg < 1.0
-        assert ndcg >= 0.0
-
-    def test_loss_is_scalar(self, lambda_rank_loss_fn, test_device):
-        '''Test that LambdaRank loss returns a scalar.'''
-
-        batch_size = 2
-        k_negatives = 4
-        dim = 384
-
-        # Create embeddings
-        anchor = torch.randn(batch_size, dim + 1, device=test_device)
-        anchor = LorentzOps.exp_map_zero(anchor, c=1.0)
-
-        positive = torch.randn(batch_size, dim + 1, device=test_device)
-        positive = LorentzOps.exp_map_zero(positive, c=1.0)
-
-        negatives = torch.randn(batch_size * k_negatives, dim + 1, device=test_device)
-        negatives = LorentzOps.exp_map_zero(negatives, c=1.0)
-
-        anchor_codes = ['31', '311']
-        positive_codes = ['311', '3111']
-        negative_codes = [['3111', '31111', '311111', '31'], ['31111', '311111', '31', '311']]
-
-        loss = lambda_rank_loss_fn(
-            anchor,
-            positive,
-            negatives,
-            anchor_codes,
-            positive_codes,
-            negative_codes,
-            LorentzOps.lorentz_distance,
-            batch_size,
-            k_negatives,
-        )
-
-        assert loss.dim() == 0
-
-    def test_loss_is_non_negative(self, lambda_rank_loss_fn, test_device):
-        '''Test that LambdaRank loss is non-negative.'''
-
-        batch_size = 2
-        k_negatives = 4
-        dim = 384
-
-        anchor = torch.randn(batch_size, dim + 1, device=test_device)
-        anchor = LorentzOps.exp_map_zero(anchor, c=1.0)
-
-        positive = torch.randn(batch_size, dim + 1, device=test_device)
-        positive = LorentzOps.exp_map_zero(positive, c=1.0)
-
-        negatives = torch.randn(batch_size * k_negatives, dim + 1, device=test_device)
-        negatives = LorentzOps.exp_map_zero(negatives, c=1.0)
-
-        anchor_codes = ['31', '311']
-        positive_codes = ['311', '3111']
-        negative_codes = [['3111', '31111', '311111', '31'], ['31111', '311111', '31', '311']]
-
-        loss = lambda_rank_loss_fn(
-            anchor,
-            positive,
-            negatives,
-            anchor_codes,
-            positive_codes,
-            negative_codes,
-            LorentzOps.lorentz_distance,
-            batch_size,
-            k_negatives,
-        )
-
-        # LambdaRank loss can be negative or positive (it's a gradient-based loss)
-        # But it should be a valid number
-        assert not torch.isnan(loss)
-        assert not torch.isinf(loss)
-
-    def test_loss_zero_for_invalid_codes(self, lambda_rank_loss_fn, test_device):
-        '''Test that loss is zero when codes are not in ground truth.'''
-
-        batch_size = 2
-        k_negatives = 2
-        dim = 384
-
-        anchor = torch.randn(batch_size, dim + 1, device=test_device)
-        anchor = LorentzOps.exp_map_zero(anchor, c=1.0)
-
-        positive = torch.randn(batch_size, dim + 1, device=test_device)
-        positive = LorentzOps.exp_map_zero(positive, c=1.0)
-
-        negatives = torch.randn(batch_size * k_negatives, dim + 1, device=test_device)
-        negatives = LorentzOps.exp_map_zero(negatives, c=1.0)
-
-        # Invalid codes
-        anchor_codes = ['invalid1', 'invalid2']
-        positive_codes = ['invalid3', 'invalid4']
-        negative_codes = [['invalid5', 'invalid6'], ['invalid7', 'invalid8']]
-
-        loss = lambda_rank_loss_fn(
-            anchor,
-            positive,
-            negatives,
-            anchor_codes,
-            positive_codes,
-            negative_codes,
-            LorentzOps.lorentz_distance,
-            batch_size,
-            k_negatives,
-        )
-
-        assert loss == 0.0
+    assert torch.isfinite(loss) and loss > 0
+    assert torch.count_nonzero(selected_embedding.grad[0, 0]) == 0
+    assert torch.count_nonzero(selected_embedding.grad[0, 1]) > 0
 
 # -------------------------------------------------------------------------------------------------
 # Integration Tests
@@ -592,7 +571,9 @@ class TestLossIntegration:
 
         # InfoNCE loss
         infonce_loss_fn = HyperbolicInfoNCELoss(embedding_dim=dim, temperature=0.07, curvature=1.0)
-        infonce_loss = infonce_loss_fn(anchor, positive, negatives, batch_size, k_negatives)
+        infonce_loss = _contrastive(
+            infonce_loss_fn, anchor, positive, negatives, batch_size, k_negatives
+        )
 
         # Hierarchy loss
         tree_distances = torch.rand(4, 4, device=test_device)
@@ -608,12 +589,26 @@ class TestLossIntegration:
         hierarchy_loss_fn = HierarchyPreservationLoss(tree_distances, code_to_idx, weight=0.1)
         hierarchy_loss = hierarchy_loss_fn(embeddings, codes, LorentzOps.lorentz_distance)
 
-        # Rank order loss
-        rank_order_loss_fn = RankOrderPreservationLoss(tree_distances, code_to_idx, weight=0.1)
-        rank_order_loss = rank_order_loss_fn(embeddings, codes, LorentzOps.lorentz_distance)
+        # Structural preference over learned anchor-negative distances
+        learned = LorentzOps.lorentz_distance(
+            anchor.unsqueeze(1).expand(-1, k_negatives, -1).reshape(-1, dim + 1), negatives
+        ).view(batch_size, k_negatives)
+        structural_loss = structural_preference_from_distances(
+            learned_distances=learned,
+            structural_distances=torch.arange(k_negatives, dtype=torch.float32).expand(
+                batch_size, -1
+            ) + 1.0,
+            candidate_code_ids=torch.arange(k_negatives).expand(batch_size, -1) + 100,
+            anchor_code_ids=torch.arange(batch_size),
+            is_explicit_exclusion=torch.zeros((batch_size, k_negatives), dtype=torch.bool),
+            valid_mask=torch.ones((batch_size, k_negatives), dtype=torch.bool),
+            margin=0.1,
+            temperature=1.0,
+            tie_tolerance=1e-6,
+        )
 
         # Combined loss
-        total_loss = infonce_loss + hierarchy_loss + rank_order_loss
+        total_loss = infonce_loss + hierarchy_loss + structural_loss
 
         assert not torch.isnan(infonce_loss)
         assert not torch.isinf(infonce_loss)
@@ -623,9 +618,8 @@ class TestLossIntegration:
         assert not torch.isinf(hierarchy_loss)
         assert hierarchy_loss >= 0
 
-        assert not torch.isnan(rank_order_loss)
-        assert not torch.isinf(rank_order_loss)
-        assert rank_order_loss >= 0
+        assert torch.isfinite(structural_loss)
+        assert structural_loss >= 0
 
         assert not torch.isnan(total_loss)
         assert not torch.isinf(total_loss)

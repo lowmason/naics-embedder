@@ -394,7 +394,7 @@ class LoggingMixin:
         contrastive_loss: torch.Tensor,
         scaled_load_balancing_loss: torch.Tensor,
         hierarchy_loss: torch.Tensor,
-        lambdarank_loss: torch.Tensor,
+        structural_preference_loss: torch.Tensor,
         radius_reg_loss: torch.Tensor,
         level_radius_loss: torch.Tensor,
         total_loss: torch.Tensor,
@@ -410,9 +410,12 @@ class LoggingMixin:
         )
         if hierarchy_loss.item() > 0:
             self.log('train/hierarchy_loss', hierarchy_loss, prog_bar=False, batch_size=batch_size)
-        if lambdarank_loss.item() > 0:
+        if structural_preference_loss.item() > 0:
             self.log(
-                'train/lambdarank_loss', lambdarank_loss, prog_bar=False, batch_size=batch_size
+                'train/structural_preference_loss',
+                structural_preference_loss,
+                prog_bar=False,
+                batch_size=batch_size,
             )
         if radius_reg_loss.item() > 0:
             self.log(

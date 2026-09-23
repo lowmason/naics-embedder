@@ -28,7 +28,6 @@ from naics_embedder.supervision.schema import (
     SamplingRole,
     SelectionReason,
 )
-from naics_embedder.text_model.false_negative_strategies import apply_false_negative_strategy
 from naics_embedder.text_model.mixins.distributed import (
     GlobalNegativeContext,
     gather_candidate_entities,
@@ -590,34 +589,6 @@ class CurriculumMixin:
 
         negative_emb = negative_emb_reshaped.view(batch_size * k_negatives, -1)
         return negative_emb, negative_emb_reshaped
-
-    def _apply_false_negative_strategy_wrapper(
-        self,
-        anchor_emb: torch.Tensor,
-        negative_emb_reshaped: torch.Tensor,
-        false_negative_mask: Optional[torch.Tensor],
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        '''
-        Apply false negative handling strategy.
-
-        Args:
-            anchor_emb: Anchor embeddings
-            negative_emb_reshaped: Negative embeddings (batch_size, k_negatives, embed_dim)
-            false_negative_mask: Optional mask of identified false negatives
-
-        Returns:
-            Tuple of (updated_mask, auxiliary_loss)
-        '''
-        if self.false_negative_config is None or negative_emb_reshaped is None:
-            return false_negative_mask, None
-
-        fn_mask, auxiliary_fn_loss = apply_false_negative_strategy(
-            self.false_negative_config,
-            anchor_emb,
-            negative_emb_reshaped,
-            false_negative_mask,
-        )
-        return fn_mask, auxiliary_fn_loss
 
     def _update_pseudo_labels(self) -> None:
         '''
