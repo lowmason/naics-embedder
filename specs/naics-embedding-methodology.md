@@ -19,7 +19,7 @@ as behavior, using two labels:
 - **nominal**: the quantity is declared learnable or adaptive but receives no update.
 
 There is one exception. The graph stage cannot run under its reference configuration (see
-Composition), so C3 describes how it would run against the current supervision, using its
+Composition), so S3 describes how it would run against the current supervision, using its
 reference hyperparameters.
 
 The document reports counts measured on the current supervision data. Apart from one geometric
@@ -30,30 +30,32 @@ and evaluates only agreement with the taxonomy it is trained on.
 
 ## Component inventory
 
+Components are labeled S1–S4, which leaves C1, C2, … free for numbering critique points.
+
 | Component (by methodological role) | Estimand / output | Consumes |
 |---|---|---|
-| **C1. Taxonomy supervision construction** | Structural distance $D$, structural relation $R$, directional exclusion indicators $X$; a positive-pair universe and, per pair, a candidate list of negatives | The official NAICS 2022 code list and, per code, its title, description, illustrative examples, and cross-reference ("excluded activities") text |
-| **C2. Text-conditioned hyperbolic contrastive encoder** (the *text stage*; the project's "Stage 3") | An inductive map $F_{\Theta}$ from a code's four text fields to $\mathbb{H}^{n}$; the text-stage embedding $Z^{(3)}$ of every code | The four text fields; $D$, $R$, $X$ and sampled training tuples from C1 |
-| **C3. Graph-convolutional hyperbolic refinement** (the *graph stage*; the project's "Stage 4") | Refined points $Z^{(4)}$ for the fixed code set (transductive) | $Z^{(3)}$ as initial values; a relation-typed taxonomy graph built from $R$; positive pairs and candidate negatives from C1 |
-| **C4. Evaluation protocol** | Structural-agreement statistics $M(Z^{(3)})$, $M(Z^{(4)})$; an accept/reject decision $A$ on $Z^{(4)}$ relative to $Z^{(3)}$; two defined but never-executed downstream benchmarks | $Z^{(3)}$, $Z^{(4)}$, $D$, the taxonomy, and (for one benchmark) public employment statistics |
+| **S1. Taxonomy supervision construction** | Structural distance $D$, structural relation $R$, directional exclusion indicators $X$; a positive-pair universe and, per pair, a candidate list of negatives | The official NAICS 2022 code list and, per code, its title, description, illustrative examples, and cross-reference ("excluded activities") text |
+| **S2. Text-conditioned hyperbolic contrastive encoder** (the *text stage*; the project's "Stage 3") | An inductive map $F_{\Theta}$ from a code's four text fields to $\mathbb{H}^{n}$; the text-stage embedding $Z^{(3)}$ of every code | The four text fields; $D$, $R$, $X$ and sampled training tuples from S1 |
+| **S3. Graph-convolutional hyperbolic refinement** (the *graph stage*; the project's "Stage 4") | Refined points $Z^{(4)}$ for the fixed code set (transductive) | $Z^{(3)}$ as initial values; a relation-typed taxonomy graph built from $R$; positive pairs and candidate negatives from S1 |
+| **S4. Evaluation protocol** | Structural-agreement statistics $M(Z^{(3)})$, $M(Z^{(4)})$; an accept/reject decision $A$ on $Z^{(4)}$ relative to $Z^{(3)}$; two defined but never-executed downstream benchmarks | $Z^{(3)}$, $Z^{(4)}$, $D$, the taxonomy, and (for one benchmark) public employment statistics |
 
 ## Composition
 
 Symbols are defined in the Notation section below. The components compose sequentially, with
 point estimates only and no feedback between stages.
 
-1. **Supervision.** C1 is a deterministic function of the official documents plus seeded
+1. **Supervision.** S1 is a deterministic function of the official documents plus seeded
    sampling. It yields $D$, $R$, $X$, the positive universe $\mathcal{P}$, and candidate lists
    $\mathcal{U}_{ap}$.
-2. **Text stage.** C2 fits $\Theta$ by stochastic gradient descent on its objective
+2. **Text stage.** S2 fits $\Theta$ by stochastic gradient descent on its objective
    $\mathcal{L}^{(3)}$. It keeps $\hat\Theta$, the epoch with the lowest validation contrastive
    loss, and then encodes every code:
    $$Z^{(3)}_{i} = F_{\hat\Theta}(t_{i}) \in \mathbb{H}^{n}, \qquad n = 384, \qquad i \in \mathcal{C}.$$
-3. **Graph stage.** C3 treats per-code node states $H$ as free parameters, initialized at
+3. **Graph stage.** S3 treats per-code node states $H$ as free parameters, initialized at
    $H = Z^{(3)}$. It fits them jointly with layer parameters $\Xi$ and exports the last epoch:
    $$Z^{(4)} = G_{\hat\Xi}(\hat H;\ \mathcal{G}).$$
    The text encoder is frozen by then and receives no gradient from this stage.
-4. **Acceptance.** C4 computes $M(Z)$ for $Z \in \{Z^{(3)}, Z^{(4)}\}$ over all codes and accepts
+4. **Acceptance.** S4 computes $M(Z)$ for $Z \in \{Z^{(3)}, Z^{(4)}\}$ over all codes and accepts
    the refinement when
    $$A = \mathbb{1}\left[\Delta\rho_{\mathrm{P}} \ge -0.02\right] \cdot \mathbb{1}\left[\Delta\mathrm{NDCG}@10 \ge -0.01\right] \cdot \mathbb{1}\left[\Delta\mathrm{PR}@1 \ge 0.05\right] = 1.$$
    The method does not define the deliverable when $A = 0$.
@@ -68,16 +70,16 @@ Three properties of the composition matter for review:
   $n'+1$, which the reference configuration sets to 31. No reduction or lifting map is specified,
   so the composition is undefined as configured. No text-stage versus graph-stage comparison has
   been produced.
-- **There is one supervisory source.** Every training target in both stages, and every C4
+- **There is one supervisory source.** Every training target in both stages, and every S4
   statistic, derives from the same hierarchy and the same positive-pair universe.
 
 ## Cross-component assumptions
 
-1. **Structural agreement stands in for quality.** Both stages optimize, and C4 measures,
+1. **Structural agreement stands in for quality.** Both stages optimize, and S4 measures,
    agreement with the taxonomy's own metric. *Breaks if violated:* the intended uses (search from
    business descriptions, economic features) may depend on relatedness the taxonomy does not
    encode. No stage optimizes for it, and no statistic would detect its absence.
-2. **The code universe is shared.** Both stages and C4 index the same 2,125 codes in the same
+2. **The code universe is shared.** Both stages and S4 index the same 2,125 codes in the same
    order. *Breaks:* any mismatch silently misaligns targets and points.
 3. **An exclusion means the same thing in both stages.** The text stage treats every explicit
    exclusion as a mandatory repulsive negative. The graph stage ignores exclusion status, so
@@ -124,9 +126,9 @@ Shared symbols. Each component section extends this table.
 | $\lambda(i)$ | Level of code $i$, its number of digits | $\{2,3,4,5,6\}$ |
 | $\mathcal{T}$ | Taxonomy forest, one tree per sector, edges parent to child | 20 trees |
 | $\operatorname{pa}(i)$ | Parent of $i$ | $\mathcal{C}$; sectors have none |
-| $D_{ij}$ | Structural distance (C1) | $\{0.5, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 99\}$ for $i \ne j$; 0 for $i = j$ |
+| $D_{ij}$ | Structural distance (S1) | $\{0.5, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 99\}$ for $i \ne j$; 0 for $i = j$ |
 | $D^{\times}$ | Structural distance assigned to every cross-sector pair | 99 |
-| $R_{ij}$ | Structural relation category (C1) | 14 within-sector categories plus *cross-sector* |
+| $R_{ij}$ | Structural relation category (S1) | 14 within-sector categories plus *cross-sector* |
 | $X_{i \to j}$ | The exclusion text of $i$ names code $j$ | $\{0,1\}$ |
 | $X_{ij}$ | Explicit exclusion, $X_{i \to j} \lor X_{j \to i}$ | $\{0,1\}$ |
 | $t^{(k)}_{i}$ | Text channel $k$ of code $i$: 1 title, 2 description, 3 illustrative examples, 4 exclusion text | token sequences |
@@ -140,18 +142,18 @@ Shared symbols. Each component section extends this table.
 | $\exp_{o}$, $\log_{o}$ | Exponential and logarithmic maps at $o$; for a tangent vector $v \in \mathbb{R}^{n}$, $\exp_{o}(v) = (\cosh\Vert v\Vert,\ \sinh\Vert v\Vert\,v/\Vert v\Vert)$ | |
 | $r(x)$ | Geodesic radius $d(o,x)$; $x_{0} = \cosh r$ and $\Vert x_{s}\Vert = \sinh r$ | $[0,\infty)$ |
 | $c$ | Curvature magnitude | fixed at 1 |
-| $F_{\Theta}$ | Text-stage map with parameters $\Theta$ (C2) | texts to $\mathbb{H}^{n}$ |
-| $G_{\Xi}$ | Graph-stage network with parameters $\Xi$ (C3) | |
+| $F_{\Theta}$ | Text-stage map with parameters $\Theta$ (S2) | texts to $\mathbb{H}^{n}$ |
+| $G_{\Xi}$ | Graph-stage network with parameters $\Xi$ (S3) | |
 | $Z^{(3)}$, $Z^{(4)}$ | Text-stage and graph-stage embeddings of all codes | $N$ points |
 | $e$ | Training epoch index | $0, 1, \dots$ |
 | $\hat\Theta$, $\hat\Xi$, $\hat H$ | A hat marks the fitted value of a parameter, as selected or exported | |
-| $M(Z)$ | Vector of structural-agreement statistics of an embedding (C4) | |
+| $M(Z)$ | Vector of structural-agreement statistics of an embedding (S4) | |
 | $\Delta$ | Graph-stage value minus text-stage value of a statistic | |
-| $A$ | Acceptance indicator of the graph stage (C4) | $\{0,1\}$ |
+| $A$ | Acceptance indicator of the graph stage (S4) | $\{0,1\}$ |
 
 ## Per-component descriptions
 
-### C1. Taxonomy supervision construction
+### S1. Taxonomy supervision construction
 
 #### Notation (extension)
 
@@ -180,7 +182,7 @@ Shared symbols. Each component section extends this table.
 - cross-reference text, in which a code names activities excluded from it and the code where
   each is classified instead.
 
-**Latent.** Nothing. C1 is a deterministic transform plus seeded sampling.
+**Latent.** Nothing. S1 is a deterministic transform plus seeded sampling.
 
 **How the data arise.** The process is editorial. The classification's authors group
 establishments by similarity of production process into a five-level hierarchy (Office of
@@ -358,7 +360,7 @@ fingerprints of its inputs. Consumers refuse mixed or inconsistent bundles.
    target as unrelated ones. The authors' own 1,204 cross-sector exclusion pairs mark such
    boundaries. The magnitude, about twelve times the largest within-sector value, dominates every
    magnitude-sensitive consumer: the text stage's distance-matching loss, and the Pearson and
-   NDCG statistics of C4.
+   NDCG statistics of S4.
 3. **Lineal pairs are half a step closer than their path length.** *Breaks:* it is an unexplained
    convention that orders lineal pairs ahead of collateral pairs of equal path length.
 4. **An exclusion reference means "unrelated".** *Breaks:* cross-references mark boundaries, and
@@ -388,7 +390,7 @@ fingerprints of its inputs. Consumers refuse mixed or inconsistent bundles.
      with the same prefix, are never negatives.
 9. **Cross-sector negatives are adequately represented.** There are 100 per pair, each with
    weight $99^{-1.5} \approx 0.001$, together about 10% of draws. *Breaks:* cross-sector
-   confusions are rarely trained against, yet C4's statistics are dominated by cross-sector
+   confusions are rarely trained against, yet S4's statistics are dominated by cross-sector
    pairs.
 10. **No holdout is needed.** *Breaks:* nothing downstream can measure generalization to unseen
     codes, subtrees, or texts.
@@ -424,7 +426,7 @@ any external notion of industry relatedness.
 5. Should empty channels and inherited descriptions be handled differently, for example by
    masking, channel-presence indicators, or deduplication?
 
-### C2. Text-conditioned hyperbolic contrastive encoder (text stage)
+### S2. Text-conditioned hyperbolic contrastive encoder (text stage)
 
 #### Notation (extension)
 
@@ -465,7 +467,7 @@ any external notion of industry relatedness.
 #### Problem formulation and data-generating story
 
 **Observed.** Per code, the four token sequences $t^{(1)}_{i},\dots,t^{(4)}_{i}$. **Supervision.**
-The tuples, $D$, and $X$ from C1.
+The tuples, $D$, and $X$ from S1.
 
 There is no probabilistic model of the data. The estimand is defined implicitly as the minimizer
 of an empirical objective: a map $F_{\Theta}$ under which, for sampled tuples,
@@ -593,7 +595,7 @@ phase 1 is epochs 0–5, phase 2 is epochs 6–7, and phase 3 is epochs 8–9. T
 fractions 0.5 and 0.7 of 10 epochs.
 
 - **Phase 1.** Selection is the reserved exclusion plus pool order. The inverse-distance
-  weighting of C1 is applied when tuples are pre-drawn, so it holds in every phase, not only
+  weighting of S1 is applied when tuples are pre-drawn, so it holds in every phase, not only
   this one.
 - **Phases 2–3.** Two proposal rules fill the non-exclusion slots, in order:
   - a geometric rule takes half the slots: the eligible candidates with the smallest
@@ -668,7 +670,7 @@ the mining rules change the selected set.
 - **Model selection:** the lowest $\bar{\mathcal{L}}^{\mathrm{val}}$, an in-sample statistic (see
   limitation 4).
 - **Reported but not used for selection:**
-  - the C4 structural statistics, on 300 codes drawn uniformly at random each epoch from the 1,273
+  - the S4 structural statistics, on 300 codes drawn uniformly at random each epoch from the 1,273
     validation anchors (only 160 of the 1,012 six-digit codes can ever be drawn);
   - manifold validity, $\lvert\langle z,z\rangle_{\mathcal{L}} + 1\rvert < 10^{-3}$;
   - per-level mean $x_{0}$;
@@ -704,7 +706,7 @@ the mining rules change the selected set.
    frozen encoder with a light trained head.
 6. What validation design would make model selection meaningful here?
 
-### C3. Graph-convolutional hyperbolic refinement (graph stage)
+### S3. Graph-convolutional hyperbolic refinement (graph stage)
 
 #### Notation (extension)
 
@@ -793,8 +795,8 @@ x'_{i} &= \exp_{o}\Big(\big[\mathrm{LN}_{\ell}\big(\upsilon_{i} + \operatorname{
 
 **Training examples.**
 
-- Positives come from the C1 sampler: one sampling round of descendant and sibling pairs, with no
-  ancestors, as in C1.
+- Positives come from the S1 sampler: one sampling round of descendant and sibling pairs, with no
+  ancestors, as in S1.
 - Each positive gets 48 negatives, drawn uniformly without replacement from $\mathcal{U}_{ap}$.
   About 54% of them are cross-sector.
 - The examples are drawn once and fixed for all epochs.
@@ -849,7 +851,7 @@ Two designed elements do not run:
   - per batch: triplet accuracy, the share with
     $d(x_{a}, x_{p}) < \min_{j \in \mathcal{N}^{\mathrm{g}}_{ap}} d(x_{a}, x_{j})$, and
     the mean rank of the positive;
-  - once per epoch: the C4 statistics over all codes.
+  - once per epoch: the S4 statistics over all codes.
 
 #### Assumptions and limitations
 
@@ -882,8 +884,8 @@ Two designed elements do not run:
 #### Evaluation criteria
 
 - Per-batch triplet accuracy and the mean rank of the positive, on the validation tail.
-- Per-epoch C4 statistics over all codes, at $c = 1$.
-- The C4 acceptance gate, relative to the text stage.
+- Per-epoch S4 statistics over all codes, at $c = 1$.
+- The S4 acceptance gate, relative to the text stage.
 
 #### Open questions for the reviewer
 
@@ -901,7 +903,7 @@ Two designed elements do not run:
 5. Is a triplet hinge with an adaptive margin and uncertainty weighting sensible, compared with
    the distortion-minimizing or ranking objectives standard in hierarchy embedding?
 
-### C4. Evaluation protocol
+### S4. Evaluation protocol
 
 #### Notation (extension)
 
