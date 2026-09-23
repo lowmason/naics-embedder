@@ -24,6 +24,7 @@ from naics_embedder.graph_model.curriculum.preprocess_curriculum import resolve_
 from naics_embedder.graph_model.dataloader.hgcn_datamodule import HGCNDataModule
 from naics_embedder.losses.level_radius import level_radius_loss
 from naics_embedder.metrics import (
+    STRUCTURAL_SPEARMAN_KEY,
     EmbeddingEvaluator,
     HierarchyMetrics,
     compute_hierarchy_retrieval_metrics,
@@ -347,7 +348,7 @@ class HGCNLightningModule(pyl.LightningModule):
                     'NAICS relations parquet not found at %s; hierarchy diagnostics disabled',
                     relations_path,
                 )
-        self._full_val_metrics: Dict[str, float] = {}
+        self._full_val_metrics: Dict[str, Union[float, int, str, None]] = {}
         self._full_eval_done = False
 
     def _current_temperature(self) -> float:
@@ -853,8 +854,8 @@ class HGCNLightningModule(pyl.LightningModule):
         step = int(getattr(self, 'global_step', 0))
         return (step % self.cfg.full_eval_frequency) == 0
 
-    def _compute_full_validation_metrics(self, embeddings: torch.Tensor
-                                         ) -> Optional[Dict[str, torch.Tensor]]:
+    def _compute_full_validation_metrics(self, embeddings: torch.Tensor) -> Optional[Dict[
+        str, Union[torch.Tensor, int, str, None]]]:
         if (
             self.tree_distances is None or self.embedding_evaluator is None
             or self.hierarchy_metrics is None
@@ -871,34 +872,35 @@ class HGCNLightningModule(pyl.LightningModule):
                 emb_dists = evaluator.compute_pairwise_distances(
                     embeddings.detach(), metric='lorentz', curvature=1.0
                 )
-                tree_dists = self.tree_distances
-                if emb_dists.shape != tree_dists.shape:
-                    logger.warning(
-                        'Skipping hierarchy metrics: embedding distance shape %s != '
-                        'tree distance shape %s',
-                        emb_dists.shape,
-                        tree_dists.shape,
-                    )
-                    return None
+        except RuntimeError as err:
+            logger.warning('Skipping hierarchy metrics due to runtime error: %s', err)
+            return None
 
+        tree_dists = self.tree_distances
+        spearman = hierarchy.spearman_correlation(emb_dists, tree_dists)
+        try:
+            with torch.no_grad():
                 cophenetic = hierarchy.cophenetic_correlation(emb_dists, tree_dists)
-                spearman = hierarchy.spearman_correlation(emb_dists, tree_dists)
                 ndcg = hierarchy.ndcg_ranking(emb_dists, tree_dists, k_values=self._ndcg_k_values)
                 distortion = hierarchy.distortion(emb_dists, tree_dists)
         except RuntimeError as err:
             logger.warning('Skipping hierarchy metrics due to runtime error: %s', err)
             return None
 
-        metrics: Dict[str, torch.Tensor] = {}
+        metrics: Dict[str, Union[torch.Tensor, int, str, None]] = {
+            STRUCTURAL_SPEARMAN_KEY: (
+                spearman['correlation'] if spearman['status'] == 'defined' else None
+            ),
+            f'{STRUCTURAL_SPEARMAN_KEY}_n_pairs': spearman['n_pairs'],
+            f'{STRUCTURAL_SPEARMAN_KEY}_n_total': spearman['n_total'],
+            f'{STRUCTURAL_SPEARMAN_KEY}_status': spearman['status'],
+            f'{STRUCTURAL_SPEARMAN_KEY}_reason': spearman['reason'],
+            f'{STRUCTURAL_SPEARMAN_KEY}_definition': spearman['definition'],
+        }
         cophenetic_corr = cast(torch.Tensor, cophenetic['correlation'])
         metrics['cophenetic_correlation'] = cophenetic_corr.detach()
         metrics['cophenetic_n_pairs'] = torch.tensor(
-            float(cophenetic['n_pairs']), device=metrics['cophenetic_correlation'].device
-        )
-        spearman_corr = cast(torch.Tensor, spearman['correlation'])
-        metrics['spearman_correlation'] = spearman_corr.detach()
-        metrics['spearman_n_pairs'] = torch.tensor(
-            float(spearman['n_pairs']), device=metrics['spearman_correlation'].device
+            float(cophenetic['n_pairs']), device=cophenetic_corr.device
         )
 
         for key, value in distortion.items():
@@ -909,7 +911,7 @@ class HGCNLightningModule(pyl.LightningModule):
             metrics[f'ndcg@{k}'] = ndcg_value.detach()
             n_queries = ndcg.get(f'ndcg@{k}_n_queries', 0)
             metrics[f'ndcg@{k}_n_queries'] = torch.tensor(
-                float(n_queries), device=metrics[f'ndcg@{k}'].device
+                float(n_queries), device=ndcg_value.device
             )
 
         if (
@@ -1000,23 +1002,27 @@ class HGCNLightningModule(pyl.LightningModule):
             if full_metrics:
                 self._full_eval_done = True
                 for name, value in full_metrics.items():
-                    tensor_value: torch.Tensor = (
+                    history_key = f'val_{name}'
+                    if value is None or isinstance(value, str):
+                        self._full_val_metrics[history_key] = value
+                        continue
+                    tensor_value = (
                         value if isinstance(value, torch.Tensor) else torch.tensor(
                             value, device=self.device
                         )
-                    )
-                    should_prog_bar = (
-                        name == 'cophenetic_correlation' or name == f'ndcg@{self._primary_ndcg}'
                     )
                     self.log(
                         f'val/{name}',
                         tensor_value,
                         on_step=False,
                         on_epoch=True,
-                        prog_bar=should_prog_bar,
+                        prog_bar=(
+                            name == 'cophenetic_correlation' or name == f'ndcg@{self._primary_ndcg}'
+                        ),
                     )
-                    scalar_value = float(tensor_value.detach().cpu())
-                    self._full_val_metrics[f'val_{name}'] = scalar_value
+                    self._full_val_metrics[history_key] = (
+                        float(value.detach().cpu()) if isinstance(value, torch.Tensor) else value
+                    )
 
     def on_train_epoch_end(self) -> None:
         if not self._train_losses:
