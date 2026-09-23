@@ -19,6 +19,7 @@ from naics_embedder.metrics.core import (
     HierarchyMetrics,
     RetrievalMetrics,
 )
+from naics_embedder.metrics.structural_spearman import STRUCTURAL_SPEARMAN_KEY
 from naics_embedder.utils.backend import get_device
 
 if TYPE_CHECKING:
@@ -82,10 +83,10 @@ class NAICSEvaluationRunner:
         # Hierarchy preservation
         if tree_distances is not None:
             logger.info('Evaluating hierarchy preservation...')
-            results['cophenetic_correlation'] = self.hierarchy_metrics.cophenetic_correlation(
+            results[STRUCTURAL_SPEARMAN_KEY] = self.hierarchy_metrics.spearman_correlation(
                 emb_distances, tree_distances
             )
-            results['spearman_correlation'] = self.hierarchy_metrics.spearman_correlation(
+            results['cophenetic_correlation'] = self.hierarchy_metrics.cophenetic_correlation(
                 emb_distances, tree_distances
             )
             results['distortion'] = self.hierarchy_metrics.distortion(emb_distances, tree_distances)

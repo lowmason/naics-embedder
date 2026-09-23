@@ -1,12 +1,9 @@
-import logging
 from pathlib import Path
 from typing import List, Sequence, Union
 
 import numpy as np
 import polars as pl
 import torch
-
-logger = logging.getLogger(__name__)
 
 def load_distance_submatrix(
     distance_matrix_path: Union[str, Path],
@@ -22,6 +19,7 @@ def load_distance_submatrix(
     Returns:
         Torch tensor of shape ``(len(node_codes), len(node_codes))`` containing the
         tree distances ordered according to ``node_codes``.
+        Non-finite entries are preserved for validation at the metric boundary.
     '''
 
     path = Path(distance_matrix_path).expanduser()
@@ -53,8 +51,4 @@ def load_distance_submatrix(
     index_array = np.array([code_to_idx[code] for code in node_codes], dtype=np.int64)
     matrix_np = df.to_numpy()
     subset = matrix_np[np.ix_(index_array, index_array)]
-    tensor = torch.from_numpy(subset).float()
-    if torch.isnan(tensor).any():
-        logger.warning('Distance submatrix contains NaNs; replacing with zeros')
-        tensor = torch.nan_to_num(tensor, nan=0.0)
-    return tensor
+    return torch.from_numpy(subset).float()
