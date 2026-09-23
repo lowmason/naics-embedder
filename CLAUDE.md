@@ -472,10 +472,9 @@ result = (
 ./scripts/format_code.sh --check src/naics_embedder/text_model/loss.py
 ```
 
-**Known drift:** `ruff check src/ tests/` is clean; keep it that way. Some files edited while the
-formatter was missing (late 2025 to Sep 2026) still don't match YAPF. Judge a change by the files
-it touches: format those, don't mass-fix unrelated code, and keep `./scripts/format_code.sh --all`
-out of feature PRs.
+**Keep the tree clean:** `ruff check src/ tests/` and `./scripts/format_code.sh --check --all` both
+pass; keep it that way. Format the files your change touches, don't mass-fix unrelated code, and
+keep `./scripts/format_code.sh --all` out of feature PRs.
 
 ### Markdown Formatting
 
