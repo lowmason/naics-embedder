@@ -173,7 +173,7 @@ naics-embedder/
 ├── logs/                     # Training logs (gitignored)
 ├── .github/workflows/        # CI/CD workflows
 │   ├── docs.yml              # Build and deploy docs to GitHub Pages
-│   └── tests.yml             # Run pytest with coverage
+│   └── tests.yml             # Ruff lint and pytest with coverage (separate jobs)
 ├── pyproject.toml            # Project metadata and dependencies
 ├── uv.lock                   # Locked dependency versions
 ├── mkdocs.yml                # Documentation config
@@ -928,16 +928,20 @@ During training, the model computes validation metrics every epoch:
 **Workflows:**
 
 1. **Documentation** (`.github/workflows/docs.yml`)
-   - **Trigger:** Push to `main` or `master` branch
+   - **Trigger:** Push to `main` or `master` branch, or a manual `workflow_dispatch` run
    - **Action:** Build and deploy MkDocs documentation to GitHub Pages
    - **Output:** <https://lowmason.github.io/naics-embedder/>
 
 2. **Tests** (`.github/workflows/tests.yml`)
-   - **Trigger:** Push, pull request
-   - **Action:** Run pytest with coverage (Python 3.10, 3.12)
+   - **Trigger:** Push to `main`/`master`, and pull requests targeting them
+   - **Action:** Two independent jobs, so lint and test failures show up as separate checks:
+     - `lint`: `ruff check src/ tests/`, once, on Python 3.12. Any violation fails the check, so
+       run `uv run ruff check src/ tests/` before pushing
+     - `test (3.10)`, `test (3.12)`: pytest with coverage, one check per Python version
    - **Dependencies:** Installs from `uv.lock` (`uv sync --locked`), so CI tests the pinned
      versions, not the newest releases that `pip install` resolves. Upgrade deliberately with
-     `uv lock --upgrade-package <name>`.
+     `uv lock --upgrade-package <name>`. The `lint` job syncs only the `dev` group
+     (`--only-group dev`), which has the locked ruff but not the project or its torch wheels.
    - **Reports:** Coverage (`coverage.xml`) uploaded to Codecov
 
 ### Documentation
