@@ -26,6 +26,20 @@ CONTRACT_VERSION = 'stage3-supervision-v1'
 STRUCTURAL_PREFERENCE_LOSS_VERSION = 'structural-preference-v1'
 MINING_CONTRACT_VERSION = 'negative-selection-v1'
 
+# -------------------------------------------------------------------------------------------------
+# Structural margin contract
+#
+# Shared by the training-pair generator (``data.create_triplets``) and the runtime eligibility rule
+# (``supervision.margins``), so both apply the identical legacy special cases.
+# -------------------------------------------------------------------------------------------------
+
+CROSS_SECTOR_DISTANCE = 99.0
+CROSS_SECTOR_RELATION_MARGIN = 15.0
+CROSS_SECTOR_DISTANCE_MARGIN = 10.0
+EQUAL_DISTANCE_MARGIN = 0.3333
+LINEAL_ADJUSTED_DISTANCE_MARGIN = 0.6667
+LINEAL_DISTANCE_DELTA = -0.5
+
 CODEBOOK_SCHEMA_VERSION = 'codebook-v1'
 PAIR_FACTS_SCHEMA_VERSION = 'pair-facts-v1'
 DISTANCES_SCHEMA_VERSION = 'distances-v1'
@@ -111,7 +125,13 @@ class ArtifactRecord(BaseModel):
     path: str
     schema_version: str
     row_count: int = Field(ge=0)
-    exclusion_count: int = Field(ge=0)
+    exclusion_count: int = Field(
+        ge=0,
+        description=(
+            'Informational: rows carrying an explicit exclusion at generation time. Not covered '
+            'by the member hashes and not validated at load; nothing depends on it.'
+        ),
+    )
     files: Tuple[ArtifactFile, ...]
 
     @field_validator('path')

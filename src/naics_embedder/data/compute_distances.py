@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import networkx as nx
 import polars as pl
 
+from naics_embedder.supervision.schema import CROSS_SECTOR_DISTANCE
 from naics_embedder.utils.config import DistancesConfig
 
 logger = logging.getLogger(__name__)
@@ -167,8 +168,6 @@ def _get_distance(i: str, j: str, depths: Dict[str, int], ancestors: Dict[str, L
 # -------------------------------------------------------------------------------------------------
 # Structural distances
 # -------------------------------------------------------------------------------------------------
-
-CROSS_SECTOR_DISTANCE = 99.0
 
 def compute_structural_distances(input_parquet: str, cfg: DistancesConfig) -> pl.DataFrame:
     '''

@@ -123,6 +123,7 @@ class LoggingMixin:
             'cousin',
             'nephew/niece',
             'grand-nephew/niece',
+            'grand-grand-nephew/niece',
             'cousin_1_times_removed',
             'second_cousin',
         }
@@ -136,7 +137,7 @@ class LoggingMixin:
                 sample_types['cousin'] += 1
             elif (
                 relation == 'cross_sector' or relation.startswith('third_cousin')
-                or relation.startswith('cousin_')
+                or relation.startswith('cousin_') or relation.startswith('second_cousin_')
             ):
                 sample_types['distant'] += 1
             else:
@@ -244,7 +245,6 @@ class LoggingMixin:
 
     def _log_selected_negative_stats(
         self,
-        batch: Dict[str, Any],
         anchor_emb: torch.Tensor,
         selected: SelectedNegativeBatch,
         batch_idx: int,

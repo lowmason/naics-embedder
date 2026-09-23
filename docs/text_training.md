@@ -229,9 +229,12 @@ duplicates removed by code (keeping the smallest UID), ties broken by code ID th
 deterministic backfill. Proposals are consulted in order:
 
 1. **Phase 2+ miners.** With hard-negative mining on, the geometric miner proposes its share of the
-   `K` slots; with router-guided mining also on, the router fills the rest.
-   `router_mix_ratio` (from `curriculum.anneal`, default 0.5) sets the router's share, so both
-   miners together decide the selection whenever they are enabled.
+   `K` slots, `K - int(K * router_mix_ratio)`; with router-guided mining also on, the router fills
+   the rest. `router_mix_ratio` comes from `curriculum.anneal` (default 0.5). A reserved exclusion
+   slot comes out of the router's share. Miners score one occurrence per code (the smallest
+   candidate UID, which the coordinator keeps) and never the anchor or positive code, so on
+   multiple GPUs, where a code repeats across rows and ranks of the global pool, the miners still
+   fill their slots with distinct codes.
 2. **The difficulty proposal** from the data layer, which is the only proposal in Phase 1 and the
    fallback afterwards.
 3. **Deterministic backfill** from the remaining eligible codes.

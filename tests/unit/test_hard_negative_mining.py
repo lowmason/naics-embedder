@@ -374,6 +374,27 @@ def test_router_mix_ratio_splits_mined_slots(hierarchy_index, mix, expected):
     assert _reasons(selected) == [SelectionReason.EXCLUSION_QUOTA] + expected
 
 
+def test_repeated_codes_cannot_crowd_distinct_codes_out_of_mining(hierarchy_index):
+    # A global pool repeats codes across rows and ranks. Three copies of code 13 sit at the anchor
+    # embedding; the miner must still fill every mined slot with a distinct code instead of
+    # leaving slots to the difficulty proposal.
+    pool = [HIERARCHY_EXCLUSION, 13, 13, 13, 12, 14, 15]
+
+    _, selected = _select_with_flags(
+        hierarchy_index,
+        {'enable_hard_negative_mining': True},
+        pool,
+        HIERARCHY_GRANDPARENT,
+        4,
+        _code_embedding(13),
+    )
+
+    assert _reasons(selected) == [SelectionReason.EXCLUSION_QUOTA] + [SelectionReason.GEOMETRIC] * 3
+    assert selected.code_id[0].tolist() == [HIERARCHY_EXCLUSION, 13, 14, 12]
+    # The duplicate code resolves to its smallest-UID occurrence (slot 1).
+    assert selected.candidate_uid[0, 1].tolist() == [0, 0, 1]
+
+
 def test_structurally_closer_relative_is_never_selected_even_when_nearest(hierarchy_index):
     # Positive: the grandparent. The parent is structurally closer than the positive, sits first
     # in the difficulty proposal, and is geometrically nearest to the anchor embedding.

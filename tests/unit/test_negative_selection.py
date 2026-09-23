@@ -7,7 +7,11 @@ import torch
 
 from naics_embedder.supervision.candidates import CandidateProposal
 from naics_embedder.supervision.schema import SelectionReason
-from naics_embedder.supervision.selection import NegativeSelectionCoordinator, stable_hash
+from naics_embedder.supervision.selection import (
+    NegativeSelectionCoordinator,
+    canonical_occurrence_mask,
+    stable_hash,
+)
 
 
 def test_quota_selects_exactly_one_exclusion_and_rotates(candidate_batch_with_exclusions):
@@ -259,6 +263,60 @@ def test_negative_infinity_marks_an_ineligible_proposal_entry(candidate_batch):
     reasons = [SelectionReason(reason) for reason in selection.reasons[0].tolist()]
     assert candidate_batch.select(selection).code_id.tolist() == [[103, 101, 102]]
     assert reasons == [SelectionReason.GEOMETRIC] * 2 + [SelectionReason.BACKFILL]
+
+
+def test_canonical_occurrence_is_the_smallest_valid_uid_per_code():
+    generator = torch.Generator().manual_seed(11)
+    for _ in range(25):
+        batch, width = 3, 40
+        code_id = torch.randint(0, 6, (batch, width), generator=generator)
+        uid = torch.stack(
+            [
+                torch.randint(0, 4, (batch, width), generator=generator),
+                torch.randint(0, 5, (batch, width), generator=generator),
+                torch.arange(width).expand(batch, width),
+            ],
+            dim=-1,
+        )
+        valid = torch.rand((batch, width), generator=generator).gt(0.3)
+
+        mask = canonical_occurrence_mask(code_id, uid, valid)
+
+        for row in range(batch):
+            smallest = {}
+            for slot in range(width):
+                if not valid[row, slot]:
+                    continue
+                code, key = int(code_id[row, slot]), tuple(uid[row, slot].tolist())
+                if code not in smallest or key < smallest[code][0]:
+                    smallest[code] = (key, slot)
+            assert set(torch.where(mask[row])[0].tolist()) == {
+                slot for _, slot in smallest.values()
+            }
+
+
+def test_malformed_score_in_an_unreached_proposal_is_still_fatal(candidate_batch):
+    filling = CandidateProposal(
+        source_indices=torch.tensor([[0, 1, 2]]),
+        scores=torch.tensor([[3.0, 2.0, 1.0]]),
+        reason=SelectionReason.GEOMETRIC,
+    )
+    unreached = CandidateProposal(
+        source_indices=torch.tensor([[2]]),
+        scores=torch.tensor([[float('nan')]]),
+        reason=SelectionReason.ROUTER,
+    )
+
+    with pytest.raises(ValueError, match='ROUTER proposal .* anchor code ID 100'):
+        NegativeSelectionCoordinator().select(
+            candidate_batch,
+            anchor_code_ids=torch.tensor([100]),
+            positive_code_ids=torch.tensor([104]),
+            k=3,
+            epoch=0,
+            global_seed=7,
+            proposals=(filling, unreached),
+        )
 
 
 def test_stable_hash_matches_a_sha256_of_the_packed_seed_and_anchor():

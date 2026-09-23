@@ -13,6 +13,7 @@ Provides methods for:
 '''
 
 import logging
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -30,6 +31,7 @@ from naics_embedder.supervision.schema import (
     SamplingRole,
     SelectionReason,
 )
+from naics_embedder.supervision.selection import canonical_occurrence_mask
 from naics_embedder.text_model.mixins.distributed import gather_candidate_entities
 
 logger = logging.getLogger(__name__)
@@ -272,6 +274,19 @@ class CurriculumMixin:
         # proposal is the fallback before deterministic backfill, and the sole proposal in Phase 1.
         selection_k = int(batch['selection_k'])
         proposals: List[CandidateProposal] = []
+        if enable_geometric or enable_router:
+            # Miners score one occurrence per code (the one the coordinator keeps) and never the
+            # anchor or positive code, so repeated codes in a global pool cannot crowd distinct
+            # codes out of a miner's top-k.
+            forbidden = candidates.code_id.eq(batch['anchor_code_id'].unsqueeze(1)) | (
+                candidates.code_id.eq(batch['positive_code_id'].unsqueeze(1))
+            )
+            proposable = canonical_occurrence_mask(
+                candidates.code_id,
+                candidates.candidate_uid,
+                candidates.valid_mask,
+            ) & ~forbidden
+            mining_candidates = replace(candidates, valid_mask=proposable)
         if enable_geometric:
             router_slots = 0
             if enable_router:
@@ -282,7 +297,7 @@ class CurriculumMixin:
                 proposals.append(
                     self.hard_negative_miner.propose(
                         anchor_output['embedding'],
-                        candidates,
+                        mining_candidates,
                         k=geometric_slots,
                     )
                 )
@@ -295,7 +310,7 @@ class CurriculumMixin:
             proposals.append(
                 self.router_guided_miner.propose(
                     anchor_gate_probs=anchor_gate_probs,
-                    candidates=candidates,
+                    candidates=mining_candidates,
                     k=selection_k,
                 )
             )

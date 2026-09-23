@@ -17,8 +17,13 @@ from typing import Iterator, List
 import numpy as np
 import polars as pl
 
-from naics_embedder.data.compute_distances import CROSS_SECTOR_DISTANCE
 from naics_embedder.supervision.schema import (
+    CROSS_SECTOR_DISTANCE,
+    CROSS_SECTOR_DISTANCE_MARGIN,
+    CROSS_SECTOR_RELATION_MARGIN,
+    EQUAL_DISTANCE_MARGIN,
+    LINEAL_ADJUSTED_DISTANCE_MARGIN,
+    LINEAL_DISTANCE_DELTA,
     SamplingRole,
     SemanticSource,
     SemanticTarget,
@@ -34,13 +39,10 @@ CROSS_SECTOR_NEGATIVE_CAP = 100
 CROSS_SECTOR_CAP_SEED = 0
 MAX_PAIRS_PER_BATCH = 4_000
 
-# Legacy margin weights and cross-sector margins, preserved for graph-model compatibility.
+# Legacy margin weights, preserved for graph-model compatibility. The structural margin special
+# cases live in supervision.schema so the runtime eligibility rule shares them.
 RELATION_MARGIN_WEIGHT = 0.3333
 DISTANCE_MARGIN_WEIGHT = 0.6667
-CROSS_SECTOR_RELATION_MARGIN = 15.0
-CROSS_SECTOR_DISTANCE_MARGIN = 10.0
-EQUAL_DISTANCE_MARGIN = 0.3333
-LINEAL_ADJUSTED_DISTANCE_MARGIN = 0.6667
 
 GENERATED_POSITIVE_PROVENANCE = 'generated_positive'
 GENERATED_CANDIDATE_PROVENANCE = 'generated_candidate'
@@ -150,7 +152,7 @@ def _structural_margins(frame: pl.DataFrame) -> pl.DataFrame:
                                                    ).otherwise(relation_delta),
         distance_margin=pl.when(relation_delta.gt(0) & distance_delta.eq(0.0)).then(
             pl.lit(EQUAL_DISTANCE_MARGIN)
-        ).when(relation_delta.gt(0) & distance_delta.eq(-0.5)).then(
+        ).when(relation_delta.gt(0) & distance_delta.eq(LINEAL_DISTANCE_DELTA)).then(
             pl.lit(LINEAL_ADJUSTED_DISTANCE_MARGIN)
         ).when(cross_sector).then(pl.lit(CROSS_SECTOR_DISTANCE_MARGIN)).otherwise(distance_delta),
     ).filter(

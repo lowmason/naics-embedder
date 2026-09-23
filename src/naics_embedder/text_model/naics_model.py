@@ -525,7 +525,7 @@ class NAICSContrastiveModel(
             candidate_uid=candidate_uid,
             batch_idx=batch_idx,
         )
-        self._log_selected_negative_stats(batch, anchor_emb, selected, batch_idx, batch_size)
+        self._log_selected_negative_stats(anchor_emb, selected, batch_idx, batch_size)
 
         # Pseudo-related candidates exist only after selection; exclusions are never eligible
         pseudo_related = self._build_selected_pseudo_related_mask(batch['anchor_code_id'], selected)

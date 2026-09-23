@@ -37,6 +37,56 @@ def stable_hash(global_seed: int, anchor_code_id: int) -> int:
     return int.from_bytes(hashlib.sha256(payload).digest()[:8], 'big', signed=False)
 
 # -------------------------------------------------------------------------------------------------
+# Canonical occurrences
+# -------------------------------------------------------------------------------------------------
+
+def canonical_occurrence_mask(
+    code_id: torch.Tensor,
+    candidate_uid: torch.Tensor,
+    valid_mask: torch.Tensor,
+) -> torch.Tensor:
+    '''
+    Per row, mark the valid occurrence of each code with the smallest candidate UID.
+
+    This is the occurrence the coordinator keeps when it deduplicates by code. Letting strategies
+    score only these entries means a code repeated across rows and ranks (as in a distributed
+    global pool) occupies one proposal slot instead of crowding out distinct codes.
+
+    Args:
+        code_id: ``[batch, candidate]`` code IDs.
+        candidate_uid: ``[batch, candidate, 3]`` occurrence UIDs.
+        valid_mask: ``[batch, candidate]`` validity.
+
+    Returns:
+        ``[batch, candidate]`` boolean mask on ``valid_mask``'s device.
+
+    Raises:
+        ValueError: If the identities cannot be ordered in one 64-bit key.
+    '''
+
+    device = valid_mask.device
+    valid = valid_mask.cpu()
+    code = code_id.cpu().masked_fill(~valid, 0)
+    uid = candidate_uid.cpu().masked_fill(~valid.unsqueeze(-1), 0)
+    widths = [int(uid[..., component].max()).bit_length() for component in range(3)]
+    code_width = int(code.max()).bit_length() if code.numel() else 0
+    if code_width + sum(widths) > 62:
+        raise ValueError('candidate identities are too large to order in one 64-bit key')
+
+    # Lexicographic (code, uid) order in one key: code is most significant, then UID components.
+    key = code.clone()
+    for component, width in enumerate(widths):
+        key = (key << width) | uid[..., component]
+    key = key.masked_fill(~valid, torch.iinfo(torch.int64).max)
+    order = key.argsort(dim=1)
+    sorted_code = code.gather(1, order)
+    first = valid.gather(1, order).clone()
+    first[:, 1:] &= sorted_code[:, 1:].ne(sorted_code[:, :-1])
+    mask = torch.zeros_like(valid)
+    mask.scatter_(1, order, first)
+    return mask.to(device)
+
+# -------------------------------------------------------------------------------------------------
 # Coordinator
 # -------------------------------------------------------------------------------------------------
 
@@ -72,6 +122,19 @@ class NegativeSelectionCoordinator:
         for proposal in proposals:
             if proposal.source_indices.shape[0] != batch_size:
                 raise ValueError('proposal batch dimension does not match candidate batch')
+            # -inf marks an ineligible entry; any other non-finite score is malformed, whether or
+            # not the merge would reach it.
+            malformed = proposal.source_indices.ge(0) & (
+                proposal.scores.isnan() | proposal.scores.isposinf()
+            )
+            if malformed.any():
+                row, slot = torch.nonzero(malformed, as_tuple=False)[0].tolist()
+                raise ValueError(
+                    f'{SelectionReason(proposal.reason).name} proposal for anchor code ID '
+                    f'{int(anchor_code_ids[row])} has a malformed score '
+                    f'{float(proposal.scores[row, slot])} at source index '
+                    f'{int(proposal.source_indices[row, slot])}'
+                )
 
         code_rows = candidates.code_id.tolist()
         valid_rows = candidates.valid_mask.tolist()
@@ -141,12 +204,6 @@ class NegativeSelectionCoordinator:
                     score = float(scores[row][proposal_slot])
                     if score == -math.inf:
                         continue  # the ineligible marker used by every strategy
-                    if not math.isfinite(score):
-                        raise ValueError(
-                            f'{SelectionReason(reason).name} proposal for anchor code ID '
-                            f'{anchors[row]} has a malformed score {score} at source index '
-                            f'{index}'
-                        )
                     best_score_by_code[code_id] = max(
                         score,
                         best_score_by_code.get(code_id, -math.inf),

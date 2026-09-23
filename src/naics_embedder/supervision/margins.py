@@ -6,10 +6,11 @@ negative must be structurally farther from the anchor than the positive. Cross-s
 negatives receive fixed margins; equal distances and the -0.5 lineal adjustment receive fixed
 distance margins when the relation margin is positive. Candidates sourced at runtime (universe
 backfill, the distributed global pool) pass through the same rule, so the repaired pipeline never
-repels a relative the generated supervision would not treat as a negative.
+repels an *ordinary* candidate that the generated supervision would not treat as a negative.
 
-Explicit exclusions are exempt: their exclusion is authoritative regardless of structure, so callers
-apply eligibility to ordinary candidates only.
+Explicit exclusions are exempt: their exclusion is authoritative regardless of structure (the
+quota may select a structurally close exclusion, as the contract requires), so callers apply
+eligibility to ordinary candidates only.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -20,15 +21,14 @@ from typing import Tuple
 
 import torch
 
-from naics_embedder.data.compute_distances import CROSS_SECTOR_DISTANCE
-from naics_embedder.data.create_triplets import (
+from naics_embedder.supervision.schema import (
+    CROSS_SECTOR_DISTANCE,
     CROSS_SECTOR_DISTANCE_MARGIN,
     CROSS_SECTOR_RELATION_MARGIN,
     EQUAL_DISTANCE_MARGIN,
     LINEAL_ADJUSTED_DISTANCE_MARGIN,
+    LINEAL_DISTANCE_DELTA,
 )
-
-LINEAL_DISTANCE_DELTA = -0.5
 
 # -------------------------------------------------------------------------------------------------
 # Margins and eligibility

@@ -238,6 +238,98 @@ def test_pool_fails_when_the_universe_cannot_supply_k(pool_builder):
         )
 
 
+# -------------------------------------------------------------------------------------------------
+# Structural eligibility on a production-shaped hierarchy
+#
+# For anchor '311111' (4) with its grandparent '3111' (2; grandchild relation, distance 1.5) as the
+# positive, only the parent '31111' (3; child relation, distance 0.5) is structurally closer. Every
+# other non-forbidden code is farther: ancestors '31'/'311' (0, 1), the collateral codes 5-10, the
+# exclusion '321111' (11), and the cross-sector '44' family (12-16).
+# -------------------------------------------------------------------------------------------------
+
+HIERARCHY_ELIGIBLE_ORDINARY = {0, 1, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16}
+
+
+@pytest.fixture
+def hierarchy_index(tmp_path, hierarchy_descriptions_parquet):
+    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+    from naics_embedder.supervision.artifacts import load_validated_bundle
+    from naics_embedder.utils.config import SupervisionBuildConfig
+
+    manifest = generate_supervision_bundle(
+        SupervisionBuildConfig(
+            descriptions_parquet=hierarchy_descriptions_parquet,
+            output_root=str(tmp_path / 'bundles'),
+        )
+    )
+    return SupervisionIndex.from_bundle(load_validated_bundle(manifest))
+
+
+def _raw(index, code_ids):
+    return [
+        {
+            'negative_code_id': code_id,
+            'negative_code': index.id_to_code[code_id],
+            'negative_structural_distance': float(index.structural_distance[4, code_id]),
+            'sampling_role_id': 2,
+            'sampling_provenance_id': 2,
+        }
+        for code_id in code_ids
+    ]
+
+
+def test_pool_rejects_a_raw_candidate_structurally_closer_than_the_positive(hierarchy_index):
+    with pytest.raises(ValueError, match='raw candidate code ID 3 .* not structurally farther'):
+        build_candidate_pool(
+            anchor_code_id=4,
+            positive_code_id=2,
+            raw_candidates=_raw(hierarchy_index, [12, 3, 13]),
+            supervision_index=hierarchy_index,
+            n_candidates=4,
+            final_k=3,
+            epoch=0,
+            seed=0,
+        )
+
+
+def test_pool_backfills_only_structurally_eligible_codes(hierarchy_index):
+    pool = build_candidate_pool(
+        anchor_code_id=4,
+        positive_code_id=2,
+        raw_candidates=_raw(hierarchy_index, [12]),
+        supervision_index=hierarchy_index,
+        n_candidates=17,
+        final_k=5,
+        epoch=0,
+        seed=0,
+    )
+
+    codes = [candidate['negative_code_id'] for candidate in pool]
+    ordinary = {
+        candidate['negative_code_id']
+        for candidate in pool
+        if not candidate['negative_is_explicit_exclusion']
+    }
+    # The universe is exhausted, yet the parent is never backfilled.
+    assert 3 not in codes
+    assert ordinary == HIERARCHY_ELIGIBLE_ORDINARY
+    assert codes[0] == 11
+
+
+def test_pool_capacity_counts_only_structurally_eligible_codes(hierarchy_index):
+    with pytest.raises(ValueError, match='requires 15 .* structurally farther'):
+        build_candidate_pool(
+            anchor_code_id=4,
+            positive_code_id=2,
+            raw_candidates=[],
+            supervision_index=hierarchy_index,
+            n_candidates=15,
+            final_k=15,
+            epoch=0,
+            seed=0,
+        )
+
+
 def test_phase1_weights_ignore_exclusions_without_a_weight():
     candidates = [
         {'negative_code': '222222', 'negative_idx': 1},
