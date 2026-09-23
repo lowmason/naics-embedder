@@ -12,7 +12,8 @@ NAICS taxonomy.
 
 - **Language:** Python 3.10+
 - **Package Manager:** `uv` (modern Python package manager)
-- **ML Frameworks:** PyTorch ≥2.4.0, PyTorch Lightning ≥2.4, Transformers ≥4.46, PyTorch Geometric ≥2.7
+- **ML Frameworks:** PyTorch ≥2.4.0, PyTorch Lightning ≥2.4, Transformers ≥4.46,
+  PyTorch Geometric ≥2.7
 - **Data:** Polars ≥1.9 (high-performance DataFrames), PyArrow ≥17.0
 - **Configuration:** Pydantic ≥2.12 (config models), Hydra-style YAML configs
 - **CLI:** Typer ≥0.12 with Rich ≥13.9 formatting
