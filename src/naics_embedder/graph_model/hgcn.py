@@ -1102,8 +1102,20 @@ class HGCNLightningModule(pyl.LightningModule):
         }
 
     def get_final_embeddings(self) -> torch.Tensor:
-        with torch.no_grad():
-            final_emb = self.forward()
+        '''
+        Compute export embeddings with dropout disabled.
+
+        Lightning leaves the module in training mode after ``fit``, so the pass runs in eval mode
+        and then restores each submodule's prior mode.
+        '''
+        modes = {module: module.training for module in self.modules()}
+        self.eval()
+        try:
+            with torch.no_grad():
+                final_emb = self.forward()
+        finally:
+            for module, training in modes.items():
+                module.training = training
         return final_emb.detach().cpu()
 
     def export_history(self) -> List[Dict[str, Any]]:

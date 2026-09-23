@@ -265,3 +265,31 @@ def test_convolution_handles_self_loops_only(test_device):
 
     out = conv(x_hyp, edge_index, edge_types, edge_weights)
     assert torch.isfinite(out).all()
+
+@pytest.mark.unit
+def test_get_final_embeddings_is_deterministic_in_training_mode(graph_inputs):
+    module, _ = graph_inputs(dropout=0.1)
+    module.eval()
+    with torch.no_grad():
+        expected = module().cpu()
+    module.train()
+
+    first = module.get_final_embeddings()
+    second = module.get_final_embeddings()
+
+    assert torch.equal(first, second)
+    assert torch.equal(first, expected)
+    assert all(submodule.training for submodule in module.modules())
+
+@pytest.mark.unit
+@pytest.mark.parametrize('start_mode', ['eval', 'mixed'])
+def test_get_final_embeddings_restores_submodule_modes(graph_inputs, start_mode):
+    module, _ = graph_inputs(dropout=0.1)
+    module.train(start_mode == 'mixed')
+    if start_mode == 'mixed':
+        module.model.layers[0].eval()
+    modes = {name: submodule.training for name, submodule in module.named_modules()}
+
+    module.get_final_embeddings()
+
+    assert {name: submodule.training for name, submodule in module.named_modules()} == modes
