@@ -7,9 +7,11 @@ code as their oracle.
 
 import polars as pl
 import pytest
+import torch
 
 from naics_embedder.data.supervision_bundle import generate_supervision_bundle_from_frames
 from naics_embedder.supervision.artifacts import load_validated_bundle
+from naics_embedder.supervision.candidates import NegativeCandidateBatch
 
 
 @pytest.fixture
@@ -177,6 +179,65 @@ def validated_bundle(generated_bundle):
         generated_bundle,
         expected_contract='stage3-supervision-v1',
     )
+
+
+# -------------------------------------------------------------------------------------------------
+# Candidate batches: every aligned field carries a distinguishable per-slot ordinal (1, 2, 3, ...)
+# -------------------------------------------------------------------------------------------------
+
+def _negative_candidate_batch(
+    code_ids: list[int],
+    explicit_exclusions: list[bool],
+) -> NegativeCandidateBatch:
+    count = len(code_ids)
+    shape = (1, count)
+    slots = torch.arange(count, dtype=torch.long)
+    candidate_uid = torch.stack(
+        [torch.zeros_like(slots), torch.zeros_like(slots), slots], dim=-1
+    ).unsqueeze(0)
+    ordinal = torch.arange(1, count + 1, dtype=torch.float64).unsqueeze(0)
+    anchor_excludes = torch.tensor([explicit_exclusions], dtype=torch.bool)
+    candidate_excludes = torch.zeros(shape, dtype=torch.bool)
+    explicit = anchor_excludes | candidate_excludes
+    return NegativeCandidateBatch(
+        candidate_uid=candidate_uid,
+        code_id=torch.tensor([code_ids], dtype=torch.long),
+        embedding=torch.stack([ordinal, ordinal + 0.5], dim=-1),
+        structural_distance=ordinal.clone(),
+        structural_relation_id=ordinal.to(torch.int16),
+        anchor_excludes_candidate=anchor_excludes,
+        candidate_excludes_anchor=candidate_excludes,
+        is_explicit_exclusion=explicit,
+        semantic_target_id=torch.where(explicit, 2, 0).to(torch.int8),
+        semantic_source_id=torch.where(explicit, 2, 0).to(torch.int8),
+        sampling_role_id=torch.full(shape, 2, dtype=torch.int8),
+        sampling_provenance_id=torch.full(shape, 2, dtype=torch.int8),
+        relation_margin=ordinal.clone(),
+        distance_margin=ordinal.clone(),
+        router_gate_probs=torch.stack(
+            [ordinal / 10.0, 1.0 - ordinal / 10.0], dim=-1
+        ),
+        valid_mask=torch.ones(shape, dtype=torch.bool),
+        runtime_fields={'difficulty': ordinal * 10.0},
+    )
+
+
+@pytest.fixture
+def candidate_batch() -> NegativeCandidateBatch:
+    return _negative_candidate_batch([101, 102, 103], [False, False, False])
+
+
+@pytest.fixture
+def candidate_batch_with_exclusions() -> NegativeCandidateBatch:
+    return _negative_candidate_batch(
+        [20, 21, 22, 30, 31, 32],
+        [True, True, True, False, False, False],
+    )
+
+
+@pytest.fixture
+def candidate_batch_with_duplicate_code() -> NegativeCandidateBatch:
+    return _negative_candidate_batch([101, 101, 102], [False, False, False])
 
 
 # -------------------------------------------------------------------------------------------------
