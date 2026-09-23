@@ -612,6 +612,9 @@ def train(
             supervision_manifest_path=cfg.supervision.manifest_path,
             supervision_contract_version=cfg.supervision.contract_version,
             supervision_bundle=bundle,
+            # Must equal the model's curriculum inputs (trainer.max_epochs, curriculum_phase1_end)
+            max_epochs=cfg.training.trainer.max_epochs,
+            phase1_end=cfg.curriculum.phase1_end,
         )
 
         # Handle checkpoint resumption using centralized utility
