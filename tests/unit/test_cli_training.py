@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 from naics_embedder.cli import app as cli_app
 from naics_embedder.cli.commands import training
 from naics_embedder.supervision.checkpoints import CheckpointContract, MigrationReport
+from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
 from naics_embedder.utils.config import CheckpointLoadMode, Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
@@ -153,6 +154,14 @@ def test_cli_train_runs_with_defaults(cli_runner, training_env):
     assert training_env.trainer is not None
     assert training_env.trainer.fit_calls[0]['ckpt_path'] is None
     assert training_env.save_summary_calls
+
+@pytest.mark.unit
+def test_training_propagates_train_epoch_to_datamodule(training_env):
+    '''Lightning never calls datamodule epoch hooks, so the trainer must carry the callback.'''
+    training.train(skip_validation=True)
+
+    callbacks = training_env.trainer.kwargs['callbacks']
+    assert any(isinstance(cb, TrainDatasetEpochCallback) for cb in callbacks)
 
 @pytest.mark.unit
 def test_cli_train_applies_overrides(cli_runner, training_env, monkeypatch):

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import polars as pl
+import pytorch_lightning as pyl
 import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
@@ -791,6 +792,35 @@ def legacy_token_fingerprints(descriptions_parquet: str) -> Dict[str, str]:
 
 
 # -------------------------------------------------------------------------------------------------
+# Epoch propagation to DataLoader worker processes
+# -------------------------------------------------------------------------------------------------
+
+class _EpochSyncedDataset(Dataset):
+    '''
+    Apply a shared training epoch to an epoch-aware dataset in every process that samples it.
+
+    DataLoader workers (persistent or not; fork, spawn or forkserver) sample from their own copy of
+    the dataset, so set_epoch() in the main process never reaches them. The epoch lives in a
+    shared-memory tensor read by every copy, and each copy applies it to its own dataset.
+    '''
+
+    def __init__(self, dataset: Dataset, shared_epoch: torch.Tensor):
+        self.dataset = dataset
+        self.shared_epoch = shared_epoch
+        self._applied_epoch: Optional[int] = None
+
+    def __len__(self) -> int:
+        return len(self.dataset)  # type: ignore[arg-type]
+
+    def __getitem__(self, idx: int) -> Optional[Dict[str, Any]]:
+        epoch = int(self.shared_epoch)
+        if epoch != self._applied_epoch:
+            self.dataset.set_epoch(epoch)  # type: ignore[attr-defined]
+            self._applied_epoch = epoch
+        return self.dataset[idx]
+
+
+# -------------------------------------------------------------------------------------------------
 # Main DataModule for PyTorch Lightning
 # -------------------------------------------------------------------------------------------------
 
@@ -872,6 +902,9 @@ class NAICSDataModule(LightningDataModule):
         self.train_dataset: Optional[Dataset] = None
         self.val_dataset: Optional[Dataset] = None
         self._token_cache: Optional[Dict[int, Dict[str, Any]]] = None
+
+        # Training epoch shared with DataLoader worker processes (see _EpochSyncedDataset)
+        self._train_epoch = torch.zeros((), dtype=torch.int64).share_memory_()
 
     # ---------------------------------------------------------------------------------------------
     # Supervision identity
@@ -1060,8 +1093,16 @@ class NAICSDataModule(LightningDataModule):
         '''Create training dataloader with shuffling enabled.'''
         if self.train_dataset is None:
             raise RuntimeError('train_dataset is None - call setup() first')
+        if self.trainer is not None:
+            # Lightning calls this after restoring a checkpoint's loop state and before creating
+            # the first iterator; no epoch hook runs in between (and none at all on a mid-epoch
+            # resume), so start from the trainer's epoch here.
+            self.set_train_epoch(self.trainer.current_epoch)
+        dataset = self.train_dataset
+        if hasattr(dataset, 'set_epoch'):
+            dataset = _EpochSyncedDataset(dataset, self._train_epoch)
         return DataLoader(
-            self.train_dataset,
+            dataset,
             batch_size=self.batch_size,
             shuffle=True,  # Enable shuffling for map-style dataset
             num_workers=self.num_workers,
@@ -1082,9 +1123,33 @@ class NAICSDataModule(LightningDataModule):
             persistent_workers=self.num_workers > 0,
         )
 
-    def on_train_epoch_start(self) -> None:
-        '''Update dataset epoch for on-the-fly sampling with difficulty curriculum.'''
-        if self.trainer is not None and hasattr(self.train_dataset, 'set_epoch'):
-            current_epoch = self.trainer.current_epoch
-            self.train_dataset.set_epoch(current_epoch)
-            logger.debug(f'Updated train dataset epoch to {current_epoch}')
+    def set_train_epoch(self, epoch: int) -> None:
+        '''
+        Set the sampling epoch of an epoch-aware training dataset in every process sampling it.
+
+        The validation dataset is deliberately never updated: its pools must not depend on the
+        epoch because val/contrastive_loss drives checkpointing.
+        '''
+        if hasattr(self.train_dataset, 'set_epoch'):
+            self._train_epoch.fill_(epoch)  # read by DataLoader workers
+            self.train_dataset.set_epoch(epoch)  # main-process copy
+            logger.debug(f'Updated train dataset epoch to {epoch}')
+
+
+# -------------------------------------------------------------------------------------------------
+# Callback propagating the training epoch to the datamodule
+# -------------------------------------------------------------------------------------------------
+
+class TrainDatasetEpochCallback(pyl.Callback):
+    '''
+    Propagate the trainer's epoch to NAICSDataModule's training dataset at each epoch start.
+
+    Register it on every Trainer that fits a NAICSDataModule: Lightning dispatches
+    on_train_epoch_start to callbacks and the LightningModule, never to a LightningDataModule,
+    so the datamodule cannot advance on-the-fly sampling past epoch 0 by itself.
+    '''
+
+    def on_train_epoch_start(self, trainer: pyl.Trainer, pl_module: pyl.LightningModule) -> None:
+        datamodule = trainer.datamodule
+        if isinstance(datamodule, NAICSDataModule):
+            datamodule.set_train_epoch(trainer.current_epoch)

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
 from naics_embedder.utils.config import Config
 from naics_embedder.utils.training import (
     HardwareInfo,
@@ -138,6 +139,18 @@ def test_create_trainer_uses_cpu_defaults(tmp_path):
     assert es_cb.patience == 3
     assert trainer.max_epochs == cfg.training.trainer.max_epochs
     assert trainer.logger is not None
+
+@pytest.mark.unit
+def test_create_trainer_propagates_train_epoch_to_datamodule(tmp_path):
+    '''Lightning never calls datamodule epoch hooks, so the trainer must carry the callback.'''
+    cfg = _build_config(tmp_path)
+    hardware = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
+    checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    trainer, _, _ = create_trainer(cfg, hardware, checkpoint_dir)
+
+    assert any(isinstance(cb, TrainDatasetEpochCallback) for cb in trainer.callbacks)
 
 @pytest.mark.unit
 def test_create_trainer_multi_gpu_uses_ddp(monkeypatch, tmp_path):

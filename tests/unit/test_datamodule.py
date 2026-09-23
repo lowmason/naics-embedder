@@ -6,15 +6,25 @@ Tests cover:
 - Multi-level supervision expansion
 - Sampling metadata accumulation
 - NAICSMapDataset indexing and __getitem__
+- Train-epoch propagation to epoch-aware datasets under a real Trainer (incl. persistent workers)
 '''
 
 import copy
-from typing import Any
+from collections import defaultdict
+from typing import Any, Dict, Optional, Set
 
 import pytest
+import pytorch_lightning as pyl
 import torch
+from pytorch_lightning.callbacks import ModelCheckpoint
 
-from naics_embedder.text_model.dataloader.datamodule import NAICSMapDataset, collate_fn
+from naics_embedder.text_model.dataloader.datamodule import (
+    NAICSDataModule,
+    NAICSMapDataset,
+    TrainDatasetEpochCallback,
+    collate_fn,
+)
+from tests.fixtures.epoch_datasets import EpochRecordingDataset
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -386,7 +396,6 @@ def test_validation_pools_are_stable_across_training_epochs(
 ):
     # val/contrastive_loss scores whole validation pools and drives checkpointing, so epoch
     # progress may only change training pools.
-    from unittest.mock import Mock
 
     from naics_embedder.text_model.dataloader.datamodule import (
         NAICSDataModule,
@@ -423,8 +432,7 @@ def test_validation_pools_are_stable_across_training_epochs(
     before = pools(datamodule.val_dataset)
     assert any(before)
 
-    datamodule.trainer = Mock(current_epoch=3)
-    datamodule.on_train_epoch_start()
+    datamodule.set_train_epoch(3)
 
     assert datamodule.train_dataset.epoch == 3
     assert datamodule.val_dataset.epoch == 0
@@ -1295,6 +1303,12 @@ class TestDataLoaderCreation:
         # persistent_workers should be False since num_workers=0
         assert train_loader.persistent_workers is False
 
+    def test_train_dataloader_keeps_precomputed_dataset(self, mock_datamodule_with_datasets):
+        '''The default precomputed path (no set_epoch) loads its dataset unchanged.'''
+        train_loader = mock_datamodule_with_datasets.train_dataloader()
+
+        assert train_loader.dataset is mock_datamodule_with_datasets.train_dataset
+
     def test_train_dataloader_raises_if_dataset_none(self, tmp_path):
         '''Test that train_dataloader raises RuntimeError if setup() not called.'''
         import polars as pl
@@ -1318,3 +1332,151 @@ class TestDataLoaderCreation:
 
         with pytest.raises(RuntimeError, match='train_dataset is None'):
             datamodule.train_dataloader()
+
+
+# -------------------------------------------------------------------------------------------------
+# Train Epoch Propagation Tests
+# -------------------------------------------------------------------------------------------------
+
+class _InjectedDataModule(NAICSDataModule):
+    '''NAICSDataModule with injected datasets: skips building the parquet/tokenizer caches.'''
+
+    def prepare_data(self) -> None:
+        pass
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        pass
+
+
+def _sampled_epochs(batch: Dict[str, Any]) -> Set[int]:
+    '''Epochs that the items of a collated EpochRecordingDataset batch were sampled with.'''
+    return {int(code) for code in batch['anchor_code']}
+
+
+class _EpochRecorder(pyl.LightningModule):
+    '''Records, per trainer epoch, the dataset epochs that train and val batches were sampled at.'''
+
+    def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.zeros(1))
+        self.train_epochs: Dict[int, Set[int]] = defaultdict(set)
+        self.val_epochs: Dict[int, Set[int]] = defaultdict(set)
+
+    def training_step(self, batch, batch_idx):
+        self.train_epochs[self.current_epoch] |= _sampled_epochs(batch)
+        return self.weight.sum()
+
+    def validation_step(self, batch, batch_idx):
+        self.val_epochs[self.current_epoch] |= _sampled_epochs(batch)
+
+    def configure_optimizers(self):
+        return torch.optim.SGD(self.parameters(), lr=0.1)
+
+
+def _epoch_aware_datamodule(tmp_path, num_workers: int) -> NAICSDataModule:
+    datamodule = _InjectedDataModule(
+        descriptions_path=str(tmp_path / 'descriptions.parquet'),
+        triplets_path=str(tmp_path / 'triplets'),
+        batch_size=2,
+        num_workers=num_workers,
+        supervision_mode='legacy_containment',  # EpochRecordingDataset emits legacy items
+    )
+    # More items than one batch, so worker prefetch is in flight when an epoch is cut short
+    datamodule.train_dataset = EpochRecordingDataset(n_items=16)
+    datamodule.val_dataset = EpochRecordingDataset(n_items=16)
+    return datamodule
+
+
+def _fit(tmp_path, datamodule, max_epochs, ckpt_path=None, extra_callbacks=(), **trainer_kwargs):
+    '''Fit an _EpochRecorder with a real Trainer; returns (trainer, model).'''
+    options: Dict[str, Any] = {
+        'max_epochs': max_epochs,
+        'limit_train_batches': 1,
+        'limit_val_batches': 0,
+        'num_sanity_val_steps': 0,
+        'accelerator': 'cpu',
+        'callbacks': [TrainDatasetEpochCallback(), *extra_callbacks],
+        'logger': False,
+        'enable_checkpointing': bool(extra_callbacks),
+        'enable_progress_bar': False,
+        'enable_model_summary': False,
+        'default_root_dir': tmp_path,
+    }
+    options.update(trainer_kwargs)
+    model = _EpochRecorder()
+    trainer = pyl.Trainer(**options)
+    trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
+    return trainer, model
+
+
+@pytest.mark.unit
+def test_train_dataset_epoch_advances_under_real_trainer(tmp_path):
+    '''Lightning never calls LightningDataModule epoch hooks; the epoch must still arrive.'''
+    datamodule = _epoch_aware_datamodule(tmp_path, num_workers=0)
+
+    _, model = _fit(tmp_path, datamodule, max_epochs=2)
+
+    assert datamodule.train_dataset.epoch == 1
+    assert model.train_epochs == {0: {0}, 1: {1}}
+
+
+@pytest.mark.unit
+def test_persistent_workers_sample_with_current_epoch(tmp_path):
+    '''Persistent workers keep their own dataset copies; each new epoch must still reach them.'''
+    datamodule = _epoch_aware_datamodule(tmp_path, num_workers=2)
+
+    trainer, model = _fit(tmp_path, datamodule, max_epochs=3)
+
+    assert trainer.train_dataloader.persistent_workers
+    assert model.train_epochs == {0: {0}, 1: {1}, 2: {2}}
+
+
+@pytest.mark.unit
+def test_validation_pools_stay_at_epoch_zero(tmp_path):
+    '''val/contrastive_loss drives checkpointing, so validation must not follow the epoch.'''
+    datamodule = _epoch_aware_datamodule(tmp_path, num_workers=2)
+
+    _, model = _fit(tmp_path, datamodule, max_epochs=3, limit_val_batches=1)
+
+    assert model.train_epochs == {0: {0}, 1: {1}, 2: {2}}
+    assert model.val_epochs == {0: {0}, 1: {0}, 2: {0}}
+    assert datamodule.val_dataset.epoch == 0
+
+
+@pytest.mark.unit
+def test_resume_with_workers_samples_with_restored_epoch(tmp_path):
+    '''Workers spawn and prefetch in setup_data(), before any epoch hook of the resumed run.'''
+    trainer, _ = _fit(tmp_path, _epoch_aware_datamodule(tmp_path, num_workers=2), max_epochs=2)
+    ckpt_path = tmp_path / 'epoch_end.ckpt'
+    trainer.save_checkpoint(ckpt_path)
+
+    datamodule = _epoch_aware_datamodule(tmp_path, num_workers=2)
+    _, model = _fit(tmp_path, datamodule, max_epochs=3, ckpt_path=ckpt_path)
+
+    assert model.train_epochs == {2: {2}}
+
+
+@pytest.mark.unit
+def test_mid_epoch_resume_samples_with_restored_epoch(tmp_path):
+    '''Lightning skips on_train_epoch_start entirely when it resumes mid-epoch.'''
+    step_checkpoints = ModelCheckpoint(
+        dirpath=tmp_path / 'steps', filename='{epoch}-{step}', every_n_train_steps=1, save_top_k=-1
+    )
+    _fit(
+        tmp_path,
+        _epoch_aware_datamodule(tmp_path, num_workers=0),
+        max_epochs=2,
+        limit_train_batches=2,
+        extra_callbacks=[step_checkpoints],
+    )
+
+    datamodule = _epoch_aware_datamodule(tmp_path, num_workers=0)
+    _, model = _fit(
+        tmp_path,
+        datamodule,
+        max_epochs=2,
+        limit_train_batches=2,
+        ckpt_path=tmp_path / 'steps' / 'epoch=1-step=3.ckpt',  # after 1 of 2 batches of epoch 1
+    )
+
+    assert model.train_epochs == {1: {1}}

@@ -321,8 +321,14 @@ def create_trainer(
         tb_log_dir.mkdir(parents=True, exist_ok=True)
         tb_logger = TensorBoardLogger(save_dir=cfg.dirs.output_dir, name=cfg.experiment_name)
 
-    # Combine callbacks
-    all_callbacks: List[Callback] = [checkpoint_callback, early_stopping]
+    # Combine callbacks (TrainDatasetEpochCallback advances on-the-fly training sampling per epoch)
+    from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
+
+    all_callbacks: List[Callback] = [
+        checkpoint_callback,
+        early_stopping,
+        TrainDatasetEpochCallback(),
+    ]
     if callbacks:
         all_callbacks.extend(callbacks)
 
