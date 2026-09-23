@@ -1,5 +1,7 @@
 # Stage-3 Supervision Integrity Implementation Plan
 
+**Status: COMPLETE (2026-09-23)** — executed via executing-plans; deferred items in specs/deferred_items.md
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via subagent-driven-development (the default) — or executing-plans when your human partner chose inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace Stage-3’s implicit, contradictory supervision arrays with one versioned identity-first contract in which structural facts remain untouched, exclusions remain repulsive, selection is index-checked, and ranking gradients point in the corrective direction.
@@ -32,7 +34,7 @@
 
 ## Execution Baseline
 
-The planning branch contains the approved spec but is three fetched commits behind `origin/main`. Those commits add `Phase1MapDataset`, `difficulty_sampler.py`, `all_candidates`, and the candidate-pool configuration explicitly named by the spec. Before Task 1, create the execution worktree via `using-git-worktrees` and merge that baseline while retaining this plan and `specs/stage-3-supervision-integrity.md`:
+The planning branch contains the approved spec but is three fetched commits behind `origin/main`. Those commits add `Phase1MapDataset`, `difficulty_sampler.py`, `all_candidates`, and the candidate-pool configuration explicitly named by the spec. Before Task 1, create the execution worktree via `using-git-worktrees` and merge that baseline while retaining this plan and `specs/completed/stage-3-supervision-integrity.md`:
 
 ```bash
 git merge --no-edit origin/main
@@ -107,7 +109,7 @@ Expected: the merge includes upstream commit `545ec50` (or a descendant), both s
 - Consumes: no earlier task interfaces.
 - Produces: `CONTRACT_VERSION`, `STRUCTURAL_PREFERENCE_LOSS_VERSION`, `MINING_CONTRACT_VERSION`, `SemanticTarget`, `SemanticSource`, `SamplingRole`, `SamplingProvenance`, `SelectionReason`, `ArtifactFile`, `ArtifactRecord`, and `SupervisionManifest`.
 
-- [ ] **Step 1: Write the failing schema tests**
+- [x] **Step 1: Write the failing schema tests**
 
 ```python
 # tests/unit/test_supervision_schema.py
@@ -175,12 +177,12 @@ def test_manifest_rejects_parent_traversal():
         SupervisionManifest.model_validate(manifest)
 ```
 
-- [ ] **Step 2: Run the schema tests and verify the import failure**
+- [x] **Step 2: Run the schema tests and verify the import failure**
 
 Run: `uv run pytest tests/unit/test_supervision_schema.py -q`
 Expected: FAIL during collection with `ModuleNotFoundError: No module named 'naics_embedder.supervision'`.
 
-- [ ] **Step 3: Add the complete contract vocabulary**
+- [x] **Step 3: Add the complete contract vocabulary**
 
 ```python
 # src/naics_embedder/supervision/schema.py
@@ -317,17 +319,17 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 4: Run the focused tests**
+- [x] **Step 4: Run the focused tests**
 
 Run: `uv run pytest tests/unit/test_supervision_schema.py -q`
 Expected: `2 passed`.
 
-- [ ] **Step 5: Run lint on the new package**
+- [x] **Step 5: Run lint on the new package**
 
 Run: `uv run ruff check src/naics_embedder/supervision tests/unit/test_supervision_schema.py`
 Expected: `All checks passed!`.
 
-- [ ] **Step 6: Commit the schema boundary**
+- [x] **Step 6: Commit the schema boundary**
 
 ```bash
 git add src/naics_embedder/supervision tests/unit/test_supervision_schema.py
@@ -353,7 +355,7 @@ git commit -m "feat(supervision): define stage3 contract schema"
 - Consumes: schema/version constants from Task 1.
 - Produces: `build_codebook(descriptions: pl.DataFrame) -> pl.DataFrame`, `codebook_fingerprint(codebook: pl.DataFrame) -> str`, `attach_exclusion_provenance(pair_facts, descriptions, codebook) -> pl.DataFrame`, `build_pair_facts(distances, relations, descriptions, codebook) -> pl.DataFrame`, `distance_matrix_from_pair_facts(pair_facts, codebook) -> pl.DataFrame`, and `relation_matrix_from_pair_facts(pair_facts, codebook) -> pl.DataFrame`.
 
-- [ ] **Step 1: Replace sentinel expectations with invariant-focused failing tests**
+- [x] **Step 1: Replace sentinel expectations with invariant-focused failing tests**
 
 Register a shared, hand-written fixture plugin. These rows deliberately include an ordinary
 positive, a forward exclusion, an ordinary negative, and a reverse exclusion; later tests can
@@ -604,12 +606,14 @@ def test_pair_rows_keep_the_generator_canonical_orientation(
 
 In `tests/unit/test_data_distances.py` and `tests/unit/test_data_relations.py`, replace tests that expect distance `0`, relation ID `0`, or relation name `excluded` with assertions that the structural values are unchanged and no structural column contains an exclusion sentinel.
 
-- [ ] **Step 2: Run the generation tests and verify the missing-module/API failures**
+- [x] **Step 2: Run the generation tests and verify the missing-module/API failures**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py tests/unit/test_data_distances.py tests/unit/test_data_relations.py -q`
 Expected: FAIL because `supervision_bundle` and the new structural column contract do not exist.
 
-- [ ] **Step 3: Make distance and relation generation structural-only**
+- [x] **Step 3: Make distance and relation generation structural-only**
+
+> Deviation: Canonical orientation keeps (level, code) order: the real `index` is lexicographic, so the planned `code_i_id < code_j_id` check failed on 1.5M real rows (D1); unmapped relation names are fatal (D5); `unrelated` became `cross_sector` = 99 with consumer updates (D4).
 
 Apply these exact semantic replacements around the final frame construction:
 
@@ -664,7 +668,9 @@ Delete both now-unused `_get_exclusions` functions. Change the matrix helpers to
 
 Preserve the current generator orientation when forming pair rows: the shallower code is `code_i`, ties use stable code order, and `code_i_id < code_j_id` is validated after the codebook join. Mirroring `structural_relation_id` into a lookup matrix does not create or persist a reverse relation name.
 
-- [ ] **Step 4: Implement canonical codebook, directional provenance, and matrices**
+- [x] **Step 4: Implement canonical codebook, directional provenance, and matrices**
+
+> Deviation: `build_pair_facts` also checks identity, self-pairs, completeness, nulls, and exclusion attachment, and diagnoses duplicates before orientation (D6).
 
 ```python
 # src/naics_embedder/data/supervision_bundle.py
@@ -809,12 +815,12 @@ def relation_matrix_from_pair_facts(
     return _matrix(pair_facts, codebook, 'structural_relation_id', np.int16)
 ```
 
-- [ ] **Step 5: Run structural and pair-fact tests**
+- [x] **Step 5: Run structural and pair-fact tests**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py tests/unit/test_data_distances.py tests/unit/test_data_relations.py -q`
 Expected: PASS; no test expects an exclusion sentinel in a structural field.
 
-- [ ] **Step 6: Commit canonical structural facts**
+- [x] **Step 6: Commit canonical structural facts**
 
 ```bash
 git add conf/data/relations.yaml src/naics_embedder/data/compute_distances.py src/naics_embedder/data/compute_relations.py src/naics_embedder/data/supervision_bundle.py tests/conftest.py tests/fixtures/supervision.py tests/unit/test_data_distances.py tests/unit/test_data_relations.py tests/unit/test_supervision_artifacts.py
@@ -835,7 +841,7 @@ git commit -m "fix(data): preserve structure across exclusions"
 - Consumes: `build_pair_facts` and codebook from Task 2.
 - Produces: `build_training_pairs(pair_facts: pl.DataFrame) -> pl.DataFrame` with identity, raw structure, semantic target/source, sampling role/provenance, exclusion directions, derived exclusion, and legacy compatibility columns.
 
-- [ ] **Step 1: Write failing semantic and direct-positive tests**
+- [x] **Step 1: Write failing semantic and direct-positive tests**
 
 ```python
 # add to tests/unit/test_data_triplets.py
@@ -870,12 +876,14 @@ def test_explicit_exclusion_cannot_be_a_direct_positive(pair_facts_fixture):
 
 Use the ten-row `pair_facts_fixture` from `tests/fixtures/supervision.py`. Its expected values are hand-written and independent of `build_training_pairs`.
 
-- [ ] **Step 2: Run the training-pair tests and verify failure**
+- [x] **Step 2: Run the training-pair tests and verify failure**
 
 Run: `uv run pytest tests/unit/test_data_triplets.py -q`
 Expected: FAIL because `build_training_pairs` does not exist and current code infers exclusion from distance `0`.
 
-- [ ] **Step 3: Replace sentinel-derived triplet semantics with explicit columns**
+- [x] **Step 3: Replace sentinel-derived triplet semantics with explicit columns**
+
+> Deviation: Implemented the legacy combinatorics over a directed anchor view with the legacy margin special cases and a deterministic cross-sector cap of 100, since the planned snippet contradicted its own prose (D2). Real-data diff: legacy lost reverse-published exclusions and used 1,479 excluded pairs as direct positives (D7).
 
 Keep the current positive/negative combinatorics and anti-sampling cap, but feed them from pair facts and use this final projection:
 
@@ -1006,7 +1014,7 @@ def build_training_pairs(pair_facts: pl.DataFrame) -> pl.DataFrame:
 
 The positive predicate is intentionally derived inside `build_training_pairs`: positive structural distance, not the cross-sector maximum, and not an explicit exclusion. Keep the legacy compatibility columns shown above because the graph loader reads them; do not use them as repaired Stage-3 authorities.
 
-- [ ] **Step 4: Add exact schema and determinism assertions**
+- [x] **Step 4: Add exact schema and determinism assertions**
 
 Extend `tests/unit/test_supervision_artifacts.py` to assert:
 
@@ -1037,12 +1045,12 @@ assert expected_supervision_columns <= set(training_pairs.columns)
 assert training_pairs.equals(build_training_pairs(pair_facts.clone()))
 ```
 
-- [ ] **Step 5: Run triplet and artifact tests**
+- [x] **Step 5: Run triplet and artifact tests**
 
 Run: `uv run pytest tests/unit/test_data_triplets.py tests/unit/test_supervision_artifacts.py -q`
 Expected: PASS, including direct-positive rejection and deterministic frame equality.
 
-- [ ] **Step 6: Commit semantic training pairs**
+- [x] **Step 6: Commit semantic training pairs**
 
 ```bash
 git add src/naics_embedder/data/create_triplets.py src/naics_embedder/data/supervision_bundle.py tests/unit/test_data_triplets.py tests/unit/test_supervision_artifacts.py
@@ -1067,7 +1075,7 @@ git commit -m "feat(data): encode explicit supervision semantics"
 - Consumes: canonical frames from Tasks 2–3 and manifest models from Task 1.
 - Produces: `write_versioned_parquet`, `write_versioned_dataset`, `sha256_file`, `generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path`, and the `naics-embedder data supervision` command.
 
-- [ ] **Step 1: Write failing immutable-publication tests**
+- [x] **Step 1: Write failing immutable-publication tests**
 
 ```python
 # add to tests/unit/test_supervision_artifacts.py
@@ -1183,12 +1191,12 @@ def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(
     assert frames[0].equals(frames[1])
 ```
 
-- [ ] **Step 2: Run the publication tests and verify failure**
+- [x] **Step 2: Run the publication tests and verify failure**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py -q`
 Expected: FAIL because versioned Parquet I/O and atomic bundle publication are absent.
 
-- [ ] **Step 3: Implement versioned Parquet writers and content hashes**
+- [x] **Step 3: Implement versioned Parquet writers and content hashes**
 
 ```python
 # src/naics_embedder/supervision/artifacts.py
@@ -1292,7 +1300,9 @@ def aggregate_fingerprint(files: Iterable[ArtifactFile]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 ```
 
-- [ ] **Step 4: Implement atomic bundle orchestration**
+- [x] **Step 4: Implement atomic bundle orchestration**
+
+> Deviation: Training pairs are written per `anchor=` partition with contract metadata on every member; the production description fingerprint is the descriptions file SHA-256 (D10); difficulty-threshold input files are sorted for determinism (D9).
 
 Add `generate_supervision_bundle_from_frames` to `data/supervision_bundle.py`. It must:
 
@@ -1358,7 +1368,9 @@ relations = pair_facts.select(
 
 For failure cleanup, remove only the fully resolved staging directory created by this invocation; never remove `output_root` or a final bundle directory.
 
-- [ ] **Step 5: Add build configuration and CLI orchestration**
+- [x] **Step 5: Add build configuration and CLI orchestration**
+
+> Deviation: Legacy stage wrappers, matrix builders, stats PDFs, and `__main__` blocks were removed; the stage commands print a migration notice and build the complete bundle (D8).
 
 Add this model in `utils/config.py`:
 
@@ -1417,12 +1429,12 @@ relation_id:
 
 Add `data supervision`, make `data all` call `preprocess()` then `supervision()`, and make old `relations`, `distances`, and `triplets` commands print a migration notice and invoke the complete bundle builder rather than publishing partial authorities. The command prints the final manifest path.
 
-- [ ] **Step 6: Run publication and CLI tests**
+- [x] **Step 6: Run publication and CLI tests**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py tests/unit/test_cli_commands.py tests/unit/test_config.py -q`
 Expected: PASS; the CLI test confirms `data all` invokes one complete supervision build after preprocessing.
 
-- [ ] **Step 7: Commit immutable bundle generation**
+- [x] **Step 7: Commit immutable bundle generation**
 
 ```bash
 git add conf/data/supervision.yaml src/naics_embedder/supervision/artifacts.py src/naics_embedder/data/supervision_bundle.py src/naics_embedder/utils/config.py src/naics_embedder/cli/commands/data.py tests/fixtures/supervision.py tests/unit/test_supervision_artifacts.py tests/unit/test_cli_commands.py tests/unit/test_config.py
@@ -1445,7 +1457,7 @@ git commit -m "feat(data): publish immutable supervision bundles"
 - Consumes: bundle layout and manifest from Task 4.
 - Produces: `ValidatedSupervisionBundle`, `load_validated_bundle(manifest_path, expected_contract)`, `PairSupervision`, and `SupervisionIndex.from_bundle(bundle)` with `join(anchor_code_ids, candidate_code_ids, valid_mask)` and `exclusion_code_ids(anchor_code_id)`.
 
-- [ ] **Step 1: Write failing mixed-bundle and directional-join tests**
+- [x] **Step 1: Write failing mixed-bundle and directional-join tests**
 
 ```python
 # tests/unit/test_supervision_index.py
@@ -1524,12 +1536,14 @@ def validated_bundle(generated_bundle):
     )
 ```
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
 Run: `uv run pytest tests/unit/test_supervision_index.py tests/unit/test_supervision_artifacts.py -q`
 Expected: FAIL because validated bundle loading and `SupervisionIndex` do not exist.
 
-- [ ] **Step 3: Implement fail-closed bundle validation**
+- [x] **Step 3: Implement fail-closed bundle validation**
+
+> Deviation: Shared validators live in `supervision/artifacts.py` and run at generation and load; the loader adds member row counts, long-form reconciliation, and training-pair checks (D11); member validation runs in bounded chunks (commit ade2d5d).
 
 Add:
 
@@ -1620,7 +1634,7 @@ After hash/metadata checks, read codebook, pair facts, distance matrix, relation
 
 Each raised message includes the logical artifact name and bundle ID.
 
-- [ ] **Step 4: Implement the dense runtime index**
+- [x] **Step 4: Implement the dense runtime index**
 
 ```python
 # src/naics_embedder/supervision/index.py
@@ -1744,12 +1758,12 @@ class SupervisionIndex:
         )
 ```
 
-- [ ] **Step 5: Run bundle/index tests**
+- [x] **Step 5: Run bundle/index tests**
 
 Run: `uv run pytest tests/unit/test_supervision_index.py tests/unit/test_supervision_artifacts.py -q`
 Expected: PASS for mixed-bundle rejection, directional mapping, and actionable unknown-ID errors.
 
-- [ ] **Step 6: Commit bundle loading and runtime joins**
+- [x] **Step 6: Commit bundle loading and runtime joins**
 
 ```bash
 git add src/naics_embedder/supervision tests/fixtures/supervision.py tests/unit/test_supervision_index.py tests/unit/test_supervision_artifacts.py
@@ -1770,7 +1784,7 @@ git commit -m "feat(supervision): validate bundles and join pair facts"
 - Consumes: `PairSupervision` and numeric enum values from Tasks 1 and 5.
 - Produces: `CandidateEntityBatch`, `CandidateProposal`, `NegativeCandidateBatch`, `NegativeSelection`, and `SelectedNegativeBatch`. `NegativeCandidateBatch.select(selection)` is the only final gather.
 
-- [ ] **Step 1: Write failing permutation, stale-pool, and invalid-index tests**
+- [x] **Step 1: Write failing permutation, stale-pool, and invalid-index tests**
 
 ```python
 # tests/unit/test_candidate_contract.py
@@ -1898,12 +1912,12 @@ def candidate_batch_with_duplicate_code() -> NegativeCandidateBatch:
     return _negative_candidate_batch([101, 101, 102], [False, False, False])
 ```
 
-- [ ] **Step 2: Run the candidate contract tests and verify failure**
+- [x] **Step 2: Run the candidate contract tests and verify failure**
 
 Run: `uv run pytest tests/unit/test_candidate_contract.py -q`
 Expected: FAIL because the candidate types do not exist.
 
-- [ ] **Step 3: Implement shape validation and the canonical gather**
+- [x] **Step 3: Implement shape validation and the canonical gather**
 
 ```python
 # src/naics_embedder/supervision/candidates.py
@@ -2104,12 +2118,12 @@ class NegativeCandidateBatch:
         )
 ```
 
-- [ ] **Step 4: Run candidate contract tests**
+- [x] **Step 4: Run candidate contract tests**
 
 Run: `uv run pytest tests/unit/test_candidate_contract.py -q`
 Expected: PASS, including the forced reorder `[2, 0, 1]` across every field.
 
-- [ ] **Step 5: Commit immutable candidate types**
+- [x] **Step 5: Commit immutable candidate types**
 
 ```bash
 git add src/naics_embedder/supervision/candidates.py src/naics_embedder/supervision/__init__.py tests/fixtures/supervision.py tests/unit/test_candidate_contract.py
@@ -2129,7 +2143,9 @@ git commit -m "feat(supervision): add checked candidate selection types"
 - Consumes: `CandidateProposal`, `NegativeCandidateBatch`, `NegativeSelection`, and `SelectionReason`.
 - Produces: `stable_hash(global_seed: int, anchor_code_id: int) -> int` and `NegativeSelectionCoordinator.select(candidates, anchor_code_ids, positive_code_ids, k, epoch, global_seed, proposals) -> NegativeSelection`.
 
-- [ ] **Step 1: Write failing quota, rotation, deduplication, and capacity tests**
+- [x] **Step 1: Write failing quota, rotation, deduplication, and capacity tests**
+
+> Deviation: Fixed two plan test bugs: a mask-indexed UID shape and the capacity-error message (D12).
 
 ```python
 # tests/unit/test_negative_selection.py
@@ -2279,12 +2295,14 @@ def test_insufficient_unique_candidates_is_fatal(candidate_batch):
         )
 ```
 
-- [ ] **Step 2: Run the selection tests and verify failure**
+- [x] **Step 2: Run the selection tests and verify failure**
 
 Run: `uv run pytest tests/unit/test_negative_selection.py -q`
 Expected: FAIL because the coordinator does not exist.
 
-- [ ] **Step 3: Implement stable rotation and deterministic proposal merge**
+- [x] **Step 3: Implement stable rotation and deterministic proposal merge**
+
+> Deviation: After review, a NaN or +inf proposal score is fatal even in a proposal the merge never reaches; -inf remains the ineligible marker.
 
 ```python
 # src/naics_embedder/supervision/selection.py
@@ -2455,12 +2473,12 @@ class NegativeSelectionCoordinator:
         )
 ```
 
-- [ ] **Step 4: Run selection and candidate contract tests**
+- [x] **Step 4: Run selection and candidate contract tests**
 
 Run: `uv run pytest tests/unit/test_negative_selection.py tests/unit/test_candidate_contract.py -q`
 Expected: PASS, including cyclic coverage, `K = 1`, tie-breaks, stale-pool checks, and fatal capacity failure.
 
-- [ ] **Step 5: Commit deterministic selection**
+- [x] **Step 5: Commit deterministic selection**
 
 ```bash
 git add src/naics_embedder/supervision/selection.py src/naics_embedder/supervision/__init__.py tests/unit/test_negative_selection.py
@@ -2487,7 +2505,7 @@ git commit -m "feat(supervision): enforce exclusion selection quota"
 - Consumes: `ValidatedSupervisionBundle`, `SupervisionIndex`, `stable_hash`, and the new training-pair schema.
 - Produces: repaired dataset items with one `candidate_pool` and `difficulty_proposal_indices`; collated `candidate_inputs` plus aligned tensor metadata; versioned streaming and token-cache envelopes.
 
-- [ ] **Step 1: Write failing collation and candidate-pool invariants**
+- [x] **Step 1: Write failing collation and candidate-pool invariants**
 
 Add these tests to `tests/unit/test_datamodule.py`:
 
@@ -2723,12 +2741,14 @@ def test_repaired_streaming_cache_rejects_missing_identity(missing):
         )
 ```
 
-- [ ] **Step 2: Run the affected data-loader suites and verify failure**
+- [x] **Step 2: Run the affected data-loader suites and verify failure**
 
 Run: `uv run pytest tests/unit/test_datamodule.py tests/unit/test_streaming_dataset.py tests/unit/test_streaming_sampling.py tests/unit/test_difficulty_sampler.py tests/unit/test_tokenization_cache.py -q`
 Expected: FAIL because current collation mutates samples, repeats the last negative, and maintains parallel `negatives`/`all_candidates` paths.
 
-- [ ] **Step 3: Replace high exclusion weight with explicit pool construction**
+- [x] **Step 3: Replace high exclusion weight with explicit pool construction**
+
+> Deviation: The pool keeps every exclusion plus at least max(n - E, K - min(E, 1)) ordinary codes, because the planned sizing failed whenever an anchor had two or more exclusions (D15). After review, backfill is restricted to structurally eligible codes (D31).
 
 In repaired mode, remove `exclusion_weight` from `_compute_phase1_weights` and `_sample_negatives_phase1`. Retain `phase1_exclusion_weight: Optional[float] = None` only for Task 13’s containment validator. Add:
 
@@ -2814,7 +2834,7 @@ def build_candidate_pool(
 
 Load negative rows from the bundle’s `training_pairs` directory with their code IDs, raw structure, semantic fields, directions, role, provenance, and margins. Stop reconstructing exclusions from descriptions or structural values.
 
-- [ ] **Step 4: Convert upstream difficulty selection into an indexed proposal**
+- [x] **Step 4: Convert upstream difficulty selection into an indexed proposal**
 
 Rename `select_by_difficulty` to `propose_by_difficulty` and return source positions in score order:
 
@@ -2883,7 +2903,9 @@ def propose_by_difficulty(
 
 `Phase1MapDataset.__getitem__` now returns one `candidate_pool` plus `difficulty_proposal_indices`. The precomputed path returns the same shape with every valid pool index as its default proposal. Do not emit repaired `negatives` or `all_candidates` keys.
 
-- [ ] **Step 5: Make repaired collation non-mutating and explicit about invalid rows**
+- [x] **Step 5: Make repaired collation non-mutating and explicit about invalid rows**
+
+> Deviation: The manifest is validated lazily in prepare_data/setup; the positive sampler uses the bundle codebook and drops explicit-exclusion siblings; legacy collation stays non-mutating for containment (D3, D16).
 
 Implement `collate_fn(batch, supervision_mode='repaired')` with local copies. For each channel, flatten candidate inputs in row-major `[batch, candidate]` order, and create invalid rows with zero `input_ids` and zero `attention_mask`. Emit:
 
@@ -2912,7 +2934,7 @@ result = {
 
 Pair-dependent candidate supervision is deliberately absent here; `SupervisionIndex.join` adds it after optional distributed entity gathering.
 
-- [ ] **Step 6: Version streaming and tokenization caches**
+- [x] **Step 6: Version streaming and tokenization caches**
 
 Store each pickle as:
 
@@ -2960,12 +2982,12 @@ Include those four values plus every sampling/difficulty parameter in cache keys
 
 For relation-, triplet-, and curriculum-derived caches, store the relevant manifest member hashes in the envelope and invalidate whenever any recorded source hash differs. Never accept an old path merely because its filename matches a rebuilt artifact.
 
-- [ ] **Step 7: Run the repaired data-loader suites**
+- [x] **Step 7: Run the repaired data-loader suites**
 
 Run: `uv run pytest tests/unit/test_datamodule.py tests/unit/test_streaming_dataset.py tests/unit/test_streaming_sampling.py tests/unit/test_difficulty_sampler.py tests/unit/test_tokenization_cache.py -q`
 Expected: PASS; no test expects repeated padding, input mutation, high exclusion weights, or dual candidate paths.
 
-- [ ] **Step 8: Commit the canonical candidate input path**
+- [x] **Step 8: Commit the canonical candidate input path**
 
 ```bash
 git add src/naics_embedder/text_model/dataloader src/naics_embedder/utils/config.py tests/unit/test_datamodule.py tests/unit/test_streaming_dataset.py tests/unit/test_streaming_sampling.py tests/unit/test_difficulty_sampler.py tests/unit/test_tokenization_cache.py
@@ -2988,7 +3010,7 @@ git commit -m "refactor(data): collate one aligned candidate pool"
 - Consumes: `CandidateEntityBatch`, `NegativeCandidateBatch`, `CandidateProposal`, `SupervisionIndex`, and selection coordinator.
 - Produces: `LorentzianHardNegativeMiner.propose`, `RouterGuidedNegativeMiner.propose`, `gather_candidate_entities`, and `CurriculumMixin._select_negative_batch(...) -> SelectedNegativeBatch`.
 
-- [ ] **Step 1: Write failing miner-boundary tests**
+- [x] **Step 1: Write failing miner-boundary tests**
 
 ```python
 # add to tests/unit/test_hard_negative_mining.py
@@ -3043,7 +3065,7 @@ def test_gathered_entity_is_rejoined_for_each_local_anchor(validated_bundle):
     assert joined.is_explicit_exclusion.tolist() == [[True], [False]]
 ```
 
-- [ ] **Step 2: Write the CPU two-rank integration test**
+- [x] **Step 2: Write the CPU two-rank integration test**
 
 ```python
 # tests/integration/test_distributed_supervision.py
@@ -3103,12 +3125,14 @@ def test_two_rank_gather_preserves_intrinsic_identity_only(tmp_path):
 
 Do not add structural distance, relation, or exclusion fields to `make_entity_batch`: their absence is the distributed contract.
 
-- [ ] **Step 3: Run mining and distributed tests and verify failure**
+- [x] **Step 3: Run mining and distributed tests and verify failure**
 
 Run: `uv run pytest tests/unit/test_hard_negative_mining.py tests/integration/test_distributed_supervision.py -q`
 Expected: FAIL because miners return gathered tensors and distributed gathering has no entity contract.
 
-- [ ] **Step 4: Change both miners to score and propose indices**
+- [x] **Step 4: Change both miners to score and propose indices**
+
+> Deviation: The embedding-returning `mine_*` paths and `GlobalNegativeContext` were removed in Task 11 with the step rewrite rather than here (D17).
 
 ```python
 # representative replacement in text_model/hard_negative_mining.py
@@ -3134,7 +3158,7 @@ def propose(
 
 Router `propose` computes confusion scores from `candidates.router_gate_probs`, applies the same validity/exclusion mask, and returns `CandidateProposal(reason=SelectionReason.ROUTER)`. Delete public paths that return selected candidate embeddings.
 
-- [ ] **Step 5: Gather only intrinsic entity tensors**
+- [x] **Step 5: Gather only intrinsic entity tensors**
 
 Replace `GlobalNegativeContext` with `gather_candidate_entities(local: CandidateEntityBatch) -> CandidateEntityBatch`. Use `torch.distributed.nn.functional.all_gather` for differentiable embeddings and fixed-shape `dist.all_gather` for code IDs, UID triples, validity, and router probabilities. Flatten rank-major results to one candidate axis. Assert equal embedding/router widths and pad variable entity counts with invalid rows before gathering.
 
@@ -3154,7 +3178,9 @@ CandidateEntityBatch(
 
 Do not gather structural distance, relation, margins, semantic IDs, or exclusion flags.
 
-- [ ] **Step 6: Rebuild candidate supervision for each local anchor and select once**
+- [x] **Step 6: Rebuild candidate supervision for each local anchor and select once**
+
+> Deviation: The planned order put the difficulty proposal first, which crowded out mining whenever the pool held K or more candidates. After review, miners go first, `router_mix_ratio` splits their slots, miners score one canonical occurrence per code, and the difficulty proposal is the fallback (D30). Ordinary candidates must be structurally farther than the positive (D31).
 
 In `CurriculumMixin`:
 
@@ -3358,12 +3384,12 @@ def _select_negative_batch(
 
 Remove `_perform_hard_negative_mining`, `_apply_router_guided_sampling`, and `_prepare_negative_embeddings` once their tests target the new boundary. No candidate field is independently indexed after `NegativeCandidateBatch` exists.
 
-- [ ] **Step 7: Run local and distributed selection suites**
+- [x] **Step 7: Run local and distributed selection suites**
 
 Run: `uv run pytest tests/unit/test_hard_negative_mining.py tests/unit/test_candidate_contract.py tests/unit/test_negative_selection.py tests/integration/test_distributed_supervision.py -q`
 Expected: PASS; the two-rank test proves occurrence UID preservation and unit tests prove local-anchor supervision is recomputed.
 
-- [ ] **Step 8: Commit indexed and distributed mining**
+- [x] **Step 8: Commit indexed and distributed mining**
 
 ```bash
 git add src/naics_embedder/text_model/hard_negative_mining.py src/naics_embedder/text_model/mixins/distributed.py src/naics_embedder/text_model/mixins/curriculum.py tests/unit/test_hard_negative_mining.py tests/unit/test_naics_model.py tests/integration/test_distributed_supervision.py
@@ -3385,7 +3411,7 @@ git commit -m "fix(training): mine by checked candidate indices"
 - Consumes: `SelectedNegativeBatch` from Task 6.
 - Produces: `effective_false_negative_mask`, `structural_preference_from_distances`, and `StructuralPreferenceLoss`. `HyperbolicInfoNCELoss.forward` accepts selected embeddings, validity, exclusion flags, and pseudo-related mask.
 
-- [ ] **Step 1: Replace LambdaRank scalar tests with direct gradient-contract tests**
+- [x] **Step 1: Replace LambdaRank scalar tests with direct gradient-contract tests**
 
 Delete `TestLambdaRankLoss` and add:
 
@@ -3547,7 +3573,7 @@ def test_structural_preference_normalizes_each_anchor_before_batch_mean():
     assert torch.allclose(combined, torch.stack(individual).mean())
 ```
 
-- [ ] **Step 2: Write failing exclusion-precedence contrastive tests**
+- [x] **Step 2: Write failing exclusion-precedence contrastive tests**
 
 ```python
 # add to tests/unit/test_false_negative_strategy.py
@@ -3647,12 +3673,14 @@ def test_invalid_padding_cannot_change_contrastive_loss_or_gradients():
     assert torch.count_nonzero(second_gradients[2][:, 1]) == 0
 ```
 
-- [ ] **Step 3: Run loss tests and verify the old objective fails**
+- [x] **Step 3: Run loss tests and verify the old objective fails**
 
 Run: `uv run pytest tests/unit/test_loss.py tests/unit/test_false_negative_strategy.py -q`
 Expected: FAIL because `structural_preference_from_distances` and exclusion-aware masks are absent.
 
-- [ ] **Step 4: Implement the pairwise structural-preference primitive**
+- [x] **Step 4: Implement the pairwise structural-preference primitive**
+
+> Deviation: Per-anchor normalization divides by the exact detached weight sum instead of `clamp_min(1.0)`; structural distances keep their own dtype.
 
 ```python
 # src/naics_embedder/text_model/loss.py
@@ -3745,7 +3773,9 @@ def structural_preference_from_distances(
     return per_anchor[contributing].mean()
 ```
 
-- [ ] **Step 5: Add the module wrapper over selected candidates**
+- [x] **Step 5: Add the module wrapper over selected candidates**
+
+> Deviation: `RankOrderPreservationLoss` was deleted too (no remaining importer); the docs API page became `structural_preference_loss.md` (D18).
 
 ```python
 class StructuralPreferenceLoss(nn.Module):
@@ -3815,7 +3845,9 @@ class StructuralPreferenceLoss(nn.Module):
 
 Delete `LambdaRankLoss` and its active imports. `RankOrderPreservationLoss` may remain only if another non-Stage-3 public API still imports it; it must not be initialized or called by the repaired path.
 
-- [ ] **Step 6: Make contrastive and attraction loss validity-aware**
+- [x] **Step 6: Make contrastive and attraction loss validity-aware**
+
+> Deviation: Rows with no eligible negative are dropped before `logsumexp` (NaN-safe), and the strategy returns the effective mask.
 
 Change `HyperbolicInfoNCELoss.forward` to accept negative embeddings shaped `[batch, selected, dim]` plus `valid_mask`, `is_explicit_exclusion`, and `pseudo_related_mask`. Compute:
 
@@ -3838,7 +3870,7 @@ return per_anchor[has_negative].mean()
 
 Change `apply_false_negative_strategy` to receive explicit and validity masks and internally derive the same effective mask before elimination or attraction. Shape mismatches raise `ValueError`.
 
-- [ ] **Step 7: Replace loss-mixin LambdaRank wiring and remove warning fallbacks**
+- [x] **Step 7: Replace loss-mixin LambdaRank wiring and remove warning fallbacks**
 
 Replace the repaired-path wrappers with:
 
@@ -3887,12 +3919,12 @@ def _compute_structural_preference_loss(
 
 Rename the combined term and log key to `train/structural_preference_loss`. Remove broad `try/except` blocks from hierarchy, structural preference, and false-negative contract boundaries so alignment or bundle errors abort the step.
 
-- [ ] **Step 8: Run all loss tests**
+- [x] **Step 8: Run all loss tests**
 
 Run: `uv run pytest tests/unit/test_loss.py tests/unit/test_false_negative_strategy.py -q`
 Expected: PASS for gradient direction, order quality, permutation invariance, masking, detached weights, per-anchor normalization, exclusion precedence, and padding.
 
-- [ ] **Step 9: Commit the corrected loss contract**
+- [x] **Step 9: Commit the corrected loss contract**
 
 ```bash
 git add src/naics_embedder/text_model/loss.py src/naics_embedder/text_model/false_negative_strategies.py src/naics_embedder/text_model/mixins/loss.py tests/unit/test_loss.py tests/unit/test_false_negative_strategy.py
@@ -3915,7 +3947,9 @@ git commit -m "fix(loss): replace LambdaRank with structural preference"
 - Consumes: bundle/index, collated pool, selected batch, and repaired losses from Tasks 5–10.
 - Produces: `NAICSContrastiveModel._forward_candidate_pool`, post-selection pseudo-related handling, health counters, and one canonical repaired `training_step`.
 
-- [ ] **Step 1: Write the forced-reorder full-step regression**
+- [x] **Step 1: Write the forced-reorder full-step regression**
+
+> Deviation: `router_first_column` is compared approximately because the stub gates are float32 (D22).
 
 ```python
 # tests/integration/test_stage3_training_step.py
@@ -4151,7 +4185,7 @@ def test_forced_reorder_preserves_uid_across_every_loss_field(
 
 The fixtures above use anchor ID `0`, positive ID `1`, and original candidate IDs `[2, 3, 4]`. They mark codes `2` and `3` as pseudo-related, with `2` also explicitly excluded. Its effective false-negative flag must therefore be `False` for `2` and `True` for `3`; the structural spy computes only over `valid & ~explicit`. The shorter first item receives one invalid padded source row, and the assertion proves that UID never reaches either spy.
 
-- [ ] **Step 2: Add a boundary test that reproduces the old failure**
+- [x] **Step 2: Add a boundary test that reproduces the old failure**
 
 ```python
 def test_old_parallel_arrays_misalign_but_checked_selection_does_not(candidate_batch):
@@ -4180,12 +4214,14 @@ def test_old_parallel_arrays_misalign_but_checked_selection_does_not(candidate_b
     assert checked_pairs == [(3.0, 103), (1.0, 101), (2.0, 102)]
 ```
 
-- [ ] **Step 3: Run the integration test and verify failure**
+- [x] **Step 3: Run the integration test and verify failure**
 
 Run: `uv run pytest tests/integration/test_stage3_training_step.py tests/unit/test_naics_model.py -q`
 Expected: FAIL because `training_step` still builds the false-negative mask before mining and passes original-order codes beside reordered embeddings.
 
-- [ ] **Step 4: Load the validated index and initialize repaired losses**
+- [x] **Step 4: Load the validated index and initialize repaired losses**
+
+> Deviation: The bundle is validated before the encoder is built; evaluation ground truth and the hierarchy come from the bundle, and legacy distance/relations paths are rejected (D19). `rank_order_weight` was removed and `selection_seed` added.
 
 Add constructor parameters:
 
@@ -4201,7 +4237,9 @@ structural_preference_tie_tolerance: float = 1e-6,
 
 In repaired mode, call `load_validated_bundle`, create `SupervisionIndex`, load the validated structural matrix for `HierarchyPreservationLoss`, initialize `StructuralPreferenceLoss`, and construct `NegativeSelectionCoordinator`. Save paths/identifiers in hyperparameters, not the index tensors or manifest object.
 
-- [ ] **Step 5: Forward the candidate pool once and build UID triples**
+- [x] **Step 5: Forward the candidate pool once and build UID triples**
+
+> Deviation: Only valid candidate rows are encoded; padding rows receive zero outputs (D20).
 
 ```python
 def _forward_candidate_pool(
@@ -4224,7 +4262,7 @@ def _forward_candidate_pool(
 
 Invalid rows keep source slot `-1` and `valid_mask = False`; their UIDs are never selectable.
 
-- [ ] **Step 6: Build pseudo-related masks only after checked selection**
+- [x] **Step 6: Build pseudo-related masks only after checked selection**
 
 Replace `_build_false_negative_mask(batch, batch_size)` with:
 
@@ -4267,7 +4305,9 @@ def _build_selected_pseudo_related_mask(
 
 Do not catch identity or shape errors in this method.
 
-- [ ] **Step 7: Rewrite the repaired training-step sequence**
+- [x] **Step 7: Rewrite the repaired training-step sequence**
+
+> Deviation: Repaired validation scores the whole eligible pool without selection (D13); `test_naics_model.py` was triaged per D14.
 
 The repaired branch of `training_step` executes in this exact order:
 
@@ -4324,7 +4364,9 @@ structural_preference_loss = self._compute_structural_preference_loss(
 
 Then compute hierarchy, radius, level-radius, and load-balancing terms. Candidate router outputs used by load balancing are masked by `candidate_valid_mask`; selected-candidate regularizers use `selected.valid_mask`. No loss reads `negative_codes`, pre-mining masks, or separately reordered router arrays.
 
-- [ ] **Step 8: Add low-cardinality selection health counters**
+- [x] **Step 8: Add low-cardinality selection health counters**
+
+> Deviation: Negative-distribution and hard-negative diagnostics now read the selected batch; the global_batch/* and router_confusion_* metrics were removed (D21). Per-reason and eligibility counters were added (D32).
 
 Add `_log_selection_health(candidates, selected, batch_size)` to `LoggingMixin`, call it from
 `_select_negative_batch` after the checked gather, and log these epoch aggregates:
@@ -4352,12 +4394,12 @@ selection_metrics = {
 
 Log each value with `on_step=False`, `on_epoch=True`, `reduce_fx='sum'`, and the current batch size. Keep candidate IDs out of metric names and values.
 
-- [ ] **Step 9: Run model and full-step integration tests**
+- [x] **Step 9: Run model and full-step integration tests**
 
 Run: `uv run pytest tests/unit/test_naics_model.py tests/integration/test_stage3_training_step.py -q`
 Expected: PASS; the old-failure fixture demonstrates the prior mismatch and the canonical selector keeps every spy field on the same UID.
 
-- [ ] **Step 10: Commit the canonical Stage-3 step**
+- [x] **Step 10: Commit the canonical Stage-3 step**
 
 ```bash
 git add src/naics_embedder/text_model/naics_model.py src/naics_embedder/text_model/mixins/curriculum.py src/naics_embedder/text_model/mixins/loss.py src/naics_embedder/text_model/mixins/logging.py tests/unit/test_naics_model.py tests/integration/test_stage3_training_step.py
@@ -4384,7 +4426,7 @@ git commit -m "fix(training): align stage3 supervision by candidate identity"
 - Consumes: validated bundle identity and model/loss/mining version constants.
 - Produces: `SupervisionRuntimeConfig`, `StructuralPreferenceConfig`, `CheckpointLoadMode`, `CheckpointContract`, `validate_exact_resume`, `load_weights_only`, and mandatory pre-model supervision validation.
 
-- [ ] **Step 1: Write failing repaired-config migration tests**
+- [x] **Step 1: Write failing repaired-config migration tests**
 
 ```python
 # add to tests/unit/test_config.py
@@ -4447,7 +4489,7 @@ def test_structural_preference_config_bounds(field, value, message):
         StructuralPreferenceConfig(**data)
 ```
 
-- [ ] **Step 2: Write failing checkpoint-contract tests**
+- [x] **Step 2: Write failing checkpoint-contract tests**
 
 ```python
 # tests/unit/test_checkpoint_contract.py
@@ -4616,12 +4658,12 @@ def test_weights_only_never_passes_checkpoint_to_trainer(
     assert training_env.trainer.fit_calls[0]['ckpt_path'] is None
 ```
 
-- [ ] **Step 3: Run config/checkpoint suites and verify failure**
+- [x] **Step 3: Run config/checkpoint suites and verify failure**
 
 Run: `uv run pytest tests/unit/test_config.py tests/unit/test_checkpoint_contract.py tests/unit/test_utils_validation.py tests/unit/test_cli_training.py -q`
 Expected: FAIL because repaired migration keys are accepted and checkpoint contract identifiers are absent.
 
-- [ ] **Step 4: Add explicit runtime and loss configuration**
+- [x] **Step 4: Add explicit runtime and loss configuration**
 
 ```python
 # src/naics_embedder/utils/config.py
@@ -4690,7 +4732,9 @@ loss:
 
 Remove the repaired defaults for `rank_order_weight` and `phase1_exclusion_weight`. `manifest_path: null` is an intentional pre-generation state: config parsing succeeds, while the mandatory training gate below emits the exact command to set the generated path.
 
-- [ ] **Step 5: Make bundle validation mandatory before model or checkpoint work**
+- [x] **Step 5: Make bundle validation mandatory before model or checkpoint work**
+
+> Deviation: Advisory data-path checks are mode-aware, so repaired runs do not require legacy files (D23).
 
 Add:
 
@@ -4749,7 +4793,9 @@ monkeypatch.setattr(
 )
 ```
 
-- [ ] **Step 6: Implement checkpoint contract and model hooks**
+- [x] **Step 6: Implement checkpoint contract and model hooks**
+
+> Deviation: The model accepts a pre-validated bundle and a runtime contract, both excluded from hyperparameters (D24). After review, a weights-only checkpoint with no allowlisted encoder tensor is fatal.
 
 ```python
 # src/naics_embedder/supervision/checkpoints.py
@@ -4857,7 +4903,9 @@ def load_weights_only(model: torch.nn.Module, path: str | Path) -> MigrationRepo
 
 `NAICSContrastiveModel.on_save_checkpoint` writes `self.checkpoint_contract.model_dump()` under `stage3_supervision`. `on_load_checkpoint` calls `validate_exact_resume` semantics against the in-memory checkpoint dictionary for repaired exact resume. The structural matrices remain bundle-loaded buffers and are excluded from weights-only loading.
 
-- [ ] **Step 7: Make CLI checkpoint modes explicit**
+- [x] **Step 7: Make CLI checkpoint modes explicit**
+
+> Deviation: An explicit load mode replaces the is_same_stage heuristic, and exact resume is validated before the model is built (D25). Embedding generation requires the contract and fixes the tokenization-cache call (D26). `weights_only` without a checkpoint is fatal (review M7).
 
 Add `--checkpoint-load-mode [exact|weights_only]` defaulting to `exact`. The flow is:
 
@@ -4882,12 +4930,12 @@ elif checkpoint_path:
 
 Do not call `load_from_checkpoint` for weights-only migration. Do not pass its path to `trainer.fit`. Update embedding generation to require a matching repaired contract or an explicitly documented legacy-containment checkpoint.
 
-- [ ] **Step 8: Run config, validation, checkpoint, and CLI tests**
+- [x] **Step 8: Run config, validation, checkpoint, and CLI tests**
 
 Run: `uv run pytest tests/unit/test_config.py tests/unit/test_utils_validation.py tests/unit/test_checkpoint_contract.py tests/unit/test_cli_training.py tests/unit/test_naics_model.py -q`
 Expected: PASS; the CLI spy proves bundle validation occurs before model construction and checkpoint restoration.
 
-- [ ] **Step 9: Commit fail-closed migration**
+- [x] **Step 9: Commit fail-closed migration**
 
 ```bash
 git add conf/config.yaml src/naics_embedder/supervision/checkpoints.py src/naics_embedder/utils/config.py src/naics_embedder/utils/validation.py src/naics_embedder/cli/commands/training.py src/naics_embedder/text_model/naics_model.py tests/unit/test_config.py tests/unit/test_utils_validation.py tests/unit/test_cli_training.py tests/unit/test_checkpoint_contract.py
@@ -4913,7 +4961,7 @@ git commit -m "feat(training): enforce supervision checkpoint contracts"
 - Consumes: `supervision.mode` and checkpoint tags.
 - Produces: `SupervisionModePolicy.from_name` and a contained legacy branch that permits only local unmined contrastive learning plus supervision-independent regularizers.
 
-- [ ] **Step 1: Write failing containment-policy tests**
+- [x] **Step 1: Write failing containment-policy tests**
 
 ```python
 # add to tests/unit/test_naics_model.py
@@ -5028,12 +5076,12 @@ def test_legacy_containment_ignores_all_candidates(make_batch_item):
 
 The repaired-mode config tests from Task 12 are the negative half of this boundary: the same legacy keys fail unless `supervision.mode='legacy_containment'` is explicit.
 
-- [ ] **Step 2: Run containment tests and verify failure**
+- [x] **Step 2: Run containment tests and verify failure**
 
 Run: `uv run pytest tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/unit/test_datamodule.py -q`
 Expected: FAIL because there is no explicit policy and legacy flags can still activate contaminated losses or reordering.
 
-- [ ] **Step 3: Define an immutable mode policy**
+- [x] **Step 3: Define an immutable mode policy**
 
 ```python
 # src/naics_embedder/supervision/mode.py
@@ -5072,7 +5120,9 @@ class SupervisionModePolicy:
         raise ValueError(f'unknown supervision mode {name!r}')
 ```
 
-- [ ] **Step 4: Enforce the policy at construction and execution boundaries**
+- [x] **Step 4: Enforce the policy at construction and execution boundaries**
+
+> Deviation: The curriculum and loss mixins are unchanged: containment never enters them and their collaborators are None (D27).
 
 Dispatch before repaired candidate construction and keep the contained branch explicit:
 
@@ -5156,12 +5206,12 @@ In containment mode:
 
 Use explicit policy predicates; do not rewrite user configuration values or silently fall back from repaired mode.
 
-- [ ] **Step 5: Run containment and repaired regression suites**
+- [x] **Step 5: Run containment and repaired regression suites**
 
 Run: `uv run pytest tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/unit/test_datamodule.py tests/integration/test_stage3_training_step.py -q`
 Expected: PASS for both modes; containment never calls forbidden paths and repaired training still uses the canonical selector.
 
-- [ ] **Step 6: Commit legacy containment**
+- [x] **Step 6: Commit legacy containment**
 
 ```bash
 git add src/naics_embedder/supervision/mode.py src/naics_embedder/text_model/dataloader/datamodule.py src/naics_embedder/text_model/mixins/curriculum.py src/naics_embedder/text_model/mixins/loss.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/cli/commands/training.py tests/unit/test_datamodule.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py
@@ -5189,7 +5239,7 @@ git commit -m "feat(training): contain legacy supervision explicitly"
 - Consumes: validated bundle paths and legacy compatibility columns.
 - Produces: a narrow graph projection that reads rebuilt artifacts without changing graph sampling/objectives, plus operator-facing generation/migration/rollout documentation.
 
-- [ ] **Step 1: Write the graph compatibility regression**
+- [x] **Step 1: Write the graph compatibility regression**
 
 ```python
 # add to tests/unit/test_hgcn_streaming_dataset.py
@@ -5256,12 +5306,14 @@ def test_graph_preprocessing_resolves_one_bundle_and_rejects_mixed_paths(
         )
 ```
 
-- [ ] **Step 2: Run graph compatibility tests and verify failure**
+- [x] **Step 2: Run graph compatibility tests and verify failure**
 
 Run: `uv run pytest tests/unit/test_hgcn_streaming_dataset.py tests/unit/test_hgcn_datamodule.py tests/unit/test_graph_preprocessing.py -q`
 Expected: FAIL because graph configuration still accepts independent artifact paths and cannot resolve the immutable bundle.
 
-- [ ] **Step 3: Add a narrow bundle-to-graph adapter**
+- [x] **Step 3: Add a narrow bundle-to-graph adapter**
+
+> Deviation: The adapter also resolves `distance_matrix` for HGCN evaluation, and `conf/graph.yaml` drops its explicit legacy paths so a manifest alone suffices (D28).
 
 Add `supervision_manifest_path: Optional[str]` to `GraphConfig`. When set, validate one bundle and resolve its `relations`, `distances`, and `training_pairs` paths. Project only these existing fields at the graph loader boundary:
 
@@ -5323,7 +5375,9 @@ def _project_graph_negative(row: dict[str, Any]) -> dict[str, Any]:
 
 Do not forward semantic target/source, exclusion flags, candidate UIDs, router fields, or repaired Stage-3 selection policy into HGCN. Keep its samplers, loss construction, and semantic-retention behavior unchanged. `compute_difficulty_thresholds` resolves both frames from the same bundle and writes the threshold artifact during bundle generation; it never combines independent legacy paths in repaired mode.
 
-- [ ] **Step 4: Document the exact operator workflow**
+- [x] **Step 4: Document the exact operator workflow**
+
+> Deviation: Also refreshed overview, index, usage, quickstart, hgcn_training, tests/README, and CLAUDE.md, which referenced deleted classes and the old pipeline (D29).
 
 Add this workflow, with prose explaining each gate, to `docs/text_training.md` and link it from `README.md`:
 
@@ -5360,7 +5414,7 @@ Document:
 
 Update `docs/api/config.md` with the exact YAML from Task 12 and remove `rank_order_weight`/high exclusion-weight guidance.
 
-- [ ] **Step 5: Run the four mandatory rollout gates directly**
+- [x] **Step 5: Run the four mandatory rollout gates directly**
 
 Run:
 
@@ -5373,7 +5427,7 @@ uv run pytest tests/integration/test_stage3_training_step.py -q
 
 Expected: every command passes independently. These are the forced-reorder, gradient-sign, bundle-validation, and full-step rollout gates.
 
-- [ ] **Step 6: Run all focused supervision, data, runtime, migration, and graph suites**
+- [x] **Step 6: Run all focused supervision, data, runtime, migration, and graph suites**
 
 Run:
 
@@ -5410,7 +5464,9 @@ uv run pytest \
 
 Expected: all listed tests pass with no warnings converted from supervision-contract failures.
 
-- [ ] **Step 7: Run the complete repository verification**
+- [x] **Step 7: Run the complete repository verification**
+
+> Deviation: `ruff check src tests` still reports 27 pre-existing errors, all in files this branch never touched (baseline 86), so that part is deferred. MkDocs was built to a temporary site directory.
 
 Run:
 
@@ -5423,7 +5479,7 @@ git diff --check
 
 Expected: ruff reports `All checks passed!`, the full pytest suite passes, MkDocs completes without warnings/errors, and `git diff --check` prints nothing.
 
-- [ ] **Step 8: Commit compatibility and rollout documentation**
+- [x] **Step 8: Commit compatibility and rollout documentation**
 
 ```bash
 git add conf/graph.yaml src/naics_embedder/graph_model src/naics_embedder/utils/config.py tests/unit/test_hgcn_streaming_dataset.py tests/unit/test_hgcn_datamodule.py tests/unit/test_graph_preprocessing.py docs/text_training.md docs/api/config.md README.md
