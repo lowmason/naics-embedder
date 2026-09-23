@@ -47,6 +47,7 @@
       legacy. See `compute_difficulty_thresholds` in
       src/naics_embedder/graph_model/curriculum/preprocess_curriculum.py. Size: design.
       Revisit if: HGCN curriculum phases are tuned or thresholds gate training.
-- [ ] Pre-existing: tests/unit/test_data_download.py::test_get_descriptions_filters_cross_references
+- [x] Pre-existing: tests/unit/test_data_download.py::test_get_descriptions_filters_cross_references
       fails on main and on this branch (cause not investigated; outside the Stage-3 scope).
       Size: quick-fix. Done when: the test passes.
+      → retired 2026-09-23: fixed by PR #75 (line-ending-independent split); test passes on main.
