@@ -174,7 +174,7 @@ naics-embedder/
 ├── logs/                     # Training logs (gitignored)
 ├── .github/workflows/        # CI/CD workflows
 │   ├── docs.yml              # Build and deploy docs to GitHub Pages
-│   └── tests.yml             # Ruff lint and pytest with coverage (separate jobs)
+│   └── tests.yml             # Ruff + yapf checks and pytest with coverage (separate jobs)
 ├── pyproject.toml            # Project metadata and dependencies
 ├── uv.lock                   # Locked dependency versions
 ├── mkdocs.yml                # Documentation config
@@ -480,8 +480,8 @@ result = (
 ```
 
 **Keep the tree clean:** `ruff check src/ tests/` and `./scripts/format_code.sh --check --all` both
-pass; keep it that way. Format the files your change touches, don't mass-fix unrelated code, and
-keep `./scripts/format_code.sh --all` out of feature PRs.
+pass, and CI's `lint` job fails if either stops passing. Format the files your change touches,
+don't mass-fix unrelated code, and keep `./scripts/format_code.sh --all` out of feature PRs.
 
 ### Markdown Formatting
 
@@ -935,13 +935,17 @@ During training, the model computes validation metrics every epoch:
 2. **Tests** (`.github/workflows/tests.yml`)
    - **Trigger:** Push to `main`/`master`, and pull requests targeting them
    - **Action:** Two independent jobs, so lint and test failures show up as separate checks:
-     - `lint`: `ruff check src/ tests/`, once, on Python 3.12. Any violation fails the check, so
-       run `uv run ruff check src/ tests/` before pushing
+     - `lint`: once, on Python 3.12. Runs `ruff check src/ tests/`, then
+       `./scripts/format_code.sh --check --all`, which fails on any file yapf would reformat.
+       That step reruns ruff, so it is skipped when ruff fails. Before pushing, run
+       `./scripts/format_code.sh --check --all` to reproduce both steps in one pass
      - `test (3.10)`, `test (3.12)`: pytest with coverage, one check per Python version
    - **Dependencies:** Installs from `uv.lock` (`uv sync --locked`), so CI tests the pinned
      versions, not the newest releases that `pip install` resolves. Upgrade deliberately with
      `uv lock --upgrade-package <name>`. The `lint` job syncs only the `dev` group
-     (`--only-group dev`), which has the locked ruff but not the project or its torch wheels.
+     (`--only-group dev`), which has the locked ruff and yapf but not the project or its torch
+     wheels. Its yapf step sets `UV_NO_SYNC=1` because the script calls plain `uv run`, which
+     would otherwise install the whole project first.
    - **Reports:** Coverage (`coverage.xml`) uploaded to Codecov
 
 ### Documentation
