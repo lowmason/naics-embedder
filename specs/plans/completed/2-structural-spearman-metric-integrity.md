@@ -1,5 +1,7 @@
 # Structural Spearman Metric Integrity Implementation Plan
 
+**Status: COMPLETE (2026-09-23)** — executed via executing-plans; nothing deferred
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via subagent-driven-development (the default) — or executing-plans when your human partner chose inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace order-sensitive ordinal-rank reporting with one validated, tie-correct structural
@@ -13,10 +15,38 @@ its existing logging/serialization boundary and publishes only versioned fields.
 **Tech Stack:** Python 3.10+, PyTorch 2.4+, SciPy 1.13+, NumPy, Polars 1.9+, PyTorch Lightning
 2.4+, Typer 0.12+, pytest 8.3+, Ruff, YAPF, MkDocs. All are existing dependencies.
 
+## Execution Evidence
+
+All five tasks were implemented and committed. The requested whole-plan `code-reviewer` review
+identified two integration gaps, both reproduced and resolved: rank-divergent distributed
+logging and HGCN validation history assigned to the preceding epoch. The user approved
+rank-zero text metric/artifact reporting; all ranks still validate their own matrices.
+Additional regressions exercise real two-rank Lightning reductions and real one-, two-, and
+three-epoch HGCN training, including skipped validation epochs.
+
+Final full suites on Python 3.10 and 3.12 each passed **1,170 tests**, with one skip for unavailable
+CUDA; MPS parity ran. Repository-wide Ruff/YAPF, strict MkDocs, branch/worktree whitespace checks,
+and the legacy-output-key scan passed. `conf/config.yaml` and historical metric artifacts were
+not changed.
+
+The supplied worktree-local matrix `data/naics_distance_matrix.parquet` identifies validated bundle
+`18403d29-3b23-444e-9e81-371d0ca8b7ea` in its Parquet metadata. Its SHA-256 is
+`3cce4c506e8626e5278071f09c21691f2ce17f93c8bccd465c948a5f801ec3e0`.
+The manual benchmark confirmed 2,125 nodes, 2,256,750 total/filtered pairs, 12 target distances,
+a 1,984,647-pair dominant tie, and 18,054,000 raw float32 vector bytes. On macOS ARM64,
+Python 3.12.12, Torch 2.9.1, and SciPy 1.16.3, five-run medians were **0.234690 s** for SciPy and
+**0.286335 s** for the public wrapper. The wrapper matched the independent SciPy oracle.
+The SciPy timing is close to the design's approximate 0.22 s observation; no material regression
+was observed. Full timings and provenance are in the execution artifact
+`structural-spearman-benchmark.json`; this is not a wall-clock test threshold.
+
+The backlog closure pass retired two already-resolved items with current evidence. No new
+deferred items or unresolved review findings remain from this plan.
+
 ## Global Constraints
 
 The following requirements are copied from the
-[approved spec](../structural-spearman-metric-integrity.md); its sections remain authoritative.
+[approved spec](../../completed/structural-spearman-metric-integrity.md); its sections remain authoritative.
 
 - The symbolic definition identifier is: `structural-spearman-v1`.
 - External numeric fields use: `structural_spearman_v1`.
@@ -169,7 +199,7 @@ uv run pytest tests/ -v --cov=src/naics_embedder --cov-report=xml:coverage.xml -
   `structural_distance_matrices -> tuple[torch.Tensor, torch.Tensor]` and
   `structural_lorentz_embeddings -> torch.Tensor`.
 
-- [ ] **Step 1: Add the small fixtures and mathematical regressions**
+- [x] **Step 1: Add the small fixtures and mathematical regressions**
 
 Append these fixtures to `tests/conftest.py`. These are synthetic matrices, not asserted NAICS
 relationships. Keep existing fixtures unchanged.
@@ -500,7 +530,7 @@ def test_available_devices_match_cpu(metric, structural_distance_matrices, devic
     assert torch.equal(actual.cpu(), expected)
 ```
 
-- [ ] **Step 2: Demonstrate the original numerical failure**
+- [x] **Step 2: Demonstrate the original numerical failure**
 
 ```bash
 uv run pytest tests/unit/test_structural_spearman.py::test_motivating_ties -q
@@ -515,7 +545,7 @@ uv run pytest tests/unit/test_structural_spearman.py -q
 
 Expected: failures in the new contract tests; do not weaken the assertions.
 
-- [ ] **Step 3: Implement validation, canonicalization, and the SciPy boundary**
+- [x] **Step 3: Implement validation, canonicalization, and the SciPy boundary**
 
 Create `src/naics_embedder/metrics/structural_spearman.py`:
 
@@ -698,7 +728,7 @@ with its transpose, rather than accepting an order-dependent relative-tolerance 
 Integer equality precedes float64 promotion so a one-unit mismatch above `2**53` is not hidden.
 The arithmetic mean is commutative even when a permutation swaps a pair's orientation.
 
-- [ ] **Step 4: Delegate the compatibility method and publish the contract**
+- [x] **Step 4: Delegate the compatibility method and publish the contract**
 
 Add this import to `src/naics_embedder/metrics/core.py`:
 
@@ -765,7 +795,7 @@ from .structural_spearman import (
     'StructuralMetricInputError',
 ```
 
-- [ ] **Step 5: Verify the complete focused contract**
+- [x] **Step 5: Verify the complete focused contract**
 
 Run formatting and the focused files:
 
@@ -779,7 +809,7 @@ uv run pytest tests/unit/test_structural_spearman.py tests/unit/test_evaluation.
 Expected: PASS, with CUDA/MPS tests skipped only when unavailable. Existing runner key
 expectations still pass at this task because the runner key is migrated in Task 2.
 
-- [ ] **Step 6: Commit the canonical metric**
+- [x] **Step 6: Commit the canonical metric**
 
 ```bash
 git add src/naics_embedder/metrics/structural_spearman.py \
@@ -809,7 +839,7 @@ git commit -m "fix(metrics): define canonical tied-rank structural Spearman" \
   `load_distance_submatrix(distance_matrix_path: Union[str, Path], node_codes: Sequence[str]) -> torch.Tensor`;
   file-backed non-finite values now reach the shared validation boundary unchanged.
 
-- [ ] **Step 1: Add runner and Parquet-boundary regressions**
+- [x] **Step 1: Add runner and Parquet-boundary regressions**
 
 Add these imports to `tests/unit/test_evaluation.py`:
 
@@ -939,7 +969,7 @@ def test_loader_preserves_order_and_diagonal_sentinels(tmp_path, structural_dist
     assert result['n_pairs'] == result['n_total'] == 6
 ```
 
-- [ ] **Step 2: Run the boundary tests red**
+- [x] **Step 2: Run the boundary tests red**
 
 ```bash
 uv run pytest tests/unit/test_evaluation.py tests/unit/test_distance_matrix.py -q
@@ -948,7 +978,7 @@ uv run pytest tests/unit/test_evaluation.py tests/unit/test_distance_matrix.py -
 Expected: new key assertions fail; the loader loses `NaN` observations and diagonal sentinels.
 Infinity-only preservation tests can already pass; that does not invalidate the `NaN` regression.
 
-- [ ] **Step 3: Migrate the runner and remove only loader sanitization**
+- [x] **Step 3: Migrate the runner and remove only loader sanitization**
 
 Add this import to `src/naics_embedder/metrics/runner.py`:
 
@@ -988,7 +1018,7 @@ Append this sentence to the loader's existing return documentation:
 
 Do not change column parsing, code ordering, missing-code errors, or float32 conversion.
 
-- [ ] **Step 4: Document the metric definition and historical incompatibility**
+- [x] **Step 4: Document the metric definition and historical incompatibility**
 
 In `README.md` under **5.4 Validation Metrics**, replace the Spearman bullet with:
 
@@ -1071,7 +1101,7 @@ evaluation and the Stage-4 verifier remain fixed at curvature `1.0`; text compar
 `loss.curvature: 1.0`. Non-unit-curvature metric corrections are a separate change.
 ```
 
-- [ ] **Step 5: Verify and commit the runner/file boundary**
+- [x] **Step 5: Verify and commit the runner/file boundary**
 
 ```bash
 ./scripts/format_code.sh src/naics_embedder/metrics/runner.py \
@@ -1110,7 +1140,9 @@ Expected: all selected tests pass, only unavailable-device tests skip, and diff 
   the existing JSON history
   envelope, clustering behavior, and `finally` cleanup.
 
-- [ ] **Step 1: Write real-hook logging and serialization tests**
+- [x] **Step 1: Write real-hook logging and serialization tests**
+
+> Deviation: review added real two-rank Lightning reduction regressions and nonzero-rank input-error tests.
 
 Create `tests/unit/test_text_validation_metrics.py`. This harness uses the production validation
 and logging mixins, geometry diagnostics, statistics, hierarchy metrics, and JSON writer. It
@@ -1234,7 +1266,7 @@ def test_text_validation_propagates_input_errors_before_hierarchy_logging(
     assert harness.validation_codes == []
 ```
 
-- [ ] **Step 2: Run the text boundary red**
+- [x] **Step 2: Run the text boundary red**
 
 ```bash
 uv run pytest tests/unit/test_text_validation_metrics.py -q
@@ -1244,7 +1276,9 @@ Expected: missing versioned fields and failure to propagate `StructuralMetricInp
 The unaligned-code case additionally exercises a shape mismatch that currently disappears
 inside the broad epoch-end exception handler.
 
-- [ ] **Step 3: Move the metric to the first hierarchy boundary and serialize explicit state**
+- [x] **Step 3: Move the metric to the first hierarchy boundary and serialize explicit state**
+
+> Deviation: user-approved rank-zero scalar/count/warning/JSON reporting replaces unsafe conditional synchronized logging; every rank still validates.
 
 Add this import to `text_model/mixins/validation.py`:
 
@@ -1324,7 +1358,9 @@ with this dictionary expansion:
 Do not change the generic JSON writer to reject every unrelated metric's historic behavior.
 Only this metric's undefined scalar is mapped to `None` at its owning boundary.
 
-- [ ] **Step 4: Document text artifacts and comparison configuration**
+- [x] **Step 4: Document text artifacts and comparison configuration**
+
+> Deviation: documented rank-zero population semantics and the distributed-monitor limitation.
 
 Add this top-level TOC entry in `docs/text_training.md` before **Resuming and Overrides**:
 
@@ -1386,7 +1422,9 @@ as an acceptance threshold.
 ---
 ````
 
-- [ ] **Step 5: Verify and commit the text boundary**
+- [x] **Step 5: Verify and commit the text boundary**
+
+> Deviation: the distributed correction and its regressions landed in a separate review-fix commit.
 
 ```bash
 ./scripts/format_code.sh src/naics_embedder/text_model/mixins/validation.py \
@@ -1423,7 +1461,9 @@ partial hierarchy artifact, while epoch buffers are still cleared.
 - Preserves: fixed `curvature=1.0`, existing graph metrics, optional missing-data behavior,
   sampling/loss/curriculum configuration, and history's epoch envelope.
 
-- [ ] **Step 1: Add full-evaluation and real history-export regressions**
+- [x] **Step 1: Add full-evaluation and real history-export regressions**
+
+> Deviation: review added real Trainer-driven history tests without pre-seeded rows, covering first, later, and skipped-validation epochs.
 
 Add imports to `tests/unit/test_hgcn_metrics.py`, preserving its existing imports and test:
 
@@ -1579,7 +1619,7 @@ def test_hgcn_does_not_skip_unexpected_spearman_failure(monkeypatch, spearman_hg
         module._compute_full_validation_metrics(module.forward())
 ```
 
-- [ ] **Step 2: Run the HGCN boundary red**
+- [x] **Step 2: Run the HGCN boundary red**
 
 ```bash
 uv run pytest tests/unit/test_hgcn_metrics.py -q
@@ -1589,7 +1629,7 @@ Expected: versioned output assertions fail and shape mismatch is incorrectly ski
 core already makes some malformed-input cases fail; this task removes the HGCN-specific bypass
 and carries metadata through the actual Lightning/history path.
 
-- [ ] **Step 3: Separate metric validation from optional-runtime skip handling**
+- [x] **Step 3: Separate metric validation from optional-runtime skip handling**
 
 Add `STRUCTURAL_SPEARMAN_KEY` to the existing import from `naics_embedder.metrics`.
 Change only this initialization annotation:
@@ -1693,7 +1733,9 @@ failure is relabeled as a skipped hierarchy metric.
 This is not a general exception-policy rewrite: the existing warning/skip behavior for unrelated
 distance-production or other-metric `RuntimeError`s remains intact.
 
-- [ ] **Step 4: Log only numeric results while retaining complete history metadata**
+- [x] **Step 4: Log only numeric results while retaining complete history metadata**
+
+> Deviation: the existing hook lifecycle was not correct; history merging now checks epoch identity and runs when the training row exists, with buffers reset at training-epoch start.
 
 Inside `validation_step`, replace the complete
 `if self._should_run_full_eval(batch_idx):` block with:
@@ -1732,7 +1774,9 @@ Do not average the new metadata through `_val_epoch_metrics`, convert strings/`N
 tensors, or carry previous epoch values forward. Existing `on_validation_epoch_start` clearing
 and `on_validation_epoch_end` history merging already provide the correct lifecycle.
 
-- [ ] **Step 5: Document HGCN scalar and history fields**
+- [x] **Step 5: Document HGCN scalar and history fields**
+
+> Deviation: documented matching-epoch history and no carry-forward into epochs without validation.
 
 In `docs/hgcn_training.md` replace the Spearman bullet with:
 
@@ -1779,7 +1823,9 @@ Full HGCN evaluation remains explicitly fixed at curvature `1.0`. This rank repa
 repair non-unit-curvature distances or change the graph architecture, objectives, or curriculum.
 ````
 
-- [ ] **Step 6: Verify and commit the HGCN boundary**
+- [x] **Step 6: Verify and commit the HGCN boundary**
+
+> Deviation: the epoch-alignment correction and its regressions landed in a separate review-fix commit.
 
 ```bash
 ./scripts/format_code.sh src/naics_embedder/graph_model/hgcn.py tests/unit/test_hgcn_metrics.py
@@ -1818,7 +1864,7 @@ observations fail validation; undefined state survives `training_log.json` as `n
 - Preserves: `Stage4VerificationConfig` fields/defaults, CLI threshold options, and the exact
   three checks `cophenetic`, `ndcg`, `local_improvement`.
 
-- [ ] **Step 1: Add verifier regressions using real files and the real metric**
+- [x] **Step 1: Add verifier regressions using real files and the real metric**
 
 Add imports to `tests/unit/test_embeddings_verification.py`, retaining existing imports/helpers:
 
@@ -1976,7 +2022,7 @@ def test_verifier_rejects_malformed_distances(
         verify_stage4(*paths, _report_config())
 ```
 
-- [ ] **Step 2: Add CLI formatting and fatal-input tests**
+- [x] **Step 2: Add CLI formatting and fatal-input tests**
 
 Add this import to `tests/unit/test_cli_commands.py`:
 
@@ -2039,7 +2085,7 @@ uv run pytest tests/unit/test_embeddings_verification.py tests/unit/test_cli_com
 Expected: verifier versioned-key/metadata assertions fail, and formatting a `None` scalar fails.
 The old threshold-failure test and explicit CLI error propagation should remain green.
 
-- [ ] **Step 3: Calculate structural Spearman before the verifier's existing hierarchy metrics**
+- [x] **Step 3: Calculate structural Spearman before the verifier's existing hierarchy metrics**
 
 Add imports to `tools/embeddings_verification.py`:
 
@@ -2147,7 +2193,7 @@ Immediately after `checks`, replace the original return block with:
 The separate numeric dictionaries preserve the original gate's non-nullable inputs and prevent
 Spearman from accidentally becoming a fourth threshold.
 
-- [ ] **Step 4: Render undefined values and deltas as `N/A`**
+- [x] **Step 4: Render undefined values and deltas as `N/A`**
 
 In `cli/commands/tools.py`, replace the verifier command's docstring with:
 
@@ -2182,7 +2228,7 @@ Replace its three metric-printing loops, keeping the surrounding section heading
 
 Keep every existing option/default, exception-to-exit-code mapping, and threshold result loop.
 
-- [ ] **Step 5: Document report-only pre/post/delta metadata**
+- [x] **Step 5: Document report-only pre/post/delta metadata**
 
 Replace the final verifier paragraph in `README.md` **5.5 Pre/Post Verification** with:
 
@@ -2236,7 +2282,7 @@ non-fatal. Both phase evaluations stay explicitly fixed at curvature `1.0`, rega
 training configuration. The rank correction does not fix non-unit-curvature geometry.
 ````
 
-- [ ] **Step 6: Run the complete focused caller suite and touched-file checks**
+- [x] **Step 6: Run the complete focused caller suite and touched-file checks**
 
 ```bash
 ./scripts/format_code.sh src/naics_embedder/tools/embeddings_verification.py \
@@ -2260,7 +2306,9 @@ uv run pytest tests/unit/test_structural_spearman.py tests/unit/test_evaluation.
 Expected: every selected test passes apart from unavailable-device skips, and every touched
 Python file passes Ruff and YAPF. Do not run `ruff format`.
 
-- [ ] **Step 7: Run the required repository-level gates**
+- [x] **Step 7: Run the required repository-level gates**
+
+> Deviation: both supported interpreter suites were reproduced locally without changing CI; full verification was repeated after review fixes.
 
 Run these commands individually so one failure does not hide another gate's result:
 
@@ -2288,7 +2336,7 @@ rg -n "'(val/)?spearman(_correlation|_n_pairs)'|'val_spearman_correlation'" \
 Expected: no matches (ripgrep exit status `1` means no matches). The compatibility Python method
 name and historical documentation/tests are intentionally not searched as forbidden output keys.
 
-- [ ] **Step 8: Re-run the full-population benchmark manually**
+- [x] **Step 8: Re-run the full-population benchmark manually**
 
 Use the current validated Stage-3 bundle's distance matrix, not synthetic targets or files in
 another checkout. No real bundle is present in the planning worktree. If the execution worktree
@@ -2389,16 +2437,14 @@ in the execution session's artifacts and compare like-for-like SciPy timing with
 approximately 0.22-second observation; it is not a portable pass threshold. Investigate and
 record any material regression before completing the repair.
 
-- [ ] **Step 9: Commit verifier reporting and final documentation**
-
-```bash
-git add src/naics_embedder/tools/embeddings_verification.py \
+- [x] **Step 9: Commit verifier reporting and final docume**git add src/naics\_embedder/tools/embeddings\_verification.py \
   src/naics_embedder/cli/commands/tools.py tests/unit/test_embeddings_verification.py \
   tests/unit/test_cli_commands.py docs/hgcn_training.md README.md
 git commit -m "feat(metrics): report structural Spearman in Stage-4 verification" \
   -m "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>"
 git status --short --branch
-```
+
+> Deviation: this commit preceded the manual benchmark while the user supplied the matrix; the benchmark completed before plan retirement.
 
 Expected: only deliberately preserved user changes remain. Generated test/build artifacts must
 not enter the commit.

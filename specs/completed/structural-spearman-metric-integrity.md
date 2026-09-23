@@ -1,8 +1,9 @@
 # Structural Spearman Metric Integrity
 
-**Status:** DESIGN APPROVED — awaiting written-spec review
+**Status: COMPLETE (2026-09-23)** — implemented and reviewed via executing-plans
 
-**Next skill after written-spec approval:** `writing-plans` in a fresh session
+**Implementation:** [Completed plan 2](../plans/completed/2-structural-spearman-metric-integrity.md);
+all acceptance criteria verified, nothing deferred.
 
 ## 1. Purpose
 
@@ -266,6 +267,13 @@ warning with the exact reason. `evaluation_metrics.json` uses these fields:
 The existing broad evaluation exception handler must re-raise `StructuralMetricInputError` rather
 than logging and continuing.
 
+**Execution clarification, approved 2026-09-23:** In distributed text training, each rank validates
+its local matrices, but rank 0 alone publishes structural Spearman, its counts and undefined
+warnings, and writes the JSON history. These values describe rank 0's sampled population, not a
+global union or an average of rank-local coefficients. Logging uses no distributed reduction for
+these fields, so mixed defined/undefined local populations cannot desynchronize collectives.
+The rank-zero-only metric is not a distributed early-stopping monitor.
+
 ### 8.2 HGCN full evaluation
 
 `graph_model/hgcn.py` uses the same versioned scalar and count names. Lightning logs numeric
@@ -274,6 +282,10 @@ status, reason, definition, `n_pairs`, and `n_total` under the existing `val_` h
 
 `StructuralMetricInputError` propagates and fails validation. It is not converted into a skipped
 optional metric.
+
+History metadata belongs to the matching training epoch, including the first epoch. Because
+Lightning finishes validation before the training-epoch-end hook, pending values are merged when
+that epoch's history row exists. Epochs without validation do not inherit earlier values.
 
 ### 8.3 General evaluation runner
 
