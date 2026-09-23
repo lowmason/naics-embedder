@@ -42,6 +42,37 @@ def test_get_descriptions_filters_cross_references():
     assert ids == sorted(ids)
 
 @pytest.mark.unit
+@pytest.mark.parametrize('eol', [pytest.param('\r\n', id='crlf'), pytest.param('\n', id='lf')])
+def test_get_descriptions_splits_lines_for_any_line_ending(eol: str):
+    # The xlsx stores CRLF line endings; whether they reach the pipeline as CRLF or LF depends on
+    # the Excel reader and its version
+    description = eol.join(
+        [
+            'The Sector as a Whole',
+            '',
+            'This industry comprises establishments growing grain.',
+            '',
+            'Illustrative Examples:',
+            '',
+            'Barley farming',
+            'Rye farming',
+            '',
+            '',
+            'Cross-References. Establishments growing wheat are classified in Industry 111140.',
+        ]
+    )
+    descriptions_df = pl.DataFrame({'code': ['111199'], 'description': [description]})
+
+    _, descriptions_clean = download_data._get_descriptions_1(descriptions_df)
+
+    assert descriptions_clean.get_column('description').to_list() == [
+        'This industry comprises establishments growing grain.',
+        'Illustrative Examples:',
+        'Barley farming',
+        'Rye farming',
+    ]
+
+@pytest.mark.unit
 def test_read_xlsx_bytes_renames_columns(monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
