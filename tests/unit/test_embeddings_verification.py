@@ -7,14 +7,16 @@ import pytest
 import torch
 from scipy.stats import spearmanr
 
-from naics_embedder.graph_model.hgcn import load_embeddings
+from naics_embedder.graph_model.hgcn import HGCN, load_embeddings, save_outputs
 from naics_embedder.metrics import EmbeddingEvaluator, StructuralMetricInputError
 from naics_embedder.tools.embeddings_verification import (
     Stage4VerificationConfig,
     verify_stage4,
 )
+from naics_embedder.utils.config import GraphConfig
 
-def _write_embeddings(path, codes, spatial_vectors):
+def _write_embeddings(path, codes, spatial_vectors, prefix):
+    '''Write Lorentz rows as Stage 3 (``hyp_e``) or Stage 4 (``hgcn_e``) columns.'''
     rows = []
     for idx, (code, vec) in enumerate(zip(codes, spatial_vectors)):
         vec = torch.tensor(vec, dtype=torch.float32)
@@ -24,9 +26,9 @@ def _write_embeddings(path, codes, spatial_vectors):
                 'index': idx,
                 'level': len(code),
                 'code': code,
-                'hyp_e0': float(time),
-                'hyp_e1': float(vec[0]),
-                'hyp_e2': float(vec[1]),
+                f'{prefix}0': float(time),
+                f'{prefix}1': float(vec[0]),
+                f'{prefix}2': float(vec[1]),
             }
         )
     pl.DataFrame(rows).write_parquet(path)
@@ -64,8 +66,8 @@ def test_verify_stage4_pass(tmp_path):
     distance_path = tmp_path / 'distance.parquet'
     relations_path = tmp_path / 'relations.parquet'
 
-    _write_embeddings(stage3_path, codes, [(0.0, 0.0), (0.2, 0.0), (0.0, 0.2)])
-    _write_embeddings(stage4_path, codes, [(0.0, 0.0), (0.15, 0.0), (0.0, 0.15)])
+    _write_embeddings(stage3_path, codes, [(0.0, 0.0), (0.2, 0.0), (0.0, 0.2)], 'hyp_e')
+    _write_embeddings(stage4_path, codes, [(0.0, 0.0), (0.15, 0.0), (0.0, 0.15)], 'hgcn_e')
     _write_distance_matrix(distance_path, codes)
     _write_relations(relations_path)
 
@@ -96,8 +98,8 @@ def test_verify_stage4_threshold_failure(tmp_path):
     relations_path = tmp_path / 'relations.parquet'
 
     vectors = [(0.0, 0.0), (0.2, 0.0), (0.0, 0.2)]
-    _write_embeddings(stage3_path, codes, vectors)
-    _write_embeddings(stage4_path, codes, vectors)
+    _write_embeddings(stage3_path, codes, vectors, 'hyp_e')
+    _write_embeddings(stage4_path, codes, vectors, 'hgcn_e')
     _write_distance_matrix(distance_path, codes)
     _write_relations(relations_path)
 
@@ -130,8 +132,8 @@ def structural_verification_files(tmp_path, monkeypatch, structural_distance_mat
         tmp_path / 'relations.parquet',
     )
     vectors = [(0.0, 0.0), (0.2, 0.0), (0.0, 0.3), (0.2, 0.4)]
-    _write_embeddings(paths[0], codes, vectors)
-    _write_embeddings(paths[1], codes, vectors)
+    _write_embeddings(paths[0], codes, vectors, 'hyp_e')
+    _write_embeddings(paths[1], codes, vectors, 'hgcn_e')
     pl.DataFrame({
         f'idx_{i}-code_{code}': target[:, i].numpy()
         for i, code in enumerate(codes)
@@ -153,6 +155,37 @@ def _report_config() -> Stage4VerificationConfig:
         min_local_improvement=-1.0,
         ndcg_k=1,
     )
+
+@pytest.mark.unit
+def test_verifier_reads_hgcn_save_outputs(tmp_path, structural_verification_files):
+    pre_path, _, distance_path, relations_path = structural_verification_files
+    hgcn_path = tmp_path / 'hgcn.parquet'
+    embeddings, _, frame = load_embeddings(str(pre_path), torch.device('cpu'))
+    model = HGCN(
+        tangent_dim=2,
+        n_layers=1,
+        dropout=0.0,
+        learnable_curvature=False,
+        learnable_loss_weights=False,
+        edge_type_count=1,
+        edge_attention_hidden_dim=4,
+        sibling_type_id=None,
+        sibling_attention_boost=0.0,
+    )
+    save_outputs(
+        str(tmp_path), embeddings, frame, GraphConfig(output_parquet=str(hgcn_path)), model, []
+    )
+
+    result = verify_stage4(pre_path, hgcn_path, distance_path, relations_path, _report_config())
+
+    assert result['post'] == result['pre']
+
+@pytest.mark.unit
+def test_verifier_rejects_stage3_file_as_post(structural_verification_files):
+    pre_path, _, distance_path, relations_path = structural_verification_files
+
+    with pytest.raises(ValueError, match=r'expected hgcn_e\* pattern'):
+        verify_stage4(pre_path, pre_path, distance_path, relations_path, _report_config())
 
 @pytest.mark.unit
 def test_verifier_real_distances_match_scipy(

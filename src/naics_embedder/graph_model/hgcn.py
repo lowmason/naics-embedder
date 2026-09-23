@@ -1102,8 +1102,20 @@ class HGCNLightningModule(pyl.LightningModule):
         }
 
     def get_final_embeddings(self) -> torch.Tensor:
-        with torch.no_grad():
-            final_emb = self.forward()
+        '''
+        Compute export embeddings with dropout disabled.
+
+        Lightning leaves the module in training mode after ``fit``, so the pass runs in eval mode
+        and then restores each submodule's prior mode.
+        '''
+        modes = {module: module.training for module in self.modules()}
+        self.eval()
+        try:
+            with torch.no_grad():
+                final_emb = self.forward()
+        finally:
+            for module, training in modes.items():
+                module.training = training
         return final_emb.detach().cpu()
 
     def export_history(self) -> List[Dict[str, Any]]:
@@ -1113,25 +1125,41 @@ class HGCNLightningModule(pyl.LightningModule):
 # IO helpers
 # -------------------------------------------------------------------------------------------------
 
-def load_embeddings(parquet_path: str,
-                    device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, pl.DataFrame]:
+# Embedding column prefixes: Stage 3 exports write hyp_e{i}; HGCN (Stage 4) writes hgcn_e{i}.
+STAGE3_EMBEDDING_PREFIX = 'hyp_e'
+STAGE4_EMBEDDING_PREFIX = 'hgcn_e'
+
+def load_embeddings(
+    parquet_path: str,
+    device: torch.device,
+    *,
+    embedding_prefix: str = STAGE3_EMBEDDING_PREFIX,
+) -> Tuple[torch.Tensor, torch.Tensor, pl.DataFrame]:
     '''
     Load hyperbolic embeddings from parquet file.
 
-    Expects columns prefixed with 'hyp_e' (e.g., hyp_e0, hyp_e1, ...) for embeddings.
+    Args:
+        parquet_path: Parquet with a ``level`` column and ``{embedding_prefix}{i}`` columns
+        device: Device for the returned tensors
+        embedding_prefix: Embedding column prefix, ``STAGE3_EMBEDDING_PREFIX`` for Stage 3
+            exports or ``STAGE4_EMBEDDING_PREFIX`` for HGCN output
+
+    Returns:
+        Embeddings in numeric column-suffix order, levels, and the full DataFrame
     '''
     df = pl.read_parquet(parquet_path)
 
-    # Find embedding columns (hyp_e* pattern) and enforce a deterministic order
-    embedding_cols = [col for col in df.columns if col.startswith('hyp_e')]
+    embedding_cols = [col for col in df.columns if col.startswith(embedding_prefix)]
     if not embedding_cols:
-        raise ValueError(f'No embedding columns found (expected hyp_e* pattern) in {parquet_path}')
+        raise ValueError(
+            f'No embedding columns found (expected {embedding_prefix}* pattern) in {parquet_path}'
+        )
 
-    embedding_cols = sorted(
-        embedding_cols,
-        key=lambda name: int(name.replace('hyp_e', ''))
-        if name.replace('hyp_e', '').isdigit() else name,
-    )
+    def _sort_key(name: str) -> Tuple[int, Union[int, str]]:
+        suffix = name[len(embedding_prefix):]
+        return (0, int(suffix)) if suffix.isdigit() else (1, suffix)
+
+    embedding_cols = sorted(embedding_cols, key=_sort_key)
 
     emb = df.select(embedding_cols).to_torch(dtype=pl.Float32).to(device)
 
@@ -1220,7 +1248,7 @@ def save_outputs(
 
     base = orig_df.select('index', 'level', 'code')
 
-    emb_schema = {f'hgcn_e{i}': pl.Float64 for i in range(emb_np.shape[1])}
+    emb_schema = {f'{STAGE4_EMBEDDING_PREFIX}{i}': pl.Float64 for i in range(emb_np.shape[1])}
     emb_df = pl.DataFrame(emb_np, schema=emb_schema)
 
     result_df = base.hstack(emb_df)
