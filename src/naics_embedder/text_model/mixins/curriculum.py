@@ -12,17 +12,79 @@ Provides methods for:
 '''
 
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
+from naics_embedder.supervision.candidates import (
+    CandidateEntityBatch,
+    CandidateProposal,
+    NegativeCandidateBatch,
+    SelectedNegativeBatch,
+)
+from naics_embedder.supervision.schema import (
+    SAMPLING_ROLE_TO_ID,
+    SamplingProvenance,
+    SamplingRole,
+    SelectionReason,
+)
 from naics_embedder.text_model.false_negative_strategies import apply_false_negative_strategy
 from naics_embedder.text_model.mixins.distributed import (
     GlobalNegativeContext,
+    gather_candidate_entities,
     gather_embeddings_global,
 )
 
 logger = logging.getLogger(__name__)
+
+def _proposal_from_local_uids(
+    *,
+    local_candidate_uid: torch.Tensor,
+    active_candidates: NegativeCandidateBatch,
+    local_source_indices: torch.Tensor,
+) -> CandidateProposal:
+    '''
+    Translate collated difficulty proposals (local pool positions) into the active pool by UID.
+
+    Rank-major distributed gathering changes source positions but preserves occurrence identity,
+    so proposals are matched by candidate UID rather than position. Earlier proposals score higher;
+    padding (index -1) becomes an ineligible ``-inf`` entry.
+
+    Raises:
+        ValueError: On a malformed or out-of-bounds proposal, or a UID that is missing from, or
+            duplicated in, the active pool.
+    '''
+    if local_source_indices.ndim != 2:
+        raise ValueError('difficulty proposal indices must have shape [batch, proposal]')
+    if local_source_indices.ge(local_candidate_uid.shape[1]).any():
+        raise ValueError('difficulty proposal contains an out-of-bounds local source index')
+    safe = local_source_indices.clamp_min(0)
+    local_uids = local_candidate_uid.gather(
+        1,
+        safe.unsqueeze(-1).expand(-1, -1, 3),
+    )
+    matches = active_candidates.candidate_uid.unsqueeze(2).eq(
+        local_uids.unsqueeze(1)
+    ).all(dim=-1)
+    expected = local_source_indices.ge(0)
+    match_count = matches.sum(dim=1)
+    if (match_count[expected] != 1).any():
+        raise ValueError('difficulty proposal UID is missing or duplicated in active pool')
+    active_indices = matches.to(torch.int64).argmax(dim=1).masked_fill(~expected, -1)
+    width = local_source_indices.shape[1]
+    scores = torch.arange(
+        width,
+        0,
+        -1,
+        dtype=active_candidates.embedding.dtype,
+        device=active_candidates.embedding.device,
+    ).unsqueeze(0).expand_as(active_indices)
+    scores = scores.masked_fill(~expected, -torch.inf)
+    return CandidateProposal(
+        source_indices=active_indices,
+        scores=scores,
+        reason=SelectionReason.DIFFICULTY,
+    )
 
 class CurriculumMixin:
     '''
@@ -87,6 +149,164 @@ class CurriculumMixin:
                 on_step=False,
                 on_epoch=True,
             )
+
+    def _selection_seed(self) -> int:
+        '''Global seed for deterministic exclusion rotation (the training seed).'''
+        return int(getattr(self.hparams, 'selection_seed', 0))
+
+    def _select_negative_batch(
+        self,
+        *,
+        batch: Dict[str, Any],
+        anchor_output: Dict[str, torch.Tensor],
+        candidate_output: Dict[str, torch.Tensor],
+        candidate_uid: torch.Tensor,
+        batch_idx: int,
+    ) -> SelectedNegativeBatch:
+        '''
+        Build the canonical candidate pool and perform the one checked negative selection.
+
+        Flow: local candidate entities -> optional distributed entity gather -> anchor-relative
+        supervision join -> ``NegativeCandidateBatch`` -> difficulty/geometric/router proposals ->
+        coordinator selection (exclusion quota, dedup, backfill) -> the single gather.
+
+        Args:
+            batch: Repaired collated batch.
+            anchor_output: Encoder output for the anchors.
+            candidate_output: Encoder output for the flattened candidate pool.
+            candidate_uid: ``[batch, candidate, 3]`` occurrence UIDs (rank, row, source slot).
+            batch_idx: Current batch index.
+        '''
+        batch_size = int(batch['batch_size'])
+        candidate_count = int(batch['k_candidates'])
+        embedding = candidate_output['embedding'].reshape(batch_size, candidate_count, -1)
+        raw_gate_probs = candidate_output.get('gate_probs')
+        gate_probs = (
+            None
+            if raw_gate_probs is None
+            else raw_gate_probs.reshape(batch_size, candidate_count, -1)
+        )
+        local_entities = CandidateEntityBatch(
+            candidate_uid=candidate_uid,
+            code_id=batch['candidate_code_id'],
+            embedding=embedding,
+            router_gate_probs=gate_probs,
+            valid_mask=batch['candidate_valid_mask'],
+        )
+
+        enable_geometric = self.current_curriculum_flags.get(
+            'enable_hard_negative_mining', False
+        )
+        enable_router = self.current_curriculum_flags.get(
+            'enable_router_guided_sampling', False
+        )
+        use_global = (
+            (enable_geometric or enable_router)
+            and torch.distributed.is_available()
+            and torch.distributed.is_initialized()
+            and torch.distributed.get_world_size() > 1
+        )
+        if use_global:
+            gathered = gather_candidate_entities(local_entities)
+            entities = CandidateEntityBatch(
+                candidate_uid=gathered.candidate_uid.expand(batch_size, -1, -1),
+                code_id=gathered.code_id.expand(batch_size, -1),
+                embedding=gathered.embedding.expand(batch_size, -1, -1),
+                router_gate_probs=(
+                    None
+                    if gathered.router_gate_probs is None
+                    else gathered.router_gate_probs.expand(batch_size, -1, -1)
+                ),
+                valid_mask=gathered.valid_mask.expand(batch_size, -1),
+            )
+            sampling_role_id = torch.full_like(
+                entities.code_id,
+                SAMPLING_ROLE_TO_ID[SamplingRole.NEGATIVE],
+                dtype=torch.int8,
+            )
+            sampling_provenance_id = torch.full_like(
+                entities.code_id,
+                int(SamplingProvenance.DISTRIBUTED_POOL),
+                dtype=torch.int8,
+            )
+        else:
+            entities = local_entities
+            sampling_role_id = batch['candidate_sampling_role_id']
+            sampling_provenance_id = batch['candidate_sampling_provenance_id']
+
+        pair = self.supervision_index.join(
+            batch['anchor_code_id'],
+            entities.code_id,
+            entities.valid_mask,
+        )
+        relation_margin = pair.structural_relation_id.to(torch.float32) - batch[
+            'positive_structural_relation_id'
+        ].to(torch.float32).unsqueeze(1)
+        distance_margin = pair.structural_distance - batch[
+            'positive_structural_distance'
+        ].unsqueeze(1)
+        candidates = NegativeCandidateBatch(
+            candidate_uid=entities.candidate_uid,
+            code_id=entities.code_id,
+            embedding=entities.embedding,
+            structural_distance=pair.structural_distance,
+            structural_relation_id=pair.structural_relation_id,
+            anchor_excludes_candidate=pair.anchor_excludes_candidate,
+            candidate_excludes_anchor=pair.candidate_excludes_anchor,
+            is_explicit_exclusion=pair.is_explicit_exclusion,
+            semantic_target_id=pair.semantic_target_id,
+            semantic_source_id=pair.semantic_source_id,
+            sampling_role_id=sampling_role_id,
+            sampling_provenance_id=sampling_provenance_id,
+            relation_margin=relation_margin,
+            distance_margin=distance_margin,
+            router_gate_probs=entities.router_gate_probs,
+            valid_mask=entities.valid_mask,
+            runtime_fields={'difficulty': pair.structural_distance},
+        )
+
+        proposals: List[CandidateProposal] = [
+            _proposal_from_local_uids(
+                local_candidate_uid=candidate_uid,
+                active_candidates=candidates,
+                local_source_indices=batch['difficulty_proposal_indices'],
+            )
+        ]
+        selection_k = int(batch['selection_k'])
+        if enable_geometric:
+            proposals.append(
+                self.hard_negative_miner.propose(
+                    anchor_output['embedding'],
+                    candidates,
+                    k=selection_k,
+                )
+            )
+        if enable_router:
+            anchor_gate_probs = anchor_output.get('gate_probs')
+            if anchor_gate_probs is None or candidates.router_gate_probs is None:
+                raise ValueError(
+                    'router-guided selection requires anchor and candidate gate probabilities'
+                )
+            proposals.append(
+                self.router_guided_miner.propose(
+                    anchor_gate_probs=anchor_gate_probs,
+                    candidates=candidates,
+                    k=selection_k,
+                )
+            )
+
+        selection = self.selection_coordinator.select(
+            candidates,
+            anchor_code_ids=batch['anchor_code_id'],
+            positive_code_ids=batch['positive_code_id'],
+            k=selection_k,
+            epoch=int(self.current_epoch),
+            global_seed=self._selection_seed(),
+            proposals=tuple(proposals),
+        )
+        selected = candidates.select(selection)
+        self._log_selection_health(candidates, selected, batch_size)
+        return selected
 
     def _build_false_negative_mask(self, batch: Dict[str, Any],
                                    batch_size: int) -> Optional[torch.Tensor]:

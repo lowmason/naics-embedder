@@ -9,9 +9,20 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
+from naics_embedder.supervision.candidates import CandidateProposal, NegativeCandidateBatch
+from naics_embedder.supervision.schema import SelectionReason
 from naics_embedder.text_model.hyperbolic import LorentzDistance
 
 logger = logging.getLogger(__name__)
+
+def _ineligible(candidates: NegativeCandidateBatch) -> torch.Tensor:
+    '''Candidates no strategy may propose: invalid padding and explicit exclusions.'''
+    return ~candidates.valid_mask | candidates.is_explicit_exclusion
+
+def _top_k_proposal(scores: torch.Tensor, k: int, reason: SelectionReason) -> CandidateProposal:
+    k_actual = min(k, scores.shape[1])
+    top_scores, top_indices = torch.topk(scores, k=k_actual, dim=1, largest=True)
+    return CandidateProposal(source_indices=top_indices, scores=top_scores, reason=reason)
 
 # Import compile utilities
 try:
@@ -95,6 +106,29 @@ class LorentzianHardNegativeMiner(nn.Module):
 
         # Use shared Lorentz distance computation
         self.lorentz_distance = LorentzDistance(curvature)
+
+    def propose(
+        self,
+        anchor_emb: torch.Tensor,
+        candidates: NegativeCandidateBatch,
+        k: int,
+    ) -> CandidateProposal:
+        '''
+        Propose the ``k`` geometrically closest eligible candidates per anchor.
+
+        Returns source indices into the canonical pool with detached ``-distance`` scores;
+        invalid padding and explicit exclusions score ``-inf`` and are never eligible. No
+        candidate field is gathered here.
+
+        Args:
+            anchor_emb: Anchor embeddings (batch_size, embedding_dim+1)
+            candidates: The canonical candidate pool
+            k: Maximum number of proposals per anchor
+        '''
+        with torch.no_grad():
+            distances = self.lorentz_distance.batched_forward(anchor_emb, candidates.embedding)
+            scores = (-distances).masked_fill(_ineligible(candidates), -torch.inf)
+        return _top_k_proposal(scores, k, SelectionReason.GEOMETRIC)
 
     def compute_lorentz_norm(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -256,6 +290,29 @@ class RouterGuidedNegativeMiner(nn.Module):
 
         if metric not in ['kl_divergence', 'cosine_similarity']:
             raise ValueError(f"metric must be 'kl_divergence' or 'cosine_similarity', got {metric}")
+
+    def propose(
+        self,
+        anchor_gate_probs: torch.Tensor,
+        candidates: NegativeCandidateBatch,
+        k: int,
+    ) -> CandidateProposal:
+        '''
+        Propose the ``k`` eligible candidates whose gate distributions most confuse the router.
+
+        Returns source indices into the canonical pool with detached confusion scores; invalid
+        padding and explicit exclusions score ``-inf`` and are never eligible.
+
+        Raises:
+            ValueError: If the candidate pool carries no router gate probabilities.
+        '''
+        if candidates.router_gate_probs is None:
+            raise ValueError('router-guided proposals require candidate gate probabilities')
+        with torch.no_grad():
+            scores = self.compute_confusion_scores(
+                anchor_gate_probs, candidates.router_gate_probs
+            ).masked_fill(_ineligible(candidates), -torch.inf)
+        return _top_k_proposal(scores, k, SelectionReason.ROUTER)
 
     def compute_kl_divergence(
         self, anchor_gate_probs: torch.Tensor, negative_gate_probs: torch.Tensor

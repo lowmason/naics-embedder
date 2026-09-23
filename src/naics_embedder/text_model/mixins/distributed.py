@@ -14,8 +14,76 @@ from typing import TYPE_CHECKING, List, Optional
 import torch
 import torch.distributed as dist
 
+from naics_embedder.supervision.candidates import CandidateEntityBatch
+
 if TYPE_CHECKING:
     from naics_embedder.text_model.mixins.logging import LoggingMixin
+
+def _all_gather_fixed(tensor: torch.Tensor, world_size: int) -> torch.Tensor:
+    '''Non-differentiable all_gather of equal-shape tensors, concatenated rank-major.'''
+    gathered = [torch.zeros_like(tensor) for _ in range(world_size)]
+    dist.all_gather(gathered, tensor)
+    return torch.cat(gathered, dim=0)
+
+def gather_candidate_entities(local: CandidateEntityBatch) -> CandidateEntityBatch:
+    '''
+    Gather candidate-intrinsic entities from every rank into one rank-major candidate axis.
+
+    Only identity (occurrence UID, code ID), embedding, router outputs, and validity travel.
+    Structure, relation, margins, semantics, and exclusion direction are pair-dependent and must
+    be recomputed for each local anchor after the gather. Embeddings use a differentiable
+    all_gather so gradients return to their originating rank; ranks with fewer entities are padded
+    with invalid rows (code ID and UID -1, zero embedding) before gathering.
+
+    Returns:
+        A ``[1, total_candidates]`` entity batch (the local entities alone when not distributed).
+    '''
+
+    uid = local.candidate_uid.reshape(-1, 3)
+    code = local.code_id.reshape(-1)
+    embedding = local.embedding.reshape(-1, local.embedding.shape[-1])
+    router = None
+    if local.router_gate_probs is not None:
+        router = local.router_gate_probs.reshape(-1, local.router_gate_probs.shape[-1])
+    valid = local.valid_mask.reshape(-1)
+
+    if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+        from torch.distributed.nn.functional import all_gather as differentiable_all_gather
+
+        world_size = dist.get_world_size()
+        router_width = -1 if router is None else router.shape[-1]
+        header = torch.tensor(
+            [[code.shape[0], embedding.shape[-1], router_width]],
+            dtype=torch.long,
+            device=embedding.device,
+        )
+        headers = _all_gather_fixed(header, world_size)
+        if (headers[:, 1] != embedding.shape[-1]).any():
+            raise ValueError('candidate embedding widths differ across ranks')
+        if (headers[:, 2] != router_width).any():
+            raise ValueError('candidate router outputs differ in presence or width across ranks')
+        padding = int(headers[:, 0].max()) - code.shape[0]
+        if padding:
+            uid = torch.cat([uid, uid.new_full((padding, 3), -1)])
+            code = torch.cat([code, code.new_full((padding, ), -1)])
+            embedding = torch.cat([embedding, embedding.new_zeros((padding, embedding.shape[-1]))])
+            if router is not None:
+                router = torch.cat([router, router.new_zeros((padding, router.shape[-1]))])
+            valid = torch.cat([valid, valid.new_zeros((padding, ))])
+        embedding = torch.cat(differentiable_all_gather(embedding), dim=0)
+        uid = _all_gather_fixed(uid, world_size)
+        code = _all_gather_fixed(code, world_size)
+        valid = _all_gather_fixed(valid.to(torch.uint8), world_size).bool()
+        if router is not None:
+            router = _all_gather_fixed(router.detach(), world_size)
+
+    return CandidateEntityBatch(
+        candidate_uid=uid.unsqueeze(0),
+        code_id=code.unsqueeze(0),
+        embedding=embedding.unsqueeze(0),
+        router_gate_probs=None if router is None else router.unsqueeze(0),
+        valid_mask=valid.unsqueeze(0),
+    )
 
 def gather_embeddings_global(
     local_embeddings: torch.Tensor, world_size: Optional[int] = None
