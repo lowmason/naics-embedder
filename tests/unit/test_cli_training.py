@@ -265,6 +265,47 @@ def test_supervision_gate_failure_stops_before_any_construction(training_env, mo
     assert training_env.events == ['supervision_gate']
 
 @pytest.mark.unit
+def test_cli_legacy_containment_is_prominently_tagged(
+    cli_runner, training_env, monkeypatch, caplog
+):
+    cfg = training.Config.from_yaml('unused.yaml')
+    cfg.supervision.mode = 'legacy_containment'
+    cfg.supervision.manifest_path = None
+    cfg.loss.rank_order_weight = 0.35
+    cfg.data_loader.streaming.phase1_exclusion_weight = 100.0
+    monkeypatch.setattr(
+        training.Config,
+        'from_yaml',
+        classmethod(lambda cls, path: cfg),
+    )
+
+    result = cli_runner.invoke(cli_app, ['train'], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert 'LEGACY CONTAINMENT' in caplog.text or 'LEGACY CONTAINMENT' in result.output
+    model = training_env.trainer.fit_calls[0]['model']
+    assert model.kwargs['supervision_mode'] == 'legacy_containment'
+    assert model.kwargs['checkpoint_contract'].bundle_id == 'legacy-containment'
+
+@pytest.mark.unit
+def test_legacy_containment_uses_legacy_inputs_without_a_bundle(training_env, monkeypatch):
+    cfg = training.Config.from_yaml('unused.yaml')
+    cfg.supervision.mode = 'legacy_containment'
+    cfg.supervision.manifest_path = None
+    monkeypatch.setattr(training.Config, 'from_yaml', classmethod(lambda cls, path: cfg))
+
+    training.train(skip_validation=True)
+
+    fit = training_env.trainer.fit_calls[0]
+    model_kwargs = fit['model'].kwargs
+    assert model_kwargs['supervision_manifest_path'] is None
+    assert model_kwargs['supervision_bundle'] is None
+    assert model_kwargs['distance_matrix_path'] == cfg.data_loader.streaming.distance_matrix_parquet
+    assert model_kwargs['relations_parquet_path'] == cfg.data_loader.streaming.relations_parquet
+    assert fit['datamodule'].kwargs['supervision_mode'] == 'legacy_containment'
+    assert fit['datamodule'].kwargs['supervision_bundle'] is None
+
+@pytest.mark.unit
 def test_repaired_model_and_datamodule_receive_bundle_supervision(training_env):
     training.train(skip_validation=True)
 

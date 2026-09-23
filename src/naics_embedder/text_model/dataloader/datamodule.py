@@ -774,6 +774,21 @@ def _filter_none_collate_fn(
         raise ValueError('All items in batch were None - no valid triplets')
     return collate_fn(filtered, supervision_mode=supervision_mode)
 
+def legacy_token_fingerprints(descriptions_parquet: str) -> Dict[str, str]:
+    '''
+    Tokenization-cache fingerprints computed directly from a descriptions file.
+
+    Used only by legacy containment, which has no supervision bundle manifest to read them from.
+    '''
+
+    descriptions_path = Path(descriptions_parquet)
+    return {
+        'description_fingerprint': sha256_file(descriptions_path),
+        'codebook_fingerprint': codebook_fingerprint(
+            build_codebook(pl.read_parquet(descriptions_path))
+        ),
+    }
+
 
 # -------------------------------------------------------------------------------------------------
 # Main DataModule for PyTorch Lightning
@@ -895,13 +910,7 @@ class NAICSDataModule(LightningDataModule):
                 'description_fingerprint': manifest.description_fingerprint,
                 'codebook_fingerprint': manifest.codebook_fingerprint,
             }
-        descriptions_path = Path(self.tokenization_cfg.descriptions_parquet)
-        return {
-            'description_fingerprint': sha256_file(descriptions_path),
-            'codebook_fingerprint': codebook_fingerprint(
-                build_codebook(pl.read_parquet(descriptions_path))
-            ),
-        }
+        return legacy_token_fingerprints(self.tokenization_cfg.descriptions_parquet)
 
     def _collate(self):
         return partial(_filter_none_collate_fn, supervision_mode=self.supervision_mode)

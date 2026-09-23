@@ -873,6 +873,104 @@ class TestCheckpointContract:
             NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
 
 # -------------------------------------------------------------------------------------------------
+# Test: Explicit legacy containment
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def runtime_contract():
+    from naics_embedder.supervision.checkpoints import CheckpointContract
+
+    return CheckpointContract(
+        supervision_mode='repaired',
+        bundle_id='bundle-a',
+        codebook_fingerprint='a' * 64,
+    )
+
+@pytest.fixture
+def legacy_model(model_config):
+    return NAICSContrastiveModel(
+        **model_config,
+        supervision_mode='legacy_containment',
+    )
+
+@pytest.fixture
+def legacy_batch(sample_training_batch):
+    return sample_training_batch
+
+def test_legacy_containment_disables_contaminated_and_reordering_paths(
+    legacy_model, legacy_batch, monkeypatch
+):
+    monkeypatch.setattr(legacy_model, 'log', Mock())
+    forbidden = [
+        ('hard_negative_miner', 'propose'),
+        ('router_guided_miner', 'propose'),
+        ('structural_preference_loss_fn', 'forward'),
+        ('hierarchy_loss_fn', 'forward'),
+    ]
+    for name, method in forbidden:
+        value = getattr(legacy_model, name, None)
+        if value is not None:
+            monkeypatch.setattr(value, method, Mock(side_effect=AssertionError(name)))
+
+    monkeypatch.setattr(
+        legacy_model,
+        '_build_selected_pseudo_related_mask',
+        Mock(side_effect=AssertionError('pseudo-related handling')),
+    )
+
+    loss = legacy_model.training_step(legacy_batch, 0)
+
+    assert torch.isfinite(loss)
+    assert legacy_model.checkpoint_contract.supervision_mode == 'legacy_containment'
+
+def test_containment_checkpoint_cannot_resume_repaired(runtime_contract):
+    containment = runtime_contract.model_copy(
+        update={
+            'supervision_mode': 'legacy_containment',
+            'bundle_id': 'legacy-containment',
+            'codebook_fingerprint': 'unversioned',
+        }
+    )
+
+    assert containment != runtime_contract
+
+def test_legacy_containment_disables_structural_losses_even_with_old_weights(model_config):
+    model_config['hierarchy_weight'] = 0.45
+    model = NAICSContrastiveModel(**model_config, supervision_mode='legacy_containment')
+
+    assert model.hierarchy_loss_fn is None
+    assert model.structural_preference_loss_fn is None
+    assert model.checkpoint_contract.bundle_id == 'legacy-containment'
+    assert model.checkpoint_contract.codebook_fingerprint == 'unversioned'
+
+def test_legacy_containment_logs_integrity_tag(legacy_model, legacy_batch, monkeypatch):
+    log = Mock()
+    monkeypatch.setattr(legacy_model, 'log', log)
+
+    legacy_model.training_step(legacy_batch, 0)
+
+    tags = [
+        call for call in log.call_args_list
+        if call.args[0] == 'train/integrity/legacy_containment'
+    ]
+    assert tags and tags[0].args[1] == 1.0
+
+def test_legacy_containment_validation_uses_local_negatives(legacy_model, legacy_batch):
+    legacy_model.eval()
+    with torch.no_grad():
+        loss = legacy_model.validation_step(legacy_batch, batch_idx=0)
+
+    assert torch.isfinite(loss)
+
+def test_containment_checkpoint_never_restores_into_repaired_model(naics_model, legacy_model):
+    checkpoint = {}
+    legacy_model.on_save_checkpoint(checkpoint)
+
+    with pytest.raises(ValueError, match='exact resume'):
+        naics_model.on_load_checkpoint(checkpoint)
+    legacy_model.on_load_checkpoint(checkpoint)
+
+# -------------------------------------------------------------------------------------------------
 # Test: Numerical Stability
 # -------------------------------------------------------------------------------------------------
 

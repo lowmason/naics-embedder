@@ -28,11 +28,15 @@ from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
     MigrationReport,
+    containment_contract,
     contract_for_bundle,
     load_weights_only,
     validate_exact_resume,
 )
-from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
+from naics_embedder.text_model.dataloader.datamodule import (
+    NAICSDataModule,
+    legacy_token_fingerprints,
+)
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import (
@@ -68,15 +72,28 @@ logger = logging.getLogger(__name__)
 def build_model_from_config(
     cfg: Config,
     runtime_contract: CheckpointContract,
-    bundle: ValidatedSupervisionBundle,
+    bundle: Optional[ValidatedSupervisionBundle],
 ) -> NAICSContrastiveModel:
     '''
-    Construct a fresh repaired model whose supervision comes only from the validated bundle.
+    Construct a fresh model for the configured supervision mode.
 
-    Legacy structural inputs (distance matrix, relations parquet, LambdaRank weight) are never
-    passed: the bundle is the single authority for structure, hierarchy, and exclusions.
+    Repaired models take supervision only from the validated bundle: legacy structural inputs
+    (distance matrix, relations parquet, LambdaRank weight) are never passed. Explicit legacy
+    containment reads the old distance matrix and relations file for evaluation only.
     '''
 
+    if cfg.supervision.mode == 'repaired':
+        supervision_inputs = {
+            'supervision_manifest_path': cfg.supervision.manifest_path,
+            'supervision_bundle': bundle,
+        }
+    else:
+        supervision_inputs = {
+            'supervision_manifest_path': None,
+            'supervision_bundle': None,
+            'distance_matrix_path': cfg.data_loader.streaming.distance_matrix_parquet,
+            'relations_parquet_path': cfg.data_loader.streaming.relations_parquet,
+        }
     structural_preference = cfg.loss.structural_preference
     return NAICSContrastiveModel(
         base_model_name=cfg.model.base_model_name,
@@ -111,7 +128,6 @@ def build_model_from_config(
         false_negative_config=cfg.false_negatives.model_dump(),
         parent_eval_top_k=cfg.model.parent_eval_top_k,
         child_eval_top_k=cfg.model.child_eval_top_k,
-        supervision_manifest_path=cfg.supervision.manifest_path,
         supervision_contract_version=cfg.supervision.contract_version,
         supervision_mode=cfg.supervision.mode,
         structural_preference_weight=structural_preference.weight,
@@ -120,8 +136,32 @@ def build_model_from_config(
         structural_preference_tie_tolerance=structural_preference.tie_tolerance,
         selection_seed=cfg.seed,
         checkpoint_contract=runtime_contract,
-        supervision_bundle=bundle,
+        **supervision_inputs,
     )
+
+def announce_legacy_containment() -> None:
+    '''Prominently tag a legacy-containment run in logs and on the console.'''
+
+    message = (
+        'LEGACY CONTAINMENT: not contract-compliant Stage-3 training. Only local unmined '
+        'contrastive learning and supervision-independent regularizers run; checkpoints are '
+        'tagged legacy-containment and can never exact-resume into repaired training.'
+    )
+    logger.warning(message)
+    console.print(f'[bold red]{message}[/bold red]\n')
+
+def runtime_contract_for(
+    cfg: Config, bundle: Optional[ValidatedSupervisionBundle]
+) -> CheckpointContract:
+    '''
+    The checkpoint contract of the configured run.
+
+    The supervision gate returns no bundle only for explicit legacy containment.
+    '''
+
+    if bundle is None:
+        return containment_contract()
+    return contract_for_bundle(bundle.manifest, cfg.supervision.mode)
 
 def log_migration_report(report: MigrationReport) -> None:
     '''Report what a weights-only migration loaded, skipped, and left freshly initialized.'''
@@ -152,8 +192,9 @@ def generate_embeddings_from_checkpoint(
 
     Loads a trained model checkpoint, runs inference on all NAICS codes, and
     writes the resulting embeddings to a parquet file compatible with HGCN
-    training. The checkpoint must carry the repaired supervision contract of the configured,
-    validated bundle; legacy or mismatched checkpoints are refused.
+    training. The checkpoint must carry the supervision contract of the configured run: the
+    repaired contract of its validated bundle, or (only under explicit legacy containment) the
+    legacy-containment tag. Untagged legacy or mismatched checkpoints are refused.
 
     Args:
         checkpoint_path: Filesystem path to the PyTorch Lightning checkpoint
@@ -186,14 +227,25 @@ def generate_embeddings_from_checkpoint(
 
     logger.info(f'Output: {output_path}')
 
-    # The checkpoint must match the configured, validated supervision bundle
+    # The checkpoint must carry the contract of the configured run: the validated repaired bundle,
+    # or the explicit legacy-containment tag
     bundle = require_valid_supervision_bundle(config)
+    validate_exact_resume(checkpoint_path, runtime_contract_for(config, bundle))
     if bundle is None:
-        raise ValueError(
-            'embedding generation requires a repaired checkpoint and supervision bundle; '
-            'set supervision.mode=repaired and supervision.manifest_path'
+        announce_legacy_containment()
+        load_overrides = {}
+        token_fingerprints = legacy_token_fingerprints(
+            config.data_loader.streaming.descriptions_parquet
         )
-    validate_exact_resume(checkpoint_path, contract_for_bundle(bundle.manifest))
+    else:
+        load_overrides = {
+            'supervision_manifest_path': str(bundle.manifest_path),
+            'supervision_bundle': bundle,
+        }
+        token_fingerprints = {
+            'description_fingerprint': bundle.manifest.description_fingerprint,
+            'codebook_fingerprint': bundle.manifest.codebook_fingerprint,
+        }
 
     # Load device
     device = pick_device('auto')  # Auto-detect device
@@ -204,8 +256,7 @@ def generate_embeddings_from_checkpoint(
     model = NAICSContrastiveModel.load_from_checkpoint(
         checkpoint_path,
         map_location=device,
-        supervision_manifest_path=str(bundle.manifest_path),
-        supervision_bundle=bundle,
+        **load_overrides,
     )
     model.eval()
     model.to(device)
@@ -226,12 +277,7 @@ def generate_embeddings_from_checkpoint(
     )
 
     logger.info('Loading tokenization cache...')
-    token_cache = tokenization_cache(
-        tokenization_cfg,
-        description_fingerprint=bundle.manifest.description_fingerprint,
-        codebook_fingerprint=bundle.manifest.codebook_fingerprint,
-        use_locking=False,
-    )
+    token_cache = tokenization_cache(tokenization_cfg, **token_fingerprints, use_locking=False)
     logger.info('Tokenization cache loaded')
 
     # Generate embeddings in batches
@@ -455,17 +501,17 @@ def train(
                 cfg = cfg.override(override_dict)
 
         # Mandatory supervision gate: validate the bundle before any DataModule, checkpoint, or
-        # model work. There is no fallback from repaired training to legacy files.
+        # model work. There is no fallback from repaired training to legacy files; only an
+        # explicit legacy_containment mode runs without a bundle.
         bundle = require_valid_supervision_bundle(cfg)
+        runtime_contract = runtime_contract_for(cfg, bundle)
         if bundle is None:
-            raise ValueError(
-                f'unsupported supervision mode {cfg.supervision.mode!r} for training'
+            announce_legacy_containment()
+        else:
+            logger.info(
+                f'Supervision bundle {runtime_contract.bundle_id} '
+                f'({runtime_contract.contract_version}) validated'
             )
-        runtime_contract = contract_for_bundle(bundle.manifest, cfg.supervision.mode)
-        logger.info(
-            f'Supervision bundle {runtime_contract.bundle_id} '
-            f'({runtime_contract.contract_version}) validated'
-        )
 
         # Run advisory pre-flight validation
         if not skip_validation:

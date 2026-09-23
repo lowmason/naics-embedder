@@ -34,10 +34,12 @@ from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, loa
 from naics_embedder.supervision.checkpoints import (
     CHECKPOINT_KEY,
     CheckpointContract,
+    containment_contract,
     contract_for_bundle,
     validate_checkpoint_contract,
 )
 from naics_embedder.supervision.index import SupervisionIndex
+from naics_embedder.supervision.mode import SupervisionModePolicy
 from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.supervision.selection import NegativeSelectionCoordinator
 from naics_embedder.text_model.curriculum import CurriculumScheduler
@@ -147,7 +149,8 @@ class NAICSContrastiveModel(
         supervision_manifest_path: Manifest of the validated supervision bundle (required in
             repaired mode)
         supervision_contract_version: Expected supervision contract version
-        supervision_mode: Supervision mode; ``'repaired'``
+        supervision_mode: ``'repaired'`` (default) or the explicit, tagged
+            ``'legacy_containment'`` mode (local unmined contrastive learning only)
         structural_preference_weight: Weight for the structural preference loss
         structural_preference_margin: Ordering margin for structural preference
         structural_preference_temperature: Softplus temperature for structural preference
@@ -208,58 +211,79 @@ class NAICSContrastiveModel(
     ):
         super().__init__()
 
-        if supervision_mode != 'repaired':
-            raise ValueError(f'unsupported supervision mode {supervision_mode!r}')
-        if supervision_manifest_path is None:
-            raise ValueError(
-                'repaired supervision requires supervision_manifest_path; generate a bundle '
-                'with `naics-embedder data supervision` and set the printed manifest path'
-            )
-        if distance_matrix_path is not None or relations_parquet_path is not None:
-            raise ValueError(
-                'repaired supervision reads structural distances and the NAICS hierarchy from '
-                'the supervision bundle; distance_matrix_path and relations_parquet_path are '
-                'legacy inputs'
-            )
+        self.supervision_policy = SupervisionModePolicy.from_name(supervision_mode)
+        if self.supervision_policy.require_bundle:
+            if supervision_manifest_path is None:
+                raise ValueError(
+                    'repaired supervision requires supervision_manifest_path; generate a bundle '
+                    'with `naics-embedder data supervision` and set the printed manifest path'
+                )
+            if distance_matrix_path is not None or relations_parquet_path is not None:
+                raise ValueError(
+                    'repaired supervision reads structural distances and the NAICS hierarchy from '
+                    'the supervision bundle; distance_matrix_path and relations_parquet_path are '
+                    'legacy inputs'
+                )
 
         # Bundle and contract objects stay out of hyperparameters: checkpoints record paths and
         # identifiers, and a restored model re-validates its bundle from the manifest path.
         self.save_hyperparameters(ignore=['checkpoint_contract', 'supervision_bundle'])
         self.supervision_mode = supervision_mode
 
-        # Load the validated supervision bundle before any model construction: the single
-        # authority for code identity, structural facts, exclusions, the evaluation hierarchy,
-        # and ground-truth distances. A caller that already validated it may pass it in.
-        if supervision_bundle is None:
-            bundle = load_validated_bundle(
-                supervision_manifest_path,
-                expected_contract=supervision_contract_version,
-            )
+        self.supervision_index: Optional[SupervisionIndex] = None
+        self.selection_coordinator: Optional[NegativeSelectionCoordinator] = None
+        self.naics_hierarchy: Optional[NaicsHierarchy] = None
+        if self.supervision_policy.require_bundle:
+            # Load the validated supervision bundle before any model construction: the single
+            # authority for code identity, structural facts, exclusions, the evaluation
+            # hierarchy, and ground-truth distances. A caller that already validated it may pass
+            # it in.
+            if supervision_bundle is None:
+                bundle = load_validated_bundle(
+                    supervision_manifest_path,
+                    expected_contract=supervision_contract_version,
+                )
+            else:
+                if supervision_bundle.manifest_path != Path(supervision_manifest_path).resolve():
+                    raise ValueError(
+                        f'pre-validated supervision bundle manifest '
+                        f'{supervision_bundle.manifest_path} is not the configured manifest '
+                        f'{supervision_manifest_path}'
+                    )
+                if supervision_bundle.manifest.contract_version != supervision_contract_version:
+                    raise ValueError(
+                        f'pre-validated supervision bundle has contract '
+                        f'{supervision_bundle.manifest.contract_version}, expected '
+                        f'{supervision_contract_version}'
+                    )
+                bundle = supervision_bundle
+            runtime_contract = contract_for_bundle(bundle.manifest, supervision_mode)
+            self.supervision_index = SupervisionIndex.from_bundle(bundle)
+            self.selection_coordinator = NegativeSelectionCoordinator()
+            self.naics_hierarchy = load_naics_hierarchy(str(bundle.artifact_path('relations')))
         else:
-            if supervision_bundle.manifest_path != Path(supervision_manifest_path).resolve():
-                raise ValueError(
-                    f'pre-validated supervision bundle manifest {supervision_bundle.manifest_path} '
-                    f'is not the configured manifest {supervision_manifest_path}'
-                )
-            if supervision_bundle.manifest.contract_version != supervision_contract_version:
-                raise ValueError(
-                    f'pre-validated supervision bundle has contract '
-                    f'{supervision_bundle.manifest.contract_version}, expected '
-                    f'{supervision_contract_version}'
-                )
-            bundle = supervision_bundle
-        self.checkpoint_contract = contract_for_bundle(bundle.manifest, supervision_mode)
-        if checkpoint_contract is not None and checkpoint_contract != self.checkpoint_contract:
-            raise ValueError(
-                f'runtime checkpoint contract {checkpoint_contract.model_dump()} does not match the '
-                f'loaded supervision bundle {self.checkpoint_contract.model_dump()}'
+            runtime_contract = containment_contract()
+            logger.warning(
+                'LEGACY CONTAINMENT (%s): not contract-compliant Stage-3 training. Structural '
+                'ranking and hierarchy losses, negative reordering, and pseudo-related handling '
+                'are disabled; no supervision bundle is read.',
+                self.supervision_policy.checkpoint_tag,
             )
-        self.supervision_bundle_id = bundle.manifest.bundle_id
-        self.supervision_index = SupervisionIndex.from_bundle(bundle)
-        self.selection_coordinator = NegativeSelectionCoordinator()
-        self.naics_hierarchy: Optional[NaicsHierarchy] = load_naics_hierarchy(
-            str(bundle.artifact_path('relations'))
-        )
+            if relations_parquet_path:
+                try:
+                    self.naics_hierarchy = load_naics_hierarchy(relations_parquet_path)
+                except FileNotFoundError:
+                    logger.warning(
+                        'NAICS relations parquet not found at %s; hierarchy diagnostics disabled',
+                        relations_parquet_path,
+                    )
+        if checkpoint_contract is not None and checkpoint_contract != runtime_contract:
+            raise ValueError(
+                f'runtime checkpoint contract {checkpoint_contract.model_dump()} does not match '
+                f'the model supervision contract {runtime_contract.model_dump()}'
+            )
+        self.checkpoint_contract = runtime_contract
+        self.supervision_bundle_id = runtime_contract.bundle_id
 
         # Initialize encoder
         self.encoder = MultiChannelEncoder(
@@ -299,29 +323,35 @@ class NAICSContrastiveModel(
         self.embedding_stats = EmbeddingStatistics()
         self.hierarchy_metrics = HierarchyMetrics()
 
-        # Ground truth distances: the validated structural matrix in codebook order
-        self.ground_truth_distances: Optional[torch.Tensor] = (
-            self.supervision_index.structural_distance
-        )
-        self.code_to_idx: Optional[Dict[str, int]] = dict(self.supervision_index.code_to_id)
+        # Ground truth distances: the validated structural matrix in codebook order (legacy
+        # containment may still evaluate against an old distance matrix)
+        self.ground_truth_distances: Optional[torch.Tensor] = None
+        self.code_to_idx: Optional[Dict[str, int]] = None
+        if self.supervision_index is not None:
+            self.ground_truth_distances = self.supervision_index.structural_distance
+            self.code_to_idx = dict(self.supervision_index.code_to_id)
+        elif distance_matrix_path:
+            self._load_ground_truth_distances(distance_matrix_path)
 
-        # Initialize hierarchy preservation loss
+        # Structural losses exist only where the policy permits them: legacy containment disables
+        # them even when old weights are nonzero
         self.hierarchy_loss_fn = None
-        if hierarchy_weight > 0:
-            self.hierarchy_loss_fn = HierarchyPreservationLoss(
-                tree_distances=self.supervision_index.structural_distance,
-                code_to_idx=self.code_to_idx,
-                weight=hierarchy_weight,
+        self.structural_preference_loss_fn = None
+        if self.supervision_policy.enable_structural_losses:
+            if hierarchy_weight > 0:
+                self.hierarchy_loss_fn = HierarchyPreservationLoss(
+                    tree_distances=self.supervision_index.structural_distance,
+                    code_to_idx=self.code_to_idx,
+                    weight=hierarchy_weight,
+                )
+            # Structural preference over each anchor's positive plus selected negatives
+            self.structural_preference_loss_fn = StructuralPreferenceLoss(
+                curvature=curvature,
+                margin=structural_preference_margin,
+                temperature=structural_preference_temperature,
+                tie_tolerance=structural_preference_tie_tolerance,
+                weight=structural_preference_weight,
             )
-
-        # Initialize structural preference loss over each anchor's positive plus selected negatives
-        self.structural_preference_loss_fn = StructuralPreferenceLoss(
-            curvature=curvature,
-            margin=structural_preference_margin,
-            temperature=structural_preference_temperature,
-            tie_tolerance=structural_preference_tie_tolerance,
-            weight=structural_preference_weight,
-        )
 
         # Initialize validation state
         self.validation_embeddings: Dict[str, torch.Tensor] = {}
@@ -463,6 +493,9 @@ class NAICSContrastiveModel(
         Returns:
             Total loss for optimization
         '''
+        if self.supervision_policy.name == 'legacy_containment':
+            return self._legacy_containment_training_step(batch, batch_idx)
+
         batch_size = int(batch['batch_size'])
 
         # Update curriculum state
@@ -569,3 +602,80 @@ class NAICSContrastiveModel(
         )
 
         return total_loss
+
+    def _legacy_containment_training_step(
+        self,
+        batch: Dict[str, Any],
+        batch_idx: int,
+    ) -> torch.Tensor:
+        '''
+        Contained legacy step: local unmined negatives in collated order plus supervision-free
+        regularizers. No structural, hierarchy, reordering, or pseudo-related path runs.
+        '''
+        anchor_output = self(batch['anchor'])
+        positive_output = self(batch['positive'])
+        negative_output = self(batch['negatives'])
+        batch_size = int(batch['batch_size'])
+        k_negatives = int(batch['k_negatives'])
+        negative_emb = negative_output['embedding'].reshape(batch_size, k_negatives, -1)
+        valid = torch.ones(
+            (batch_size, k_negatives),
+            dtype=torch.bool,
+            device=negative_emb.device,
+        )
+        explicit = torch.zeros_like(valid)
+        contrastive = self.loss_fn(
+            anchor_output['embedding'],
+            positive_output['embedding'],
+            negative_emb,
+            valid_mask=valid,
+            is_explicit_exclusion=explicit,
+            pseudo_related_mask=None,
+        )
+        gate_probs, topk_indices = self._collect_gate_outputs(
+            [anchor_output, positive_output, negative_output]
+        )
+        load_balancing = self._compute_load_balancing_loss(
+            gate_probs,
+            topk_indices,
+            batch_size,
+        )
+        radius = self._compute_radius_regularization(
+            anchor_output['embedding'],
+            positive_output['embedding'],
+            negative_output['embedding'],
+            batch_size,
+        )
+        level_radius = self._compute_level_radius_alignment_loss(
+            anchor_output['embedding'],
+            positive_output['embedding'],
+            batch,
+            batch_size,
+        )
+        disabled = contrastive.new_zeros(())
+        total, scaled_load_balancing = self._combine_loss_terms(
+            contrastive,
+            load_balancing,
+            disabled,
+            disabled,
+            radius,
+            level_radius,
+        )
+        self._log_loss_breakdown(
+            contrastive,
+            scaled_load_balancing,
+            disabled,
+            disabled,
+            radius,
+            level_radius,
+            total,
+            batch_size,
+        )
+        self.log(
+            'train/integrity/legacy_containment',
+            1.0,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch_size,
+        )
+        return total

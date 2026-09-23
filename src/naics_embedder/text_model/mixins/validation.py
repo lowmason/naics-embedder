@@ -27,7 +27,8 @@ class ValidationMixin:
     - device: torch.device
     - hparams: hyperparameters
     - loss_fn: contrastive loss function
-    - supervision_index: SupervisionIndex for anchor-relative exclusion joins
+    - supervision_policy: SupervisionModePolicy
+    - supervision_index: SupervisionIndex for anchor-relative exclusion joins (repaired mode)
     - embedding_eval: EmbeddingEvaluator
     - embedding_stats: EmbeddingStatistics
     - hierarchy_metrics: HierarchyMetrics
@@ -78,28 +79,39 @@ class ValidationMixin:
         '''
         anchor_output = self(batch['anchor'])
         positive_output = self(batch['positive'])
-        candidate_output, _ = self._forward_candidate_pool(batch)
 
         anchor_emb = anchor_output['embedding']
         positive_emb = positive_output['embedding']
-
         batch_size = int(batch['batch_size'])
-        valid_mask = batch['candidate_valid_mask']
-        candidate_emb = candidate_output['embedding'].reshape(
-            batch_size, int(batch['k_candidates']), -1
-        )
-        pair = self.supervision_index.join(
-            batch['anchor_code_id'],
-            batch['candidate_code_id'],
-            valid_mask,
-        )
+
+        if self.supervision_policy.name == 'legacy_containment':
+            # Local legacy negatives in collated order; nothing supervision-derived is used
+            k_negatives = int(batch['k_negatives'])
+            negative_emb = self(batch['negatives'])['embedding'].reshape(
+                batch_size, k_negatives, -1
+            )
+            valid_mask = torch.ones(
+                (batch_size, k_negatives), dtype=torch.bool, device=negative_emb.device
+            )
+            explicit = torch.zeros_like(valid_mask)
+        else:
+            candidate_output, _ = self._forward_candidate_pool(batch)
+            valid_mask = batch['candidate_valid_mask']
+            negative_emb = candidate_output['embedding'].reshape(
+                batch_size, int(batch['k_candidates']), -1
+            )
+            explicit = self.supervision_index.join(
+                batch['anchor_code_id'],
+                batch['candidate_code_id'],
+                valid_mask,
+            ).is_explicit_exclusion
 
         contrastive_loss = self.loss_fn(
             anchor_emb,
             positive_emb,
-            candidate_emb,
+            negative_emb,
             valid_mask=valid_mask,
-            is_explicit_exclusion=pair.is_explicit_exclusion,
+            is_explicit_exclusion=explicit,
         )
 
         self.log(
@@ -507,6 +519,8 @@ class ValidationMixin:
 
     def _handle_clustering_update(self) -> None:
         '''Handle pseudo-label clustering updates based on curriculum schedule.'''
+        if not self.supervision_policy.enable_pseudo_related:
+            return
         if self.curriculum_scheduler is not None:
             fn_cluster_every_n_epochs = getattr(self.hparams, 'fn_cluster_every_n_epochs', 5)
             should_update = self.curriculum_scheduler.should_update_clustering(

@@ -25,6 +25,8 @@ from naics_embedder.supervision.schema import (
 )
 
 CHECKPOINT_KEY = 'stage3_supervision'
+LEGACY_CONTAINMENT_BUNDLE_ID = 'legacy-containment'
+UNVERSIONED_CODEBOOK_FINGERPRINT = 'unversioned'
 WEIGHTS_ONLY_ALLOWED_PREFIXES = ('encoder.', )
 WEIGHTS_ONLY_EXCLUDED_PREFIXES = (
     'loss_fn.',
@@ -68,6 +70,20 @@ def contract_for_bundle(manifest: Any, supervision_mode: str = 'repaired') -> Ch
         contract_version=manifest.contract_version,
         bundle_id=manifest.bundle_id,
         codebook_fingerprint=manifest.codebook_fingerprint,
+    )
+
+def containment_contract() -> CheckpointContract:
+    '''
+    The tag every legacy-containment checkpoint carries.
+
+    It can never equal a repaired contract, so containment checkpoints cannot exact-resume into
+    repaired training.
+    '''
+
+    return CheckpointContract(
+        supervision_mode='legacy_containment',
+        bundle_id=LEGACY_CONTAINMENT_BUNDLE_ID,
+        codebook_fingerprint=UNVERSIONED_CODEBOOK_FINGERPRINT,
     )
 
 # -------------------------------------------------------------------------------------------------

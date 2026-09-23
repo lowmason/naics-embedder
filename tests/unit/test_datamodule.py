@@ -203,6 +203,23 @@ def test_legacy_collate_pads_without_mutating_input(make_batch_item):
     assert batch['negative_codes'] == [['222', '222'], ['666', '777']]
 
 
+def test_legacy_containment_ignores_all_candidates(make_batch_item):
+    item = make_batch_item('111', '11', ['222', '333'])
+    item['all_candidates'] = [
+        {
+            'negative_code': 'SHOULD-NOT-ENTER',
+            'negative_idx': 999,
+            'negative_embedding': item['negatives'][0]['negative_embedding'],
+        }
+    ]
+
+    batch = collate_fn([item], supervision_mode='legacy_containment')
+
+    assert batch['negative_codes'] == [['222', '333']]
+    assert 'all_candidates' not in batch
+    assert 'candidate_inputs' not in batch
+
+
 def test_collate_rejects_an_unknown_mode(make_repaired_batch_item):
     with pytest.raises(ValueError, match='supervision mode'):
         collate_fn([make_repaired_batch_item([1])], supervision_mode='legacy')
