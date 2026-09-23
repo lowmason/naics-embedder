@@ -20,6 +20,7 @@ from pytorch_lightning import seed_everything
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import softmax
 
+from naics_embedder.graph_model.curriculum.preprocess_curriculum import resolve_graph_config
 from naics_embedder.graph_model.dataloader.hgcn_datamodule import HGCNDataModule
 from naics_embedder.losses.level_radius import level_radius_loss
 from naics_embedder.metrics import (
@@ -1261,7 +1262,7 @@ def save_outputs(
 
 def main(config_file: str = 'conf/config.yaml') -> None:
     '''Main entry point for single-stage HGCN training via PyTorch Lightning.'''
-    base_cfg = GraphConfig.from_yaml(config_file)
+    base_cfg = resolve_graph_config(GraphConfig.from_yaml(config_file))
     outdir = setup_directory(base_cfg.output_dir)
 
     print('=' * 80)

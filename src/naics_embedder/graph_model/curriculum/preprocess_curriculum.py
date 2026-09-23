@@ -32,14 +32,105 @@ Outputs:
 import json
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import polars as pl
 import torch
 
+from naics_embedder.supervision.artifacts import load_validated_bundle
+from naics_embedder.utils.config import GraphConfig
+
 logger = logging.getLogger(__name__)
+
+PathLike = Union[str, Path]
+
+# -------------------------------------------------------------------------------------------------
+# Supervision bundle adapter (graph inputs come from one validated bundle)
+# -------------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class GraphSupervisionPaths:
+    '''The structural inputs graph code reads, all from one validated supervision bundle.'''
+
+    relations: Path
+    distances: Path
+    distance_matrix: Path
+    training_pairs: Path
+
+def resolve_graph_supervision_paths(
+    manifest_path: PathLike,
+    *,
+    relations_path: Optional[PathLike] = None,
+    distances_path: Optional[PathLike] = None,
+    distance_matrix_path: Optional[PathLike] = None,
+    training_pairs_path: Optional[PathLike] = None,
+) -> GraphSupervisionPaths:
+    '''
+    Validate one bundle and resolve the graph inputs from it.
+
+    Any explicitly supplied path must be that bundle's own artifact: artifacts from different
+    bundles (or unversioned legacy files) are never mixed.
+
+    Raises:
+        ValueError: If a supplied path does not belong to the bundle, or the bundle is invalid.
+    '''
+
+    bundle = load_validated_bundle(manifest_path)
+    resolved = GraphSupervisionPaths(
+        relations=bundle.artifact_path('relations').resolve(),
+        distances=bundle.artifact_path('distances').resolve(),
+        distance_matrix=bundle.artifact_path('distance_matrix').resolve(),
+        training_pairs=bundle.artifact_path('training_pairs').resolve(),
+    )
+    supplied = {
+        'relations': relations_path,
+        'distances': distances_path,
+        'distance_matrix': distance_matrix_path,
+        'training_pairs': training_pairs_path,
+    }
+    for logical_name, candidate in supplied.items():
+        if candidate is None:
+            continue
+        expected = getattr(resolved, logical_name)
+        if Path(candidate).resolve() != expected:
+            raise ValueError(
+                f'{logical_name} path does not belong to supervision bundle '
+                f'{bundle.manifest.bundle_id}: {candidate}'
+            )
+    return resolved
+
+def resolve_graph_config(cfg: GraphConfig) -> GraphConfig:
+    '''
+    Point a graph configuration's structural inputs at its supervision bundle, if it names one.
+
+    Only paths the configuration explicitly sets are checked against the bundle; unset legacy
+    defaults are replaced. Without a manifest the configuration is returned unchanged.
+    '''
+
+    if not cfg.supervision_manifest_path:
+        return cfg
+    explicit = cfg.model_fields_set
+    paths = resolve_graph_supervision_paths(
+        cfg.supervision_manifest_path,
+        relations_path=cfg.relations_parquet if 'relations_parquet' in explicit else None,
+        training_pairs_path=(
+            cfg.training_pairs_path if 'training_pairs_path' in explicit else None
+        ),
+        distance_matrix_path=(
+            cfg.distance_matrix_parquet
+            if 'distance_matrix_parquet' in explicit and cfg.distance_matrix_parquet else None
+        ),
+    )
+    return cfg.model_copy(
+        update={
+            'relations_parquet': str(paths.relations),
+            'training_pairs_path': str(paths.training_pairs),
+            'distance_matrix_parquet': str(paths.distance_matrix),
+        }
+    )
 
 # -------------------------------------------------------------------------------------------------
 # Node Centrality Computation
@@ -536,13 +627,18 @@ def compute_difficulty_thresholds(
 
 def preprocess_curriculum_data(
     descriptions_parquet: str = './data/naics_descriptions.parquet',
-    relations_parquet: str = './data/naics_relations.parquet',
-    distances_parquet: str = './data/naics_distances.parquet',
-    triplets_parquet: str = './data/naics_training_pairs',
+    relations_parquet: Optional[str] = None,
+    distances_parquet: Optional[str] = None,
+    triplets_parquet: Optional[str] = None,
     output_dir: str = './data/curriculum_cache',
+    supervision_manifest_path: Optional[str] = None,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any], Dict[str, Any]]:
     '''
     Run full preprocessing pipeline for curriculum learning.
+
+    With a supervision manifest, relations, distances, and training pairs all come from that one
+    validated bundle (an explicitly supplied path must be the bundle's own artifact). Without one,
+    unset paths fall back to the legacy ``./data`` locations.
 
     Args:
         descriptions_parquet: Path to descriptions parquet file
@@ -550,10 +646,26 @@ def preprocess_curriculum_data(
         distances_parquet: Path to distances parquet file
         triplets_parquet: Path to training triplets directory
         output_dir: Directory to save output files
+        supervision_manifest_path: Optional supervision bundle manifest
 
     Returns:
         Tuple of (node_scores, relation_types, difficulty_thresholds)
     '''
+    if supervision_manifest_path:
+        paths = resolve_graph_supervision_paths(
+            supervision_manifest_path,
+            relations_path=relations_parquet,
+            distances_path=distances_parquet,
+            training_pairs_path=triplets_parquet,
+        )
+        relations_parquet = str(paths.relations)
+        distances_parquet = str(paths.distances)
+        triplets_parquet = str(paths.training_pairs)
+    else:
+        relations_parquet = relations_parquet or './data/naics_relations.parquet'
+        distances_parquet = distances_parquet or './data/naics_distances.parquet'
+        triplets_parquet = triplets_parquet or './data/naics_training_pairs'
+
     logger.info('=' * 60)
     logger.info('Preprocessing Curriculum Data')
     logger.info('=' * 60)
@@ -616,19 +728,24 @@ def main() -> None:
         help='Path to descriptions parquet',
     )
     parser.add_argument(
+        '--supervision-manifest',
+        default=None,
+        help='Supervision bundle manifest; relations, distances, and pairs are read from it',
+    )
+    parser.add_argument(
         '--relations',
-        default='./data/naics_relations.parquet',
-        help='Path to relations parquet',
+        default=None,
+        help='Relations parquet (default: bundle artifact, else ./data/naics_relations.parquet)',
     )
     parser.add_argument(
         '--distances',
-        default='./data/naics_distances.parquet',
-        help='Path to distances parquet',
+        default=None,
+        help='Distances parquet (default: bundle artifact, else ./data/naics_distances.parquet)',
     )
     parser.add_argument(
         '--triplets',
-        default='./data/naics_training_pairs',
-        help='Path to training triplets directory',
+        default=None,
+        help='Training triplets dir (default: bundle artifact, else ./data/naics_training_pairs)',
     )
     parser.add_argument(
         '--output-dir',
@@ -646,6 +763,7 @@ def main() -> None:
         distances_parquet=args.distances,
         triplets_parquet=args.triplets,
         output_dir=args.output_dir,
+        supervision_manifest_path=args.supervision_manifest,
     )
 
 if __name__ == '__main__':

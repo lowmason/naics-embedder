@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from naics_embedder.graph_model.curriculum.preprocess_curriculum import resolve_graph_config
 from naics_embedder.graph_model.dataloader.hgcn_streaming_dataset import load_streaming_triplets
 from naics_embedder.utils.config import GraphConfig, StreamingConfig
 
@@ -212,7 +213,9 @@ class HGCNDataModule(pl.LightningDataModule):
         descriptions_parquet: Optional[str] = None,
     ):
         super().__init__()
-        self.graph_cfg = graph_cfg
+        # With a supervision manifest, every structural input comes from that one bundle
+        self.graph_cfg = resolve_graph_config(graph_cfg)
+        graph_cfg = self.graph_cfg
         self.val_split = max(0.0, min(0.9, val_split))
         self.loader_cfg = _loader_cfg_from_graph(
             graph_cfg, descriptions_override=descriptions_parquet

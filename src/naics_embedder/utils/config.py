@@ -912,6 +912,13 @@ class GraphConfig(BaseModel):
         default='./output/hyperbolic_projection/encodings.parquet',
         description='Path to input hyperbolic embeddings parquet file',
     )
+    supervision_manifest_path: Optional[str] = Field(
+        default=None,
+        description=(
+            'Stage-3 supervision bundle manifest; when set, relations, training pairs, and the '
+            'distance matrix are all read from that one validated bundle'
+        ),
+    )
     relations_parquet: str = Field(
         default='./data/naics_relations.parquet', description='Path to relations parquet file'
     )

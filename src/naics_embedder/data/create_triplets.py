@@ -330,10 +330,12 @@ def _triplets_for_positives(
     cap_seed: int,
 ) -> pl.DataFrame:
     via_positive = via.filter(
-        pl.col('positive_code_id').is_in(positives.get_column('positive_code_id').unique())
+        pl.col('positive_code_id').is_in(
+            positives.get_column('positive_code_id').unique().implode()
+        )
     )
     anchor_negatives = negatives.filter(
-        pl.col('anchor_code_id').is_in(positives.get_column('anchor_code_id').unique())
+        pl.col('anchor_code_id').is_in(positives.get_column('anchor_code_id').unique().implode())
     )
     triplets = positives.join(via_positive, on='positive_code_id', how='inner').join(
         anchor_negatives, on=['anchor_code_id', 'negative_code_id'], how='inner'

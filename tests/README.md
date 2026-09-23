@@ -125,8 +125,7 @@ The following modules have comprehensive test coverage:
 2. **text_model/loss.py** ✅ - `test_loss.py`
    - HyperbolicInfoNCELoss (DCL-based contrastive learning)
    - HierarchyPreservationLoss (distance correlation)
-   - RankOrderPreservationLoss (margin-based ranking)
-   - LambdaRankLoss (NDCG-based learning to rank)
+   - StructuralPreferenceLoss (pairwise structural ordering; gradient-direction contracts)
    - **Coverage: >75%**
 
 3. **text_model/encoder.py** ✅ - `test_encoder.py`

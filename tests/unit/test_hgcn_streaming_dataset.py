@@ -11,7 +11,9 @@ import polars as pl
 import pytest
 
 from naics_embedder.graph_model.dataloader import hgcn_streaming_dataset as streaming
+from naics_embedder.supervision.artifacts import load_validated_bundle
 from naics_embedder.utils.config import StreamingConfig
+
 
 def _sample_cached_triplets():
     '''Create cached triplets resembling load_streaming_triplets output (new flat format).'''
@@ -183,3 +185,48 @@ def test_negative_candidate_loader_filters_pairs(tmp_path):
 
     assert set(result.keys()) == {(1, 11)}
     assert result[(1, 11)][0]['negative_code'] == 'N101'
+
+
+@pytest.mark.unit
+def test_graph_loader_reads_rebuilt_training_pairs_without_new_semantics(
+    generated_bundle,
+):
+    bundle = load_validated_bundle(generated_bundle)
+    result = streaming._load_negative_candidates(
+        str(bundle.artifact_path('training_pairs')),
+        required_pairs={(0, 1)},
+    )
+
+    negative = result[(0, 1)][0]
+    assert set(negative) == {
+        'negative_idx',
+        'negative_code',
+        'relation_margin',
+        'distance_margin',
+    }
+    assert negative == {
+        'negative_idx': 2,
+        'negative_code': '111113',
+        'relation_margin': 1.0,
+        'distance_margin': 1.5,
+    }
+
+
+@pytest.mark.unit
+def test_graph_negative_projection_drops_repaired_stage3_fields():
+    row = {
+        'negative_idx': 2,
+        'negative_code': '111113',
+        'relation_margin': 1.0,
+        'distance_margin': 1.5,
+        'is_explicit_exclusion': True,
+        'semantic_target': 'UNRELATED',
+        'candidate_uid': (0, 0, 1),
+    }
+
+    assert streaming._project_graph_negative(row) == {
+        'negative_idx': 2,
+        'negative_code': '111113',
+        'relation_margin': 1.0,
+        'distance_margin': 1.5,
+    }
