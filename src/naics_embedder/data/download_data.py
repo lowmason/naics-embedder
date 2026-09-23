@@ -113,6 +113,7 @@ def _download_files(
 
         dfs = []
         for col, df in df_list:
+            # yapf: disable
             dfs.append(
                 df
                 .with_columns(  # type: ignore
@@ -125,6 +126,7 @@ def _download_files(
                            .otherwise(pl.col('code'))
                 )
             )
+            # yapf: enable
 
             logger.info(f'  {col} observations: {df.height: ,}')  # type: ignore
 
@@ -144,6 +146,7 @@ def _download_files(
 def _get_titles(titles_df: pl.DataFrame) -> Tuple[pl.DataFrame, Set[str]]:
 
     # Load NAICS titles and normalize combined sector codes (31-33, 44-45, 48-49)
+    # yapf: disable
     titles = (
         titles_df
         .select(
@@ -153,6 +156,7 @@ def _get_titles(titles_df: pl.DataFrame) -> Tuple[pl.DataFrame, Set[str]]:
             title=pl.col('title'),
         )
     )
+    # yapf: enable
 
     # Unique set of NAICS codes
     codes = set(titles.get_column('code').unique().to_list())
@@ -177,6 +181,7 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
     # Split multiline descriptions into one block per line and filter out section headers and
     # cross-references. The xlsx stores CRLF line endings; openpyxl and newer fastexcel releases
     # normalize them to LF but fastexcel 0.16 keeps them, so normalize before splitting.
+    # yapf: disable
     descriptions_2 = (
         descriptions_1
         .with_columns(
@@ -194,8 +199,10 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
             (pl.col('description').str.len_chars().gt(0)),
         )
     )
+    # yapf: enable
 
     # Clean and normalize description text
+    # yapf: disable
     descriptions_3 = descriptions_2.select(
         code=pl.col('code').str.strip_chars(),
         description_id=pl.col('description_id'),
@@ -218,6 +225,7 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
                       .str.strip_prefix(' ')
                       .str.strip_suffix(' '),
     )
+    # yapf: enable
 
     logger.info('Descriptions:')
     logger.info(f'  Number: {descriptions_1.height: ,}')
@@ -238,14 +246,17 @@ def _get_exclusions(
 ) -> Tuple[pl.DataFrame, pl.DataFrame]:
     
     # Load descriptions from cross-reference file
+    # yapf: disable
     exclusions_1 = (
         exclusions_df
         .filter(
             pl.col('excluded').str.contains(r' \d{2,6}'),
         )
     )
+    # yapf: enable
 
     # Aggregate exclusions by code
+    # yapf: disable
     exclusions_2 = (
         exclusions_1
         .group_by('code', maintain_order=True)
@@ -256,8 +267,10 @@ def _get_exclusions(
             description=pl.col('excluded').list.join(' ')
         )
     )
+    # yapf: enable
 
     # Extract excluded activities (typically last description block for a code)
+    # yapf: disable
     exclusions_3 = (
         descriptions_3
         .filter(
@@ -271,11 +284,13 @@ def _get_exclusions(
             description=pl.col('description'),
         )
     )
+    # yapf: enable
 
     # Exclusions for cleaning descriptions
     descriptions_exclusions = exclusions_3.select('code', 'description_id')
 
     # Combine and extract excluded codes
+    # yapf: disable
     exclusions_4 = (
         pl.concat([exclusions_2, exclusions_3])
         .filter(pl.col('description').is_not_null())
@@ -290,8 +305,10 @@ def _get_exclusions(
         )
         .filter(pl.col('digit').list.len().gt(0))
     )
+    # yapf: enable
 
     # Final exclusions DataFrame
+    # yapf: disable
     exclusions = (
         exclusions_4
         .explode('digit')
@@ -311,7 +328,9 @@ def _get_exclusions(
             excluded=pl.col('excluded').list.join(' ')
         )
     )
+    # yapf: enable
 
+    # yapf: disable
     exclusions_cnt = (
         exclusions
         .with_columns(
@@ -320,6 +339,7 @@ def _get_exclusions(
         .get_column('excluded_count')
         .sum()
     )
+    # yapf: enable
 
     logger.info('Exclusions:')
     logger.info('  Reference codes:')
@@ -344,6 +364,7 @@ def _get_examples(
 ) -> Tuple[pl.DataFrame, pl.DataFrame]:
 
     # Example spreadsheet
+    # yapf: disable
     examples_1 = (
         examples_df
         .filter(
@@ -355,8 +376,10 @@ def _get_examples(
             examples_1=pl.col('examples')
         )
     )
+    # yapf: enable
 
     # Identify where 'Illustrative Examples:' section begins
+    # yapf: disable
     examples_2 = (
         descriptions_2
         .filter(
@@ -367,14 +390,17 @@ def _get_examples(
             example_id=pl.col('description_id')
         )
     )
+    # yapf: enable
 
     # Extract examples that appear after 'Illustrative Examples:' marker
+    # yapf: disable
     examples_3 = (
         descriptions_3.join(examples_2, how='inner', on='code')
         .filter(pl.col('example_id').lt(pl.col('description_id')))
         .group_by('code', maintain_order=True)
         .agg(examples_2=pl.col('description'), description_id_min=pl.col('example_id').min())
     )
+    # yapf: enable
 
     # Description IDs to exclude in description dataframe, starting at the marker itself
     descriptions_examples = examples_3.select('code', 'description_id_min')
@@ -386,11 +412,13 @@ def _get_examples(
 
     examples = examples_4.select(code=pl.col('code'), examples=pl.col('examples').list.join('; '))
 
+    # yapf: disable
     examples_cnt = (
         examples_4.with_columns(example_cnt=pl.col('examples').list.len())
         .get_column('example_cnt')
         .sum()
     )
+    # yapf: enable
 
     logger.info('Examples:')
     logger.info('  Reference codes:')
@@ -414,6 +442,7 @@ def _get_descriptions_2(
 ) -> pl.DataFrame:
 
     # descriptions: exclude exclusion and example description blocks
+    # yapf: disable
     descriptions_4 = (
         descriptions_3
         .join(
@@ -440,14 +469,17 @@ def _get_descriptions_2(
             description=pl.col('description').list.join(' ')
         )
     )
+    # yapf: enable
 
     # Separate complete descriptions from missing ones
+    # yapf: disable
     description_complete_1 = (
         descriptions_4
         .filter(
             pl.col('description').ne('')
         )
     )
+    # yapf: enable
 
     # Find 4-digit codes missing descriptions
     description_4_missing = descriptions_4.filter(
@@ -472,6 +504,7 @@ def _get_descriptions_2(
     logger.info(f'  Missing (level 5): {description_5_missing.height: ,}\n')
 
     # Fill missing 5-digit descriptions from 6-digit children
+    # yapf: disable
     description_5_complete = (
         description_5_missing.join(description_complete_1, how='inner', on='code')
         .with_columns(code=pl.col('code').str.slice(0, 5))
@@ -482,6 +515,7 @@ def _get_descriptions_2(
             ),
         )
     )
+    # yapf: enable
 
     description_complete_2 = pl.concat([description_complete_1, description_5_complete])
 
@@ -506,6 +540,7 @@ def _get_descriptions_2(
         description_complete_2, how='inner', right_on='code', left_on='code9'
     )
 
+    # yapf: disable
     description_4_complete = (
         pl.concat(
             [
@@ -524,6 +559,7 @@ def _get_descriptions_2(
         )
         .unique(subset=['code'])
     )
+    # yapf: enable
 
     # Combine all descriptions
     descriptions = pl.concat([description_complete_2, description_4_complete])
@@ -567,6 +603,7 @@ def download_preprocess_data() -> pl.DataFrame:
     descriptions = _get_descriptions_2(descriptions_3, descriptions_exclusions, descriptions_examples)
 
     # Join all components and write final output
+    # yapf: disable
     naics_final = (
         titles.join(descriptions, how='inner', on='code')
         .join(exclusions, how='left', on='code')
@@ -583,6 +620,7 @@ def download_preprocess_data() -> pl.DataFrame:
         )
         .sort('index')
     )
+    # yapf: enable
 
     (naics_final.write_parquet(cfg.output_parquet))
 
