@@ -12,6 +12,7 @@ from naics_embedder.utils.utilities import (
     setup_directory,
 )
 
+
 @pytest.mark.unit
 def test_make_directories_creates_all(tmp_path):
     cfg = DirConfig(
