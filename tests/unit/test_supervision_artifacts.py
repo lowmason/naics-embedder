@@ -1,6 +1,7 @@
 import polars as pl
 import pytest
 
+from naics_embedder.data.create_triplets import build_training_pairs
 from naics_embedder.data.supervision_bundle import (
     build_codebook,
     build_pair_facts,
@@ -63,6 +64,38 @@ def test_matrices_reconcile_with_pair_facts_and_codebook_order(
     assert relation_matrix.row(0)[1] == 1
     assert relation_matrix.row(1)[0] == 1
     assert codebook_fingerprint(codebook) == codebook_fingerprint(codebook.clone())
+
+
+def test_training_pairs_expose_identity_and_supervision_columns_deterministically(
+    pair_facts_fixture,
+):
+    pair_facts = pair_facts_fixture
+    training_pairs = build_training_pairs(pair_facts)
+
+    expected_identity_columns = {
+        'anchor_code_id',
+        'positive_code_id',
+        'negative_code_id',
+        'anchor_code',
+        'positive_code',
+        'negative_code',
+    }
+    expected_supervision_columns = {
+        'positive_structural_distance',
+        'negative_structural_distance',
+        'positive_structural_relation_id',
+        'negative_structural_relation_id',
+        'positive_semantic_target',
+        'negative_semantic_target',
+        'positive_semantic_source',
+        'negative_semantic_source',
+        'anchor_excludes_negative',
+        'negative_excludes_anchor',
+        'negative_is_explicit_exclusion',
+    }
+    assert expected_identity_columns <= set(training_pairs.columns)
+    assert expected_supervision_columns <= set(training_pairs.columns)
+    assert training_pairs.equals(build_training_pairs(pair_facts.clone()))
 
 
 def test_pair_rows_keep_the_generator_canonical_orientation(
