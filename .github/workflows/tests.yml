@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Lint with ruff
+        run: uv run ruff check src tests
+
       - name: Run tests with coverage (generate coverage.xml)
         # We explicitly ask for xml:coverage.xml to guarantee the filename and location
         run: uv run pytest tests/ -v --cov=src/naics_embedder --cov-report=xml:coverage.xml --cov-report=term
