@@ -429,6 +429,70 @@ class StreamingConfig(BaseModel):
         description='High constant weight for excluded codes in Phase 1 sampling',
     )
 
+    # On-the-fly sampling with oversampling
+    use_on_the_fly_sampling: bool = Field(
+        default=False,
+        description='Use on-the-fly negative sampling instead of pre-computed cache',
+    )
+    n_candidates: int = Field(
+        default=48,
+        gt=0,
+        description='Total candidate negatives to sample (for Phase 2+ HNM pool)',
+    )
+    n_negatives_phase1: int = Field(
+        default=24,
+        gt=0,
+        description='Number of negatives used in Phase 1 loss (selected from candidates)',
+    )
+
+    # Phase 1 difficulty curriculum (linear annealing)
+    # Hard ratio is derived as 1 - easy - semi to guarantee sum = 1.0
+    phase1_easy_start: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description='Easy negative ratio at start of Phase 1 (d >= 6)',
+    )
+    phase1_easy_end: float = Field(
+        default=0.20,
+        ge=0.0,
+        le=1.0,
+        description='Easy negative ratio at end of Phase 1',
+    )
+    phase1_semi_start: float = Field(
+        default=0.20,
+        ge=0.0,
+        le=1.0,
+        description='Semi-hard negative ratio at start of Phase 1 (d = 4-5)',
+    )
+    phase1_semi_end: float = Field(
+        default=0.40,
+        ge=0.0,
+        le=1.0,
+        description='Semi-hard negative ratio at end of Phase 1',
+    )
+
+    @model_validator(mode='after')
+    def validate_difficulty_ratios(self) -> 'StreamingConfig':
+        """Ensure easy + semi <= 1.0 at both start and end (hard is derived)."""
+        if self.phase1_easy_start + self.phase1_semi_start > 1.0:
+            raise ValueError(
+                f'phase1_easy_start ({self.phase1_easy_start}) + '
+                f'phase1_semi_start ({self.phase1_semi_start}) must be <= 1.0'
+            )
+        if self.phase1_easy_end + self.phase1_semi_end > 1.0:
+            raise ValueError(
+                f'phase1_easy_end ({self.phase1_easy_end}) + '
+                f'phase1_semi_end ({self.phase1_semi_end}) must be <= 1.0'
+            )
+        if self.n_negatives_phase1 > self.n_candidates:
+            raise ValueError(
+                f'n_negatives_phase1 ({self.n_negatives_phase1}) must be <= '
+                f'n_candidates ({self.n_candidates})'
+            )
+        return self
+
+
 class SansStaticConfig(BaseModel):
     '''Configuration for static SANS-style sampling buckets.'''
 

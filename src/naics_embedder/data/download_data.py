@@ -174,12 +174,15 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
     # descriptions: normalize combined sector codes
     descriptions_1 = (descriptions_df.select('code', 'description'))
 
-    # Split multiline descriptions and filter out section headers and cross-references
+    # Split multiline descriptions into one block per line and filter out section headers and
+    # cross-references. The xlsx stores CRLF line endings; openpyxl and newer fastexcel releases
+    # normalize them to LF but fastexcel 0.16 keeps them, so normalize before splitting.
     descriptions_2 = (
         descriptions_1
         .with_columns(
             description=pl.col('description')
-            .str.split('\n\n')
+            .str.replace_all('\r\n', '\n', literal=True)
+            .str.split('\n')
             .list.eval(pl.element().filter(pl.element().str.len_chars() > 0))
         )
         .explode('description')

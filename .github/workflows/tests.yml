@@ -25,7 +25,7 @@ jobs:
         run: pip install uv
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
 
       - name: Run tests with coverage (generate coverage.xml)
         # We explicitly ask for xml:coverage.xml to guarantee the filename and location

@@ -98,5 +98,4 @@ Thumbs.db
 .pre-commit-config.yaml
 .pre-commit-setup.md
 scratch.ipynb
-uv.lock
 .vscode/
