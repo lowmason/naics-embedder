@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 from typing import Callable, Tuple
 
+import polars as pl
 import pytest
 import torch
 from torch import nn
@@ -10,6 +11,7 @@ from naics_embedder.graph_model.hgcn import (
     CurriculumState,
     HGCNLightningModule,
     HyperbolicConvolution,
+    load_embeddings,
 )
 from naics_embedder.text_model.hyperbolic import LorentzOps, check_lorentz_manifold_validity
 from naics_embedder.utils.config import GraphConfig
@@ -293,3 +295,16 @@ def test_get_final_embeddings_restores_submodule_modes(graph_inputs, start_mode)
     module.get_final_embeddings()
 
     assert {name: submodule.training for name, submodule in module.named_modules()} == modes
+
+@pytest.mark.unit
+def test_load_embeddings_selects_prefix_in_numeric_order(tmp_path):
+    path = tmp_path / 'hgcn.parquet'
+    shuffled = {f'hgcn_e{i}': [float(i)] for i in [10, 2, 11, 0, 9, 1, 3, 8, 4, 7, 5, 6]}
+    pl.DataFrame({'level': [2], 'hyp_e0': [-1.0], **shuffled}).write_parquet(path)
+
+    embeddings, levels, _ = load_embeddings(
+        str(path), torch.device('cpu'), embedding_prefix='hgcn_e'
+    )
+
+    assert embeddings.tolist() == [[float(i) for i in range(12)]]
+    assert levels.tolist() == [2]

@@ -8,7 +8,11 @@ from typing import Dict, List, Sequence, Tuple
 import polars as pl
 import torch
 
-from naics_embedder.graph_model.hgcn import load_embeddings
+from naics_embedder.graph_model.hgcn import (
+    STAGE3_EMBEDDING_PREFIX,
+    STAGE4_EMBEDDING_PREFIX,
+    load_embeddings,
+)
 from naics_embedder.metrics import EmbeddingEvaluator, HierarchyMetrics
 from naics_embedder.metrics.structural_spearman import (
     STRUCTURAL_SPEARMAN_DEFINITION,
@@ -94,9 +98,13 @@ def _compute_global_metrics(
     }
     return metrics, spearman
 
-def _load_embeddings_with_codes(parquet_path: Path,
-                                ) -> Tuple[torch.Tensor, List[str], pl.DataFrame]:
-    embeddings, _levels, df = load_embeddings(str(parquet_path), torch.device('cpu'))
+def _load_embeddings_with_codes(
+    parquet_path: Path,
+    embedding_prefix: str,
+) -> Tuple[torch.Tensor, List[str], pl.DataFrame]:
+    embeddings, _levels, df = load_embeddings(
+        str(parquet_path), torch.device('cpu'), embedding_prefix=embedding_prefix
+    )
     codes = df['code'].to_list()
     return embeddings, codes, df
 
@@ -129,8 +137,12 @@ def verify_stage4(
     if not stage4_parquet.exists():
         raise FileNotFoundError(f'Stage 4 embeddings not found: {stage4_parquet}')
 
-    emb_stage3, codes_pre, df_pre = _load_embeddings_with_codes(stage3_parquet)
-    emb_stage4, codes_post, df_post = _load_embeddings_with_codes(stage4_parquet)
+    emb_stage3, codes_pre, df_pre = _load_embeddings_with_codes(
+        stage3_parquet, STAGE3_EMBEDDING_PREFIX
+    )
+    emb_stage4, codes_post, df_post = _load_embeddings_with_codes(
+        stage4_parquet, STAGE4_EMBEDDING_PREFIX
+    )
 
     if df_pre.shape[0] != df_post.shape[0]:
         raise ValueError('Stage 3 and Stage 4 embeddings have different row counts')
