@@ -17,7 +17,7 @@ NAICS taxonomy.
 - **Configuration:** Pydantic ≥2.12 (config models), Hydra-style YAML configs
 - **CLI:** Typer ≥0.12 with Rich ≥13.9 formatting
 - **Documentation:** MkDocs ≥1.6 with Material theme ≥9.7
-- **Development:** pytest ≥8.3, ruff ≥0.6, yapf ≥0.43
+- **Development:** pytest ≥8.3, ruff ≥0.6
 
 ## Architecture Summary
 
@@ -152,9 +152,6 @@ naics-embedder/
 │   ├── hgcn_training.md
 │   ├── benchmarks.md
 │   └── api/                  # 27 API reference files (auto-generated)
-├── scripts/                  # Utility scripts
-│   ├── format_code.sh        # Run ruff and yapf formatting
-│   └── create_refactor_issues.sh
 ├── outputs/                  # Training outputs and visualizations
 │   ├── visualizations/       # Comparative training visualizations
 │   ├── 01_text/, 02_text/, 03_text/, ...  # Experiment directories
@@ -175,12 +172,12 @@ naics-embedder/
 ├── logs/                     # Training logs (gitignored)
 ├── .github/workflows/        # CI/CD workflows
 │   ├── docs.yml              # Build and deploy docs to GitHub Pages
-│   └── tests.yml             # Run pytest with coverage, ruff linting
+│   └── tests.yml             # Run pytest with coverage
 ├── pyproject.toml            # Project metadata and dependencies
 ├── uv.lock                   # Locked dependency versions
 ├── mkdocs.yml                # Documentation config
 ├── .gitignore
-├── .markdownlint.jsonc       # Markdown linting rules
+├── .markdownlint.jsonc       # Markdown linting rules (gitignored, local only)
 ├── scratch.ipynb             # Experimentation notebook
 └── README.md
 ```
@@ -432,17 +429,21 @@ uv run pytest -n auto
 
 **Tools:**
 
-- **Ruff:** Linting and import sorting
-- **YAPF:** Detailed formatting (spacing, chaining, alignment)
+- **Ruff:** Linting and import sorting via `ruff check`. There is no formatter step.
+- **YAPF:** No longer used. Its `[tool.yapf]` config was removed from `pyproject.toml` in
+  December 2025. `yapf` is still in the `dev` dependency group, but don't run it (see below).
 
-**Key Rules (from `pyproject.toml`):**
+**Enforced by `ruff check` (`[tool.ruff]` in `pyproject.toml`; rule sets E, F, I, Q):**
 
-- **Line length:** 100 characters
-- **Quotes:** Single quotes preferred (`'` not `"`)
+- **Line length:** 105 characters (E501)
+- **Quotes:** Single quotes (`'` not `"`) for inline strings and docstrings (Q)
+- **Imports:** Sorted (I)
+
+**Conventions (no tool checks these; follow them by hand):**
+
 - **Blank lines:** 1 after top-level definitions
 - **Indentation:** 4 spaces
 - **Method chaining:** Dot-aligned, split before dot
-- **Imports:** Sorted with `ruff` (E, F, I, Q rules)
 
 **Example:**
 
@@ -459,26 +460,31 @@ result = (
 result = df.filter(pl.col("code").is_not_null()).select(["code", "title", "description"]).collect()
 ```
 
-**Format Code:**
+**Lint Code:**
 
 ```bash
-# Use the formatting script (recommended)
-./scripts/format_code.sh
+# Lint: the only configured Python check
+uv run ruff check src/ tests/
 
-# Or manually:
-uv run yapf -i -r src/
-uv run ruff check src/
-uv run ruff format src/
+# Apply safe autofixes (e.g., import order) only to the files you changed
+uv run ruff check --fix path/to/changed_file.py
 ```
+
+Don't run `ruff format` or `yapf`. Their config sections (`[tool.ruff.format]`, `[tool.yapf]`)
+were removed, so `ruff format` falls back to double quotes (which the Q rules reject) and yapf
+falls back to pep8. Either one would rewrite most files.
 
 ### Markdown Formatting
 
-**Rules (from `.markdownlint.jsonc`):**
+**Rules (from `.markdownlint.jsonc`, which is gitignored, so fresh clones don't have it):**
 
-- **Line length:** 100 characters (code blocks and tables exempt)
 - **Headings:** 1 blank line above and below
 - **Lists:** Indent by 2 spaces
 - **Max consecutive blank lines:** 1
+
+**Convention (not linted, since that file disables the MD013 line-length rule):**
+
+- **Line length:** 100 characters (code blocks and tables exempt)
 
 ### Section Dividers
 
@@ -919,7 +925,7 @@ During training, the model computes validation metrics every epoch:
 
 2. **Tests** (`.github/workflows/tests.yml`)
    - **Trigger:** Push, pull request
-   - **Action:** Run pytest with coverage (Python 3.10, 3.12), ruff linting
+   - **Action:** Run pytest with coverage (Python 3.10, 3.12)
    - **Reports:** Coverage reports uploaded to artifacts
 
 ### Documentation
@@ -1186,13 +1192,13 @@ When working on this codebase:
 
 - [ ] Use `uv run` for all CLI commands
 - [ ] Follow single-quote Python style (`'` not `"`)
-- [ ] Keep line length ≤ 100 characters
+- [ ] Keep lines ≤ 105 characters in Python and ≤ 100 in Markdown
 - [ ] Use semantic section dividers in Python files
 - [ ] Add type hints to function signatures
 - [ ] Use `logging` instead of `print`
 - [ ] Write unit tests for new functionality in `tests/unit/`
 - [ ] Run tests before committing: `uv run pytest`
-- [ ] Format code: `./scripts/format_code.sh` or manually with yapf/ruff
+- [ ] Lint: `uv run ruff check src/ tests/` (no formatter; don't run `ruff format` or yapf)
 - [ ] Test changes with a quick training run: `uv run naics-embedder train training.trainer.max_epochs=2`
 - [ ] Check hyperbolic validity when modifying geometry code
 - [ ] Use validation utilities to check data and config
