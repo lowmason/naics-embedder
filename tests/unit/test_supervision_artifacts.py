@@ -27,9 +27,11 @@ def test_exclusion_provenance_does_not_mutate_structure(
     codebook = build_codebook(descriptions)
 
     facts = build_pair_facts(distances, relations, descriptions, codebook)
+    # yapf: disable
     row = facts.filter(
         pl.col('code_i').eq('111111') & pl.col('code_j').eq('111113')
     ).row(0, named=True)
+    # yapf: enable
 
     assert row['structural_distance'] == 2.0
     assert row['structural_relation_id'] == 2
@@ -47,9 +49,11 @@ def test_reverse_direction_survives_canonical_orientation(
     codebook = build_codebook(descriptions)
 
     facts = build_pair_facts(distances, relations, descriptions, codebook)
+    # yapf: disable
     row = facts.filter(
         pl.col('code_i').eq('111112') & pl.col('code_j').eq('222222')
     ).row(0, named=True)
+    # yapf: enable
 
     assert row['code_i_excludes_code_j'] is False
     assert row['code_j_excludes_code_i'] is True
@@ -167,9 +171,11 @@ def test_pair_facts_accept_shallower_first_rows_with_descending_ids(depth_first_
     descriptions, distances, relations = depth_first_frames
 
     facts = build_pair_facts(distances, relations, descriptions, build_codebook(descriptions))
+    # yapf: disable
     row = facts.filter(
         pl.col('code_i').eq('3112') & pl.col('code_j').eq('31111')
     ).row(0, named=True)
+    # yapf: enable
 
     assert (row['code_i_id'], row['code_j_id']) == (3, 2)
     assert row['structural_distance'] == 3.0

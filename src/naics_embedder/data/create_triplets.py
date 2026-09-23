@@ -138,6 +138,7 @@ def _structural_margins(frame: pl.DataFrame) -> pl.DataFrame:
     not structurally farther than the positive are dropped.
     '''
 
+    # yapf: disable
     relation_delta = (
         pl.col('negative_structural_relation_id').cast(pl.Float64)
         - pl.col('positive_structural_relation_id').cast(pl.Float64)
@@ -164,6 +165,7 @@ def _structural_margins(frame: pl.DataFrame) -> pl.DataFrame:
             + pl.col('distance_margin').mul(DISTANCE_MARGIN_WEIGHT)
         ).pow(-1)
     ).with_columns(pl.col('relation_margin', 'distance_margin', 'margin').cast(pl.Float32))
+    # yapf: enable
 
 # -------------------------------------------------------------------------------------------------
 # Deterministic cross-sector cap

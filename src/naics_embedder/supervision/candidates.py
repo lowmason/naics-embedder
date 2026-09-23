@@ -27,9 +27,11 @@ def _gather_aligned(value: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     if value.ndim < 2:
         raise ValueError('aligned candidate tensors require [batch, candidate, ...] dimensions')
     suffix = value.shape[2:]
+    # yapf: disable
     gather_index = indices.view(*indices.shape, *([1] * len(suffix))).expand(
         *indices.shape, *suffix
     )
+    # yapf: enable
     return value.gather(1, gather_index)
 
 # -------------------------------------------------------------------------------------------------
@@ -234,7 +236,9 @@ class NegativeCandidateBatch:
         for item in fields(self):
             if item.name in {'runtime_fields', 'router_gate_probs'}:
                 continue
+            # yapf: disable
             gathered[item.name] = _gather_aligned(getattr(self, item.name), selection.source_indices)
+            # yapf: enable
         router = None
         if self.router_gate_probs is not None:
             router = _gather_aligned(self.router_gate_probs, selection.source_indices)
