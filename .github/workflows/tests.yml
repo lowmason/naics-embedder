@@ -12,6 +12,10 @@ jobs:
       matrix:
         python-version: ['3.10', '3.12']
     runs-on: ubuntu-latest
+    env:
+      # .python-version pins local dev to 3.12. UV_PYTHON overrides it so each
+      # leg tests its matrix version; without it, `uv run` rebuilds on 3.12.
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

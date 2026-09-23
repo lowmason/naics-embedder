@@ -385,6 +385,10 @@ pip install uv
 uv sync
 ```
 
+`.python-version` pins uv to Python 3.12, one of CI's two test versions (3.10 and 3.12); uv
+downloads it if missing, and CI overrides it per matrix leg with `UV_PYTHON`. Without the pin,
+uv can pick Python 3.14, where the locked torch 2.9.x fails tests.
+
 ### Running Commands
 
 All commands use the `naics-embedder` CLI via `uv run`:
@@ -423,6 +427,9 @@ uv run pytest tests/unit/test_encoder.py
 
 # Run with parallelization
 uv run pytest -n auto
+
+# Run on Python 3.10 (CI's other leg) in a separate env, so .venv stays on the 3.12 pin
+UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
 ## Code Style and Conventions
