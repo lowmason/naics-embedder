@@ -14,7 +14,6 @@ from naics_embedder.utils.validation import (
     validate_training_config,
 )
 
-
 def _touch(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('test')

@@ -7,7 +7,6 @@ from naics_embedder.text_model.false_negative_strategies import apply_false_nega
 from naics_embedder.text_model.loss import HyperbolicInfoNCELoss, effective_false_negative_mask
 from naics_embedder.utils.config import FalseNegativeConfig
 
-
 def _no_exclusions(mask: torch.Tensor) -> dict:
     return {
         'explicit_exclusion_mask': torch.zeros_like(mask),

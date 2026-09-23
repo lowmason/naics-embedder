@@ -6,7 +6,6 @@ import pytest
 
 from naics_embedder.data import download_data
 
-
 @pytest.mark.unit
 def test_get_titles_normalizes_index_and_level():
     titles_df = pl.DataFrame(

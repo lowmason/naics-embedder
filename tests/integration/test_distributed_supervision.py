@@ -19,7 +19,6 @@ from naics_embedder.text_model.mixins.distributed import (
     gather_candidate_entities,
 )
 
-
 def make_entity_batch(rank: int, code_id: int) -> CandidateEntityBatch:
     return CandidateEntityBatch(
         candidate_uid=torch.tensor([[[rank, 0, 0]]], dtype=torch.long),

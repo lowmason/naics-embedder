@@ -3,7 +3,6 @@ import pytest
 
 from naics_embedder.data import compute_relations
 
-
 @pytest.mark.unit
 def test_get_relations_handles_child_sibling_and_cousin():
     depths = {'A': 0, 'B': 1, 'C': 2, 'D': 1, 'E': 2}

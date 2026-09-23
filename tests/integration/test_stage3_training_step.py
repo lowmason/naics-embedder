@@ -10,7 +10,6 @@ from naics_embedder.supervision.candidates import NegativeSelection, SelectedNeg
 from naics_embedder.supervision.schema import SelectionReason
 from naics_embedder.text_model.dataloader.datamodule import collate_fn
 
-
 def forced_selection(order: list[int]):
     def select(candidates, **_kwargs) -> NegativeSelection:
         indices = torch.tensor(

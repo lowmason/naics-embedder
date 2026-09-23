@@ -15,7 +15,6 @@ import torch.distributed as dist
 
 from naics_embedder.supervision.candidates import CandidateEntityBatch
 
-
 def _all_gather_fixed(tensor: torch.Tensor, world_size: int) -> torch.Tensor:
     '''Non-differentiable all_gather of equal-shape tensors, concatenated rank-major.'''
     gathered = [torch.zeros_like(tensor) for _ in range(world_size)]

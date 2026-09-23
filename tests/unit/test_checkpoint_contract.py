@@ -10,7 +10,6 @@ from naics_embedder.supervision.checkpoints import (
     validate_exact_resume,
 )
 
-
 @pytest.fixture
 def runtime_contract() -> CheckpointContract:
     return CheckpointContract(

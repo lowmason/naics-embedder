@@ -17,7 +17,6 @@ from naics_embedder.supervision.index import SupervisionIndex
 from naics_embedder.supervision.margins import structural_margins, structurally_eligible
 from naics_embedder.utils.config import SupervisionBuildConfig
 
-
 def _margins(negative_distance, negative_relation, positive_distance, positive_relation):
     return structural_margins(
         negative_distance=torch.tensor([negative_distance]),

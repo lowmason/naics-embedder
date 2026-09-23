@@ -5,7 +5,6 @@ import pytest
 
 from naics_embedder.utils.console import configure_logging, log_table
 
-
 @pytest.mark.unit
 def test_configure_logging_creates_log_file(tmp_path, monkeypatch):
     # Reset root handlers so configure_logging can attach new ones

@@ -4,7 +4,6 @@ from typer.testing import CliRunner
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
 
-
 @pytest.fixture
 def runner():
     return CliRunner()

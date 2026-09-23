@@ -12,7 +12,6 @@ from naics_embedder.metrics import (
 )
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
 
-
 def _lorentz_points(spatial):
     tensor = torch.tensor(spatial, dtype=torch.float32)
     time = torch.sqrt(1.0 + torch.sum(tensor**2, dim=1, keepdim=True))

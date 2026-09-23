@@ -12,7 +12,6 @@ from naics_embedder.utils.config import CheckpointLoadMode, Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
 
-
 @pytest.fixture
 def cli_runner():
     return CliRunner()

@@ -7,7 +7,6 @@ from naics_embedder.metrics.hierarchy_structure import (
 )
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
 
-
 def test_radius_metrics_capture_level_statistics():
     hierarchy = NaicsHierarchy([('31', '311'), ('311', '3111')])
     embeddings = torch.tensor(

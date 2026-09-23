@@ -13,7 +13,6 @@ from naics_embedder.supervision.selection import (
     stable_hash,
 )
 
-
 def test_quota_selects_exactly_one_exclusion_and_rotates(candidate_batch_with_exclusions):
     coordinator = NegativeSelectionCoordinator()
     chosen = []

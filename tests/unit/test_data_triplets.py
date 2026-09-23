@@ -7,7 +7,6 @@ from naics_embedder.data.create_triplets import (
     build_training_pairs,
 )
 
-
 def test_training_pairs_keep_semantics_separate_from_structure(pair_facts_fixture):
     pairs = build_training_pairs(pair_facts_fixture)
     excluded = pairs.filter(pl.col('negative_is_explicit_exclusion')).row(0, named=True)
