@@ -473,8 +473,9 @@ result = (
 ```
 
 **Known drift:** Files edited while the formatter was missing (late 2025 to Sep 2026) may not
-match YAPF, and `ruff check` is not yet clean on `main` (pre-existing I001, E501, E741). Format
-files as you touch them, and keep `./scripts/format_code.sh --all` out of feature PRs.
+match YAPF, and `ruff check src/ tests/` currently fails on pre-existing violations (I001, E501,
+E741). Judge a change by the files it touches: format those, don't mass-fix unrelated code, and
+keep `./scripts/format_code.sh --all` out of feature PRs.
 
 ### Markdown Formatting
 
@@ -928,6 +929,9 @@ During training, the model computes validation metrics every epoch:
 2. **Tests** (`.github/workflows/tests.yml`)
    - **Trigger:** Push, pull request
    - **Action:** Run pytest with coverage (Python 3.10, 3.12)
+   - **Dependencies:** Installs from `uv.lock` (`uv sync --locked`), so CI tests the pinned
+     versions, not the newest releases that `pip install` resolves. Upgrade deliberately with
+     `uv lock --upgrade-package <name>`.
    - **Reports:** Coverage (`coverage.xml`) uploaded to Codecov
 
 ### Documentation
