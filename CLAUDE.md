@@ -17,7 +17,7 @@ NAICS taxonomy.
 - **Configuration:** Pydantic ≥2.12 (config models), Hydra-style YAML configs
 - **CLI:** Typer ≥0.12 with Rich ≥13.9 formatting
 - **Documentation:** MkDocs ≥1.6 with Material theme ≥9.7
-- **Development:** pytest ≥8.3, ruff ≥0.6
+- **Development:** pytest ≥8.3, ruff ≥0.6, yapf ≥0.43
 
 ## Architecture Summary
 
@@ -151,6 +151,8 @@ naics-embedder/
 │   ├── hgcn_training.md
 │   ├── benchmarks.md
 │   └── api/                  # 27 API reference files (auto-generated)
+├── scripts/                  # Utility scripts
+│   └── format_code.sh        # ruff check --fix + yapf (see Python Formatting)
 ├── outputs/                  # Training outputs and visualizations
 │   ├── visualizations/       # Comparative training visualizations
 │   ├── 01_text/, 02_text/, 03_text/, ...  # Experiment directories
@@ -426,55 +428,53 @@ uv run pytest -n auto
 
 ### Python Formatting
 
-**Tools:**
+**Tools** (both configured in `pyproject.toml`, both run by `scripts/format_code.sh`):
 
-- **Ruff:** Linting and import sorting via `ruff check`. There is no formatter step.
-- **YAPF:** No longer used. Its `[tool.yapf]` config was removed from `pyproject.toml` in
-  December 2025. `yapf` is still in the `dev` dependency group, but don't run it (see below).
+- **YAPF:** The formatter. It owns layout: line wrapping, blank lines, bracket placement.
+- **Ruff:** The linter (E, F, I, Q rules), plus import sorting via `ruff check --fix`.
+  **Never run `ruff format`**: it forces double quotes (which the Q rules reject) and 2 blank
+  lines between top-level definitions, which would rewrite nearly every file.
 
-**Enforced by `ruff check` (`[tool.ruff]` in `pyproject.toml`; rule sets E, F, I, Q):**
+**Key Rules (from `pyproject.toml`):**
 
-- **Line length:** 105 characters (E501)
-- **Quotes:** Single quotes (`'` not `"`) for inline strings and docstrings (Q)
-- **Imports:** Sorted (I)
-
-**Conventions (no tool checks these; follow them by hand):**
-
-- **Blank lines:** 1 after top-level definitions
-- **Indentation:** 4 spaces
-- **Method chaining:** Dot-aligned, split before dot
-
-**Example:**
+- **Line length:** YAPF wraps at 100 characters; ruff's E501 allows up to 105 for lines YAPF
+  cannot split
+- **Quotes:** Single quotes (`'` not `"`), including `'''` docstrings
+- **Blank lines:** 1 between top-level definitions, and 1 after the import block
+- **Indentation:** 4 spaces; closing brackets dedented onto their own line
+- **Imports:** Sorted by ruff's isort rules (I)
+- **Method chaining:** YAPF packs a chain onto as few lines as fit and splits before a `.` only
+  when a line overflows. To keep a vertical Polars chain, fence it, as `data/download_data.py`
+  does:
 
 ```python
-# Good: single quotes, dot-aligned chaining
+# yapf: disable
 result = (
     df
     .filter(pl.col('code').is_not_null())
     .select(['code', 'title', 'description'])
     .collect()
 )
-
-# Bad: double quotes, no alignment
-result = df.filter(pl.col("code").is_not_null()).select(["code", "title", "description"]).collect()
+# yapf: enable
 ```
 
-**Lint Code:**
+**Format Code:**
 
 ```bash
-# Lint: the only configured Python check
-uv run ruff check src/ tests/
+# Files changed on your branch vs origin/main, including uncommitted and untracked ones
+./scripts/format_code.sh
 
-# Apply safe autofixes (e.g., import order) only to the files you changed
-uv run ruff check --fix path/to/changed_file.py
+# Specific files or directories
+./scripts/format_code.sh src/naics_embedder/text_model/loss.py
+
+# Check only: exits non-zero on lint issues or files YAPF would reformat
+./scripts/format_code.sh --check src/naics_embedder/text_model/loss.py
 ```
 
-`ruff check src/ tests/` currently fails on pre-existing violations, so judge a change by the
-files it touches and don't mass-fix unrelated code.
-
-Don't run `ruff format` or `yapf`. Their config sections (`[tool.ruff.format]`, `[tool.yapf]`)
-were removed, so `ruff format` falls back to double quotes (which the Q rules reject) and yapf
-falls back to pep8. Either one would rewrite most files.
+**Known drift:** `ruff check src/ tests/` is clean; keep it that way. Some files edited while the
+formatter was missing (late 2025 to Sep 2026) still don't match YAPF. Judge a change by the files
+it touches: format those, don't mass-fix unrelated code, and keep `./scripts/format_code.sh --all`
+out of feature PRs.
 
 ### Markdown Formatting
 
@@ -1197,13 +1197,14 @@ When working on this codebase:
 
 - [ ] Use `uv run` for all CLI commands
 - [ ] Follow single-quote Python style (`'` not `"`)
-- [ ] Keep lines ≤ 105 characters in Python and ≤ 100 in Markdown
+- [ ] Keep lines ≤ 100 characters in Python and Markdown (ruff only errors above 105)
 - [ ] Use semantic section dividers in Python files
 - [ ] Add type hints to function signatures
 - [ ] Use `logging` instead of `print`
 - [ ] Write unit tests for new functionality in `tests/unit/`
 - [ ] Run tests before committing: `uv run pytest`
-- [ ] Lint: `uv run ruff check src/ tests/` (no formatter; don't run `ruff format` or yapf)
+- [ ] Format the files you touched: `./scripts/format_code.sh` (never `ruff format`; no `--all` in
+  feature PRs)
 - [ ] Test changes with a quick training run:
   `uv run naics-embedder train training.trainer.max_epochs=2`
 - [ ] Check hyperbolic validity when modifying geometry code

@@ -8,7 +8,6 @@ import torch.nn.functional as F
 from naics_embedder.text_model.loss import effective_false_negative_mask
 from naics_embedder.utils.config import FalseNegativeConfig
 
-
 def apply_false_negative_strategy(
     config: FalseNegativeConfig,
     anchor_embeddings: torch.Tensor,

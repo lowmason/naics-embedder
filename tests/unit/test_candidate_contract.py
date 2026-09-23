@@ -10,7 +10,6 @@ from naics_embedder.supervision.candidates import (
 )
 from naics_embedder.supervision.schema import SelectionReason
 
-
 def test_select_gathers_every_field_by_one_source_index(candidate_batch):
     indices = torch.tensor([[2, 0, 1]])
     selection = NegativeSelection(

@@ -12,7 +12,6 @@ from naics_embedder.utils.config import CheckpointLoadMode, Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
 
-
 @pytest.fixture
 def cli_runner():
     return CliRunner()
@@ -359,3 +358,21 @@ def test_training_error_handling_exits(training_env):
         training.train(skip_validation=True)
 
     assert excinfo.value.exit_code == 1
+
+@pytest.mark.unit
+def test_training_passes_curriculum_horizon_to_datamodule(training_env):
+    '''Phase1MapDataset's difficulty ramp must end where the model's curriculum Phase 1 ends.'''
+    training.train(
+        skip_validation=True,
+        overrides=['training.trainer.max_epochs=10', 'curriculum.phase1_end=0.5'],
+    )
+
+    fit_call = training_env.trainer.fit_calls[0]
+    datamodule = fit_call['datamodule']
+    model = fit_call['model']
+
+    assert datamodule.kwargs.get('max_epochs') == 10
+    assert datamodule.kwargs.get('phase1_end') == 0.5
+    # The model's CurriculumScheduler derives Phase 1 from trainer.max_epochs and this hparam
+    assert datamodule.kwargs['max_epochs'] == training_env.trainer.kwargs['max_epochs']
+    assert datamodule.kwargs['phase1_end'] == model.kwargs['curriculum_phase1_end']

@@ -7,7 +7,6 @@ from naics_embedder.graph_model.dataloader import hgcn_datamodule as hgcn_module
 from naics_embedder.graph_model.dataloader.hgcn_datamodule import HGCNDataModule
 from naics_embedder.utils.config import GraphConfig, StreamingConfig
 
-
 def _graph_cfg(**overrides) -> GraphConfig:
     '''Create a GraphConfig tailored for small deterministic tests.'''
     defaults: Dict[str, Any] = {

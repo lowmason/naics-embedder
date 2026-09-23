@@ -439,20 +439,33 @@ def run_qcew_multilevel_benchmark(
 
     # Compute summary statistics
     if successful_levels:
-        embed_r2_values = [results[f'level_{l}_{NAICS_LEVEL_NAMES.get(l, "unknown")}']['embedding']['r2']
-                          for l in successful_levels]
-        onehot_r2_values = [results[f'level_{l}_{NAICS_LEVEL_NAMES.get(l, "unknown")}']['one_hot']['r2']
-                           for l in successful_levels]
-        hybrid_r2_values = [results[f'level_{l}_{NAICS_LEVEL_NAMES.get(l, "unknown")}']['hybrid']['r2']
-                           for l in successful_levels]
+        embed_r2_values = [
+            results[f'level_{level}_{NAICS_LEVEL_NAMES.get(level, "unknown")}']['embedding']['r2']
+            for level in successful_levels
+        ]
+        onehot_r2_values = [
+            results[f'level_{level}_{NAICS_LEVEL_NAMES.get(level, "unknown")}']['one_hot']['r2']
+            for level in successful_levels
+        ]
+        hybrid_r2_values = [
+            results[f'level_{level}_{NAICS_LEVEL_NAMES.get(level, "unknown")}']['hybrid']['r2']
+            for level in successful_levels
+        ]
 
-        embed_rmse_values = [results[f'level_{l}_{NAICS_LEVEL_NAMES.get(l, "unknown")}']['embedding']['rmse']
-                            for l in successful_levels]
-        onehot_rmse_values = [results[f'level_{l}_{NAICS_LEVEL_NAMES.get(l, "unknown")}']['one_hot']['rmse']
-                             for l in successful_levels]
+        embed_rmse_values = [
+            results[f'level_{level}_{NAICS_LEVEL_NAMES.get(level, "unknown")}']['embedding']['rmse']
+            for level in successful_levels
+        ]
+        onehot_rmse_values = [
+            results[f'level_{level}_{NAICS_LEVEL_NAMES.get(level, "unknown")}']['one_hot']['rmse']
+            for level in successful_levels
+        ]
 
         results['summary'] = {
-            'levels_evaluated': {str(l): NAICS_LEVEL_NAMES.get(l, 'unknown') for l in successful_levels},
+            'levels_evaluated': {
+                str(level): NAICS_LEVEL_NAMES.get(level, 'unknown')
+                for level in successful_levels
+            },
             'embedding': {
                 'avg_r2': float(np.mean(embed_r2_values)),
                 'std_r2': float(np.std(embed_r2_values)),
@@ -468,12 +481,14 @@ def run_qcew_multilevel_benchmark(
                 'std_r2': float(np.std(hybrid_r2_values)),
             },
             'comparison': {
-                'embedding_vs_onehot_r2_diff': float(np.mean(embed_r2_values) - np.mean(onehot_r2_values)),
+                'embedding_vs_onehot_r2_diff': float(
+                    np.mean(embed_r2_values) - np.mean(onehot_r2_values)
+                ),
                 'embedding_wins': sum(1 for e, o in zip(embed_r2_values, onehot_r2_values) if e > o),
                 'onehot_wins': sum(1 for e, o in zip(embed_r2_values, onehot_r2_values) if o > e),
                 'per_level_r2_diff': {
-                    f'level_{l}': float(e - o)
-                    for l, e, o in zip(successful_levels, embed_r2_values, onehot_r2_values)
+                    f'level_{level}': float(e - o)
+                    for level, e, o in zip(successful_levels, embed_r2_values, onehot_r2_values)
                 },
             },
         }
@@ -488,7 +503,10 @@ def print_multilevel_comparison(results: Dict[str, Any]) -> None:
     print('=' * 80)
 
     # Print per-level results
-    print(f'\n{"Level":<25} {"Embedding R²":>12} {"One-Hot R²":>12} {"Hybrid R²":>12} {"Δ (Emb-OH)":>12} {"N":>8}')
+    print(
+        f'\n{"Level":<25} {"Embedding R²":>12} {"One-Hot R²":>12} {"Hybrid R²":>12} '
+        f'{"Δ (Emb-OH)":>12} {"N":>8}'
+    )
     print('-' * 80)
 
     for key, level_results in results.items():
@@ -504,14 +522,20 @@ def print_multilevel_comparison(results: Dict[str, Any]) -> None:
         # Format level name nicely
         level_name = key.replace('level_', '').replace('_', ' ').title()
 
-        print(f'{level_name:<25} {embed_r2:>12.3f} {onehot_r2:>12.3f} {hybrid_r2:>12.3f} {diff:>+12.3f} {n_samples:>8.0f}')
+        print(
+            f'{level_name:<25} {embed_r2:>12.3f} {onehot_r2:>12.3f} {hybrid_r2:>12.3f} '
+            f'{diff:>+12.3f} {n_samples:>8.0f}'
+        )
 
     # Print summary
     if 'summary' in results:
         summary = results['summary']
         print('-' * 80)
-        print(f'{"AVERAGE":<25} {summary["embedding"]["avg_r2"]:>12.3f} {summary["one_hot"]["avg_r2"]:>12.3f} '
-              f'{summary["hybrid"]["avg_r2"]:>12.3f} {summary["comparison"]["embedding_vs_onehot_r2_diff"]:>+12.3f}')
+        print(
+            f'{"AVERAGE":<25} {summary["embedding"]["avg_r2"]:>12.3f} '
+            f'{summary["one_hot"]["avg_r2"]:>12.3f} {summary["hybrid"]["avg_r2"]:>12.3f} '
+            f'{summary["comparison"]["embedding_vs_onehot_r2_diff"]:>+12.3f}'
+        )
 
         print('\n' + '-' * 40)
         print('SUMMARY')
