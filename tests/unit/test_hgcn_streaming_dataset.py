@@ -14,7 +14,6 @@ from naics_embedder.graph_model.dataloader import hgcn_streaming_dataset as stre
 from naics_embedder.supervision.artifacts import load_validated_bundle
 from naics_embedder.utils.config import StreamingConfig
 
-
 def _sample_cached_triplets():
     '''Create cached triplets resembling load_streaming_triplets output (new flat format).'''
 

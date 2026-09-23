@@ -17,7 +17,6 @@ from naics_embedder.text_model.dataloader.streaming_dataset import (
 )
 from naics_embedder.utils.config import SansStaticConfig
 
-
 def _index(size: int, anchor_code_id: int, exclusion_code_ids: tuple[int, ...]) -> SupervisionIndex:
     directed = torch.zeros((size, size), dtype=torch.bool)
     for code_id in exclusion_code_ids:

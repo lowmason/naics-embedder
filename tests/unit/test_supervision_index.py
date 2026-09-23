@@ -11,7 +11,6 @@ from naics_embedder.supervision.artifacts import (
 )
 from naics_embedder.supervision.index import SupervisionIndex
 
-
 def test_loader_rejects_mixed_bundle_metadata(generated_bundle):
     manifest = json.loads(generated_bundle.read_text())
     member = manifest['artifacts']['pair_facts']['files'][0]

@@ -13,7 +13,6 @@ from naics_embedder.data.supervision_bundle import generate_supervision_bundle_f
 from naics_embedder.supervision.artifacts import load_validated_bundle
 from naics_embedder.supervision.candidates import NegativeCandidateBatch
 
-
 @pytest.fixture
 def descriptions_fixture() -> pl.DataFrame:
     return pl.DataFrame(

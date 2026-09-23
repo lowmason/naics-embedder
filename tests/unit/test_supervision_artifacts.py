@@ -19,7 +19,6 @@ from naics_embedder.supervision.artifacts import load_validated_bundle, sha256_f
 from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.utils.config import SupervisionBuildConfig
 
-
 def test_exclusion_provenance_does_not_mutate_structure(
     descriptions_fixture, structural_frames_fixture
 ):

@@ -14,7 +14,6 @@ from naics_embedder.graph_model.hgcn import (
 from naics_embedder.text_model.hyperbolic import LorentzOps, check_lorentz_manifold_validity
 from naics_embedder.utils.config import GraphConfig
 
-
 def _make_lorentz_embeddings(num_nodes: int, dim: int, device: torch.device) -> torch.Tensor:
     tangent = torch.randn(num_nodes, dim, device=device)
     tangent[:, 0] = 0.0  # Time component 0 in tangent space

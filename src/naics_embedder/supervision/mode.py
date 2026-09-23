@@ -8,7 +8,6 @@ learning plus supervision-independent regularizers; it is not contract-compliant
 
 from dataclasses import dataclass
 
-
 @dataclass(frozen=True)
 class SupervisionModePolicy:
     '''What a supervision mode permits; consulted through explicit predicates, never inferred.'''

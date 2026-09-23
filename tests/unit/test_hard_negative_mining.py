@@ -22,7 +22,6 @@ from naics_embedder.text_model.mixins.curriculum import (
 )
 from naics_embedder.text_model.mixins.distributed import DistributedMixin
 
-
 def test_geometric_miner_returns_source_indices_not_embeddings(candidate_batch):
     anchor = candidate_batch.embedding[:, 0]
     proposal = LorentzianHardNegativeMiner().propose(anchor, candidate_batch, k=2)

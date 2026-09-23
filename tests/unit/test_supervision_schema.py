@@ -12,7 +12,6 @@ from naics_embedder.supervision.schema import (
     SupervisionManifest,
 )
 
-
 def _manifest() -> SupervisionManifest:
     artifact_file = ArtifactFile(path='naics_codebook.parquet', sha256='a' * 64, row_count=3)
     return SupervisionManifest(
