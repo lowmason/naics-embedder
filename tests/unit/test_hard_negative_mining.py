@@ -30,7 +30,6 @@ def test_geometric_miner_returns_source_indices_not_embeddings(candidate_batch):
     assert proposal.reason == SelectionReason.GEOMETRIC
     assert not hasattr(proposal, 'embedding')
 
-
 def test_router_miner_indices_recover_matching_gate_rows(candidate_batch):
     anchor_gate = torch.tensor([[0.9, 0.1]])
     proposal = RouterGuidedNegativeMiner().propose(
@@ -45,7 +44,6 @@ def test_router_miner_indices_recover_matching_gate_rows(candidate_batch):
 
     assert selected_gates.shape == (1, 2, 2)
     assert proposal.reason == SelectionReason.ROUTER
-
 
 def test_gathered_entity_is_rejoined_for_each_local_anchor(validated_bundle):
     index = SupervisionIndex.from_bundle(validated_bundle)
@@ -68,7 +66,6 @@ def test_gathered_entity_is_rejoined_for_each_local_anchor(validated_bundle):
     assert joined.structural_distance.tolist() == [[2.0], [3.0]]
     assert joined.is_explicit_exclusion.tolist() == [[True], [False]]
 
-
 # -------------------------------------------------------------------------------------------------
 # Proposal masking and ranking
 # -------------------------------------------------------------------------------------------------
@@ -76,7 +73,6 @@ def test_gathered_entity_is_rejoined_for_each_local_anchor(validated_bundle):
 def _lorentz(spatial: list[float]) -> torch.Tensor:
     point = torch.tensor(spatial, dtype=torch.float32)
     return torch.cat([torch.sqrt(1.0 + point.square().sum()).unsqueeze(0), point])
-
 
 def test_geometric_proposals_rank_the_closest_eligible_candidates_first(
     candidate_batch_with_exclusions,
@@ -96,7 +92,6 @@ def test_geometric_proposals_rank_the_closest_eligible_candidates_first(
     # Exclusions (slots 0-2) and the invalid slot 5 are never eligible.
     assert proposal.source_indices[0][finite].tolist() == [3, 4]
 
-
 def test_router_proposals_never_include_exclusions_or_invalid_rows(
     candidate_batch_with_exclusions,
 ):
@@ -111,7 +106,6 @@ def test_router_proposals_never_include_exclusions_or_invalid_rows(
 
     finite = torch.isfinite(proposal.scores[0])
     assert set(proposal.source_indices[0][finite].tolist()) == {3, 5}
-
 
 # -------------------------------------------------------------------------------------------------
 # Canonical selection boundary (curriculum mixin)
@@ -157,8 +151,8 @@ def test_local_difficulty_proposals_translate_by_occurrence_uid(candidate_batch)
     assert proposal.scores[0, 0] > proposal.scores[0, 1]
     assert proposal.scores[0, 2] == float('-inf')
 
-
 class _SelectionHost(DistributedMixin, CurriculumMixin):
+
     def __init__(self, index: SupervisionIndex, flags: dict):
         self.supervision_index = index
         self.current_curriculum_flags = flags
@@ -172,7 +166,6 @@ class _SelectionHost(DistributedMixin, CurriculumMixin):
 
     def _log_selection_health(self, candidates, selected, batch_size, *, entity_valid_mask):
         self.health.append((candidates, selected, entity_valid_mask))
-
 
 def _host_batch(pools: list[list[int]], anchor: int = 0, positive: int = 1) -> dict:
     width = max(len(pool) for pool in pools)
@@ -198,7 +191,6 @@ def _host_batch(pools: list[list[int]], anchor: int = 0, positive: int = 1) -> d
         ),
     }
 
-
 def _candidate_output(batch: dict) -> dict:
     code_ids = batch['candidate_code_id'].clamp_min(0).to(torch.float32).reshape(-1)
     spatial = torch.stack([code_ids / 10.0, torch.zeros_like(code_ids)], dim=1)
@@ -206,12 +198,10 @@ def _candidate_output(batch: dict) -> dict:
     gate = torch.stack([code_ids / 10.0, 1.0 - code_ids / 10.0], dim=1)
     return {'embedding': embedding, 'gate_probs': gate}
 
-
 def _local_uid(batch: dict) -> torch.Tensor:
     slots = batch['candidate_source_slot']
     rows = torch.arange(slots.shape[0]).unsqueeze(1).expand_as(slots)
     return torch.stack([torch.zeros_like(slots), rows, slots], dim=-1)
-
 
 @pytest.mark.parametrize('mining', [False, True])
 def test_select_negative_batch_keeps_every_field_on_one_identity(validated_bundle, mining):
@@ -219,7 +209,10 @@ def test_select_negative_batch_keeps_every_field_on_one_identity(validated_bundl
     index = SupervisionIndex.from_bundle(validated_bundle)
     host = _SelectionHost(
         index,
-        {'enable_hard_negative_mining': mining, 'enable_router_guided_sampling': mining},
+        {
+            'enable_hard_negative_mining': mining,
+            'enable_router_guided_sampling': mining
+        },
     )
     batch = _host_batch([[2, 3, 4], [3, 4]])
     candidate_output = _candidate_output(batch)
@@ -242,7 +235,8 @@ def test_select_negative_batch_keeps_every_field_on_one_identity(validated_bundl
     assert all(code >= 0 for row in codes for code in row)
     assert torch.equal(selected.embedding[..., 1], selected.code_id.to(torch.float32) / 10.0)
     assert torch.equal(
-        selected.router_gate_probs[..., 0], selected.code_id.to(torch.float32) / 10.0
+        selected.router_gate_probs[..., 0],
+        selected.code_id.to(torch.float32) / 10.0
     )
     expected_distance = index.structural_distance[0][selected.code_id]
     assert torch.equal(selected.structural_distance, expected_distance)
@@ -255,7 +249,6 @@ def test_select_negative_batch_keeps_every_field_on_one_identity(validated_bundl
             assert selected.distance_margin[row, slot].item() == expected_margins[code][1]
     assert len(host.health) == 1
 
-
 # Production-shaped hierarchy (tests/fixtures/supervision.py HIERARCHY_CODES): code IDs follow
 # lexicographic order. '311111' (4) excludes '321111' (11); '3111' (2) is its grandparent and
 # '31111' (3) its parent; the '44' family (12-16) is cross-sector for it.
@@ -264,7 +257,6 @@ HIERARCHY_GRANDPARENT = 2
 HIERARCHY_PARENT = 3
 HIERARCHY_EXCLUSION = 11
 CROSS_SECTOR_CODES = [12, 13, 14, 15, 16]
-
 
 @pytest.fixture
 def hierarchy_index(tmp_path, hierarchy_descriptions_parquet):
@@ -280,23 +272,19 @@ def hierarchy_index(tmp_path, hierarchy_descriptions_parquet):
     )
     return SupervisionIndex.from_bundle(load_validated_bundle(manifest))
 
-
 def _hierarchy_batch(index, pool, positive, selection_k):
     batch = _host_batch([pool], anchor=HIERARCHY_ANCHOR, positive=positive)
     batch['selection_k'] = selection_k
     batch['positive_structural_distance'] = torch.tensor(
         [float(index.structural_distance[HIERARCHY_ANCHOR, positive])]
     )
-    batch['positive_structural_relation_id'] = index.structural_relation_id[
-        HIERARCHY_ANCHOR, positive
-    ].reshape(1)
+    batch['positive_structural_relation_id'] = index.structural_relation_id[HIERARCHY_ANCHOR,
+                                                                            positive].reshape(1)
     return batch
-
 
 def _code_embedding(code_id: int) -> torch.Tensor:
     '''The embedding ``_candidate_output`` gives a candidate with this code ID.'''
     return _candidate_output({'candidate_code_id': torch.tensor([[code_id]])})['embedding'][0]
-
 
 def _hierarchy_candidate_output(batch: dict) -> dict:
     # Hierarchy code IDs reach 16, so gate probabilities scale by 1/20 to stay in [0, 1].
@@ -304,7 +292,6 @@ def _hierarchy_candidate_output(batch: dict) -> dict:
     code_ids = batch['candidate_code_id'].clamp_min(0).to(torch.float32).reshape(-1)
     output['gate_probs'] = torch.stack([code_ids / 20.0, 1.0 - code_ids / 20.0], dim=1)
     return output
-
 
 def _select_with_flags(index, flags, pool, positive, selection_k, anchor_embedding, mix=None):
     host = _SelectionHost(index, flags)
@@ -324,10 +311,8 @@ def _select_with_flags(index, flags, pool, positive, selection_k, anchor_embeddi
     )
     return host, selected
 
-
 def _reasons(selected) -> list:
     return [SelectionReason(reason) for reason in selected.selection_reasons[0].tolist()]
-
 
 def test_miners_choose_negatives_before_the_difficulty_proposal(hierarchy_index):
     pool = [HIERARCHY_EXCLUSION] + CROSS_SECTOR_CODES
@@ -353,7 +338,6 @@ def test_miners_choose_negatives_before_the_difficulty_proposal(hierarchy_index)
     # d(x, y) = |asinh(x) - asinh(y)| here, so 1.4 (code 14) is nearer 1.3 than 1.2 (code 12).
     assert set(mined.code_id[0, 1:3].tolist()) == {13, 14}
 
-
 @pytest.mark.parametrize(
     ('mix', 'expected'),
     [
@@ -371,7 +355,6 @@ def test_router_mix_ratio_splits_mined_slots(hierarchy_index, mix, expected):
     )
 
     assert _reasons(selected) == [SelectionReason.EXCLUSION_QUOTA] + expected
-
 
 def test_repeated_codes_cannot_crowd_distinct_codes_out_of_mining(hierarchy_index):
     # A global pool repeats codes across rows and ranks. Three copies of code 13 sit at the anchor
@@ -393,7 +376,6 @@ def test_repeated_codes_cannot_crowd_distinct_codes_out_of_mining(hierarchy_inde
     # The duplicate code resolves to its smallest-UID occurrence (slot 1).
     assert selected.candidate_uid[0, 1].tolist() == [0, 0, 1]
 
-
 def test_structurally_closer_relative_is_never_selected_even_when_nearest(hierarchy_index):
     # Positive: the grandparent. The parent is structurally closer than the positive, sits first
     # in the difficulty proposal, and is geometrically nearest to the anchor embedding.
@@ -409,7 +391,6 @@ def test_structurally_closer_relative_is_never_selected_even_when_nearest(hierar
         assert HIERARCHY_PARENT not in selected.code_id[0].tolist()
         assert HIERARCHY_EXCLUSION in selected.code_id[0].tolist()
         assert (entity_valid & ~candidates.valid_mask)[0].tolist() == [True] + [False] * 6
-
 
 def test_select_negative_batch_rejects_router_mining_without_gate_probs(validated_bundle):
     host = _SelectionHost(

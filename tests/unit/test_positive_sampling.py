@@ -32,8 +32,7 @@ def sample_descriptions_df():
     '''Create sample NAICS descriptions for testing.'''
     # Includes manufacturing sectors 31-33 (merged) and retail sectors 44-45 (merged)
     data = {
-        'index':
-        list(range(24)),
+        'index': list(range(24)),
         'code': [
             # Sector 31 (merged with 32, 33 -> becomes 31)
             '31',
@@ -229,8 +228,7 @@ class TestBuildTaxonomy:
         '''Test that sectors 48, 49 are correctly merged to 48.'''
         df = pl.DataFrame(
             {
-                'index':
-                list(range(10)),
+                'index': list(range(10)),
                 'code': [
                     '48',
                     '481',
@@ -951,7 +949,6 @@ class TestIntegration:
         # Should have sampled some positives
         if positives_df.height > 0:
             assert len(all_samples) >= 0  # May be empty if anchors don't match
-
 
 @pytest.mark.unit
 def test_enumerate_positives_uses_a_supplied_codebook(

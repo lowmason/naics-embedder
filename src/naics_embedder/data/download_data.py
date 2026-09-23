@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 # Utilities
 # -------------------------------------------------------------------------------------------------
 
-
 def _read_xlsx_bytes(
     data: bytes, sheet: str, schema: Dict[str, pl.DataType], cols: Dict[str, str]
 ) -> pl.DataFrame:
@@ -40,7 +39,6 @@ def _read_xlsx_bytes(
         BytesIO(data), sheet_name=sheet, columns=list(schema.keys()), schema_overrides=schema
     ).rename(mapping=cols)
 
-
 def _read_xlsx(
     url: str,
     sheet: str,
@@ -60,15 +58,12 @@ def _read_xlsx(
 
     return _read_xlsx_bytes(data, sheet, schema, cols)
 
-
 # -------------------------------------------------------------------------------------------------
 # Download files
 # -------------------------------------------------------------------------------------------------
 
-
-def _download_files(
-    cfg: DownloadConfig,
-) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def _download_files(cfg: DownloadConfig,
+                    ) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     # Convert string schema names to Polars types
     schema_codes = {k: getattr(pl, v) for k, v in cfg.schema_codes.items()}
     schema_index = {k: getattr(pl, v) for k, v in cfg.schema_index.items()}
@@ -137,11 +132,9 @@ def _download_files(
     else:
         raise ValueError('Failed to download one or more NAICS files.')
 
-
 # -------------------------------------------------------------------------------------------------
 # NAICS titles
 # -------------------------------------------------------------------------------------------------
-
 
 def _get_titles(titles_df: pl.DataFrame) -> Tuple[pl.DataFrame, Set[str]]:
 
@@ -167,14 +160,12 @@ def _get_titles(titles_df: pl.DataFrame) -> Tuple[pl.DataFrame, Set[str]]:
 
     return titles, codes
 
-
 # -------------------------------------------------------------------------------------------------
 # NAICS descriptions 1
 # -------------------------------------------------------------------------------------------------
 
-
 def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl.DataFrame]:
-    
+
     # descriptions: normalize combined sector codes
     descriptions_1 = (descriptions_df.select('code', 'description'))
 
@@ -233,18 +224,13 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
 
     return descriptions_2, descriptions_3
 
-
 # -------------------------------------------------------------------------------------------------
 # NAICS exclusions
 # -------------------------------------------------------------------------------------------------
 
+def _get_exclusions(exclusions_df: pl.DataFrame, descriptions_3: pl.DataFrame,
+                    codes: Set[str]) -> Tuple[pl.DataFrame, pl.DataFrame]:
 
-def _get_exclusions(
-    exclusions_df: pl.DataFrame, 
-    descriptions_3: pl.DataFrame, 
-    codes: Set[str]
-) -> Tuple[pl.DataFrame, pl.DataFrame]:
-    
     # Load descriptions from cross-reference file
     # yapf: disable
     exclusions_1 = (
@@ -321,7 +307,7 @@ def _get_exclusions(
         .sort('level', 'code')
         .group_by('level', 'code', maintain_order=True)
         .agg(
-            excluded=pl.col('excluded'), 
+            excluded=pl.col('excluded'),
             excluded_codes=pl.col('excluded_codes')
         )
         .with_columns(
@@ -350,11 +336,9 @@ def _get_exclusions(
 
     return exclusions, descriptions_exclusions
 
-
 # -------------------------------------------------------------------------------------------------
 # NAICS examples
 # -------------------------------------------------------------------------------------------------
-
 
 def _get_examples(
     examples_df: pl.DataFrame,
@@ -386,7 +370,7 @@ def _get_examples(
             pl.col('description').str.contains('Illustrative Examples:')
         )
         .select(
-            code=pl.col('code'), 
+            code=pl.col('code'),
             example_id=pl.col('description_id')
         )
     )
@@ -429,11 +413,9 @@ def _get_examples(
 
     return examples, descriptions_examples
 
-
 # -------------------------------------------------------------------------------------------------
 # NAICS description 2 (cleaned descriptions)
 # -------------------------------------------------------------------------------------------------
-
 
 def _get_descriptions_2(
     descriptions_3: pl.DataFrame,
@@ -446,13 +428,13 @@ def _get_descriptions_2(
     descriptions_4 = (
         descriptions_3
         .join(
-            descriptions_exclusions, 
-            how='anti', 
+            descriptions_exclusions,
+            how='anti',
             on=['code', 'description_id']
         )
         .join(
-            descriptions_examples, 
-            how='left', 
+            descriptions_examples,
+            how='left',
             on='code'
         )
         .with_columns(
@@ -483,7 +465,8 @@ def _get_descriptions_2(
 
     # Find 4-digit codes missing descriptions
     description_4_missing = descriptions_4.filter(
-        pl.col('code').str.len_chars().eq(4), pl.col('description').eq('')
+        pl.col('code').str.len_chars().eq(4),
+        pl.col('description').eq('')
     ).select(
         code1=pl.col('code').str.pad_end(5, '1'),
         code2=pl.col('code').str.pad_end(5, '2'),
@@ -494,7 +477,8 @@ def _get_descriptions_2(
 
     # Find 5-digit codes missing descriptions
     description_5_missing = descriptions_4.filter(
-        pl.col('code').str.len_chars().eq(5), pl.col('description').eq('')
+        pl.col('code').str.len_chars().eq(5),
+        pl.col('description').eq('')
     ).select(code=pl.col('code').str.pad_end(6, '0'))
 
     logger.info('NAICS missing descriptions:')
@@ -573,11 +557,9 @@ def _get_descriptions_2(
 
     return descriptions
 
-
 # -------------------------------------------------------------------------------------------------
 # Combine all and write final output
 # -------------------------------------------------------------------------------------------------
-
 
 def download_preprocess_data() -> pl.DataFrame:
     # Create directories
@@ -598,9 +580,13 @@ def download_preprocess_data() -> pl.DataFrame:
 
     exclusions, descriptions_exclusions = _get_exclusions(exclusions_df, descriptions_3, codes)
 
-    examples, descriptions_examples = _get_examples(examples_df, codes, descriptions_2, descriptions_3)
+    examples, descriptions_examples = _get_examples(
+        examples_df, codes, descriptions_2, descriptions_3
+    )
 
-    descriptions = _get_descriptions_2(descriptions_3, descriptions_exclusions, descriptions_examples)
+    descriptions = _get_descriptions_2(
+        descriptions_3, descriptions_exclusions, descriptions_examples
+    )
 
     # Join all components and write final output
     # yapf: disable
@@ -632,7 +618,6 @@ def download_preprocess_data() -> pl.DataFrame:
     )
 
     return naics_final
-
 
 # -------------------------------------------------------------------------------------------------
 # Main

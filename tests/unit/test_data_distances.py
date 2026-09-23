@@ -454,9 +454,8 @@ class TestDistanceEdgeCases:
 # -------------------------------------------------------------------------------------------------
 
 def _distance(frame: pl.DataFrame, code_i: str, code_j: str) -> float:
-    return frame.filter(pl.col('code_i').eq(code_i) & pl.col('code_j').eq(code_j)).item(
-        0, 'structural_distance'
-    )
+    return frame.filter(pl.col('code_i').eq(code_i)
+                        & pl.col('code_j').eq(code_j)).item(0, 'structural_distance')
 
 @pytest.mark.unit
 class TestStructuralDistances:
@@ -505,6 +504,4 @@ class TestStructuralDistances:
         )
         assert non_canonical.height == 0
         # Same-level pairs across a merged-sector prefix are no longer emitted twice.
-        assert distances.filter(
-            pl.col('code_i').eq('321') & pl.col('code_j').eq('311')
-        ).height == 0
+        assert distances.filter(pl.col('code_i').eq('321') & pl.col('code_j').eq('311')).height == 0

@@ -211,9 +211,9 @@ def _cap_cross_sector(frame: pl.DataFrame, cap: int, seed: int) -> pl.DataFrame:
         eligible.get_column('positive_code_id').to_numpy(),
         eligible.get_column('negative_code_id').to_numpy(),
     )
-    kept = eligible.with_columns(cap_key=pl.Series(keys, dtype=pl.UInt64)).sort(
-        'anchor_code_id', 'positive_code_id', 'cap_key', 'negative_code_id'
-    ).filter(
+    kept = eligible.with_columns(
+        cap_key=pl.Series(keys, dtype=pl.UInt64)
+    ).sort('anchor_code_id', 'positive_code_id', 'cap_key', 'negative_code_id').filter(
         pl.int_range(pl.len()).over('anchor_code_id', 'positive_code_id') < cap
     ).drop('cap_key')
     return pl.concat([frame.filter(~capped), kept])
@@ -348,7 +348,9 @@ def _triplets_for_positives(
         pl.col('negative_code_id').ne(pl.col('anchor_code_id')),
     )
     triplets = _cap_cross_sector(_structural_margins(triplets), cross_sector_cap, cap_seed)
-    training_pairs = _project(triplets).sort('anchor_code_id', 'positive_code_id', 'negative_code_id')
+    training_pairs = _project(triplets).sort(
+        'anchor_code_id', 'positive_code_id', 'negative_code_id'
+    )
     _validate_training_pairs(training_pairs)
     return training_pairs
 

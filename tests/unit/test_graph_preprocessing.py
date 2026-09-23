@@ -38,8 +38,9 @@ def sample_graph_data(tmp_path):
     descriptions = pl.DataFrame(
         {
             'index': list(range(10)),
-            'code':
-            ['11', '111', '1111', '11111', '111111', '21', '211', '2111', '21111', '211111'],
+            'code': [
+                '11', '111', '1111', '11111', '111111', '21', '211', '2111', '21111', '211111'
+            ],
             'level': [2, 3, 4, 5, 6, 2, 3, 4, 5, 6],
             'title': [f'Title {i}' for i in range(10)],
         }
@@ -450,12 +451,10 @@ def test_graph_preprocessing_resolves_one_bundle_and_rejects_mixed_paths(
     )
     other_bundle = load_validated_bundle(other_manifest)
 
-    assert first.distances == load_validated_bundle(generated_bundle).artifact_path(
-        'distances'
+    assert first.distances == load_validated_bundle(generated_bundle).artifact_path('distances')
+    assert first.training_pairs == load_validated_bundle(generated_bundle).artifact_path(
+        'training_pairs'
     )
-    assert first.training_pairs == load_validated_bundle(
-        generated_bundle
-    ).artifact_path('training_pairs')
     with pytest.raises(ValueError, match='distances.*bundle-a'):
         resolve_graph_supervision_paths(
             generated_bundle,

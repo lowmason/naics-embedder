@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # Embedding similarity and distance utilities
 # -------------------------------------------------------------------------------------------------
 
-
 class EmbeddingEvaluator:
 
     def __init__(self):
@@ -134,11 +133,9 @@ class EmbeddingEvaluator:
 
         return similarities
 
-
 # -------------------------------------------------------------------------------------------------
 # Retrieval metrics
 # -------------------------------------------------------------------------------------------------
-
 
 class RetrievalMetrics:
 
@@ -314,11 +311,9 @@ class RetrievalMetrics:
 
         return ndcg
 
-
 # -------------------------------------------------------------------------------------------------
 # Hierarchy preservation metrics
 # -------------------------------------------------------------------------------------------------
-
 
 class HierarchyMetrics:
 
@@ -609,11 +604,9 @@ class HierarchyMetrics:
             'median_distortion': ratios.median(),
         }
 
-
 # -------------------------------------------------------------------------------------------------
 # Embedding space statistics
 # -------------------------------------------------------------------------------------------------
-
 
 class EmbeddingStatistics:
 
@@ -730,4 +723,3 @@ class EmbeddingStatistics:
             'distance_mean': distance_mean,
             'distance_std': distance_std,
         }
-

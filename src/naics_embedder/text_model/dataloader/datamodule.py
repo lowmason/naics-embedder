@@ -57,14 +57,14 @@ CHANNELS = ('title', 'description', 'excluded', 'examples')
 # Collate function for DataLoader
 # -------------------------------------------------------------------------------------------------
 
-def _stack_text_inputs(
-    embeddings: List[Dict[str, Dict[str, torch.Tensor]]]
-) -> Dict[str, Dict[str, torch.Tensor]]:
+def _stack_text_inputs(embeddings: List[Dict[str, Dict[str, torch.Tensor]]]
+                       ) -> Dict[str, Dict[str, torch.Tensor]]:
     return {
         channel: {
             'input_ids': torch.stack([embedding[channel]['input_ids'] for embedding in embeddings]),
-            'attention_mask':
-            torch.stack([embedding[channel]['attention_mask'] for embedding in embeddings]),
+            'attention_mask': torch.stack(
+                [embedding[channel]['attention_mask'] for embedding in embeddings]
+            ),
         }
         for channel in CHANNELS
     }
@@ -125,8 +125,10 @@ def _collate_legacy(batch: List[Dict]) -> Dict:
         'anchor': _stack_text_inputs([item['anchor_embedding'] for item in batch]),
         'positive': _stack_text_inputs([item['positive_embedding'] for item in batch]),
         'negatives': _stack_text_inputs(
-            [negative['negative_embedding'] for negatives in padded_negatives
-             for negative in negatives]
+            [
+                negative['negative_embedding'] for negatives in padded_negatives
+                for negative in negatives
+            ]
         ),
         'batch_size': len(batch),
         'k_negatives': max_negatives,
@@ -202,8 +204,8 @@ def _collate_repaired(batch: List[Dict]) -> Dict:
 
     proposal_width = max(len(item['difficulty_proposal_indices']) for item in batch)
     difficulty_indices = [
-        [int(slot) for slot in item['difficulty_proposal_indices']] +
-        [-1] * (proposal_width - len(item['difficulty_proposal_indices'])) for item in batch
+        [int(slot) for slot in item['difficulty_proposal_indices']] + [-1] *
+        (proposal_width - len(item['difficulty_proposal_indices'])) for item in batch
     ]
 
     result = {
@@ -230,9 +232,9 @@ def _collate_repaired(batch: List[Dict]) -> Dict:
         'candidate_source_slot': torch.tensor(candidate_source_slots, dtype=torch.long),
         'candidate_sampling_role_id': torch.tensor(candidate_roles, dtype=torch.int8),
         'candidate_sampling_provenance_id': torch.tensor(candidate_provenance, dtype=torch.int8),
-        'difficulty_proposal_indices': torch.tensor(
-            difficulty_indices, dtype=torch.long
-        ).reshape(len(batch), proposal_width),
+        'difficulty_proposal_indices': torch.tensor(difficulty_indices, dtype=torch.long).reshape(
+            len(batch), proposal_width
+        ),
         'anchor_code': [item['anchor_code'] for item in batch],
         'positive_code': [item['positive_code'] for item in batch],
         'positive_levels': [
@@ -343,7 +345,6 @@ class NAICSMapDataset(Dataset):
             result['sampling_metadata'] = sampling_metadata
 
         return result
-
 
 # -------------------------------------------------------------------------------------------------
 # Phase 1 Map Dataset with On-the-Fly Negative Sampling
@@ -462,9 +463,7 @@ class Phase1MapDataset(Dataset):
             logger.warning(f'Missing token_cache for index {idx}')
             return None
 
-    def _attach_embeddings(
-        self, negatives: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def _attach_embeddings(self, negatives: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         '''Attach embeddings to negative dictionaries.'''
         result = []
         for neg in negatives:
@@ -473,14 +472,16 @@ class Phase1MapDataset(Dataset):
             if neg_embedding is None:
                 continue
 
-            result.append({
-                'negative_idx': neg_idx,
-                'negative_code': neg['negative_code'],
-                'negative_embedding': neg_embedding,
-                'relation_margin': neg.get('relation_margin', 0),
-                'distance_margin': neg.get('distance_margin', 0),
-                'explicit_exclusion': neg.get('explicit_exclusion', False),
-            })
+            result.append(
+                {
+                    'negative_idx': neg_idx,
+                    'negative_code': neg['negative_code'],
+                    'negative_embedding': neg_embedding,
+                    'relation_margin': neg.get('relation_margin', 0),
+                    'distance_margin': neg.get('distance_margin', 0),
+                    'explicit_exclusion': neg.get('explicit_exclusion', False),
+                }
+            )
 
         return result
 
@@ -571,7 +572,6 @@ class Phase1MapDataset(Dataset):
             'negatives': selected_with_emb,  # Phase 1 uses these
             'all_candidates': all_with_emb,  # Phase 2+ HNM pool
         }
-
 
 # -------------------------------------------------------------------------------------------------
 # Repaired Stage-3 datasets: one bundle-backed candidate pool per item
@@ -702,11 +702,11 @@ class RepairedPhase1Dataset(Dataset):
         if dropped:
             logger.info(f'Dropped {dropped:,} sampled positives that are explicit exclusions')
         self.negative_candidates = load_bundle_candidates(
-            bundle, {(anchor, int(positive['positive_idx'])) for anchor, positive in pairs}
+            bundle, {(anchor, int(positive['positive_idx']))
+                     for anchor, positive in pairs}
         )
         self.pairs: List[Tuple[int, Dict[str, Any]]] = [
-            (anchor, positive)
-            for anchor, positive in pairs
+            (anchor, positive) for anchor, positive in pairs
             if self.negative_candidates.get((anchor, int(positive['positive_idx'])))
         ]
         logger.info(f'RepairedPhase1Dataset: {len(self.pairs):,} (anchor, positive) pairs')
@@ -752,7 +752,9 @@ class RepairedPhase1Dataset(Dataset):
         )
         return _repaired_item(
             anchor_code_id=anchor_code_id,
-            positive={**positive, 'positive_code_id': positive_code_id},
+            positive={
+                **positive, 'positive_code_id': positive_code_id
+            },
             pool=pool,
             proposals=proposals,
             selection_k=self.cfg.n_negatives_phase1,
@@ -790,7 +792,6 @@ def legacy_token_fingerprints(descriptions_parquet: str) -> Dict[str, str]:
         ),
     }
 
-
 # -------------------------------------------------------------------------------------------------
 # Epoch propagation to DataLoader worker processes
 # -------------------------------------------------------------------------------------------------
@@ -818,7 +819,6 @@ class _EpochSyncedDataset(Dataset):
             self.dataset.set_epoch(epoch)  # type: ignore[attr-defined]
             self._applied_epoch = epoch
         return self.dataset[idx]
-
 
 # -------------------------------------------------------------------------------------------------
 # Main DataModule for PyTorch Lightning
@@ -1063,7 +1063,9 @@ class NAICSDataModule(LightningDataModule):
                 val_triplets = build_multi_epoch_triplets(
                     self.val_streaming_cfg, self.sampling_cfg, self.n_epochs
                 )
-                logger.info(f'  • Creating validation dataset with {len(val_triplets):,} triplets\n')
+                logger.info(
+                    f'  • Creating validation dataset with {len(val_triplets):,} triplets\n'
+                )
                 self.val_dataset = NAICSMapDataset(val_triplets, self._token_cache)
 
     def _repaired_dataset(self, cfg: StreamingConfig, phase1_end_epoch: int) -> Dataset:
@@ -1134,7 +1136,6 @@ class NAICSDataModule(LightningDataModule):
             self._train_epoch.fill_(epoch)  # read by DataLoader workers
             self.train_dataset.set_epoch(epoch)  # main-process copy
             logger.debug(f'Updated train dataset epoch to {epoch}')
-
 
 # -------------------------------------------------------------------------------------------------
 # Callback propagating the training epoch to the datamodule

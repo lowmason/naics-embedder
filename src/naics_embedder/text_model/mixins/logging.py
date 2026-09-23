@@ -211,26 +211,23 @@ class LoggingMixin:
         '''
         selectable_codes = candidates.code_id.masked_fill(~candidates.valid_mask, -1)
         sorted_codes = selectable_codes.sort(dim=1).values
-        duplicates = (
-            sorted_codes[:, 1:].eq(sorted_codes[:, :-1]) & sorted_codes[:, 1:].ge(0)
-        ).sum()
+        duplicates = (sorted_codes[:, 1:].eq(sorted_codes[:, :-1]) & sorted_codes[:, 1:].ge(0)).sum()
         reasons = selected.selection_reasons
         selection_metrics = {
-            'train/integrity/anchors_with_exclusions':
-            candidates.is_explicit_exclusion.any(dim=1).sum(),
-            'train/integrity/quota_selections':
-            reasons.eq(int(SelectionReason.EXCLUSION_QUOTA)).sum(),
-            'train/integrity/geometric_selections':
-            reasons.eq(int(SelectionReason.GEOMETRIC)).sum(),
-            'train/integrity/router_selections':
-            reasons.eq(int(SelectionReason.ROUTER)).sum(),
-            'train/integrity/difficulty_selections':
-            reasons.eq(int(SelectionReason.DIFFICULTY)).sum(),
-            'train/integrity/deterministic_backfills':
-            reasons.eq(int(SelectionReason.BACKFILL)).sum(),
+            'train/integrity/anchors_with_exclusions': candidates.is_explicit_exclusion.any(dim=1
+                                                                                            ).sum(),
+            'train/integrity/quota_selections': reasons.eq(int(SelectionReason.EXCLUSION_QUOTA)
+                                                           ).sum(),
+            'train/integrity/geometric_selections': reasons.eq(int(SelectionReason.GEOMETRIC)).sum(),
+            'train/integrity/router_selections': reasons.eq(int(SelectionReason.ROUTER)).sum(),
+            'train/integrity/difficulty_selections': reasons.eq(int(SelectionReason.DIFFICULTY)
+                                                                ).sum(),
+            'train/integrity/deterministic_backfills': reasons.eq(int(SelectionReason.BACKFILL)
+                                                                  ).sum(),
             'train/integrity/invalid_candidates_ignored': (~entity_valid_mask).sum(),
-            'train/integrity/structurally_ineligible_candidates':
-            (entity_valid_mask & ~candidates.valid_mask).sum(),
+            'train/integrity/structurally_ineligible_candidates': (
+                entity_valid_mask & ~candidates.valid_mask
+            ).sum(),
             'train/integrity/duplicate_candidates_removed': duplicates,
         }
         for name, value in selection_metrics.items():

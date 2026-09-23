@@ -40,7 +40,6 @@ def test_exclusion_provenance_does_not_mutate_structure(
     assert row['code_j_excludes_code_i'] is False
     assert row['is_explicit_exclusion'] is True
 
-
 def test_reverse_direction_survives_canonical_orientation(
     descriptions_fixture, structural_frames_fixture
 ):
@@ -59,7 +58,6 @@ def test_reverse_direction_survives_canonical_orientation(
     assert row['code_j_excludes_code_i'] is True
     assert row['is_explicit_exclusion'] is True
 
-
 def test_matrices_reconcile_with_pair_facts_and_codebook_order(
     descriptions_fixture, structural_frames_fixture
 ):
@@ -76,7 +74,6 @@ def test_matrices_reconcile_with_pair_facts_and_codebook_order(
     assert relation_matrix.row(0)[1] == 1
     assert relation_matrix.row(1)[0] == 1
     assert codebook_fingerprint(codebook) == codebook_fingerprint(codebook.clone())
-
 
 def test_training_pairs_expose_identity_and_supervision_columns_deterministically(
     pair_facts_fixture,
@@ -109,7 +106,6 @@ def test_training_pairs_expose_identity_and_supervision_columns_deterministicall
     assert expected_supervision_columns <= set(training_pairs.columns)
     assert training_pairs.equals(build_training_pairs(pair_facts.clone()))
 
-
 def test_pair_rows_keep_the_generator_canonical_orientation(
     descriptions_fixture, structural_frames_fixture
 ):
@@ -120,10 +116,7 @@ def test_pair_rows_keep_the_generator_canonical_orientation(
         descriptions_fixture,
         build_codebook(descriptions_fixture),
     )
-    assert facts.select(
-        pl.col('code_i_id').lt(pl.col('code_j_id')).all()
-    ).item()
-
+    assert facts.select(pl.col('code_i_id').lt(pl.col('code_j_id')).all()).item()
 
 # -------------------------------------------------------------------------------------------------
 # Production-shaped orientation
@@ -166,7 +159,6 @@ def depth_first_frames() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     )
     return descriptions, distances, relations
 
-
 def test_pair_facts_accept_shallower_first_rows_with_descending_ids(depth_first_frames):
     descriptions, distances, relations = depth_first_frames
 
@@ -184,7 +176,6 @@ def test_pair_facts_accept_shallower_first_rows_with_descending_ids(depth_first_
     assert row['code_j_excludes_code_i'] is True
     assert row['is_explicit_exclusion'] is True
     assert facts.height == 6
-
 
 def test_pair_facts_reject_a_deeper_first_row(depth_first_frames):
     descriptions, distances, relations = depth_first_frames
@@ -206,13 +197,10 @@ def test_pair_facts_reject_a_deeper_first_row(depth_first_frames):
             build_codebook(descriptions),
         )
 
-
 def test_pair_facts_reject_a_reversed_duplicate_pair(depth_first_frames):
     descriptions, distances, relations = depth_first_frames
     reversed_key = {'idx_i': [3], 'idx_j': [1], 'code_i': ['3112'], 'code_j': ['3111']}
-    distances = pl.concat(
-        [distances, pl.DataFrame(reversed_key | {'structural_distance': [99.0]})]
-    )
+    distances = pl.concat([distances, pl.DataFrame(reversed_key | {'structural_distance': [99.0]})])
     relations = pl.concat(
         [
             relations,
@@ -229,7 +217,6 @@ def test_pair_facts_reject_a_reversed_duplicate_pair(depth_first_frames):
     with pytest.raises(ValueError, match='duplicate unordered'):
         build_pair_facts(distances, relations, descriptions, build_codebook(descriptions))
 
-
 def test_pair_facts_reject_an_exclusion_that_cannot_attach(depth_first_frames):
     descriptions, distances, relations = depth_first_frames
     self_exclusion = descriptions.with_columns(
@@ -239,7 +226,6 @@ def test_pair_facts_reject_an_exclusion_that_cannot_attach(depth_first_frames):
     with pytest.raises(ValueError, match='could not be attached'):
         build_pair_facts(distances, relations, self_exclusion, build_codebook(self_exclusion))
 
-
 def test_pair_facts_reject_ids_that_disagree_with_the_codebook(depth_first_frames):
     descriptions, distances, relations = depth_first_frames
     mislabeled = descriptions.with_columns(
@@ -248,7 +234,6 @@ def test_pair_facts_reject_ids_that_disagree_with_the_codebook(depth_first_frame
 
     with pytest.raises(ValueError, match='codebook'):
         build_pair_facts(distances, relations, mislabeled, build_codebook(mislabeled))
-
 
 # -------------------------------------------------------------------------------------------------
 # Immutable bundle publication
@@ -276,7 +261,6 @@ def test_bundle_writes_manifest_last_with_matching_parquet_metadata(
     assert metadata[b'naics_embedder.bundle_id'].decode() == 'bundle-a'
     assert metadata[b'naics_embedder.schema_version'].decode() == 'codebook-v1'
 
-
 def test_bundle_never_overwrites_an_existing_generation(
     tmp_path, descriptions_fixture, pair_facts_fixture
 ):
@@ -292,7 +276,6 @@ def test_bundle_never_overwrites_an_existing_generation(
 
     with pytest.raises(FileExistsError, match='bundle-a'):
         generate_supervision_bundle_from_frames(**kwargs)
-
 
 def test_failed_validation_publishes_no_manifest(
     tmp_path, descriptions_fixture, pair_facts_fixture
@@ -311,7 +294,6 @@ def test_failed_validation_publishes_no_manifest(
 
     assert not (tmp_path / 'broken' / 'manifest.json').exists()
 
-
 def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(
     tmp_path, descriptions_fixture, pair_facts_fixture
 ):
@@ -323,20 +305,16 @@ def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(
             naics_vintage=2022,
             descriptions=descriptions_fixture,
             pair_facts=pair_facts_fixture,
-        )
-        for bundle_id in ('bundle-a', 'bundle-b')
+        ) for bundle_id in ('bundle-a', 'bundle-b')
     ]
     loaded = [json.loads(path.read_text()) for path in manifests]
     frames = [
-        pl.read_parquet(
-            path.parent / manifest['artifacts']['pair_facts']['path']
-        )
+        pl.read_parquet(path.parent / manifest['artifacts']['pair_facts']['path'])
         for path, manifest in zip(manifests, loaded)
     ]
 
     assert loaded[0]['bundle_id'] != loaded[1]['bundle_id']
     assert frames[0].equals(frames[1])
-
 
 def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
     tmp_path, descriptions_fixture, pair_facts_fixture
@@ -381,7 +359,6 @@ def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
                 )
     assert not list(tmp_path.glob('.*staging*'))
 
-
 def test_failed_generation_leaves_no_staging_directory(
     tmp_path, descriptions_fixture, pair_facts_fixture
 ):
@@ -396,7 +373,6 @@ def test_failed_generation_leaves_no_staging_directory(
         )
 
     assert list(tmp_path.iterdir()) == []
-
 
 def test_production_bundle_uses_a_uuid_and_the_descriptions_file_hash(
     tmp_path, hierarchy_descriptions_parquet
@@ -416,7 +392,6 @@ def test_production_bundle_uses_a_uuid_and_the_descriptions_file_hash(
     assert manifest['artifacts']['pair_facts']['row_count'] == 17 * 16 // 2
     assert manifest['artifacts']['pair_facts']['exclusion_count'] == 2
 
-
 # -------------------------------------------------------------------------------------------------
 # Fail-closed bundle loading
 # -------------------------------------------------------------------------------------------------
@@ -433,7 +408,6 @@ def _rewrite_member(manifest_path, logical_name, transform, member_index=0):
     member['sha256'] = sha256_file(path)
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
-
 def test_loader_accepts_a_generated_bundle(generated_bundle):
     bundle = load_validated_bundle(generated_bundle, expected_contract=CONTRACT_VERSION)
 
@@ -445,11 +419,9 @@ def test_loader_accepts_a_generated_bundle(generated_bundle):
     with pytest.raises(ValueError, match='no .*missing_artifact'):
         bundle.artifact_path('missing_artifact')
 
-
 def test_loader_rejects_another_contract_version(generated_bundle):
     with pytest.raises(ValueError, match='expected supervision contract stage3-supervision-v2'):
         load_validated_bundle(generated_bundle, expected_contract='stage3-supervision-v2')
-
 
 def test_loader_rejects_bytes_that_do_not_match_the_manifest_hash(generated_bundle):
     manifest = json.loads(generated_bundle.read_text())
@@ -459,7 +431,6 @@ def test_loader_rejects_bytes_that_do_not_match_the_manifest_hash(generated_bund
     with pytest.raises(ValueError, match='codebook hash mismatch'):
         load_validated_bundle(generated_bundle)
 
-
 def test_loader_rejects_a_missing_member(generated_bundle):
     manifest = json.loads(generated_bundle.read_text())
     member = manifest['artifacts']['training_pairs']['files'][0]
@@ -467,7 +438,6 @@ def test_loader_rejects_a_missing_member(generated_bundle):
 
     with pytest.raises(ValueError, match='training_pairs artifact missing'):
         load_validated_bundle(generated_bundle)
-
 
 def test_loader_rejects_rehashed_inconsistent_pair_facts(generated_bundle):
     _rewrite_member(
@@ -479,21 +449,19 @@ def test_loader_rejects_rehashed_inconsistent_pair_facts(generated_bundle):
     with pytest.raises(ValueError, match='pair_facts.*bundle-a.*exclusion derivation'):
         load_validated_bundle(generated_bundle)
 
-
 def test_loader_rejects_a_rehashed_structural_sentinel(generated_bundle):
     _rewrite_member(
         generated_bundle,
         'pair_facts',
         lambda frame: frame.with_columns(
-            structural_distance=pl.when(pl.col('is_explicit_exclusion'))
-            .then(pl.lit(0.0, dtype=pl.Float32))
-            .otherwise(pl.col('structural_distance'))
+            structural_distance=pl.when(pl.col('is_explicit_exclusion')).then(
+                pl.lit(0.0, dtype=pl.Float32)
+            ).otherwise(pl.col('structural_distance'))
         ),
     )
 
     with pytest.raises(ValueError, match='pair_facts.*bundle-a.*structural distance zero'):
         load_validated_bundle(generated_bundle)
-
 
 def test_loader_rejects_a_rehashed_matrix_that_drifts_from_pair_facts(generated_bundle):
     _rewrite_member(
@@ -505,7 +473,6 @@ def test_loader_rejects_a_rehashed_matrix_that_drifts_from_pair_facts(generated_
     with pytest.raises(ValueError, match='distance_matrix.*bundle-a.*reconcile'):
         load_validated_bundle(generated_bundle)
 
-
 def test_loader_rejects_a_rehashed_excluded_direct_positive(generated_bundle):
     _rewrite_member(
         generated_bundle,
@@ -515,7 +482,6 @@ def test_loader_rejects_a_rehashed_excluded_direct_positive(generated_bundle):
 
     with pytest.raises(ValueError, match='training_pairs.*bundle-a.*direct positive'):
         load_validated_bundle(generated_bundle)
-
 
 def test_loader_rejects_training_exclusions_that_disagree_with_pair_facts(generated_bundle):
     _rewrite_member(

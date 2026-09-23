@@ -179,7 +179,10 @@ def _load_negative_candidates(
                 'anchor_idx': [anchor for anchor, _ in unique_pairs],
                 'positive_idx': [positive for _, positive in unique_pairs],
             },
-            schema={'anchor_idx': pl.UInt32, 'positive_idx': pl.UInt32},
+            schema={
+                'anchor_idx': pl.UInt32,
+                'positive_idx': pl.UInt32
+            },
         )
         pairs_lazy = pair_df.lazy()
         logger.info(

@@ -89,9 +89,8 @@ class ValidationMixin:
         if self.supervision_policy.name == 'legacy_containment':
             # Local legacy negatives in collated order; nothing supervision-derived is used
             k_negatives = int(batch['k_negatives'])
-            negative_emb = self(batch['negatives'])['embedding'].reshape(
-                batch_size, k_negatives, -1
-            )
+            negative_emb = self(batch['negatives']
+                                )['embedding'].reshape(batch_size, k_negatives, -1)
             valid_mask = torch.ones(
                 (batch_size, k_negatives), dtype=torch.bool, device=negative_emb.device
             )
@@ -447,8 +446,7 @@ class ValidationMixin:
             val_loss = self.trainer.callback_metrics.get('val/contrastive_loss', None)
 
         epoch_metrics = {
-            'epoch':
-            self.current_epoch,
+            'epoch': self.current_epoch,
             # Training metrics
             'train_loss': (self._to_python_scalar(train_loss) if train_loss is not None else None),
             'train_contrastive_loss': (
@@ -456,69 +454,41 @@ class ValidationMixin:
                 if train_contrastive_loss is not None else None
             ),
             # Validation metrics
-            'val_loss':
-            self._to_python_scalar(val_loss) if val_loss is not None else None,
+            'val_loss': self._to_python_scalar(val_loss) if val_loss is not None else None,
             # Hyperbolic metrics
-            'hyperbolic_radius_mean':
-            self._to_python_scalar(diagnostics['radius_mean']),
-            'hyperbolic_radius_std':
-            self._to_python_scalar(diagnostics['radius_std']),
-            'lorentz_norm_mean':
-            self._to_python_scalar(diagnostics['lorentz_norm_mean']),
-            'lorentz_norm_std':
-            self._to_python_scalar(diagnostics['lorentz_norm_std']),
-            'lorentz_norm_violation_max':
-            self._to_python_scalar(diagnostics['violation_max']),
-            'manifold_valid':
-            bool(is_valid),
+            'hyperbolic_radius_mean': self._to_python_scalar(diagnostics['radius_mean']),
+            'hyperbolic_radius_std': self._to_python_scalar(diagnostics['radius_std']),
+            'lorentz_norm_mean': self._to_python_scalar(diagnostics['lorentz_norm_mean']),
+            'lorentz_norm_std': self._to_python_scalar(diagnostics['lorentz_norm_std']),
+            'lorentz_norm_violation_max': self._to_python_scalar(diagnostics['violation_max']),
+            'manifold_valid': bool(is_valid),
             # Embedding statistics
-            'mean_norm':
-            self._to_python_scalar(stats['mean_norm']),
-            'std_norm':
-            self._to_python_scalar(stats['std_norm']),
-            'mean_pairwise_distance':
-            self._to_python_scalar(stats['mean_pairwise_distance']),
-            'std_pairwise_distance':
-            self._to_python_scalar(stats['std_pairwise_distance']),
+            'mean_norm': self._to_python_scalar(stats['mean_norm']),
+            'std_norm': self._to_python_scalar(stats['std_norm']),
+            'mean_pairwise_distance': self._to_python_scalar(stats['mean_pairwise_distance']),
+            'std_pairwise_distance': self._to_python_scalar(stats['std_pairwise_distance']),
             # Collapse detection
-            'norm_cv':
-            self._to_python_scalar(collapse['norm_cv']),
-            'distance_cv':
-            self._to_python_scalar(collapse['distance_cv']),
-            'collapse_detected':
-            bool(collapse['any_collapse']),
+            'norm_cv': self._to_python_scalar(collapse['norm_cv']),
+            'distance_cv': self._to_python_scalar(collapse['distance_cv']),
+            'collapse_detected': bool(collapse['any_collapse']),
             # Hierarchy preservation
-            'cophenetic_correlation':
-            self._to_python_scalar(cophenetic_result['correlation']),
-            'cophenetic_n_pairs':
-            int(cophenetic_result['n_pairs']),
-            'spearman_correlation':
-            self._to_python_scalar(spearman_result['correlation']),
-            'spearman_n_pairs':
-            int(spearman_result['n_pairs']),
+            'cophenetic_correlation': self._to_python_scalar(cophenetic_result['correlation']),
+            'cophenetic_n_pairs': int(cophenetic_result['n_pairs']),
+            'spearman_correlation': self._to_python_scalar(spearman_result['correlation']),
+            'spearman_n_pairs': int(spearman_result['n_pairs']),
             # Ranking metrics
-            'ndcg@5':
-            self._to_python_scalar(ndcg_result['ndcg@5']),
-            'ndcg@10':
-            self._to_python_scalar(ndcg_result['ndcg@10']),
-            'ndcg@20':
-            self._to_python_scalar(ndcg_result['ndcg@20']),
-            'ndcg@5_n_queries':
-            int(ndcg_result['ndcg@5_n_queries']),
-            'ndcg@10_n_queries':
-            int(ndcg_result['ndcg@10_n_queries']),
-            'ndcg@20_n_queries':
-            int(ndcg_result['ndcg@20_n_queries']),
+            'ndcg@5': self._to_python_scalar(ndcg_result['ndcg@5']),
+            'ndcg@10': self._to_python_scalar(ndcg_result['ndcg@10']),
+            'ndcg@20': self._to_python_scalar(ndcg_result['ndcg@20']),
+            'ndcg@5_n_queries': int(ndcg_result['ndcg@5_n_queries']),
+            'ndcg@10_n_queries': int(ndcg_result['ndcg@10_n_queries']),
+            'ndcg@20_n_queries': int(ndcg_result['ndcg@20_n_queries']),
             # Distortion metrics
-            'mean_distortion':
-            self._to_python_scalar(distortion['mean_distortion']),
-            'std_distortion':
-            self._to_python_scalar(distortion['std_distortion']),
-            'median_distortion':
-            self._to_python_scalar(distortion['median_distortion']),
+            'mean_distortion': self._to_python_scalar(distortion['mean_distortion']),
+            'std_distortion': self._to_python_scalar(distortion['std_distortion']),
+            'median_distortion': self._to_python_scalar(distortion['median_distortion']),
             # Sample size
-            'num_samples':
-            int(num_samples),
+            'num_samples': int(num_samples),
         }
 
         if radius_metrics:

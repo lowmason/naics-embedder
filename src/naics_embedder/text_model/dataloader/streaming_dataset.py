@@ -410,7 +410,10 @@ def _load_negative_candidates(
                 'anchor_idx': [anchor for anchor, _ in unique_pairs],
                 'positive_idx': [positive for _, positive in unique_pairs],
             },
-            schema={'anchor_idx': pl.UInt32, 'positive_idx': pl.UInt32},
+            schema={
+                'anchor_idx': pl.UInt32,
+                'positive_idx': pl.UInt32
+            },
         )
         pairs_lazy = pair_df.lazy()
         logger.info(
@@ -452,7 +455,6 @@ def _load_negative_candidates(
 
     logger.info(f'Grouped into {len(result):,} (anchor, positive) pairs')
     return result
-
 
 def _load_anchor_negative_candidates(
     triplets_parquet: str,
@@ -507,7 +509,6 @@ def _load_anchor_negative_candidates(
 # -------------------------------------------------------------------------------------------------
 # Triplet materialization helpers
 # -------------------------------------------------------------------------------------------------
-
 
 def _build_triplet_rows(
     cfg: StreamingConfig,
@@ -716,9 +717,8 @@ def _save_final_cache(data: List[Dict[str, Any]], cfg: StreamingConfig) -> None:
 # Triplet batch generator
 # -------------------------------------------------------------------------------------------------
 
-def create_streaming_generator(
-    cfg: StreamingConfig, sampling_cfg: Optional[SamplingConfig] = None
-) -> Iterator[Dict[str, Any]]:
+def create_streaming_generator(cfg: StreamingConfig, sampling_cfg: Optional[SamplingConfig] = None
+                               ) -> Iterator[Dict[str, Any]]:
     '''Create a generator that yields triplets for training, using cached data when available.'''
 
     # Identify worker process
@@ -762,8 +762,7 @@ def create_streaming_generator(
                 'negative_code': neg['negative_code'],
                 'relation_margin': neg['relation_margin'],
                 'distance_margin': neg['distance_margin'],
-            }
-            for neg in row['negatives']
+            } for neg in row['negatives']
         ]
 
         yield {
@@ -800,7 +799,6 @@ def _get_multi_epoch_cache_path(cfg: StreamingConfig, n_epochs: int) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f'multi_epoch_{cache_key}.pkl'
 
-
 def _load_multi_epoch_cache(cfg: StreamingConfig, n_epochs: int) -> Optional[List[Dict[str, Any]]]:
     '''Load cached multi-epoch triplet data if available.'''
     cache_path = _get_multi_epoch_cache_path(cfg, n_epochs)
@@ -816,7 +814,6 @@ def _load_multi_epoch_cache(cfg: StreamingConfig, n_epochs: int) -> Optional[Lis
         logger.warning(f'Failed to load multi-epoch cache: {e}')
         return None
 
-
 def _save_multi_epoch_cache(
     data: List[Dict[str, Any]], cfg: StreamingConfig, n_epochs: int
 ) -> None:
@@ -830,7 +827,6 @@ def _save_multi_epoch_cache(
         logger.info(f'Saved multi-epoch cache to {cache_path}')
     except Exception as e:
         logger.warning(f'Failed to save multi-epoch cache: {e}')
-
 
 def build_multi_epoch_triplets(
     cfg: StreamingConfig,
@@ -876,7 +872,6 @@ def build_multi_epoch_triplets(
     _save_multi_epoch_cache(all_rows, cfg, n_epochs)
 
     return all_rows
-
 
 # -------------------------------------------------------------------------------------------------
 # Streaming dataset generator (legacy - kept for compatibility)
@@ -949,7 +944,6 @@ def create_streaming_dataset(
 
         yield result
 
-
 # -------------------------------------------------------------------------------------------------
 # Repaired Stage-3: bundle-backed candidate pools
 # -------------------------------------------------------------------------------------------------
@@ -978,9 +972,8 @@ class IndexDistanceLookup(Mapping):
     def __getitem__(self, key: Tuple[str, str]) -> float:
         anchor_code, candidate_code = key
         return float(
-            self._index.structural_distance[
-                self._index.code_to_id[anchor_code], self._index.code_to_id[candidate_code]
-            ]
+            self._index.structural_distance[self._index.code_to_id[anchor_code],
+                                            self._index.code_to_id[candidate_code]]
         )
 
     def __contains__(self, key: object) -> bool:
@@ -1027,8 +1020,7 @@ def build_candidate_pool(
         raise ValueError('final negative count must be at least one')
     forbidden = {anchor_code_id, positive_code_id}
     exclusion_ids = tuple(
-        code_id
-        for code_id in supervision_index.exclusion_code_ids(anchor_code_id)
+        code_id for code_id in supervision_index.exclusion_code_ids(anchor_code_id)
         if code_id not in forbidden
     )
     exclusion_set = set(exclusion_ids)
@@ -1036,15 +1028,15 @@ def build_candidate_pool(
         negative_distance=supervision_index.structural_distance[anchor_code_id],
         negative_relation_id=supervision_index.structural_relation_id[anchor_code_id],
         positive_distance=supervision_index.structural_distance[anchor_code_id, positive_code_id],
-        positive_relation_id=supervision_index.structural_relation_id[
-            anchor_code_id, positive_code_id
-        ],
+        positive_relation_id=supervision_index.structural_relation_id[anchor_code_id,
+                                                                      positive_code_id],
     ).tolist()
 
     def normalized_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
         normalized = {key: item[key] for key in RAW_CANDIDATE_KEYS if key in item}
         normalized['negative_code_id'] = int(item['negative_code_id'])
-        normalized['negative_is_explicit_exclusion'] = normalized['negative_code_id'] in exclusion_set
+        normalized['negative_is_explicit_exclusion'] = normalized['negative_code_id'
+                                                                  ] in exclusion_set
         return normalized
 
     def backfill_candidate(code_id: int) -> Dict[str, Any]:
@@ -1082,10 +1074,9 @@ def build_candidate_pool(
 
     if len(kept_ordinary) < ordinary_target:
         universe = [
-            code_id
-            for code_id in range(len(supervision_index.id_to_code))
-            if eligible_codes[code_id] and code_id not in forbidden
-            and code_id not in exclusion_set and code_id not in by_code
+            code_id for code_id in range(len(supervision_index.id_to_code))
+            if eligible_codes[code_id] and code_id not in forbidden and code_id not in exclusion_set
+            and code_id not in by_code
         ]
         rng.shuffle(universe)
         for code_id in universe[:ordinary_target - len(kept_ordinary)]:
@@ -1182,13 +1173,17 @@ def load_bundle_candidates(
         return {}
     partitions = training_pair_partitions(bundle)
     files = sorted(
-        {str(partitions[anchor]) for anchor, _ in required_pairs if anchor in partitions}
+        {str(partitions[anchor])
+         for anchor, _ in required_pairs if anchor in partitions}
     )
     if not files:
         return {}
     pairs = pl.DataFrame(
         sorted(required_pairs),
-        schema={'anchor_code_id': pl.Int32, 'positive_code_id': pl.Int32},
+        schema={
+            'anchor_code_id': pl.Int32,
+            'positive_code_id': pl.Int32
+        },
         orient='row',
     )
     frame = pl.scan_parquet(files).select(_RAW_CANDIDATE_COLUMNS).with_columns(
@@ -1301,7 +1296,8 @@ def build_repaired_triplet_rows(
         logger.info(f'Dropped {dropped:,} sampled positives that are explicit exclusions')
     candidates_by_pair = load_bundle_candidates(
         bundle,
-        {(anchor, int(positive['positive_idx'])) for anchor, positive in pairs},
+        {(anchor, int(positive['positive_idx']))
+         for anchor, positive in pairs},
     )
     distance_lookup = IndexDistanceLookup(index)
     rows: List[Dict[str, Any]] = []
@@ -1344,7 +1340,8 @@ def build_repaired_triplet_rows(
 def _repaired_source_fingerprints(bundle: ValidatedSupervisionBundle) -> Dict[str, str]:
     artifacts = bundle.manifest.artifacts
     return {
-        name: aggregate_fingerprint(artifacts[name].files) for name in ('relations', 'training_pairs')
+        name: aggregate_fingerprint(artifacts[name].files)
+        for name in ('relations', 'training_pairs')
     }
 
 def _get_repaired_multi_epoch_cache_path(

@@ -241,16 +241,16 @@ class LossMixin:
         anchor_levels = _code_lengths(anchor_codes)
         positive_levels_raw = batch.get('positive_levels')
         if positive_levels_raw:
-            positive_levels = torch.tensor(
-                positive_levels_raw, dtype=torch.float32, device=device
-            )
+            positive_levels = torch.tensor(positive_levels_raw, dtype=torch.float32, device=device)
         else:
             positive_levels = _code_lengths(positive_codes)
 
         embeddings = torch.cat([anchor_emb, positive_emb], dim=0)
         levels = torch.cat([anchor_levels, positive_levels], dim=0)
         if embeddings.shape[0] != levels.shape[0]:
-            logger.warning('Mismatch between embeddings and level annotations; skipping radius loss.')
+            logger.warning(
+                'Mismatch between embeddings and level annotations; skipping radius loss.'
+            )
             return torch.tensor(0.0, device=self.device)
 
         curvature = getattr(self.hparams, 'curvature', 1.0)
@@ -483,8 +483,8 @@ class LossMixin:
         '''
         scaled_load_balancing_loss = self.load_balancing_coef * load_balancing_loss
         total_loss = (
-            contrastive_loss + scaled_load_balancing_loss + hierarchy_loss +
-            structural_preference_loss + radius_reg_loss + level_radius_loss_value
+            contrastive_loss + scaled_load_balancing_loss + hierarchy_loss
+            + structural_preference_loss + radius_reg_loss + level_radius_loss_value
         )
         return total_loss, scaled_load_balancing_loss
 

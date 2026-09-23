@@ -109,7 +109,6 @@ def sample_training_batch(test_device, batch_size=4, k_negatives=8):
 BUNDLE_CODES = ('111111', '111112', '111113', '222222', '333333')
 CHANNELS = ('title', 'description', 'excluded', 'examples')
 
-
 def _tokens(code_id: int, seq_length: int = 32) -> dict:
     '''Deterministic per-code token inputs, so repeated codes encode identically.'''
 
@@ -121,7 +120,6 @@ def _tokens(code_id: int, seq_length: int = 32) -> dict:
         }
         for channel in CHANNELS
     }
-
 
 def _repaired_item(
     anchor_id: int,
@@ -147,13 +145,11 @@ def _repaired_item(
                 'negative_embedding': _tokens(code_id),
                 'sampling_role_id': 2,
                 'sampling_provenance_id': 2,
-            }
-            for code_id in pool
+            } for code_id in pool
         ],
         'difficulty_proposal_indices': list(range(len(pool))),
         'selection_k': selection_k,
     }
-
 
 @pytest.fixture
 def repaired_training_batch():
@@ -429,8 +425,7 @@ class TestTrainingStep:
 
         counters = {
             call.args[0]: call.args[1].item()
-            for call in log.call_args_list
-            if call.args[0].startswith('train/integrity/')
+            for call in log.call_args_list if call.args[0].startswith('train/integrity/')
         }
         # Mining is off, so the difficulty proposal fills every ordinary slot: row 0 selects its
         # exclusion by quota plus two codes; row 1 (no exclusion in its pool) selects three.
@@ -500,8 +495,8 @@ class TestTrainingStep:
 
         expected_scaled = load_balancing_loss * naics_model.load_balancing_coef
         expected_total = (
-            contrastive_loss + expected_scaled + hierarchy_loss + structural_preference_loss +
-            radius_reg_loss + level_radius_loss
+            contrastive_loss + expected_scaled + hierarchy_loss + structural_preference_loss
+            + radius_reg_loss + level_radius_loss
         )
 
         assert torch.isclose(scaled_load_balancing, expected_scaled)
@@ -822,7 +817,9 @@ class TestCheckpointContract:
             naics_model.on_load_checkpoint({})
         with pytest.raises(ValueError, match='exact resume'):
             naics_model.on_load_checkpoint(
-                {'stage3_supervision': {**contract, 'bundle_id': 'other-bundle'}}
+                {'stage3_supervision': {
+                    **contract, 'bundle_id': 'other-bundle'
+                }}
             )
         naics_model.on_load_checkpoint({'stage3_supervision': contract})
 
@@ -956,8 +953,7 @@ def test_legacy_containment_logs_integrity_tag(legacy_model, legacy_batch, monke
     legacy_model.training_step(legacy_batch, 0)
 
     tags = [
-        call for call in log.call_args_list
-        if call.args[0] == 'train/integrity/legacy_containment'
+        call for call in log.call_args_list if call.args[0] == 'train/integrity/legacy_containment'
     ]
     assert tags and tags[0].args[1] == 1.0
 

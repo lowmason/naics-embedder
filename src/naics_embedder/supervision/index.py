@@ -84,7 +84,10 @@ class SupervisionIndex:
 
         codes = tuple(codebook.get_column('code').to_list())
         return cls(
-            code_to_id={code: code_id for code_id, code in enumerate(codes)},
+            code_to_id={
+                code: code_id
+                for code_id, code in enumerate(codes)
+            },
             id_to_code=codes,
             structural_distance=distance,
             structural_relation_id=relation,

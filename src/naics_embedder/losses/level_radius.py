@@ -31,4 +31,3 @@ def level_radius_loss(
     if reduction == 'sum':
         return loss.sum()
     return loss.mean()
-

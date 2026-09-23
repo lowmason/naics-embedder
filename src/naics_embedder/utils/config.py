@@ -353,23 +353,25 @@ class SupervisionBuildConfig(BaseModel):
     output_root: str = './data/supervision/stage3-supervision-v1'
     contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
     naics_vintage: int = 2022
-    relation_id: Dict[str, int] = Field(default_factory=lambda: {
-        'child': 1,
-        'sibling': 2,
-        'grandchild': 3,
-        'great-grandchild': 4,
-        'nephew/niece': 5,
-        'great-great-grandchild': 6,
-        'cousin': 7,
-        'grand-nephew/niece': 8,
-        'grand-grand-nephew/niece': 9,
-        'cousin_1_times_removed': 10,
-        'second_cousin': 11,
-        'cousin_2_times_removed': 12,
-        'second_cousin_1_times_removed': 13,
-        'third_cousin': 14,
-        'cross_sector': 99,
-    })
+    relation_id: Dict[str, int] = Field(
+        default_factory=lambda: {
+            'child': 1,
+            'sibling': 2,
+            'grandchild': 3,
+            'great-grandchild': 4,
+            'nephew/niece': 5,
+            'great-great-grandchild': 6,
+            'cousin': 7,
+            'grand-nephew/niece': 8,
+            'grand-grand-nephew/niece': 9,
+            'cousin_1_times_removed': 10,
+            'second_cousin': 11,
+            'cousin_2_times_removed': 12,
+            'second_cousin_1_times_removed': 13,
+            'third_cousin': 14,
+            'cross_sector': 99,
+        }
+    )
 
 class SupervisionRuntimeConfig(BaseModel):
     '''Which supervision contract training runs under, and the one authoritative bundle.'''
@@ -545,7 +547,6 @@ class StreamingConfig(BaseModel):
                 f'n_candidates ({self.n_candidates})'
             )
         return self
-
 
 class SansStaticConfig(BaseModel):
     '''Configuration for static SANS-style sampling buckets.'''

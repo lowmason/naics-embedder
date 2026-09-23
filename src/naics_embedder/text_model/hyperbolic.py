@@ -18,7 +18,6 @@ try:
 except Exception:  # pragma: no cover - torch version specific
     _cudagraph_mark_step_begin = None
 
-
 def _mark_cudagraph_step() -> None:
     '''
     Notify Torch compile that a new CUDA graph step begins.

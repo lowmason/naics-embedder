@@ -51,8 +51,7 @@ def mock_codes_parquet(tmp_path):
             '321111',
         ],
         'level': [2, 3, 4, 5, 6, 6, 2, 3, 4, 5, 6],
-        'index':
-        list(range(11)),
+        'index': list(range(11)),
     }
     df = pl.DataFrame(data)
     path = tmp_path / 'codes.parquet'
@@ -447,11 +446,9 @@ def test_sample_handles_fewer_candidates_than_requested():
 
     assert len(sampled) == 1
 
-
 # -------------------------------------------------------------------------------------------------
 # Negative candidate loading tests
 # -------------------------------------------------------------------------------------------------
-
 
 def test_load_negative_candidates_filters_pairs(tmp_path):
     '''Only requested (anchor, positive) pairs should be loaded from triplets parquet.'''
@@ -476,7 +473,6 @@ def test_load_negative_candidates_filters_pairs(tmp_path):
     assert set(result.keys()) == {(1, 10)}
     assert result[(1, 10)][0]['negative_idx'] == 100
 
-
 def test_load_negative_candidates_handles_empty_pairs(tmp_path):
     '''Providing an empty pair set should skip loading and return empty mapping.'''
     triplets_dir = tmp_path / 'triplets'
@@ -497,7 +493,6 @@ def test_load_negative_candidates_handles_empty_pairs(tmp_path):
     result = _load_negative_candidates(str(triplets_dir), required_pairs=set())
     assert result == {}
 
-
 def _fake_triplet_row():
     return [
         {
@@ -516,10 +511,11 @@ def _fake_triplet_row():
                     'distance_margin': 0.2,
                 }
             ],
-            'sampling_metadata': {'candidates_near': 1},
+            'sampling_metadata': {
+                'candidates_near': 1
+            },
         }
     ]
-
 
 def test_streaming_generator_saves_cache_when_missing(monkeypatch):
     '''Generator should persist built triplets before yielding when cache is absent.'''
@@ -548,7 +544,6 @@ def test_streaming_generator_saves_cache_when_missing(monkeypatch):
     assert saved['data'] == fake_rows
     with pytest.raises(StopIteration):
         next(gen)
-
 
 def test_streaming_generator_uses_existing_cache(monkeypatch):
     '''When cache exists, generator should not rebuild or resave triplets.'''
@@ -793,7 +788,6 @@ def test_multi_epoch_cache_key_deterministic():
 
     assert path1 == path2
 
-
 def test_multi_epoch_cache_key_changes_with_n_epochs():
     '''Different n_epochs should produce different cache keys.'''
     from naics_embedder.text_model.dataloader.streaming_dataset import _get_multi_epoch_cache_path
@@ -804,7 +798,6 @@ def test_multi_epoch_cache_key_changes_with_n_epochs():
     path2 = _get_multi_epoch_cache_path(cfg, n_epochs=50)
 
     assert path1 != path2
-
 
 def test_multi_epoch_cache_key_changes_with_seed():
     '''Different seeds should produce different cache keys.'''
@@ -818,7 +811,6 @@ def test_multi_epoch_cache_key_changes_with_seed():
 
     assert path1 != path2
 
-
 def test_multi_epoch_cache_path_in_streaming_cache_dir():
     '''Multi-epoch cache path should be in streaming_cache directory.'''
     from naics_embedder.text_model.dataloader.streaming_dataset import _get_multi_epoch_cache_path
@@ -829,7 +821,6 @@ def test_multi_epoch_cache_path_in_streaming_cache_dir():
 
     assert 'streaming_cache' in str(path)
     assert path.name.startswith('multi_epoch_')
-
 
 # -------------------------------------------------------------------------------------------------
 # Positive Sampler Tests
@@ -923,7 +914,6 @@ class TestPositiveSampler:
                 assert 'stratum_id' in p
                 assert 'stratum_wgt' in p
 
-
 # -------------------------------------------------------------------------------------------------
 # Versioned repaired streaming caches
 # -------------------------------------------------------------------------------------------------
@@ -950,7 +940,6 @@ def test_repaired_streaming_cache_rejects_missing_identity(missing):
             expected_codebook_fingerprint='a' * 64,
         )
 
-
 def test_repaired_streaming_cache_rejects_another_bundle():
     envelope = {
         'contract_version': 'stage3-supervision-v1',
@@ -967,7 +956,6 @@ def test_repaired_streaming_cache_rejects_another_bundle():
             expected_bundle_id='bundle-a',
             expected_codebook_fingerprint='a' * 64,
         )
-
 
 def test_repaired_streaming_cache_returns_a_valid_payload():
     rows = [{'anchor_code_id': 0}]
@@ -986,11 +974,12 @@ def test_repaired_streaming_cache_returns_a_valid_payload():
         expected_codebook_fingerprint='a' * 64,
     ) is rows
 
-
 def test_repaired_streaming_cache_rejects_unversioned_payloads():
     with pytest.raises(ValueError, match='envelope'):
         _validate_streaming_cache_envelope(
-            [{'anchor_idx': 0}],
+            [{
+                'anchor_idx': 0
+            }],
             expected_contract='stage3-supervision-v1',
             expected_bundle_id='bundle-a',
             expected_codebook_fingerprint='a' * 64,

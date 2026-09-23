@@ -357,8 +357,8 @@ class HGCNLightningModule(pyl.LightningModule):
         epoch = min(self.current_epoch, self.cfg.num_epochs - 1)
         progress = epoch / (self.cfg.num_epochs - 1)
         return float(
-            self.cfg.temperature_start + progress *
-            (self.cfg.temperature_end - self.cfg.temperature_start)
+            self.cfg.temperature_start
+            + progress * (self.cfg.temperature_end - self.cfg.temperature_start)
         )
 
     def _current_lr(self) -> float:

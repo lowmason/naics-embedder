@@ -162,7 +162,6 @@ def test_generator_negatives_structure(monkeypatch: pytest.MonkeyPatch):
             assert 'relation_margin' in neg
             assert 'distance_margin' in neg
 
-
 @pytest.mark.unit
 def test_negative_candidate_loader_filters_pairs(tmp_path):
     '''Graph loader should restrict triplet rows to requested pairs.'''
@@ -185,11 +184,8 @@ def test_negative_candidate_loader_filters_pairs(tmp_path):
     assert set(result.keys()) == {(1, 11)}
     assert result[(1, 11)][0]['negative_code'] == 'N101'
 
-
 @pytest.mark.unit
-def test_graph_loader_reads_rebuilt_training_pairs_without_new_semantics(
-    generated_bundle,
-):
+def test_graph_loader_reads_rebuilt_training_pairs_without_new_semantics(generated_bundle, ):
     bundle = load_validated_bundle(generated_bundle)
     result = streaming._load_negative_candidates(
         str(bundle.artifact_path('training_pairs')),
@@ -209,7 +205,6 @@ def test_graph_loader_reads_rebuilt_training_pairs_without_new_semantics(
         'relation_margin': 1.0,
         'distance_margin': 1.5,
     }
-
 
 @pytest.mark.unit
 def test_graph_negative_projection_drops_repaired_stage3_fields():

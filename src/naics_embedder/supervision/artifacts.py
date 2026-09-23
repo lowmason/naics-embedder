@@ -115,7 +115,7 @@ def write_versioned_dataset_batches(
 
     root.mkdir(parents=True, exist_ok=False)
     for batch in batches:
-        for (value,), part in batch.partition_by(
+        for (value, ), part in batch.partition_by(
             partition_column, as_dict=True, maintain_order=True
         ).items():
             partition_dir = root / f'{partition_column}={value}'
@@ -273,9 +273,9 @@ def validate_matrix(
     code_j_id = pair_facts.get_column('code_j_id').to_numpy()
     expected = pair_facts.get_column(value_column).to_numpy()
     if not (
-        values.shape == (codebook.height, codebook.height)
-        and np.array_equal(values[code_i_id, code_j_id], expected)
-        and np.array_equal(values[code_j_id, code_i_id], expected)
+        values.shape == (codebook.height, codebook.height) and np.array_equal(
+            values[code_i_id, code_j_id], expected
+        ) and np.array_equal(values[code_j_id, code_i_id], expected)
         and not np.diagonal(values).any()
     ):
         raise ValueError('matrix does not reconcile with the long-form pair facts')
@@ -337,7 +337,10 @@ def _validate_training_chunk(paths: List[Path], directed: pl.DataFrame, n_codes:
     ).otherwise(pl.lit(SemanticTarget.UNKNOWN.value))
     summary = scan.select(
         unmapped=pl.any_horizontal(
-            *[pl.col(name).is_null() | pl.col(name).lt(0) | pl.col(name).ge(n_codes) for name in ids]
+            *[
+                pl.col(name).is_null() | pl.col(name).lt(0) | pl.col(name).ge(n_codes)
+                for name in ids
+            ]
         ).sum(),
         excluded_positives=pl.col('positive_is_explicit_exclusion').sum(),
         derivation=pl.col('negative_is_explicit_exclusion').ne(
@@ -419,7 +422,9 @@ class ValidatedSupervisionBundle:
 
         if logical_name not in self.manifest.artifacts:
             raise ValueError(f'bundle has no {logical_name!r} artifact')
-        return tuple(self.root / member.path for member in self.manifest.artifacts[logical_name].files)
+        return tuple(
+            self.root / member.path for member in self.manifest.artifacts[logical_name].files
+        )
 
 def _parquet_contract(path: Path) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     metadata = pq.read_metadata(path).metadata or {}

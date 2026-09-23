@@ -170,14 +170,11 @@ class NegativeSelectionCoordinator:
                     available_by_code[code_id] = index
 
             exclusion_codes = sorted(
-                code_id
-                for code_id, index in available_by_code.items()
-                if explicit_rows[row][index]
+                code_id for code_id, index in available_by_code.items() if explicit_rows[row][index]
             )
             ordinary_codes: Set[int] = {
                 code_id
-                for code_id, index in available_by_code.items()
-                if not explicit_rows[row][index]
+                for code_id, index in available_by_code.items() if not explicit_rows[row][index]
             }
             chosen: List[int] = []
             chosen_scores: List[float] = []
@@ -225,8 +222,7 @@ class NegativeSelectionCoordinator:
 
             if len(chosen) < k:
                 remaining = sorted(
-                    (code_id, uids[index], index)
-                    for code_id, index in available_by_code.items()
+                    (code_id, uids[index], index) for code_id, index in available_by_code.items()
                     if code_id in ordinary_codes and code_id not in chosen_codes
                 )
                 for code_id, _, index in remaining:

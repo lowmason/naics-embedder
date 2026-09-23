@@ -25,19 +25,21 @@ def _manifest() -> SupervisionManifest:
         description_fingerprint='c' * 64,
         exclusion_fingerprint='d' * 64,
         generation_parameters={'seed': 42},
-        structural_relation_ids={'child': 1, 'cross_sector': 99},
+        structural_relation_ids={
+            'child': 1,
+            'cross_sector': 99
+        },
         artifacts={
             'codebook': ArtifactRecord(
                 path='naics_codebook.parquet',
                 schema_version='codebook-v1',
                 row_count=3,
                 exclusion_count=0,
-                files=(artifact_file,),
+                files=(artifact_file, ),
             )
         },
         validation_results={'codebook_unique': True},
     )
-
 
 def test_manifest_round_trip_preserves_contract_identity(tmp_path):
     manifest = _manifest()
@@ -51,7 +53,6 @@ def test_manifest_round_trip_preserves_contract_identity(tmp_path):
     assert restored.artifacts['codebook'].files[0].sha256 == 'a' * 64
     assert SemanticTarget.UNRELATED.value == 'unrelated'
     assert SemanticSource.EXPLICIT_EXCLUSION.value == 'explicit_exclusion'
-
 
 def test_manifest_rejects_parent_traversal():
     manifest = _manifest().model_dump()
