@@ -1,7 +1,7 @@
 # -------------------------------------------------------------------------------------------------
 # Difficulty-Based Negative Sampler for Phase 1 Curriculum
 # -------------------------------------------------------------------------------------------------
-"""
+'''
 Select negatives using a difficulty curriculum that anneals from easy to hard.
 
 Buckets by tree distance:
@@ -13,7 +13,7 @@ Buckets by tree distance:
 The difficulty ratios interpolate linearly across Phase 1 epochs:
 - Start: 70% easy, 20% semi-hard, 10% hard
 - End: 20% easy, 40% semi-hard, 40% hard
-"""
+'''
 
 import logging
 from typing import Any, Dict, List, Tuple
@@ -30,7 +30,7 @@ def _bucket_candidates(
     distance_lookup: Dict[Tuple[str, str], float],
     anchor_code: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """
+    '''
     Bucket candidates by tree distance into easy, semi-hard, and hard.
 
     Args:
@@ -40,7 +40,7 @@ def _bucket_candidates(
 
     Returns:
         Tuple of (easy, semi_hard, hard) candidate lists
-    """
+    '''
     easy: List[Dict[str, Any]] = []
     semi_hard: List[Dict[str, Any]] = []
     hard: List[Dict[str, Any]] = []
@@ -64,7 +64,7 @@ def _interpolate_ratios(
     epoch_progress: float,
     cfg: StreamingConfig,
 ) -> Tuple[float, float, float]:
-    """
+    '''
     Interpolate difficulty ratios based on epoch progress.
 
     Args:
@@ -73,7 +73,7 @@ def _interpolate_ratios(
 
     Returns:
         Tuple of (easy_ratio, semi_ratio, hard_ratio) summing to 1.0
-    """
+    '''
     t = epoch_progress
 
     easy_ratio = cfg.phase1_easy_start + t * (cfg.phase1_easy_end - cfg.phase1_easy_start)
@@ -88,7 +88,7 @@ def _sample_from_bucket(
     n_want: int,
     rng: np.random.Generator,
 ) -> Tuple[List[Dict[str, Any]], int]:
-    """
+    '''
     Sample from a bucket, returning the sampled items and any shortfall.
 
     Args:
@@ -98,7 +98,7 @@ def _sample_from_bucket(
 
     Returns:
         Tuple of (sampled_items, shortfall)
-    """
+    '''
     n_avail = len(bucket)
     if n_avail == 0:
         return [], n_want
@@ -183,5 +183,86 @@ def select_by_difficulty(
             f'only {len(selected)} available'
         )
 
+    return selected
+
+
+# -------------------------------------------------------------------------------------------------
+# Indexed difficulty proposals (repaired Stage-3)
+# -------------------------------------------------------------------------------------------------
+
+IndexedCandidate = Tuple[int, Dict[str, Any]]
+
+
+def _bucket_indexed_candidates(
+    indexed: List[IndexedCandidate],
+) -> Tuple[List[IndexedCandidate], List[IndexedCandidate], List[IndexedCandidate]]:
+    '''Bucket (pool position, candidate) pairs by the candidate's own structural distance.'''
+
+    easy: List[IndexedCandidate] = []
+    semi_hard: List[IndexedCandidate] = []
+    hard: List[IndexedCandidate] = []
+    for entry in indexed:
+        distance = float(entry[1]['negative_structural_distance'])
+        if distance >= 6.0:
+            easy.append(entry)
+        elif distance >= 4.0:
+            semi_hard.append(entry)
+        elif distance >= 3.0:
+            hard.append(entry)
+    return easy, semi_hard, hard
+
+
+def propose_by_difficulty(
+    *,
+    candidates: List[Dict[str, Any]],
+    n_propose: int,
+    epoch_progress: float,
+    cfg: StreamingConfig,
+    rng: np.random.Generator,
+) -> List[int]:
+    '''
+    Propose candidate-pool positions by the annealed difficulty curriculum.
+
+    Returns source positions (never gathered candidates) in proposal order. Explicit exclusions are
+    never proposed: the one-slot exclusion quota owns their representation. Bucket shortfalls
+    cascade to the next bucket and finally to any remaining non-exclusion candidate.
+
+    Args:
+        candidates: The canonical candidate pool (dicts with ``negative_structural_distance`` and
+            ``negative_is_explicit_exclusion``).
+        n_propose: Maximum number of positions to propose.
+        epoch_progress: Progress through Phase 1 (0.0 to 1.0).
+        cfg: Streaming configuration with ratio parameters.
+        rng: Random number generator.
+    '''
+
+    ordinary = [
+        (position, item)
+        for position, item in enumerate(candidates)
+        if not item['negative_is_explicit_exclusion']
+    ]
+    if n_propose <= 0 or not ordinary:
+        return []
+    easy, semi_hard, hard = _bucket_indexed_candidates(ordinary)
+    easy_ratio, semi_ratio, _ = _interpolate_ratios(epoch_progress, cfg)
+    n_easy = round(n_propose * easy_ratio)
+    n_semi = round(n_propose * semi_ratio)
+    counts = (n_easy, n_semi, n_propose - n_easy - n_semi)
+
+    selected: List[int] = []
+    chosen = set()
+    shortfall = 0
+    for bucket, wanted in zip((easy, semi_hard, hard), counts):
+        available = [position for position, _ in bucket if position not in chosen]
+        take = min(wanted + shortfall, len(available))
+        if take:
+            for position in rng.choice(available, size=take, replace=False).tolist():
+                selected.append(int(position))
+                chosen.add(int(position))
+        shortfall = wanted + shortfall - take
+    remaining = [position for position, _ in ordinary if position not in chosen]
+    if shortfall and remaining:
+        extra = rng.choice(remaining, size=min(shortfall, len(remaining)), replace=False)
+        selected.extend(int(position) for position in extra.tolist())
     return selected
 

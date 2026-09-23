@@ -7,17 +7,20 @@ Loss computation mixin for NAICSContrastiveModel.
 Provides methods for computing various loss components:
 - Contrastive loss
 - Hierarchy preservation loss
-- LambdaRank loss for ranking optimization
+- Structural preference loss over selected candidates
 - Radius regularization loss
 - Load balancing loss for MoE
 '''
 
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
 from naics_embedder.losses.level_radius import level_radius_loss
+from naics_embedder.supervision.candidates import SelectedNegativeBatch
+from naics_embedder.text_model.false_negative_strategies import apply_false_negative_strategy
+from naics_embedder.text_model.loss import effective_false_negative_mask
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,8 @@ class LossMixin:
     - device: torch.device
     - hparams: hyperparameters with weight configurations
     - hierarchy_loss_fn: Optional hierarchy preservation loss function
-    - lambdarank_loss_fn: Optional LambdaRank loss function
+    - structural_preference_loss_fn: Structural preference loss over selected candidates
+    - false_negative_config: Optional false-negative strategy configuration
     - load_balancing_coef: float coefficient for load balancing loss
     - trainer: PyTorch Lightning trainer (for distributed logging)
     - logger: PyTorch Lightning logger (for histograms)
@@ -58,85 +62,118 @@ class LossMixin:
         if self.hierarchy_loss_fn is None or 'anchor_code' not in batch:
             return torch.tensor(0.0, device=self.device)
 
-        try:
-            all_codes = batch['anchor_code'].copy()
-            if 'positive_code' in batch:
-                all_codes.extend(batch['positive_code'])
-            else:
-                all_codes.extend(batch['anchor_code'])
+        all_codes = list(batch['anchor_code'])
+        if 'positive_code' in batch:
+            all_codes.extend(batch['positive_code'])
+        else:
+            all_codes.extend(batch['anchor_code'])
 
-            all_embeddings = torch.cat([anchor_emb, positive_emb])
-            from naics_embedder.text_model.hyperbolic import LorentzDistance
+        all_embeddings = torch.cat([anchor_emb, positive_emb])
+        from naics_embedder.text_model.hyperbolic import LorentzDistance
 
-            curvature = getattr(self.hparams, 'curvature', 1.0)
-            lorentz_dist = LorentzDistance(curvature=curvature)
+        curvature = getattr(self.hparams, 'curvature', 1.0)
+        lorentz_dist = LorentzDistance(curvature=curvature)
 
-            hierarchy_loss = self.hierarchy_loss_fn(
-                all_embeddings, all_codes, lambda x, y: lorentz_dist(x, y)
+        hierarchy_loss = self.hierarchy_loss_fn(
+            all_embeddings, all_codes, lambda x, y: lorentz_dist(x, y)
+        )
+
+        self.log('train/hierarchy_loss', hierarchy_loss, batch_size=batch_size)
+        return hierarchy_loss
+
+    def _apply_false_negative_strategy_wrapper(
+        self,
+        anchor_emb: torch.Tensor,
+        selected: SelectedNegativeBatch,
+        pseudo_related: Optional[torch.Tensor],
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        '''
+        Resolve post-selection pseudo-related candidates into the effective false-negative mask.
+
+        Explicit exclusions and invalid padding are never effective false negatives, with or
+        without a configured strategy.
+
+        Args:
+            anchor_emb: Anchor embeddings (batch_size, embed_dim)
+            selected: The checked selected-negative batch
+            pseudo_related: Optional pseudo-related mask aligned with ``selected``
+
+        Returns:
+            Tuple of (effective_mask, auxiliary_loss)
+        '''
+        if self.false_negative_config is None:
+            return (
+                effective_false_negative_mask(
+                    pseudo_related,
+                    selected.is_explicit_exclusion,
+                    selected.valid_mask,
+                ),
+                None,
             )
+        return apply_false_negative_strategy(
+            self.false_negative_config,
+            anchor_emb,
+            selected.embedding,
+            pseudo_related,
+            explicit_exclusion_mask=selected.is_explicit_exclusion,
+            valid_mask=selected.valid_mask,
+        )
 
-            self.log('train/hierarchy_loss', hierarchy_loss, batch_size=batch_size)
-            return hierarchy_loss
-        except Exception as exc:
-            logger.warning(f'Failed to compute hierarchy loss: {exc}')
-            return torch.tensor(0.0, device=self.device)
-
-    def _compute_lambdarank_loss(
+    def _compute_contrastive_loss(
         self,
         anchor_emb: torch.Tensor,
         positive_emb: torch.Tensor,
-        negative_emb: torch.Tensor,
-        batch: Dict[str, Any],
-        batch_size: int,
-        k_negatives: int,
+        selected: SelectedNegativeBatch,
+        effective_mask: Optional[torch.Tensor],
     ) -> torch.Tensor:
         '''
-        Compute LambdaRank loss for global ranking optimization.
+        Hyperbolic InfoNCE over the checked selected negatives.
 
         Args:
             anchor_emb: Anchor embeddings
             positive_emb: Positive embeddings
-            negative_emb: Negative embeddings
-            batch: Training batch with codes
-            batch_size: Batch size
-            k_negatives: Number of negatives per sample
+            selected: The checked selected-negative batch
+            effective_mask: Optional effective false-negative mask aligned with ``selected``
 
         Returns:
-            LambdaRank loss tensor (scalar)
+            Contrastive loss (scalar)
         '''
-        if self.lambdarank_loss_fn is None or 'anchor_code' not in batch or 'positive_code' not in batch:
-            return torch.tensor(0.0, device=self.device)
+        return self.loss_fn(
+            anchor_emb,
+            positive_emb,
+            selected.embedding,
+            valid_mask=selected.valid_mask,
+            is_explicit_exclusion=selected.is_explicit_exclusion,
+            pseudo_related_mask=effective_mask,
+        )
 
-        try:
-            negative_codes = batch.get('negative_codes', [])
-            if not negative_codes or len(negative_codes) != batch_size:
-                logger.debug('Skipping LambdaRank: negative_codes not available in batch')
-                return torch.tensor(0.0, device=self.device)
+    def _compute_structural_preference_loss(
+        self,
+        anchor_emb: torch.Tensor,
+        positive_emb: torch.Tensor,
+        batch: Dict[str, Any],
+        selected: SelectedNegativeBatch,
+    ) -> torch.Tensor:
+        '''
+        Structural preference over each anchor's positive plus its selected negatives.
 
-            from naics_embedder.text_model.hyperbolic import LorentzDistance
+        Args:
+            anchor_emb: Anchor embeddings
+            positive_emb: Positive embeddings
+            batch: Collated batch with anchor/positive code IDs and positive structural distance
+            selected: The checked selected-negative batch
 
-            curvature = getattr(self.hparams, 'curvature', 1.0)
-            lorentz_dist = LorentzDistance(curvature=curvature)
-
-            lambdarank_loss = self.lambdarank_loss_fn(
-                anchor_emb,
-                positive_emb,
-                negative_emb,
-                batch['anchor_code'],
-                batch['positive_code'],
-                negative_codes,
-                lambda x, y: lorentz_dist(x, y),
-                batch_size,
-                k_negatives,
-            )
-            self.log('train/lambdarank_loss', lambdarank_loss, batch_size=batch_size)
-            return lambdarank_loss
-        except Exception as exc:
-            logger.warning(f'Failed to compute LambdaRank loss: {exc}')
-            import traceback
-
-            logger.debug(traceback.format_exc())
-            return torch.tensor(0.0, device=self.device)
+        Returns:
+            Weighted structural preference loss (scalar)
+        '''
+        return self.structural_preference_loss_fn(
+            anchor_emb=anchor_emb,
+            positive_emb=positive_emb,
+            anchor_code_id=batch['anchor_code_id'],
+            positive_code_id=batch['positive_code_id'],
+            positive_structural_distance=batch['positive_structural_distance'],
+            selected=selected,
+        )
 
     def _compute_radius_regularization(
         self,
@@ -426,7 +463,7 @@ class LossMixin:
         contrastive_loss: torch.Tensor,
         load_balancing_loss: torch.Tensor,
         hierarchy_loss: torch.Tensor,
-        lambdarank_loss: torch.Tensor,
+        structural_preference_loss: torch.Tensor,
         radius_reg_loss: torch.Tensor,
         level_radius_loss_value: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -437,7 +474,7 @@ class LossMixin:
             contrastive_loss: Main contrastive loss
             load_balancing_loss: MoE load balancing loss
             hierarchy_loss: Hierarchy preservation loss
-            lambdarank_loss: Ranking optimization loss
+            structural_preference_loss: Structural preference loss over selected candidates
             radius_reg_loss: Radius regularization loss
             level_radius_loss_value: Level-aware radius alignment loss
 
@@ -446,8 +483,8 @@ class LossMixin:
         '''
         scaled_load_balancing_loss = self.load_balancing_coef * load_balancing_loss
         total_loss = (
-            contrastive_loss + scaled_load_balancing_loss + hierarchy_loss + lambdarank_loss +
-            radius_reg_loss + level_radius_loss_value
+            contrastive_loss + scaled_load_balancing_loss + hierarchy_loss +
+            structural_preference_loss + radius_reg_loss + level_radius_loss_value
         )
         return total_loss, scaled_load_balancing_loss
 

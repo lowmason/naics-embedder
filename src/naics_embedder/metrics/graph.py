@@ -390,7 +390,7 @@ class GraphDownstreamEvaluator:
             stratify=labels,
         )
 
-        model = LogisticRegression(max_iter=500, multi_class='auto')
+        model = LogisticRegression(max_iter=500)
         model.fit(X_train, y_train)
         preds = model.predict(X_test)
 
@@ -429,4 +429,3 @@ def run_graph_downstream_suite(
         'clustering': clustering,
         'classification': classification,
     }
-

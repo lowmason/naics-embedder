@@ -57,7 +57,7 @@ def map_relationships(key: Union[str, int]) -> Union[Dict[str, int], Dict[int, s
         ('cousin_2_times_removed', 12),
         ('second_cousin_1_times_removed', 13),
         ('third_cousin', 14),
-        ('unrelated', 15),
+        ('cross_sector', 99),
     ]
 
     if isinstance(key, str):

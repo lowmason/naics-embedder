@@ -4,16 +4,23 @@ Unit tests for configuration management.
 Tests Pydantic config models, YAML loading, and validation.
 '''
 
+from pathlib import Path
+
 import pytest
 import yaml
 from pydantic import ValidationError
 
 from naics_embedder.utils.config import (
+    CheckpointLoadMode,
+    Config,
     DirConfig,
     DistancesConfig,
     DownloadConfig,
     SamplingConfig,
     SansStaticConfig,
+    StructuralPreferenceConfig,
+    SupervisionBuildConfig,
+    SupervisionRuntimeConfig,
     load_config,
 )
 
@@ -388,3 +395,125 @@ class TestSamplingConfig:
                     far_bucket_weight=0.0,
                 )
             )
+
+@pytest.mark.unit
+class TestSupervisionBuildConfig:
+    '''The supervision bundle build configuration.'''
+
+    def test_yaml_matches_defaults(self):
+        cfg = load_config(SupervisionBuildConfig, 'data/supervision.yaml')
+
+        assert cfg == SupervisionBuildConfig()
+        assert cfg.contract_version == 'stage3-supervision-v1'
+        assert cfg.relation_id['cross_sector'] == 99
+        assert cfg.output_root == './data/supervision/stage3-supervision-v1'
+
+    def test_rejects_other_contract_versions(self):
+        with pytest.raises(ValidationError):
+            SupervisionBuildConfig(contract_version='legacy')
+
+    def test_rejects_unknown_keys(self):
+        with pytest.raises(ValidationError):
+            SupervisionBuildConfig(rank_order_weight=0.35)
+
+
+# -------------------------------------------------------------------------------------------------
+# Repaired Stage-3 runtime configuration
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def valid_config_dict():
+    return yaml.safe_load(Path('conf/config.yaml').read_text())
+
+
+def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
+    cfg = Config.model_validate(valid_config_dict)
+
+    assert cfg.supervision.mode == 'repaired'
+    assert cfg.supervision.manifest_path is None
+    assert cfg.supervision.contract_version == 'stage3-supervision-v1'
+    assert cfg.loss.structural_preference == StructuralPreferenceConfig()
+    assert cfg.loss.rank_order_weight is None
+    assert cfg.data_loader.streaming.phase1_exclusion_weight is None
+
+
+def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
+    valid_config_dict['supervision'] = {
+        'mode': 'repaired',
+        'manifest_path': '/tmp/bundle/manifest.json',
+    }
+    valid_config_dict['loss']['rank_order_weight'] = 0.35
+
+    with pytest.raises(
+        ValidationError,
+        match='rank_order_weight.*structural_preference',
+    ):
+        Config.model_validate(valid_config_dict)
+
+
+def test_repaired_config_rejects_high_exclusion_weight(valid_config_dict):
+    valid_config_dict['supervision'] = {
+        'mode': 'repaired',
+        'manifest_path': '/tmp/bundle/manifest.json',
+    }
+    valid_config_dict['data_loader']['streaming']['phase1_exclusion_weight'] = 100.0
+
+    with pytest.raises(
+        ValidationError,
+        match='phase1_exclusion_weight.*one-slot exclusion quota',
+    ):
+        Config.model_validate(valid_config_dict)
+
+
+def test_overrides_cannot_reintroduce_legacy_keys_in_repaired_mode():
+    with pytest.raises(ValidationError, match='rank_order_weight'):
+        Config().override({'loss.rank_order_weight': 0.35})
+
+
+def test_legacy_containment_is_the_only_mode_accepting_legacy_keys(valid_config_dict):
+    valid_config_dict['supervision'] = {'mode': 'legacy_containment'}
+    valid_config_dict['loss']['rank_order_weight'] = 0.35
+    valid_config_dict['data_loader']['streaming']['phase1_exclusion_weight'] = 100.0
+
+    cfg = Config.model_validate(valid_config_dict)
+
+    assert cfg.supervision.mode == 'legacy_containment'
+    assert cfg.loss.rank_order_weight == 0.35
+
+
+@pytest.mark.parametrize(
+    'supervision',
+    [
+        {'mode': 'legacy'},
+        {'contract_version': 'stage3-supervision-v0'},
+        {'manifest': '/tmp/bundle/manifest.json'},
+    ],
+)
+def test_supervision_runtime_config_rejects_unknown_values(supervision):
+    with pytest.raises(ValidationError):
+        SupervisionRuntimeConfig(**supervision)
+
+
+def test_checkpoint_load_modes_are_explicit():
+    assert [mode.value for mode in CheckpointLoadMode] == ['exact', 'weights_only']
+
+
+@pytest.mark.parametrize(
+    ('field', 'value', 'message'),
+    [
+        ('temperature', 0.0, 'temperature'),
+        ('margin', -0.1, 'margin'),
+        ('tie_tolerance', -0.1, 'tie_tolerance'),
+    ],
+)
+def test_structural_preference_config_bounds(field, value, message):
+    data = {
+        'weight': 0.35,
+        'margin': 0.1,
+        'temperature': 1.0,
+        'tie_tolerance': 1e-6,
+    }
+    data[field] = value
+
+    with pytest.raises(ValidationError, match=message):
+        StructuralPreferenceConfig(**data)

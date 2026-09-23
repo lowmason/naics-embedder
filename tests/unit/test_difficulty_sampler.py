@@ -1,7 +1,7 @@
 # -------------------------------------------------------------------------------------------------
 # Tests for Phase 1 Difficulty Sampler
 # -------------------------------------------------------------------------------------------------
-"""
+'''
 Tests for the difficulty curriculum-based negative sampling.
 
 Tests cover:
@@ -9,18 +9,94 @@ Tests cover:
 2. Annealing - ratios change correctly with epoch progress
 3. Reproducibility - same seed produces identical results
 4. Edge cases - empty buckets, insufficient candidates
-"""
+'''
 
-import pytest
-import numpy as np
 from typing import Dict, List, Tuple
 
+import numpy as np
+import pytest
+
 from naics_embedder.text_model.dataloader.difficulty_sampler import (
-    select_by_difficulty,
     _bucket_candidates,
     _interpolate_ratios,
+    propose_by_difficulty,
+    select_by_difficulty,
 )
 from naics_embedder.utils.config import StreamingConfig
+
+# -------------------------------------------------------------------------------------------------
+# Indexed difficulty proposals over a canonical candidate pool
+# -------------------------------------------------------------------------------------------------
+
+def _pool(distances: List[float], exclusions: Tuple[int, ...] = ()) -> List[Dict]:
+    return [
+        {
+            'negative_code_id': position,
+            'negative_structural_distance': distance,
+            'negative_is_explicit_exclusion': position in exclusions,
+        }
+        for position, distance in enumerate(distances)
+    ]
+
+
+def test_proposals_are_unique_source_positions_that_skip_exclusions(default_config):
+    pool = _pool([8.0] * 5 + [4.0] * 5 + [3.0] * 5, exclusions=(0, 5, 10))
+
+    proposal = propose_by_difficulty(
+        candidates=pool,
+        n_propose=9,
+        epoch_progress=0.5,
+        cfg=default_config,
+        rng=np.random.default_rng(3),
+    )
+
+    assert len(proposal) == 9
+    assert len(set(proposal)) == 9
+    assert not {0, 5, 10} & set(proposal)
+    assert all(0 <= position < len(pool) for position in proposal)
+
+
+def test_proposals_follow_the_starting_bucket_ratios(default_config):
+    pool = _pool([8.0] * 10 + [4.0] * 10 + [3.0] * 10)
+
+    proposal = propose_by_difficulty(
+        candidates=pool,
+        n_propose=10,
+        epoch_progress=0.0,
+        cfg=default_config,
+        rng=np.random.default_rng(0),
+    )
+
+    distances = [pool[position]['negative_structural_distance'] for position in proposal]
+    assert distances.count(8.0) == 7
+    assert distances.count(4.0) == 2
+    assert distances.count(3.0) == 1
+
+
+def test_proposal_shortfall_cascades_to_remaining_candidates(default_config):
+    # Only two bucketed candidates; siblings (d = 2) fill the remaining shortfall.
+    pool = _pool([8.0, 4.0, 2.0, 2.0, 2.0])
+
+    proposal = propose_by_difficulty(
+        candidates=pool,
+        n_propose=4,
+        epoch_progress=0.0,
+        cfg=default_config,
+        rng=np.random.default_rng(1),
+    )
+
+    assert len(proposal) == 4
+    assert {0, 1} <= set(proposal)
+
+
+def test_proposals_are_reproducible(default_config):
+    pool = _pool([8.0] * 10 + [4.0] * 10 + [3.0] * 10)
+    kwargs = {'candidates': pool, 'n_propose': 8, 'epoch_progress': 0.3, 'cfg': default_config}
+
+    first = propose_by_difficulty(**kwargs, rng=np.random.default_rng(42))
+    second = propose_by_difficulty(**kwargs, rng=np.random.default_rng(42))
+
+    assert first == second
 
 
 # -------------------------------------------------------------------------------------------------
@@ -29,7 +105,7 @@ from naics_embedder.utils.config import StreamingConfig
 
 @pytest.fixture
 def sample_candidates() -> List[Dict]:
-    """Create sample candidate negatives with various tree distances."""
+    '''Create sample candidate negatives with various tree distances.'''
     candidates = []
     # Easy negatives (d >= 6)
     for i in range(20):
@@ -60,7 +136,7 @@ def sample_candidates() -> List[Dict]:
 
 @pytest.fixture
 def distance_lookup() -> Dict[Tuple[str, str], float]:
-    """Create distance lookup matching the sample candidates."""
+    '''Create distance lookup matching the sample candidates.'''
     lookup = {}
     anchor = 'anchor_code'
     # Easy distances (d >= 6)
@@ -77,7 +153,7 @@ def distance_lookup() -> Dict[Tuple[str, str], float]:
 
 @pytest.fixture
 def default_config() -> StreamingConfig:
-    """Create default streaming config."""
+    '''Create default streaming config.'''
     return StreamingConfig(
         phase1_easy_start=0.70,
         phase1_easy_end=0.20,
@@ -91,13 +167,13 @@ def default_config() -> StreamingConfig:
 # -------------------------------------------------------------------------------------------------
 
 class TestCountGuarantees:
-    """Tests that exactly n_select negatives are returned."""
+    '''Tests that exactly n_select negatives are returned.'''
 
     @pytest.mark.unit
     def test_exact_count_returned(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """Verify exactly n_select negatives are returned."""
+        '''Verify exactly n_select negatives are returned.'''
         rng = np.random.default_rng(42)
         n_select = 24
 
@@ -117,7 +193,7 @@ class TestCountGuarantees:
     def test_exact_count_at_start(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """Verify exact count at epoch start (easy-heavy)."""
+        '''Verify exact count at epoch start (easy-heavy).'''
         rng = np.random.default_rng(42)
         n_select = 20
 
@@ -137,7 +213,7 @@ class TestCountGuarantees:
     def test_exact_count_at_end(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """Verify exact count at epoch end (hard-heavy)."""
+        '''Verify exact count at epoch end (hard-heavy).'''
         rng = np.random.default_rng(42)
         n_select = 20
 
@@ -157,7 +233,7 @@ class TestCountGuarantees:
     def test_handles_n_select_larger_than_candidates(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """When n_select > len(candidates), return all available."""
+        '''When n_select > len(candidates), return all available.'''
         rng = np.random.default_rng(42)
         n_select = 100  # More than 45 candidates
 
@@ -180,11 +256,11 @@ class TestCountGuarantees:
 # -------------------------------------------------------------------------------------------------
 
 class TestAnnealing:
-    """Tests that difficulty ratios anneal correctly."""
+    '''Tests that difficulty ratios anneal correctly.'''
 
     @pytest.mark.unit
     def test_interpolate_ratios_at_start(self, default_config):
-        """At epoch_progress=0, ratios should be start values."""
+        '''At epoch_progress=0, ratios should be start values.'''
         easy, semi, hard = _interpolate_ratios(0.0, default_config)
 
         assert abs(easy - 0.70) < 1e-6
@@ -194,7 +270,7 @@ class TestAnnealing:
 
     @pytest.mark.unit
     def test_interpolate_ratios_at_end(self, default_config):
-        """At epoch_progress=1, ratios should be end values."""
+        '''At epoch_progress=1, ratios should be end values.'''
         easy, semi, hard = _interpolate_ratios(1.0, default_config)
 
         assert abs(easy - 0.20) < 1e-6
@@ -204,7 +280,7 @@ class TestAnnealing:
 
     @pytest.mark.unit
     def test_interpolate_ratios_at_midpoint(self, default_config):
-        """At epoch_progress=0.5, ratios should be midpoint values."""
+        '''At epoch_progress=0.5, ratios should be midpoint values.'''
         easy, semi, hard = _interpolate_ratios(0.5, default_config)
 
         expected_easy = 0.70 + 0.5 * (0.20 - 0.70)  # 0.45
@@ -218,7 +294,7 @@ class TestAnnealing:
 
     @pytest.mark.unit
     def test_ratios_always_sum_to_one(self, default_config):
-        """Ratios should sum to 1.0 at any progress point."""
+        '''Ratios should sum to 1.0 at any progress point.'''
         for progress in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0]:
             easy, semi, hard = _interpolate_ratios(progress, default_config)
             assert abs(easy + semi + hard - 1.0) < 1e-6
@@ -227,7 +303,7 @@ class TestAnnealing:
     def test_more_easy_at_start(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """Early epochs should have more easy negatives."""
+        '''Early epochs should have more easy negatives.'''
         rng = np.random.default_rng(42)
         n_select = 30
 
@@ -251,7 +327,7 @@ class TestAnnealing:
     def test_more_hard_at_end(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """Late epochs should have more hard negatives."""
+        '''Late epochs should have more hard negatives.'''
         rng = np.random.default_rng(42)
         n_select = 30
 
@@ -278,13 +354,13 @@ class TestAnnealing:
 # -------------------------------------------------------------------------------------------------
 
 class TestReproducibility:
-    """Tests that same seed produces identical results."""
+    '''Tests that same seed produces identical results.'''
 
     @pytest.mark.unit
     def test_same_seed_same_result(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """Same seed should produce identical selections."""
+        '''Same seed should produce identical selections.'''
         seed = 12345
         n_select = 20
 
@@ -319,7 +395,7 @@ class TestReproducibility:
     def test_different_seed_different_result(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """Different seeds should produce different selections."""
+        '''Different seeds should produce different selections.'''
         n_select = 20
 
         rng1 = np.random.default_rng(111)
@@ -356,11 +432,11 @@ class TestReproducibility:
 # -------------------------------------------------------------------------------------------------
 
 class TestEdgeCases:
-    """Tests for edge cases and boundary conditions."""
+    '''Tests for edge cases and boundary conditions.'''
 
     @pytest.mark.unit
     def test_empty_candidates(self, distance_lookup, default_config):
-        """Empty candidates should return empty list."""
+        '''Empty candidates should return empty list.'''
         rng = np.random.default_rng(42)
 
         result = select_by_difficulty(
@@ -379,7 +455,7 @@ class TestEdgeCases:
     def test_zero_n_select(
         self, sample_candidates, distance_lookup, default_config
     ):
-        """n_select=0 should return empty list."""
+        '''n_select=0 should return empty list.'''
         rng = np.random.default_rng(42)
 
         result = select_by_difficulty(
@@ -396,7 +472,7 @@ class TestEdgeCases:
 
     @pytest.mark.unit
     def test_bucket_with_no_candidates(self, distance_lookup, default_config):
-        """Handles buckets with no candidates gracefully."""
+        '''Handles buckets with no candidates gracefully.'''
         # Only easy candidates
         easy_only = [
             {'negative_idx': i, 'negative_code': f'easy_{i}'}
@@ -420,7 +496,7 @@ class TestEdgeCases:
 
     @pytest.mark.unit
     def test_missing_distance_uses_default(self, default_config):
-        """Missing distances default to 12.0 (easy)."""
+        '''Missing distances default to 12.0 (easy).'''
         candidates = [
             {'negative_idx': 1, 'negative_code': 'unknown_1'},
             {'negative_idx': 2, 'negative_code': 'unknown_2'},
@@ -440,11 +516,11 @@ class TestEdgeCases:
 # -------------------------------------------------------------------------------------------------
 
 class TestConfigValidation:
-    """Tests for config validation."""
+    '''Tests for config validation.'''
 
     @pytest.mark.unit
     def test_valid_config_ratios(self):
-        """Valid ratio configs should pass validation."""
+        '''Valid ratio configs should pass validation.'''
         cfg = StreamingConfig(
             phase1_easy_start=0.60,
             phase1_easy_end=0.30,
@@ -456,7 +532,7 @@ class TestConfigValidation:
 
     @pytest.mark.unit
     def test_invalid_start_ratios_sum(self):
-        """Start ratios summing > 1.0 should fail validation."""
+        '''Start ratios summing > 1.0 should fail validation.'''
         with pytest.raises(ValueError, match='phase1_easy_start.*phase1_semi_start.*<= 1.0'):
             StreamingConfig(
                 phase1_easy_start=0.70,
@@ -465,7 +541,7 @@ class TestConfigValidation:
 
     @pytest.mark.unit
     def test_invalid_end_ratios_sum(self):
-        """End ratios summing > 1.0 should fail validation."""
+        '''End ratios summing > 1.0 should fail validation.'''
         with pytest.raises(ValueError, match='phase1_easy_end.*phase1_semi_end.*<= 1.0'):
             StreamingConfig(
                 phase1_easy_end=0.50,
@@ -474,7 +550,7 @@ class TestConfigValidation:
 
     @pytest.mark.unit
     def test_n_negatives_phase1_cannot_exceed_candidates(self):
-        """n_negatives_phase1 > n_candidates should fail validation."""
+        '''n_negatives_phase1 > n_candidates should fail validation.'''
         with pytest.raises(ValueError, match='n_negatives_phase1.*n_candidates'):
             StreamingConfig(
                 n_candidates=24,

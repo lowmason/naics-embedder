@@ -7,6 +7,7 @@ from naics_embedder.graph_model.dataloader import hgcn_datamodule as hgcn_module
 from naics_embedder.graph_model.dataloader.hgcn_datamodule import HGCNDataModule
 from naics_embedder.utils.config import GraphConfig, StreamingConfig
 
+
 def _graph_cfg(**overrides) -> GraphConfig:
     '''Create a GraphConfig tailored for small deterministic tests.'''
     defaults: Dict[str, Any] = {
@@ -123,6 +124,28 @@ class TestHGCNDataModule:
         cfg = captured_cfg['value']
         assert cfg.n_negatives == 12
         assert cfg.seed == dm.loader_cfg.seed
+
+    def test_datamodule_reads_structure_from_one_supervision_bundle(
+        self, monkeypatch: pytest.MonkeyPatch, generated_bundle
+    ):
+        '''With a manifest, relations and training pairs come from that validated bundle.'''
+        from naics_embedder.supervision.artifacts import load_validated_bundle
+
+        captured: Dict[str, StreamingConfig] = {}
+
+        def fake_loader(cfg, *args, **kwargs):
+            captured['value'] = cfg
+            return [_make_triplet(0, 10)]
+
+        monkeypatch.setattr(hgcn_module, 'load_streaming_triplets', fake_loader)
+
+        dm = HGCNDataModule(_graph_cfg(supervision_manifest_path=str(generated_bundle)))
+        dm.prepare_data()
+
+        bundle = load_validated_bundle(generated_bundle)
+        cfg = captured['value']
+        assert cfg.triplets_parquet == str(bundle.artifact_path('training_pairs'))
+        assert cfg.relations_parquet == str(bundle.artifact_path('relations'))
 
     def test_datamodule_with_different_seeds(self, monkeypatch: pytest.MonkeyPatch):
         '''Different seeds should produce different streaming configs.'''

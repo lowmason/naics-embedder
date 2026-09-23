@@ -3,11 +3,12 @@
 # -------------------------------------------------------------------------------------------------
 
 import fcntl
+import json
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional, TextIO, Tuple, Union
+from typing import Any, Dict, Optional, TextIO, Tuple, Union
 
 import polars as pl
 import torch
@@ -182,26 +183,113 @@ def _release_lock(lock_file: Optional[TextIO]) -> None:
         logger.debug(f'Error releasing lock: {e}')
 
 # -------------------------------------------------------------------------------------------------
+# Fingerprint sidecar
+# -------------------------------------------------------------------------------------------------
+
+def _sidecar_path(cache_path: Path) -> Path:
+    return cache_path.with_name(cache_path.name + '.meta.json')
+
+def _cache_identity(
+    cfg: TokenizationConfig,
+    description_fingerprint: str,
+    codebook_fingerprint: str,
+) -> Dict[str, Any]:
+    return {
+        'description_fingerprint': description_fingerprint,
+        'codebook_fingerprint': codebook_fingerprint,
+        'tokenizer_name': cfg.tokenizer_name,
+        'max_length': cfg.max_length,
+    }
+
+def _write_cache_sidecar(
+    cfg: TokenizationConfig,
+    *,
+    description_fingerprint: str,
+    codebook_fingerprint: str,
+) -> None:
+    '''Record which descriptions, codebook, and tokenizer produced the cache file.'''
+
+    sidecar = _sidecar_path(Path(cfg.output_path))
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = sidecar.with_suffix('.tmp')
+    temp_path.write_text(
+        json.dumps(_cache_identity(cfg, description_fingerprint, codebook_fingerprint), indent=2)
+    )
+    temp_path.replace(sidecar)
+
+def _sidecar_matches(
+    cfg: TokenizationConfig,
+    description_fingerprint: str,
+    codebook_fingerprint: str,
+) -> bool:
+    sidecar = _sidecar_path(Path(cfg.output_path))
+    if not sidecar.exists():
+        return False
+    try:
+        recorded = json.loads(sidecar.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return recorded == _cache_identity(cfg, description_fingerprint, codebook_fingerprint)
+
+def load_verified_tokenization_cache(
+    cfg: TokenizationConfig,
+    *,
+    description_fingerprint: str,
+    codebook_fingerprint: str,
+) -> Dict[int, Dict[str, torch.Tensor]]:
+    '''
+    Load a tokenization cache whose sidecar matches the expected fingerprints.
+
+    Raises:
+        RuntimeError: If the cache is missing or was built from other inputs.
+    '''
+
+    if not _sidecar_matches(cfg, description_fingerprint, codebook_fingerprint):
+        raise RuntimeError(
+            f'Tokenization cache at {cfg.output_path} is missing or does not match the expected '
+            'descriptions/codebook fingerprints; run prepare_data() to rebuild it'
+        )
+    cache = _load_tokenization_cache(cfg.output_path)
+    if cache is None:
+        raise RuntimeError(f'Tokenization cache not found at {cfg.output_path}')
+    return cache
+
+# -------------------------------------------------------------------------------------------------
 # Main tokenization functions
 # -------------------------------------------------------------------------------------------------
 
-def tokenization_cache(cfg: TokenizationConfig = TokenizationConfig(),
-                       use_locking: bool = True) -> Dict[int, Dict[str, torch.Tensor]]:
+def tokenization_cache(
+    cfg: TokenizationConfig = TokenizationConfig(),
+    *,
+    description_fingerprint: str,
+    codebook_fingerprint: str,
+    use_locking: bool = True,
+) -> Dict[int, Dict[str, torch.Tensor]]:
     '''
     Get tokenization cache, loading from disk or building if necessary.
+
+    A cache is reused only when its JSON sidecar records exactly the requested description and
+    codebook fingerprints, tokenizer, and max length; otherwise it is rebuilt, because its source
+    text is independently reproducible.
 
     This function is safe for multi-worker environments. It uses file locking
     to ensure only one worker builds the cache, while others wait and then load it.
 
     Args:
         cfg: TokenizationConfig
+        description_fingerprint: SHA-256 identifying the descriptions input
+        codebook_fingerprint: Fingerprint of the code-ID assignment the cache keys follow
         use_locking: If False, skip locking (for fast reads when cache exists)
     '''
 
     cache_path = Path(cfg.output_path)
+    identity = {
+        'description_fingerprint': description_fingerprint,
+        'codebook_fingerprint': codebook_fingerprint,
+    }
 
     # Fast path: try to load existing cache first (no locking needed for reads)
-    if cache_path.exists():
+    if cache_path.exists() and _sidecar_matches(cfg, **identity):
         try:
             cache = _load_tokenization_cache(cfg.output_path)
             if cache is not None:
@@ -212,7 +300,8 @@ def tokenization_cache(cfg: TokenizationConfig = TokenizationConfig(),
     # If we're not using locking (e.g., cache should already exist), fail fast
     if not use_locking:
         raise RuntimeError(
-            f'Tokenization cache not found at {cache_path} and locking disabled. '
+            f'Tokenization cache not found at {cache_path} (or its fingerprint sidecar does not '
+            'match) and locking disabled. '
             f'Cache should be built in prepare_data() before workers are spawned.'
         )
 
@@ -233,10 +322,11 @@ def tokenization_cache(cfg: TokenizationConfig = TokenizationConfig(),
             start_time = time.time()
 
             while time.time() - start_time < max_wait:
-                cache = _load_tokenization_cache(cfg.output_path)
-                if cache is not None:
-                    logger.info('Cache was built by another worker, loaded successfully')
-                    return cache
+                if _sidecar_matches(cfg, **identity):
+                    cache = _load_tokenization_cache(cfg.output_path)
+                    if cache is not None:
+                        logger.info('Cache was built by another worker, loaded successfully')
+                        return cache
                 time.sleep(check_interval)
 
             raise RuntimeError(
@@ -245,10 +335,11 @@ def tokenization_cache(cfg: TokenizationConfig = TokenizationConfig(),
             )
 
         # We have the lock - double-check cache wasn't built while we waited
-        cache = _load_tokenization_cache(cfg.output_path)
-        if cache is not None:
-            logger.info('Cache was built while waiting for lock, loaded successfully')
-            return cache
+        if cache_path.exists() and _sidecar_matches(cfg, **identity):
+            cache = _load_tokenization_cache(cfg.output_path)
+            if cache is not None:
+                logger.info('Cache was built while waiting for lock, loaded successfully')
+                return cache
 
         # Build cache (we're the only one doing this)
         logger.info('Building tokenization cache (this may take a few minutes)...')
@@ -258,12 +349,15 @@ def tokenization_cache(cfg: TokenizationConfig = TokenizationConfig(),
             cfg.max_length,  # type: ignore
         )
 
-        # Save to temporary file first, then rename (atomic operation)
+        # Save to temporary file first, then rename (atomic operation). The old sidecar is removed
+        # first so a crash between the two renames can never vouch for replaced cache bytes.
         temp_path = cache_path.with_suffix('.tmp')
         _save_tokenization_cache(cache, str(temp_path))
+        _sidecar_path(cache_path).unlink(missing_ok=True)
 
         # Atomic rename - ensures cache file appears all at once
         temp_path.replace(cache_path)
+        _write_cache_sidecar(cfg, **identity)
 
         logger.info('Tokenization cache built and saved successfully')
         return cache

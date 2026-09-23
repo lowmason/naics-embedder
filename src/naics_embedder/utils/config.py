@@ -3,11 +3,14 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from naics_embedder.supervision.schema import CONTRACT_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +344,54 @@ class DataConfig(BaseModel):
         default_factory=TripletsConfig, description='Triplets configuration'
     )
 
+class SupervisionBuildConfig(BaseModel):
+    '''Inputs and parameters for building one immutable Stage-3 supervision bundle.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    descriptions_parquet: str = './data/naics_descriptions.parquet'
+    output_root: str = './data/supervision/stage3-supervision-v1'
+    contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
+    naics_vintage: int = 2022
+    relation_id: Dict[str, int] = Field(default_factory=lambda: {
+        'child': 1,
+        'sibling': 2,
+        'grandchild': 3,
+        'great-grandchild': 4,
+        'nephew/niece': 5,
+        'great-great-grandchild': 6,
+        'cousin': 7,
+        'grand-nephew/niece': 8,
+        'grand-grand-nephew/niece': 9,
+        'cousin_1_times_removed': 10,
+        'second_cousin': 11,
+        'cousin_2_times_removed': 12,
+        'second_cousin_1_times_removed': 13,
+        'third_cousin': 14,
+        'cross_sector': 99,
+    })
+
+class SupervisionRuntimeConfig(BaseModel):
+    '''Which supervision contract training runs under, and the one authoritative bundle.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    mode: Literal['repaired', 'legacy_containment'] = 'repaired'
+    manifest_path: Optional[str] = Field(
+        default=None,
+        description=(
+            'Immutable bundle manifest printed by `naics-embedder data supervision`; required '
+            'before repaired training'
+        ),
+    )
+    contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
+
+class CheckpointLoadMode(str, Enum):
+    '''How a training run may use a checkpoint.'''
+
+    EXACT = 'exact'
+    WEIGHTS_ONLY = 'weights_only'
+
 # -------------------------------------------------------------------------------------------------
 # Data Loader Configuration
 # -------------------------------------------------------------------------------------------------
@@ -423,10 +474,13 @@ class StreamingConfig(BaseModel):
         gt=0.0,
         description='Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α',
     )
-    phase1_exclusion_weight: float = Field(
-        default=100.0,
+    phase1_exclusion_weight: Optional[float] = Field(
+        default=None,
         gt=0.0,
-        description='High constant weight for excluded codes in Phase 1 sampling',
+        description=(
+            'Legacy-containment only: constant sampling weight for excluded codes. Repaired '
+            'Stage-3 training rejects it; the one-slot exclusion quota owns representation.'
+        ),
     )
 
     # On-the-fly sampling with oversampling
@@ -474,7 +528,7 @@ class StreamingConfig(BaseModel):
 
     @model_validator(mode='after')
     def validate_difficulty_ratios(self) -> 'StreamingConfig':
-        """Ensure easy + semi <= 1.0 at both start and end (hard is derived)."""
+        '''Ensure easy + semi <= 1.0 at both start and end (hard is derived).'''
         if self.phase1_easy_start + self.phase1_semi_start > 1.0:
             raise ValueError(
                 f'phase1_easy_start ({self.phase1_easy_start}) + '
@@ -614,6 +668,20 @@ class ModelConfig(BaseModel):
 # Loss Configuration
 # -------------------------------------------------------------------------------------------------
 
+class StructuralPreferenceConfig(BaseModel):
+    '''Pairwise structural preference over each anchor's positive plus selected negatives.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    weight: float = Field(
+        default=0.35, ge=0.0, le=1.0, description='Structural preference loss weight'
+    )
+    margin: float = Field(default=0.1, ge=0.0, description='Ordering margin on learned distances')
+    temperature: float = Field(default=1.0, gt=0.0, description='Softplus temperature')
+    tie_tolerance: float = Field(
+        default=1e-6, ge=0.0, description='Structural distances within this tolerance are ties'
+    )
+
 class LossConfig(BaseModel):
     '''Loss function configuration.'''
 
@@ -633,12 +701,17 @@ class LossConfig(BaseModel):
         le=1.0,
         description='Weight for hierarchy preservation loss component (0.0 to disable)',
     )
-    rank_order_weight: float = Field(
-        default=0.15,
+    structural_preference: StructuralPreferenceConfig = Field(
+        default_factory=StructuralPreferenceConfig,
+        description='Structural preference loss (replaces LambdaRank)',
+    )
+    rank_order_weight: Optional[float] = Field(
+        default=None,
         ge=0,
         le=1.0,
         description=(
-            'Weight for rank order preservation loss (Spearman correlation optimization, 0.0 to disable)'
+            'Legacy LambdaRank weight, retained only for legacy containment and so repaired '
+            'configurations can be rejected with a migration message'
         ),
     )
     radius_reg_weight: float = Field(
@@ -838,6 +911,13 @@ class GraphConfig(BaseModel):
     encodings_parquet: str = Field(
         default='./output/hyperbolic_projection/encodings.parquet',
         description='Path to input hyperbolic embeddings parquet file',
+    )
+    supervision_manifest_path: Optional[str] = Field(
+        default=None,
+        description=(
+            'Stage-3 supervision bundle manifest; when set, relations, training pairs, and the '
+            'distance matrix are all read from that one validated bundle'
+        ),
     )
     relations_parquet: str = Field(
         default='./data/naics_relations.parquet', description='Path to relations parquet file'
@@ -1064,6 +1144,26 @@ class Config(BaseModel):
     false_negatives: FalseNegativeConfig = Field(
         default_factory=FalseNegativeConfig, description='False negative mitigation strategy'
     )
+    supervision: SupervisionRuntimeConfig = Field(
+        default_factory=SupervisionRuntimeConfig,
+        description='Stage-3 supervision mode and authoritative bundle',
+    )
+
+    @model_validator(mode='after')
+    def validate_supervision_contract(self) -> 'Config':
+        '''Repaired training rejects settings whose semantics the repaired contract replaced.'''
+        if self.supervision.mode == 'repaired':
+            if self.loss.rank_order_weight is not None:
+                raise ValueError(
+                    'loss.rank_order_weight is a legacy LambdaRank setting; '
+                    'configure loss.structural_preference instead'
+                )
+            if self.data_loader.streaming.phase1_exclusion_weight is not None:
+                raise ValueError(
+                    'data_loader.streaming.phase1_exclusion_weight is invalid in repaired mode; '
+                    'the one-slot exclusion quota owns representation'
+                )
+        return self
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'Config':
