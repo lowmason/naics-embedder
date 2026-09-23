@@ -117,56 +117,47 @@ The following modules have comprehensive test coverage:
    - Manifold validity checks
    - Numerical stability tests
    - Property-based tests with Hypothesis
-   - **Coverage: >80% (CRITICAL)**
 
 2. **text_model/loss.py** ✅ - `test_loss.py`
    - HyperbolicInfoNCELoss (DCL-based contrastive learning)
    - HierarchyPreservationLoss (distance correlation)
    - StructuralPreferenceLoss (pairwise structural ordering; gradient-direction contracts)
-   - **Coverage: >75%**
 
 3. **text_model/encoder.py** ✅ - `test_encoder.py`
    - Multi-channel transformer encoders (title, description, examples, exclusions)
    - LoRA adaptation layers
    - Channel-specific encoding
-   - **Coverage: >70%**
 
 4. **text_model/moe.py** ✅ - `test_moe.py`
    - Top-k gating mechanism
    - Expert routing logic
    - Load balancing loss
    - Batched expert processing
-   - **Coverage: >75%**
 
 5. **text_model/naics_model.py** ✅ - `test_naics_model.py`
-   - NAICSEmbedder PyTorch Lightning module
+   - NAICSContrastiveModel PyTorch Lightning module
    - Training step (forward + loss)
    - Validation step (metrics)
    - Optimizer configuration
-   - **Coverage: >60%**
 
-6. **text_model/evaluation.py** ✅ - `test_evaluation.py`
+6. **metrics/core.py** ✅ - `test_evaluation.py`
    - EmbeddingEvaluator (distance/similarity computation)
    - RetrievalMetrics (precision@k, recall@k, MAP, NDCG)
    - HierarchyMetrics (cophenetic/Spearman correlation, distortion)
    - EmbeddingStatistics (norm, radius, diversity, collapse detection)
-   - NAICSEvaluationRunner (full evaluation pipeline)
-   - **Coverage: >75%**
+   - NAICSEvaluationRunner (full evaluation pipeline, in `metrics/runner.py`)
 
 7. **text_model/curriculum.py** ✅ - `test_curriculum.py`
    - Dynamic structure-aware curriculum scheduling
    - Difficulty progression
-   - **Coverage: >65%**
 
 8. **text_model/hard_negative_mining.py** ✅ - `test_hard_negative_mining.py`
    - Hard negative sampling strategies
    - Distance-based selection
-   - **Coverage: >70%**
 
 9. **text_model/false_negative_strategies.py** ✅ - `test_false_negative_strategy.py`
    - False negative detection strategies
    - Masking logic
-   - **Coverage: >65%**
 
 #### Data Loading Pipeline
 
@@ -176,14 +167,12 @@ The following modules have comprehensive test coverage:
     - File locking for multi-worker safety
     - Atomic cache operations
     - get_tokens utility function
-    - **Coverage: >70%**
 
 2. **text_model/dataloader/datamodule.py** ✅ - `test_datamodule.py`
     - collate_fn batching logic
     - Positive level extraction
     - NAICSMapDataset indexing and __getitem__
     - DataLoader shuffle configuration
-    - **Coverage: >60%**
 
 3. **text_model/dataloader/streaming_dataset.py** ✅ - `test_streaming_dataset.py`
     - Taxonomy utilities
@@ -191,7 +180,6 @@ The following modules have comprehensive test coverage:
     - Matrix loading
     - Sampling weight computation
     - Multi-epoch cache path generation
-    - **Coverage: >65%**
 
 #### Configuration & Utilities
 
@@ -199,13 +187,11 @@ The following modules have comprehensive test coverage:
     - Pydantic configuration models
     - YAML loading and parsing
     - Configuration validation
-    - **Coverage: >60%**
 
 2. **data/compute_distances.py** ✅ - `test_data_distances.py`
     - NAICS tree construction
     - Pairwise distance calculations
     - Distance matrix generation
-    - **Coverage: >65%**
 
 ### Closed Gaps
 
@@ -242,16 +228,10 @@ skeletons are in `b1ee4df`.
 
 ## Known Issues
 
-Some tests currently fail due to fixture generation issues:
-
-1. **Hyperbolic fixture**: The `sample_tangent_vectors` and `sample_lorentz_embeddings` fixtures
-   need refinement to properly generate tangent vectors at the origin (time component should be 0)
-
-2. **Config loading**: Tests using `tmp_path` need adjustment to work with the config loader's
-   path resolution
-
-These are test infrastructure issues, not issues with the core code. The tests themselves are
-correctly written and will pass once fixtures are fixed.
+- **Python 3.14:** some tests fail there with the locked torch 2.9.1. Importing `torch._inductor`
+  raises `AttributeError: 'typing.Union' object has no attribute '__module__'` in
+  `torch/ao/quantization/quantizer/quantizer.py`. The repo pins Python 3.12 in `.python-version`,
+  which `uv` uses by default; see [CLAUDE.md](../CLAUDE.md#initial-setup).
 
 ## Test Markers
 
