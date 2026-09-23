@@ -926,7 +926,7 @@ During training, the model computes validation metrics every epoch:
 2. **Tests** (`.github/workflows/tests.yml`)
    - **Trigger:** Push, pull request
    - **Action:** Run pytest with coverage (Python 3.10, 3.12)
-   - **Reports:** Coverage reports uploaded to artifacts
+   - **Reports:** Coverage (`coverage.xml`) uploaded to Codecov
 
 ### Documentation
 
@@ -1199,7 +1199,8 @@ When working on this codebase:
 - [ ] Write unit tests for new functionality in `tests/unit/`
 - [ ] Run tests before committing: `uv run pytest`
 - [ ] Lint: `uv run ruff check src/ tests/` (no formatter; don't run `ruff format` or yapf)
-- [ ] Test changes with a quick training run: `uv run naics-embedder train training.trainer.max_epochs=2`
+- [ ] Test changes with a quick training run:
+  `uv run naics-embedder train training.trainer.max_epochs=2`
 - [ ] Check hyperbolic validity when modifying geometry code
 - [ ] Use validation utilities to check data and config
 - [ ] Update configuration files (not hardcoded values) for hyperparameters
