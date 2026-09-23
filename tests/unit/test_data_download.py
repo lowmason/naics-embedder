@@ -1,5 +1,5 @@
 from io import BytesIO
-from typing import Dict, cast
+from typing import Dict, List, cast
 
 import polars as pl
 import pytest
@@ -118,8 +118,9 @@ def test_get_examples_prefers_spreadsheet_entries():
     row = examples.row(0, named=True)
     assert row['examples'] == 'Sheet example'
 
+    # The examples section, and so the description cutoff, starts at the marker itself
     assert descriptions_examples.height == 1
-    assert descriptions_examples.row(0, named=True)['description_id_min'] == 3
+    assert descriptions_examples.row(0, named=True)['description_id_min'] == 2
 
 @pytest.mark.unit
 def test_get_exclusions_combines_crossrefs_and_descriptions():
@@ -167,3 +168,47 @@ def test_get_descriptions_2_removes_flagged_sections():
     text = cleaned.row(0, named=True)['description']
     assert 'Drop exclusion' not in text
     assert 'Drop example' not in text
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'sheet_examples, expected_examples',
+    [
+        pytest.param(['Grain farming, mixed'], 'Grain farming, mixed', id='index-sheet'),
+        pytest.param([], 'Barley farming; Rye farming', id='description-text'),
+    ],
+)
+def test_description_drops_whole_illustrative_examples_section(
+    sheet_examples: List[str], expected_examples: str
+):
+    # A real description split one block per line, the structure _get_examples relies on. The
+    # marker and its bullets leave the description whichever source fills the examples column: the
+    # Index sheet (preferred) or the bullets themselves.
+    descriptions_3 = pl.DataFrame(
+        {
+            'code': ['111199'] * 4,
+            'description_id': pl.Series([1, 2, 3, 4], dtype=pl.UInt32),
+            'description': [
+                'This industry comprises establishments growing grain.',
+                'Illustrative Examples:',
+                'Barley farming',
+                'Rye farming',
+            ],
+        }
+    )
+    examples_df = pl.DataFrame(
+        {'code': ['111199'] * len(sheet_examples), 'examples': sheet_examples},
+        schema={'code': pl.Utf8, 'examples': pl.Utf8},
+    )
+    descriptions_exclusions = pl.DataFrame(schema={'code': pl.Utf8, 'description_id': pl.UInt32})
+
+    examples, descriptions_examples = download_data._get_examples(
+        examples_df, {'111199'}, descriptions_3, descriptions_3
+    )
+    descriptions = download_data._get_descriptions_2(
+        descriptions_3, descriptions_exclusions, descriptions_examples
+    )
+
+    assert descriptions.get_column('description').to_list() == [
+        'This industry comprises establishments growing grain.'
+    ]
+    assert examples.get_column('examples').to_list() == [expected_examples]

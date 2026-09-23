@@ -373,10 +373,10 @@ def _get_examples(
         descriptions_3.join(examples_2, how='inner', on='code')
         .filter(pl.col('example_id').lt(pl.col('description_id')))
         .group_by('code', maintain_order=True)
-        .agg(examples_2=pl.col('description'), description_id_min=pl.col('description_id').min())
+        .agg(examples_2=pl.col('description'), description_id_min=pl.col('example_id').min())
     )
 
-    # Description IDs to exclude in description dataframe
+    # Description IDs to exclude in description dataframe, starting at the marker itself
     descriptions_examples = examples_3.select('code', 'description_id_min')
 
     # Merge examples, preferring spreadsheet example
