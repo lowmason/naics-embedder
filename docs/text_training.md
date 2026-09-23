@@ -14,6 +14,7 @@ explicit exclusions, and training pairs. See
   - [Quick Start](#quick-start)
   - [SADC Scheduler](#sadc-scheduler)
   - [CLI Reference](#cli-reference)
+  - [Structural Spearman Validation](#structural-spearman-validation)
   - [Resuming and Overrides](#resuming-and-overrides)
   - [Stage-3 Supervision Integrity](#stage-3-supervision-integrity)
     - [Operator Workflow](#operator-workflow)
@@ -99,6 +100,63 @@ Key options:
 - `--skip-validation` — Bypass the advisory pre-flight checks of data files and tokenization cache.
   The supervision bundle gate is mandatory and always runs.
 - `OVERRIDES...` — Space-separated config overrides (e.g., `training.learning_rate=1e-4`).
+
+---
+
+## Structural Spearman Validation
+
+Text validation reports `structural-spearman-v1` through versioned fields. Each mirrored distance
+pair is validated and averaged in CPU float64; only the strict upper triangle (`i < j`) is used,
+with the diagonal excluded. Canonical target distances are filtered at `min_distance=0.1`.
+SciPy assigns average ranks to exact ties. See the
+[complete input and undefined-result contract](overview.md#structural-spearman-v1).
+
+Lightning logs `val/structural_spearman_v1` only when defined and always logs
+`val/structural_spearman_v1_n_pairs` and `val/structural_spearman_v1_n_total`.
+Undefined results emit one warning with the exact reason and omit the numeric scalar.
+Malformed inputs raise `StructuralMetricInputError` and fail validation rather than being
+swallowed by the epoch-end evaluation handler.
+
+In distributed text training, structural Spearman and its counts describe **rank 0's sampled
+validation population**. All ranks validate their own matrices, but only rank 0 publishes these
+fields and undefined warnings and writes `evaluation_metrics.json`. The scalar and counts are
+not reduced across ranks: averaging local correlations is not a global Spearman coefficient, and
+undefined local populations must not select different collective operations. This rank-zero-only
+metric is for reporting, not a distributed early-stopping monitor.
+
+The existing `evaluation_metrics.json` history includes these fields. For example, a valid
+four-node evaluation with a constant target produces:
+
+```json
+{
+  "structural_spearman_v1": null,
+  "structural_spearman_v1_n_pairs": 6,
+  "structural_spearman_v1_n_total": 6,
+  "structural_spearman_v1_status": "undefined",
+  "structural_spearman_v1_reason": "constant_target",
+  "structural_spearman_v1_definition": "structural-spearman-v1"
+}
+```
+
+When defined, the value is numeric, status is `defined`, and reason is `null`. The other
+undefined reasons are `fewer_than_two_observations`, `constant_prediction_and_target`, and
+`constant_prediction`, in that precedence before `constant_target`.
+
+Unversioned historical `spearman`, `spearman_correlation`, `val/spearman_correlation`, and
+`val_spearman_correlation` fields are `legacy-ordinal-rank-v0`: defective, order-sensitive
+ordinal-rank results, not directly comparable with v1. Existing files are not rewritten, and
+new evaluations do not emit legacy aliases.
+
+For comparisons covered by this repair, retain `loss.curvature: 1.0`. After configuring the
+supervision manifest as described above, make the comparison setting explicit:
+
+```bash
+uv run naics-embedder train --config conf/config.yaml loss.curvature=1.0
+```
+
+The rank fix does not correct non-unit-curvature distances. HGCN full evaluation and Stage-4
+verification also remain fixed at `1.0`; Stage-4 reports structural Spearman without using it
+as an acceptance threshold.
 
 ---
 

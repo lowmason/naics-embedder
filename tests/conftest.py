@@ -272,3 +272,21 @@ def temp_config_dir(tmp_path):
     config_dir = tmp_path / 'conf'
     config_dir.mkdir()
     return config_dir
+
+@pytest.fixture
+def structural_distance_matrices() -> tuple[torch.Tensor, torch.Tensor]:
+    prediction = torch.tensor(
+        [[0, 1, 2, 3], [1, 0, 4, 5], [2, 4, 0, 6], [3, 5, 6, 0]],
+        dtype=torch.float64,
+    )
+    target = torch.tensor(
+        [[0, 1, 1, 1], [1, 0, 2, 2], [1, 2, 0, 2], [1, 2, 2, 0]],
+        dtype=torch.float64,
+    )
+    return prediction, target
+
+@pytest.fixture
+def structural_lorentz_embeddings() -> torch.Tensor:
+    spatial = torch.tensor([[0.0, 0.0], [0.2, 0.0], [0.0, 0.3], [0.2, 0.4]])
+    time = torch.sqrt(1.0 + spatial.square().sum(dim=1, keepdim=True))
+    return torch.cat([time, spatial], dim=1)

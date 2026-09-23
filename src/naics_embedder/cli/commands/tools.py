@@ -269,10 +269,10 @@ def verify_stage4_command(
     ] = 1,
 ):
     '''
-    Compare Stage 3 and Stage 4 embeddings to ensure HGCN preserves global structure.
+    Compare Stage 3 and Stage 4 embeddings at curvature 1.0.
 
-    Computes cophenetic correlation, NDCG@K, and parent retrieval accuracy
-    before/after HGCN refinement and enforces configurable degradation thresholds.
+    Enforce cophenetic, NDCG, and parent-retrieval thresholds. Report structural
+    Spearman v1 separately; undefined values and deltas display as N/A.
     '''
 
     configure_logging('tools_verify_stage4.log')
@@ -300,15 +300,18 @@ def verify_stage4_command(
     console.print('\n[bold cyan]Stage 4 Verification[/bold cyan]\n')
     console.print('[bold]Pre-HGCN metrics:[/bold]')
     for key, value in result['pre'].items():
-        console.print(f'  • {key}: {value:.4f}')
+        formatted = 'N/A' if value is None else f'{value:.4f}'
+        console.print(f'  • {key}: {formatted}')
 
     console.print('\n[bold]Post-HGCN metrics:[/bold]')
     for key, value in result['post'].items():
-        console.print(f'  • {key}: {value:.4f}')
+        formatted = 'N/A' if value is None else f'{value:.4f}'
+        console.print(f'  • {key}: {formatted}')
 
     console.print('\n[bold]Deltas:[/bold]')
     for key, value in result['delta'].items():
-        console.print(f'  • {key}: {value:+.4f}')
+        formatted = 'N/A' if value is None else f'{value:+.4f}'
+        console.print(f'  • {key}: {formatted}')
 
     console.print('\n[bold]Threshold checks:[/bold]')
     for key, passed in result['checks'].items():

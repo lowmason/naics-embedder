@@ -9,6 +9,8 @@ Tests cover:
 - NAICSEvaluationRunner (full evaluation pipeline)
 '''
 
+from unittest.mock import MagicMock
+
 import pytest
 import torch
 
@@ -18,6 +20,7 @@ from naics_embedder.metrics import (
     HierarchyMetrics,
     NAICSEvaluationRunner,
     RetrievalMetrics,
+    StructuralMetricInputError,
 )
 
 # -------------------------------------------------------------------------------------------------
@@ -570,7 +573,8 @@ class TestNAICSEvaluationRunner:
         assert 'statistics' in results
         assert 'collapse_check' in results
         assert 'cophenetic_correlation' in results
-        assert 'spearman_correlation' in results
+        assert 'structural_spearman_v1' in results
+        assert 'spearman_correlation' not in results
         assert 'distortion' in results
 
     def test_evaluate_with_relevance(
@@ -607,7 +611,8 @@ class TestNAICSEvaluationRunner:
         assert 'statistics' in results
         assert 'collapse_check' in results
         assert 'cophenetic_correlation' in results
-        assert 'spearman_correlation' in results
+        assert 'structural_spearman_v1' in results
+        assert 'spearman_correlation' not in results
         assert 'distortion' in results
         assert 'retrieval' in results
         assert 'precision@5' in results['retrieval']
@@ -633,6 +638,62 @@ class TestNAICSEvaluationRunner:
         assert 'recall@3' in results['retrieval']
         assert 'recall@7' in results['retrieval']
         assert 'recall@15' in results['retrieval']
+
+@pytest.mark.unit
+def test_runner_emits_complete_versioned_spearman(
+    monkeypatch, structural_distance_matrices, structural_lorentz_embeddings
+):
+    prediction, target = structural_distance_matrices
+    runner = NAICSEvaluationRunner(MagicMock())
+    runner.embedding_stats.device = 'cpu'
+    runner.hierarchy_metrics.device = 'cpu'
+    monkeypatch.setattr(
+        runner.embedding_eval, 'compute_pairwise_distances', lambda *_, **__: prediction
+    )
+    result = runner.evaluate(structural_lorentz_embeddings, tree_distances=target)
+    assert 'spearman_correlation' not in result
+    record = result['structural_spearman_v1']
+    assert set(record) == {'correlation', 'n_pairs', 'n_total', 'definition', 'status', 'reason'}
+    assert record['correlation'].item() == pytest.approx(0.87831006565368, abs=1e-7)
+    assert record['definition'] == 'structural-spearman-v1'
+    assert record['n_pairs'] == record['n_total'] == 6
+    assert record['status'] == 'defined'
+    assert record['reason'] is None
+
+@pytest.mark.unit
+def test_runner_preserves_undefined_metadata(
+    monkeypatch, structural_distance_matrices, structural_lorentz_embeddings
+):
+    prediction, target = structural_distance_matrices
+    target.fill_(1.0)
+    runner = NAICSEvaluationRunner(MagicMock())
+    runner.embedding_stats.device = 'cpu'
+    runner.hierarchy_metrics.device = 'cpu'
+    monkeypatch.setattr(
+        runner.embedding_eval, 'compute_pairwise_distances', lambda *_, **__: prediction
+    )
+    result = runner.evaluate(structural_lorentz_embeddings, tree_distances=target)
+    record = result['structural_spearman_v1']
+    assert record['status'] == 'undefined'
+    assert record['reason'] == 'constant_target'
+    assert torch.isnan(record['correlation'])
+    assert record['n_pairs'] == record['n_total'] == 6
+    assert 'spearman_correlation' not in result
+
+@pytest.mark.unit
+def test_runner_propagates_malformed_inputs(
+    monkeypatch, structural_distance_matrices, structural_lorentz_embeddings
+):
+    prediction, target = structural_distance_matrices
+    target[1, 0] = float('nan')
+    runner = NAICSEvaluationRunner(MagicMock())
+    runner.embedding_stats.device = 'cpu'
+    runner.hierarchy_metrics.device = 'cpu'
+    monkeypatch.setattr(
+        runner.embedding_eval, 'compute_pairwise_distances', lambda *_, **__: prediction
+    )
+    with pytest.raises(StructuralMetricInputError, match='tree_distances'):
+        runner.evaluate(structural_lorentz_embeddings, tree_distances=target)
 
 # -------------------------------------------------------------------------------------------------
 # Level Consistency Tests (Per-level embedding quality)

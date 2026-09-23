@@ -458,11 +458,55 @@ The system computes comprehensive evaluation metrics during training to monitor 
 | Metric | Description | Ideal Value |
 |--------|-------------|-------------|
 | Cophenetic Correlation | Correlation between embedding and tree distances | → 1.0 |
-| Spearman Correlation | Rank-order correlation of distance pairs | → 1.0 |
+| Structural Spearman v1 (`structural_spearman_v1`) | Average-rank correlation of canonical unordered distance pairs | Defined values approach 1.0 |
 | NDCG@5 | Ranking quality (top 5 neighbors) | → 1.0 |
 | NDCG@10 | Ranking quality (top 10 neighbors) | → 1.0 |
 | NDCG@20 | Ranking quality (top 20 neighbors) | → 1.0 |
 | Mean Distortion | Average distance distortion from tree | → 0.0 |
+
+### Structural Spearman v1
+
+The definition identifier is `structural-spearman-v1`; external fields use
+`structural_spearman_v1`. The Python entry point remains
+`HierarchyMetrics.spearman_correlation(predicted_distances, target_distances, min_distance=0.1)`.
+Inputs are equal-shaped square tensors with the documented real floating or integer dtypes.
+They are detached and transferred to CPU before validation and calculation.
+
+Both orientations of every off-diagonal pair must be finite and symmetric. Each matrix uses its
+own source-dtype tolerance: float64 `(rtol=1e-7, atol=1e-9)`, float32 `(1e-5, 1e-7)`,
+float16/bfloat16 `(1e-3, 1e-3)`, and exact equality for integers. Mirrored values are promoted to
+float64 and arithmetically averaged; the strict upper triangle contributes exactly
+`N(N-1)/2` candidates. The diagonal, including non-finite diagonal sentinels, is ignored.
+
+Canonical target distances below the finite `min_distance` threshold are removed only after
+validation. `n_total` counts candidates before filtering; `n_pairs` counts observations after it.
+SciPy uses average ranks for exact ties in the two float64 vectors; tolerance does not group
+near-equal observations. The p-value is discarded. The public result's `correlation` is a
+detached float32 scalar on the metric's configured device; CUDA and MPS do not select a
+different ranking algorithm. Source quantization cannot be reversed by promotion.
+
+Malformed inputs raise `StructuralMetricInputError`, a `ValueError` subclass. Statistically
+undefined results have a `NaN` tensor and these ordered reasons: fewer than two filtered
+observations (`fewer_than_two_observations`), both vectors constant
+(`constant_prediction_and_target`), prediction constant (`constant_prediction`), or target
+constant (`constant_target`). Defined results have `status='defined'` and `reason=None`.
+An unexpected non-finite SciPy result for otherwise defined inputs raises `RuntimeError`.
+
+The general evaluation runner returns the complete result under `structural_spearman_v1`:
+`correlation`, `n_pairs`, `n_total`, `definition`, `status`, and `reason`. Training artifacts
+serialize undefined correlation as JSON `null`; Lightning omits that numeric scalar but logs
+the pair counts. Stage-4 verification reports pre/post/delta values and metadata but does not
+gate acceptance on Spearman.
+
+All unversioned historical fields (`spearman`, `spearman_correlation`,
+`val/spearman_correlation`, `val_spearman_correlation`) identify
+`legacy-ordinal-rank-v0`. Their order-sensitive ordinal ranks are not valid tied-rank Spearman
+and are not directly comparable with v1. Do not rewrite, dual-write, or numerically convert old
+artifacts.
+
+This rank repair does not validate the formula that produced the distance matrices. HGCN full
+evaluation and the Stage-4 verifier remain fixed at curvature `1.0`; text comparison runs retain
+`loss.curvature: 1.0`. Non-unit-curvature metric corrections are a separate change.
 
 ### Hyperbolic Geometry Metrics
 

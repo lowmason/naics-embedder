@@ -17,6 +17,10 @@ from typing import Any, Dict, List, Optional, Union
 import torch
 import torch.nn.functional as F
 
+from naics_embedder.metrics.structural_spearman import (
+    StructuralSpearmanResult,
+    compute_structural_spearman,
+)
 from naics_embedder.utils.backend import get_device
 
 logger = logging.getLogger(__name__)
@@ -415,52 +419,31 @@ class HierarchyMetrics:
         embedding_distances: torch.Tensor,
         tree_distances: torch.Tensor,
         min_distance: float = 0.1,
-    ) -> Dict[str, Union[torch.Tensor, int]]:
-        '''
-        Compute Spearman rank correlation coefficient with filtering.
+    ) -> StructuralSpearmanResult:
+        '''Compute structural-spearman-v1 over unique unordered non-self pairs.
 
-        Args:
-            embedding_distances: Distance matrix from embeddings (N, N)
-            tree_distances: Ground truth tree distances (N, N)
-            min_distance: Minimum tree distance to include
+        Inputs must be same-shaped square, real numeric tensors. The calculation
+        validates both off-diagonal orientations, averages mirrored values on CPU
+        in float64, filters canonical targets >= min_distance, and uses SciPy's
+        average ranks for exact ties. Diagonal values are ignored.
 
         Returns:
-            Dictionary with correlation and metadata
+            A detached float32 scalar on self.device, pair counts, definition,
+            status, and reason. Undefined correlations are NaN with an explicit
+            reason; malformed input raises StructuralMetricInputError.
         '''
-
-        embedding_distances = embedding_distances.to(self.device)
-        tree_distances = tree_distances.to(self.device)
-
-        # Get upper triangular values
-        N = embedding_distances.shape[0]
-        triu_indices = torch.triu_indices(N, N, offset=1, device=self.device)
-
-        emb_dists = embedding_distances[triu_indices[0], triu_indices[1]]
-        tree_dists = tree_distances[triu_indices[0], triu_indices[1]]
-
-        # Filter out pairs with very small tree distances
-        valid_mask = tree_dists >= min_distance
-        emb_dists_filtered = emb_dists[valid_mask]
-        tree_dists_filtered = tree_dists[valid_mask]
-
-        if len(emb_dists_filtered) < 2:
-            return {
-                'correlation': torch.tensor(0.0, device=self.device),
-                'n_pairs': len(emb_dists_filtered),
-                'n_total': len(emb_dists),
-            }
-
-        # Convert to ranks
-        emb_ranks = self._rank_tensor(emb_dists_filtered)
-        tree_ranks = self._rank_tensor(tree_dists_filtered)
-
-        # Compute Pearson correlation of ranks
-        correlation = self._pearson_correlation(emb_ranks, tree_ranks)
-
+        result = compute_structural_spearman(
+            embedding_distances, tree_distances, min_distance=min_distance
+        )
         return {
-            'correlation': correlation,
-            'n_pairs': len(emb_dists_filtered),
-            'n_total': len(emb_dists),
+            'correlation': torch.tensor(
+                result.correlation, dtype=torch.float32, device=self.device
+            ),
+            'n_pairs': result.n_pairs,
+            'n_total': result.n_total,
+            'definition': result.definition,
+            'status': result.status,
+            'reason': result.reason,
         }
 
     def ndcg_ranking(
@@ -549,23 +532,6 @@ class HierarchyMetrics:
                 results[f'ndcg@{k}_n_queries'] = 0
 
         return results
-
-    def _rank_tensor(self, x: torch.Tensor) -> torch.Tensor:
-        '''
-        Convert values to ranks.
-
-        Args:
-            x: Values to rank (shape: N)
-
-        Returns:
-            Ranks (shape: N)
-        '''
-
-        _, indices = torch.sort(x)
-        ranks = torch.zeros_like(indices, dtype=torch.float32)
-        ranks[indices] = torch.arange(len(x), device=x.device, dtype=torch.float32)
-
-        return ranks
 
     def distortion(self, embedding_distances: torch.Tensor,
                    tree_distances: torch.Tensor) -> Dict[str, torch.Tensor]:

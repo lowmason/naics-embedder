@@ -141,9 +141,26 @@ This aligns global and local geometric structure with the NAICS taxonomy.
 To ensure graph refinement does not erode the global structure captured by the text model, the same hierarchy-aware metrics introduced earlier in the pipeline are logged:
 
 - Cophenetic correlation + pair counts
-- Spearman correlation
+- Structural Spearman v1 (`structural_spearman_v1`) and unique-pair counts
 - NDCG\@K (configurable list, default `5/10/20`)
 - Hyperbolic distortion statistics
+
+`structural-spearman-v1` validates square symmetric distance matrices, averages each mirrored
+pair in CPU float64, and uses only the strict upper triangle (`i < j`), excluding the diagonal.
+After filtering canonical target distances at `min_distance` (default `0.1`), SciPy computes
+Spearman correlation with average ranks for exact ties. Counts distinguish all unordered pairs
+from those retained by the filter.
+
+Malformed off-diagonal values, shapes, dtypes, thresholds, or asymmetry raise
+`StructuralMetricInputError`. Valid but undefined correlations have an explicit status/reason
+and serialize as JSON `null`; they are not logged as numeric zero or `NaN` in Lightning.
+
+Historical unversioned fields (`spearman`, `spearman_correlation`, `val/spearman_correlation`,
+and `val_spearman_correlation`) are `legacy-ordinal-rank-v0`: order-sensitive ordinal-rank
+results, not valid tied-rank Spearman coefficients. They are not directly comparable with v1.
+Historical files remain untouched, and new reports do not dual-write legacy keys. See the
+[metric contract](docs/overview.md#structural-spearman-v1) and the
+[text](docs/text_training.md) and [HGCN](docs/hgcn_training.md) artifact documentation.
 
 ### 5.5 Pre/Post Verification
 
@@ -157,7 +174,13 @@ uv run naics-embedder tools verify-stage4 \
   --relations ./data/naics_relations.parquet
 ```
 
-The verifier reports cophenetic correlation, NDCG\@K, and parent-retrieval accuracy deltas and fails when degradation exceeds the configurable thresholds (`--max-cophenetic-drop`, `--max-ndcg-drop`, `--min-local-improvement`, `--parent-top-k`). Integrate this command into your pipeline to guarantee that Stage 4 only ships when it demonstrably preserves the global NAICS hierarchy.
+The verifier reports cophenetic correlation, NDCG\@K, parent-retrieval accuracy, and
+`structural_spearman_v1` pre/post/delta values at fixed curvature `1.0`. Only cophenetic, NDCG,
+and local parent-retrieval checks determine pass/fail; structural Spearman is report-only, with
+no threshold option. Undefined values or deltas display as `N/A` and serialize as JSON `null`.
+Definition, status, reason, and pair counts live under
+`metric_metadata['structural_spearman_v1']`; see the
+[verification output contract](docs/hgcn_training.md#9-prepost-verification-workflow).
 
 ------------------------------------------------------------------------
 
