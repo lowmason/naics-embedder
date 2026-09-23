@@ -420,6 +420,9 @@ def train(
             num_workers=cfg.data_loader.num_workers,
             val_split=cfg.data_loader.val_split,
             seed=cfg.seed,
+            # Must equal the model's curriculum inputs (trainer.max_epochs, curriculum_phase1_end)
+            max_epochs=cfg.training.trainer.max_epochs,
+            phase1_end=cfg.curriculum.phase1_end,
         )
 
         # Handle checkpoint resumption using centralized utility
