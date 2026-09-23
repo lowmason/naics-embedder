@@ -7,12 +7,7 @@ from itertools import combinations
 from typing import Dict, List, Mapping, Optional, Tuple
 
 import networkx as nx
-import numpy as np
 import polars as pl
-
-from naics_embedder.utils.config import RelationsConfig, load_config
-from naics_embedder.utils.console import log_table as _log_table
-from naics_embedder.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
 
@@ -163,58 +158,7 @@ def _get_relations(i: str, j: str, depths: Dict[str, int], ancestors: Dict[str, 
             return f'{degree_name}_cousin_{removed}_times_removed'
 
 # -------------------------------------------------------------------------------------------------
-# Relation matrix
-# -------------------------------------------------------------------------------------------------
-
-def _get_relation_matrix(df: pl.DataFrame) -> pl.DataFrame:
-    '''Create relation matrix from relations_df DataFrame.'''
-
-    codes = sorted(set(df['code_i'].to_list() + df['code_j'].to_list()))
-    n_codes = len(codes)
-
-    code_to_idx = {code: idx for idx, code in enumerate(codes)}
-
-    rel_matrix = np.zeros((n_codes, n_codes), dtype=float)
-    for row in df.iter_rows(named=True):
-        i = code_to_idx[row['code_i']]
-        j = code_to_idx[row['code_j']]
-        dist = row['structural_relation_id']
-        rel_matrix[i, j] = dist
-        rel_matrix[j, i] = dist
-
-    rel_matrix_schema = []
-    for code, idx in code_to_idx.items():
-        rel_matrix_schema.append((f'idx_{idx}-code_{code}', pl.Float64))
-
-    return pl.from_numpy(data=rel_matrix, schema=rel_matrix_schema)
-
-# -------------------------------------------------------------------------------------------------
-# Distance stats
-# -------------------------------------------------------------------------------------------------
-
-def _relation_stats(relations_df: pl.DataFrame):
-    stats_df = (
-        relations_df.group_by('structural_relation_id', 'structural_relation_name').agg(
-            cnt=pl.len()
-        ).with_columns(pct=pl.col('cnt').truediv(pl.col('cnt').sum()).mul(100)
-                       ).sort('structural_relation_id')
-    )
-
-    _log_table(
-        df=stats_df,
-        title='Relation Statistics',
-        headers=[
-            'Relation ID:structural_relation_id',
-            'Relation:structural_relation_name',
-            'cnt',
-            'pct',
-        ],
-        logger=logger,
-        output='./outputs/relation_stats.pdf',
-    )
-
-# -------------------------------------------------------------------------------------------------
-# Main Entry Point
+# Structural relations
 # -------------------------------------------------------------------------------------------------
 
 CROSS_SECTOR_RELATION_NAME = 'cross_sector'
@@ -316,44 +260,3 @@ def compute_structural_relations(
             structural_relation_name=pl.col('relation').fill_null(CROSS_SECTOR_RELATION_NAME),
         ).sort('idx_i', 'idx_j')
     )
-
-def calculate_pairwise_relations() -> pl.DataFrame:
-    # Load configuration from YAML
-    cfg = load_config(RelationsConfig, './data/relations.yaml')
-
-    logger.info('Configuration:')
-    logger.info(cfg.model_dump_json(indent=2))
-    logger.info('')
-
-    relations_df = compute_structural_relations(cfg.input_parquet, cfg.relation_id)
-
-    (relations_df.write_parquet(cfg.output_parquet))
-
-    _relation_stats(relations_df)
-
-    _parquet_stats(
-        parquet_df=relations_df,
-        message='NAICS pairwise relations written to',
-        output_parquet=cfg.output_parquet,
-        logger=logger,
-    )
-
-    relations_matrix = _get_relation_matrix(relations_df)
-
-    (relations_matrix.write_parquet(cfg.relation_matrix_parquet))
-
-    _parquet_stats(
-        parquet_df=relations_matrix,
-        message='NAICS relations matrix written to',
-        output_parquet=cfg.relation_matrix_parquet,
-        logger=logger,
-    )
-
-    return relations_df
-
-# -------------------------------------------------------------------------------------------------
-# Main Entry Point
-# -------------------------------------------------------------------------------------------------
-
-if __name__ == '__main__':
-    calculate_pairwise_relations()

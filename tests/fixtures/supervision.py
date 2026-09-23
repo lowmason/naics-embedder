@@ -8,6 +8,8 @@ code as their oracle.
 import polars as pl
 import pytest
 
+from naics_embedder.data.supervision_bundle import generate_supervision_bundle_from_frames
+
 
 @pytest.fixture
 def descriptions_fixture() -> pl.DataFrame:
@@ -153,6 +155,18 @@ def pair_facts_fixture() -> pl.DataFrame:
                 False, True, False, False, False, True, False, False, False, False
             ],
         }
+    )
+
+
+@pytest.fixture
+def generated_bundle(tmp_path, descriptions_fixture, pair_facts_fixture):
+    return generate_supervision_bundle_from_frames(
+        output_root=tmp_path,
+        bundle_id='bundle-a',
+        generator_revision='revision-a',
+        naics_vintage=2022,
+        descriptions=descriptions_fixture,
+        pair_facts=pair_facts_fixture,
     )
 
 

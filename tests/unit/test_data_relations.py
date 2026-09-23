@@ -21,23 +21,6 @@ def test_get_relations_handles_child_sibling_and_cousin():
     assert compute_relations._get_relations('C', 'E', depths, ancestors) == 'cousin'
 
 @pytest.mark.unit
-def test_get_relation_matrix_is_symmetric():
-    df = pl.DataFrame({
-        'code_i': ['11', '11'],
-        'code_j': ['21', '31'],
-        'structural_relation_id': [1, 2],
-    })
-
-    matrix = compute_relations._get_relation_matrix(df)
-
-    assert matrix.shape == (3, 3)
-    cols = matrix.columns
-    assert matrix[cols[1]][0] == pytest.approx(1.0)
-    assert matrix[cols[0]][1] == pytest.approx(1.0)
-    assert matrix[cols[2]][0] == pytest.approx(2.0)
-    assert matrix[cols[0]][2] == pytest.approx(2.0)
-
-@pytest.mark.unit
 def test_get_relations_handles_extended_family_names():
     depths = {
         'A': 0,

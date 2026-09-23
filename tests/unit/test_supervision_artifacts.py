@@ -1,4 +1,8 @@
+import json
+import uuid
+
 import polars as pl
+import pyarrow.parquet as pq
 import pytest
 
 from naics_embedder.data.create_triplets import build_training_pairs
@@ -7,8 +11,13 @@ from naics_embedder.data.supervision_bundle import (
     build_pair_facts,
     codebook_fingerprint,
     distance_matrix_from_pair_facts,
+    generate_supervision_bundle,
+    generate_supervision_bundle_from_frames,
     relation_matrix_from_pair_facts,
 )
+from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.utils.config import SupervisionBuildConfig
 
 
 def test_exclusion_provenance_does_not_mutate_structure(
@@ -234,3 +243,170 @@ def test_pair_facts_reject_ids_that_disagree_with_the_codebook(depth_first_frame
 
     with pytest.raises(ValueError, match='codebook'):
         build_pair_facts(distances, relations, mislabeled, build_codebook(mislabeled))
+
+
+# -------------------------------------------------------------------------------------------------
+# Immutable bundle publication
+# -------------------------------------------------------------------------------------------------
+
+def test_bundle_writes_manifest_last_with_matching_parquet_metadata(
+    tmp_path, descriptions_fixture, pair_facts_fixture
+):
+    manifest_path = generate_supervision_bundle_from_frames(
+        output_root=tmp_path,
+        bundle_id='bundle-a',
+        generator_revision='revision-a',
+        naics_vintage=2022,
+        descriptions=descriptions_fixture,
+        pair_facts=pair_facts_fixture,
+    )
+
+    manifest = json.loads(manifest_path.read_text())
+    codebook_path = manifest_path.parent / manifest['artifacts']['codebook']['path']
+    metadata = pq.read_metadata(codebook_path).metadata
+
+    assert manifest_path.name == 'manifest.json'
+    assert manifest['contract_version'] == CONTRACT_VERSION
+    assert metadata[b'naics_embedder.contract_version'].decode() == CONTRACT_VERSION
+    assert metadata[b'naics_embedder.bundle_id'].decode() == 'bundle-a'
+    assert metadata[b'naics_embedder.schema_version'].decode() == 'codebook-v1'
+
+
+def test_bundle_never_overwrites_an_existing_generation(
+    tmp_path, descriptions_fixture, pair_facts_fixture
+):
+    kwargs = {
+        'output_root': tmp_path,
+        'bundle_id': 'bundle-a',
+        'generator_revision': 'revision-a',
+        'naics_vintage': 2022,
+        'descriptions': descriptions_fixture,
+        'pair_facts': pair_facts_fixture,
+    }
+    generate_supervision_bundle_from_frames(**kwargs)
+
+    with pytest.raises(FileExistsError, match='bundle-a'):
+        generate_supervision_bundle_from_frames(**kwargs)
+
+
+def test_failed_validation_publishes_no_manifest(
+    tmp_path, descriptions_fixture, pair_facts_fixture
+):
+    inconsistent = pair_facts_fixture.with_columns(is_explicit_exclusion=pl.lit(False))
+
+    with pytest.raises(ValueError, match='exclusion derivation'):
+        generate_supervision_bundle_from_frames(
+            output_root=tmp_path,
+            bundle_id='broken',
+            generator_revision='revision-a',
+            naics_vintage=2022,
+            descriptions=descriptions_fixture,
+            pair_facts=inconsistent,
+        )
+
+    assert not (tmp_path / 'broken' / 'manifest.json').exists()
+
+
+def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(
+    tmp_path, descriptions_fixture, pair_facts_fixture
+):
+    manifests = [
+        generate_supervision_bundle_from_frames(
+            output_root=tmp_path,
+            bundle_id=bundle_id,
+            generator_revision='revision-a',
+            naics_vintage=2022,
+            descriptions=descriptions_fixture,
+            pair_facts=pair_facts_fixture,
+        )
+        for bundle_id in ('bundle-a', 'bundle-b')
+    ]
+    loaded = [json.loads(path.read_text()) for path in manifests]
+    frames = [
+        pl.read_parquet(
+            path.parent / manifest['artifacts']['pair_facts']['path']
+        )
+        for path, manifest in zip(manifests, loaded)
+    ]
+
+    assert loaded[0]['bundle_id'] != loaded[1]['bundle_id']
+    assert frames[0].equals(frames[1])
+
+
+def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
+    tmp_path, descriptions_fixture, pair_facts_fixture
+):
+    manifest_path = generate_supervision_bundle_from_frames(
+        output_root=tmp_path,
+        bundle_id='bundle-a',
+        generator_revision='revision-a',
+        naics_vintage=2022,
+        descriptions=descriptions_fixture,
+        pair_facts=pair_facts_fixture,
+    )
+    manifest = json.loads(manifest_path.read_text())
+    artifacts = manifest['artifacts']
+
+    assert set(artifacts) == {
+        'codebook',
+        'pair_facts',
+        'distances',
+        'distance_matrix',
+        'relations',
+        'relation_matrix',
+        'training_pairs',
+        'difficulty_thresholds',
+    }
+    assert manifest['codebook_order'] == ['111111', '111112', '111113', '222222', '333333']
+    assert artifacts['pair_facts']['row_count'] == 10
+    assert artifacts['pair_facts']['exclusion_count'] == 2
+    assert artifacts['training_pairs']['row_count'] == 5
+    assert artifacts['training_pairs']['exclusion_count'] == 2
+    assert all(manifest['validation_results'].values())
+    for record in artifacts.values():
+        assert sum(member['row_count'] for member in record['files']) == record['row_count']
+        for member in record['files']:
+            path = manifest_path.parent / member['path']
+            assert sha256_file(path) == member['sha256']
+            if path.suffix == '.parquet':
+                metadata = pq.read_metadata(path).metadata
+                assert metadata[b'naics_embedder.bundle_id'] == b'bundle-a'
+                assert metadata[b'naics_embedder.schema_version'].decode() == (
+                    record['schema_version']
+                )
+    assert not list(tmp_path.glob('.*staging*'))
+
+
+def test_failed_generation_leaves_no_staging_directory(
+    tmp_path, descriptions_fixture, pair_facts_fixture
+):
+    with pytest.raises(ValueError):
+        generate_supervision_bundle_from_frames(
+            output_root=tmp_path,
+            bundle_id='broken',
+            generator_revision='revision-a',
+            naics_vintage=2022,
+            descriptions=descriptions_fixture,
+            pair_facts=pair_facts_fixture.with_columns(structural_distance=pl.lit(0.0)),
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_production_bundle_uses_a_uuid_and_the_descriptions_file_hash(
+    tmp_path, hierarchy_descriptions_parquet
+):
+    cfg = SupervisionBuildConfig(
+        descriptions_parquet=hierarchy_descriptions_parquet,
+        output_root=str(tmp_path / 'bundles'),
+    )
+
+    manifest_path = generate_supervision_bundle(cfg)
+    manifest = json.loads(manifest_path.read_text())
+
+    assert str(uuid.UUID(manifest['bundle_id'])) == manifest['bundle_id']
+    assert manifest_path.parent.name == manifest['bundle_id']
+    assert manifest['description_fingerprint'] == sha256_file(hierarchy_descriptions_parquet)
+    assert manifest['structural_relation_ids']['cross_sector'] == 99
+    assert manifest['artifacts']['pair_facts']['row_count'] == 17 * 16 // 2
+    assert manifest['artifacts']['pair_facts']['exclusion_count'] == 2

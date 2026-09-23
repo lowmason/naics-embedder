@@ -12,31 +12,17 @@ Semantics are explicit columns: structural values are never overloaded to carry 
 # -------------------------------------------------------------------------------------------------
 
 import logging
-import shutil
-from pathlib import Path
 from typing import Iterator, List
 
 import numpy as np
 import polars as pl
 
-from naics_embedder.data.compute_distances import (
-    CROSS_SECTOR_DISTANCE,
-    compute_structural_distances,
-)
-from naics_embedder.data.compute_relations import compute_structural_relations
+from naics_embedder.data.compute_distances import CROSS_SECTOR_DISTANCE
 from naics_embedder.supervision.schema import (
     SamplingRole,
     SemanticSource,
     SemanticTarget,
 )
-from naics_embedder.utils.config import (
-    DistancesConfig,
-    RelationsConfig,
-    TripletsConfig,
-    load_config,
-)
-from naics_embedder.utils.console import log_table as _log_table
-from naics_embedder.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
 
@@ -446,91 +432,3 @@ def build_training_pairs(
         cross_sector_cap,
         cap_seed,
     )
-
-# -------------------------------------------------------------------------------------------------
-# Triplet stats
-# -------------------------------------------------------------------------------------------------
-
-def _triplet_stats(triplets_df: pl.DataFrame):
-    stats_df = (
-        triplets_df.group_by('relation_margin', 'distance_margin',
-                             'margin').agg(cnt=pl.len(), ).with_columns(
-                                 pct=pl.col('cnt').truediv(pl.col('cnt').sum()).mul(100)
-                             ).sort('relation_margin', 'distance_margin', 'margin')
-    )
-
-    rels = stats_df.get_column('relation_margin').unique().sort().to_list()
-    dists = stats_df.get_column('distance_margin').unique().sort().to_list()
-    margin = stats_df.get_column('margin').unique().sort().to_list()
-
-    logger.info(
-        'Observed relation margins (differences in positive and negative relations): '
-        f'{", ".join(str(r) for r in rels)}\n'
-    )
-
-    logger.info(
-        'Observed distance margins (differences in positive and negative distances): '
-        f'{", ".join(str(d) for d in dists)}\n'
-    )
-
-    logger.info(f'Observed margin weights: {", ".join(str(m) for m in margin)}\n')
-
-    _log_table(
-        df=stats_df,
-        title='Triplet Statistics',
-        headers=['Margins:Relation', 'Margins:Distance', 'Margins:Weightscnt', 'pct'],
-        logger=logger,
-        output='./outputs/triplets_stats.pdf',
-    )
-
-# -------------------------------------------------------------------------------------------------
-# Generate triplets
-# -------------------------------------------------------------------------------------------------
-
-def generate_training_triplets() -> pl.DataFrame:
-    # Imported here: bundle orchestration imports this module.
-    from naics_embedder.data.supervision_bundle import build_codebook, build_pair_facts
-
-    cfg = load_config(TripletsConfig, './data/triplets.yaml')
-    relations_cfg = load_config(RelationsConfig, './data/relations.yaml')
-
-    logger.info('Configuration:')
-    logger.info(cfg.model_dump_json(indent=2))
-    logger.info('')
-
-    descriptions = pl.read_parquet(cfg.descriptions_parquet)
-    distances = compute_structural_distances(
-        cfg.descriptions_parquet, DistancesConfig(input_parquet=cfg.descriptions_parquet)
-    )
-    relations = compute_structural_relations(cfg.descriptions_parquet, relations_cfg.relation_id)
-    pair_facts = build_pair_facts(distances, relations, descriptions, build_codebook(descriptions))
-    triplets_df = build_training_pairs(pair_facts)
-
-    _triplet_stats(triplets_df)
-
-    _parquet_stats(
-        parquet_df=triplets_df,
-        message='NAICS triplets written to',
-        output_parquet=cfg.output_parquet,
-        logger=logger,
-    )
-
-    output_path = Path(cfg.output_parquet)
-    if output_path.exists():
-        shutil.rmtree(output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    (
-        triplets_df.with_columns(anchor=pl.col('anchor_idx')).write_parquet(
-            cfg.output_parquet, use_pyarrow=True, pyarrow_options={'partition_cols': ['anchor']}
-        )
-    )
-
-    return triplets_df
-
-# -------------------------------------------------------------------------------------------------
-# Main
-# -------------------------------------------------------------------------------------------------
-
-if __name__ == '__main__':
-    generate_training_triplets()

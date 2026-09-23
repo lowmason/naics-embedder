@@ -14,6 +14,7 @@ from naics_embedder.utils.config import (
     DownloadConfig,
     SamplingConfig,
     SansStaticConfig,
+    SupervisionBuildConfig,
     load_config,
 )
 
@@ -388,3 +389,23 @@ class TestSamplingConfig:
                     far_bucket_weight=0.0,
                 )
             )
+
+@pytest.mark.unit
+class TestSupervisionBuildConfig:
+    '''The supervision bundle build configuration.'''
+
+    def test_yaml_matches_defaults(self):
+        cfg = load_config(SupervisionBuildConfig, 'data/supervision.yaml')
+
+        assert cfg == SupervisionBuildConfig()
+        assert cfg.contract_version == 'stage3-supervision-v1'
+        assert cfg.relation_id['cross_sector'] == 99
+        assert cfg.output_root == './data/supervision/stage3-supervision-v1'
+
+    def test_rejects_other_contract_versions(self):
+        with pytest.raises(ValidationError):
+            SupervisionBuildConfig(contract_version='legacy')
+
+    def test_rejects_unknown_keys(self):
+        with pytest.raises(ValidationError):
+            SupervisionBuildConfig(rank_order_weight=0.35)

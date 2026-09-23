@@ -7,12 +7,9 @@ from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
-import numpy as np
 import polars as pl
 
-from naics_embedder.utils.config import DistancesConfig, load_config
-from naics_embedder.utils.console import log_table as _log_table
-from naics_embedder.utils.utilities import parquet_stats as _parquet_stats
+from naics_embedder.utils.config import DistancesConfig
 
 logger = logging.getLogger(__name__)
 
@@ -168,52 +165,7 @@ def _get_distance(i: str, j: str, depths: Dict[str, int], ancestors: Dict[str, L
     return float(max(distance, 0.0))
 
 # -------------------------------------------------------------------------------------------------
-# Distance matrix
-# -------------------------------------------------------------------------------------------------
-
-def _get_distance_matrix(df: pl.DataFrame) -> pl.DataFrame:
-    '''Create distance matrix from distances DataFrame.'''
-
-    codes = sorted(set(df['code_i'].to_list() + df['code_j'].to_list()))
-    n_codes = len(codes)
-
-    code_to_idx = {code: idx for idx, code in enumerate(codes)}
-
-    dist_matrix = np.zeros((n_codes, n_codes), dtype=float)
-    for row in df.iter_rows(named=True):
-        i = code_to_idx[row['code_i']]
-        j = code_to_idx[row['code_j']]
-        dist = row['structural_distance']
-        dist_matrix[i, j] = dist
-        dist_matrix[j, i] = dist
-
-    dist_matric_schema = []
-    for code, idx in code_to_idx.items():
-        dist_matric_schema.append((f'idx_{idx}-code_{code}', pl.Float64))
-
-    return pl.from_numpy(data=dist_matrix, schema=dist_matric_schema)
-
-# -------------------------------------------------------------------------------------------------
-# Distance stats
-# -------------------------------------------------------------------------------------------------
-
-def _distance_stats(distances_df: pl.DataFrame):
-    stats_df = (
-        distances_df.group_by('structural_distance').agg(cnt=pl.len()).with_columns(
-            pct=pl.col('cnt').truediv(pl.col('cnt').sum()).mul(100)
-        ).sort('structural_distance')
-    )
-
-    _log_table(
-        df=stats_df,
-        title='Distance Statistics',
-        headers=['Distance', 'Frequency', 'Percent'],
-        logger=logger,
-        output='./outputs/distance_stats.pdf',
-    )
-
-# -------------------------------------------------------------------------------------------------
-# Main Entry Point
+# Structural distances
 # -------------------------------------------------------------------------------------------------
 
 CROSS_SECTOR_DISTANCE = 99.0
@@ -293,40 +245,3 @@ def compute_structural_distances(input_parquet: str, cfg: DistancesConfig) -> pl
             structural_distance=pl.col('distance').fill_null(CROSS_SECTOR_DISTANCE),
         ).sort('idx_i', 'idx_j')
     )
-
-def calculate_pairwise_distances() -> pl.DataFrame:
-    # Load configuration from YAML
-    cfg = load_config(DistancesConfig, './data/distances.yaml')
-
-    distances_df = compute_structural_distances(cfg.input_parquet, cfg)
-
-    (distances_df.write_parquet(cfg.distances_parquet))
-
-    _distance_stats(distances_df)
-
-    _parquet_stats(
-        parquet_df=distances_df,
-        message='NAICS pairwise distances written to',
-        output_parquet=cfg.distances_parquet,
-        logger=logger,
-    )
-
-    dist_matrix = _get_distance_matrix(distances_df)
-
-    (dist_matrix.write_parquet(cfg.distance_matrix_parquet))
-
-    _parquet_stats(
-        parquet_df=dist_matrix,
-        message='NAICS distance matrix written to',
-        output_parquet=cfg.distance_matrix_parquet,
-        logger=logger,
-    )
-
-    return distances_df
-
-# -------------------------------------------------------------------------------------------------
-# Main
-# -------------------------------------------------------------------------------------------------
-
-if __name__ == '__main__':
-    calculate_pairwise_distances()

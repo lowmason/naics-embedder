@@ -443,7 +443,8 @@ def compute_difficulty_thresholds(
     # Load triplet data for margin distribution
     import glob
 
-    triplet_files = glob.glob(f'{triplets_parquet}/**/*.parquet', recursive=True)
+    # Sorted so the sampled margin distribution does not depend on filesystem enumeration order.
+    triplet_files = sorted(glob.glob(f'{triplets_parquet}/**/*.parquet', recursive=True))
 
     if triplet_files:
         # Sample a subset for efficiency

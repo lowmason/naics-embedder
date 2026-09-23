@@ -11,10 +11,47 @@ mutated by exclusion processing: exclusion provenance lives on its own direction
 # -------------------------------------------------------------------------------------------------
 
 import hashlib
+import importlib.metadata
+import json
 import logging
+import os
+import shutil
+import subprocess
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterator, Mapping, Optional
 
 import numpy as np
 import polars as pl
+
+from naics_embedder.data.compute_distances import compute_structural_distances
+from naics_embedder.data.compute_relations import compute_structural_relations
+from naics_embedder.data.create_triplets import (
+    CROSS_SECTOR_CAP_SEED,
+    CROSS_SECTOR_NEGATIVE_CAP,
+    iter_training_pair_batches,
+)
+from naics_embedder.supervision.artifacts import (
+    sha256_file,
+    write_versioned_dataset_batches,
+    write_versioned_parquet,
+)
+from naics_embedder.supervision.schema import (
+    CODEBOOK_SCHEMA_VERSION,
+    CONTRACT_VERSION,
+    DIFFICULTY_THRESHOLDS_SCHEMA_VERSION,
+    DISTANCE_MATRIX_SCHEMA_VERSION,
+    DISTANCES_SCHEMA_VERSION,
+    PAIR_FACTS_SCHEMA_VERSION,
+    RELATION_MATRIX_SCHEMA_VERSION,
+    RELATIONS_SCHEMA_VERSION,
+    TRAINING_PAIRS_SCHEMA_VERSION,
+    ArtifactFile,
+    ArtifactRecord,
+    SupervisionManifest,
+)
+from naics_embedder.utils.config import DistancesConfig, SupervisionBuildConfig
 
 logger = logging.getLogger(__name__)
 
@@ -267,3 +304,490 @@ def relation_matrix_from_pair_facts(
     '''Relation-ID lookup matrix mirroring the canonical relation ID in both directions.'''
 
     return _matrix(pair_facts, codebook, 'structural_relation_id', np.int16)
+
+# -------------------------------------------------------------------------------------------------
+# Bundle layout
+# -------------------------------------------------------------------------------------------------
+
+MANIFEST_FILENAME = 'manifest.json'
+TRAINING_PAIRS_PARTITION_COLUMN = 'anchor'
+
+ARTIFACT_FILENAMES = {
+    'codebook': 'naics_codebook.parquet',
+    'pair_facts': 'naics_pair_facts.parquet',
+    'distances': 'naics_distances.parquet',
+    'distance_matrix': 'naics_distance_matrix.parquet',
+    'relations': 'naics_relations.parquet',
+    'relation_matrix': 'naics_relation_matrix.parquet',
+    'training_pairs': 'naics_training_pairs',
+    'difficulty_thresholds': 'curriculum_difficulty_thresholds.json',
+}
+
+ARTIFACT_SCHEMA_VERSIONS = {
+    'codebook': CODEBOOK_SCHEMA_VERSION,
+    'pair_facts': PAIR_FACTS_SCHEMA_VERSION,
+    'distances': DISTANCES_SCHEMA_VERSION,
+    'distance_matrix': DISTANCE_MATRIX_SCHEMA_VERSION,
+    'relations': RELATIONS_SCHEMA_VERSION,
+    'relation_matrix': RELATION_MATRIX_SCHEMA_VERSION,
+    'training_pairs': TRAINING_PAIRS_SCHEMA_VERSION,
+    'difficulty_thresholds': DIFFICULTY_THRESHOLDS_SCHEMA_VERSION,
+}
+
+PAIR_FACT_SCHEMA = {
+    'code_i_id': pl.Int32,
+    'code_j_id': pl.Int32,
+    'code_i': pl.Utf8,
+    'code_j': pl.Utf8,
+    'structural_distance': pl.Float32,
+    'structural_relation_id': pl.Int16,
+    'structural_relation_name': pl.Utf8,
+    'code_i_excludes_code_j': pl.Boolean,
+    'code_j_excludes_code_i': pl.Boolean,
+    'is_explicit_exclusion': pl.Boolean,
+}
+
+# -------------------------------------------------------------------------------------------------
+# Fingerprints and provenance
+# -------------------------------------------------------------------------------------------------
+
+def descriptions_frame_fingerprint(descriptions: pl.DataFrame) -> str:
+    '''SHA-256 over the ordered rows of an in-memory descriptions frame.'''
+
+    digest = hashlib.sha256()
+    for row in descriptions.sort('index').iter_rows(named=True):
+        digest.update(json.dumps(row, sort_keys=True, default=str).encode('utf-8'))
+        digest.update(b'\n')
+    return digest.hexdigest()
+
+def exclusion_input_fingerprint(descriptions: pl.DataFrame) -> str:
+    '''SHA-256 over every published (code, excluded code) reference, sorted.'''
+
+    published = (
+        descriptions.select(
+            source=pl.col('code').cast(pl.Utf8), target=pl.col('excluded_codes')
+        ).explode('target').filter(pl.col('target').is_not_null()).unique().sort(
+            'source', 'target'
+        )
+    )
+    payload = '\n'.join(f'{source}\t{target}' for source, target in published.rows())
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+def _generator_revision() -> str:
+    '''Git revision of the generating checkout, or the installed package version.'''
+
+    repository = Path(__file__).resolve().parents[3]
+    try:
+        result = subprocess.run(
+            ['git', 'describe', '--always', '--dirty', '--abbrev=40'],
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        revision = result.stdout.strip()
+        if revision:
+            return revision
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return f'naics-embedder=={importlib.metadata.version("naics-embedder")}'
+
+# -------------------------------------------------------------------------------------------------
+# Bundle validation
+# -------------------------------------------------------------------------------------------------
+
+def _normalize_pair_facts(pair_facts: pl.DataFrame) -> pl.DataFrame:
+    missing = sorted(set(PAIR_FACT_SCHEMA) - set(pair_facts.columns))
+    if missing:
+        raise ValueError(f'pair facts lack required columns: {missing}')
+    return pair_facts.select(
+        [pl.col(name).cast(dtype) for name, dtype in PAIR_FACT_SCHEMA.items()]
+    ).sort('code_i_id', 'code_j_id')
+
+def validate_pair_facts(
+    pair_facts: pl.DataFrame,
+    descriptions: pl.DataFrame,
+    codebook: pl.DataFrame,
+) -> Dict[str, bool]:
+    '''
+    Validate canonical pair facts against the codebook and the published exclusions.
+
+    Returns:
+        Validation results keyed by check name (all ``True``).
+
+    Raises:
+        ValueError: On the first failed check, naming the violated invariant.
+    '''
+
+    structural_columns = [
+        'code_i_id',
+        'code_j_id',
+        'code_i',
+        'code_j',
+        'structural_distance',
+        'structural_relation_id',
+        'structural_relation_name',
+    ]
+    _validate_structural_pairs(pair_facts.select(structural_columns), codebook)
+
+    derived = pl.col('code_i_excludes_code_j') | pl.col('code_j_excludes_code_i')
+    if pair_facts.filter(pl.col('is_explicit_exclusion').ne(derived)).height:
+        raise ValueError(
+            'pair facts exclusion derivation is inconsistent: is_explicit_exclusion must equal '
+            'code_i_excludes_code_j OR code_j_excludes_code_i'
+        )
+
+    published = attach_exclusion_provenance(
+        pair_facts.select(structural_columns), descriptions, codebook
+    )
+    flags = ['code_i_excludes_code_j', 'code_j_excludes_code_i', 'is_explicit_exclusion']
+    if not published.select(flags).equals(pair_facts.select(flags)):
+        raise ValueError('pair facts exclusion flags disagree with the published exclusions')
+
+    return {
+        'codebook_contiguous_unique': True,
+        'codebook_identity': True,
+        'pair_keys_unique': True,
+        'canonical_orientation': True,
+        'pair_coverage': True,
+        'nonzero_structural_distance': True,
+        'no_structural_sentinel': True,
+        'exclusion_derivation': True,
+        'exclusions_match_descriptions': True,
+    }
+
+def _validate_matrices(
+    pair_facts: pl.DataFrame,
+    codebook: pl.DataFrame,
+    distance_matrix: pl.DataFrame,
+    relation_matrix: pl.DataFrame,
+) -> None:
+    expected_columns = [
+        f'idx_{code_id}-code_{code}' for code_id, code in codebook.select('code_id', 'code').rows()
+    ]
+    code_i_id = pair_facts.get_column('code_i_id').to_numpy()
+    code_j_id = pair_facts.get_column('code_j_id').to_numpy()
+    for name, matrix, column in (
+        ('distance_matrix', distance_matrix, 'structural_distance'),
+        ('relation_matrix', relation_matrix, 'structural_relation_id'),
+    ):
+        if matrix.columns != expected_columns:
+            raise ValueError(f'{name} columns do not follow the codebook order')
+        values = matrix.to_numpy()
+        expected = pair_facts.get_column(column).to_numpy()
+        if not (
+            np.array_equal(values[code_i_id, code_j_id], expected)
+            and np.array_equal(values[code_j_id, code_i_id], expected)
+            and not np.diagonal(values).any()
+        ):
+            raise ValueError(f'{name} does not reconcile with the long-form pair facts')
+
+def _validate_training_identity(batch: pl.DataFrame, pair_keys: pl.DataFrame) -> None:
+    '''Every anchor/positive and anchor/negative identity must join to a canonical pair fact.'''
+
+    for other in ('positive_code_id', 'negative_code_id'):
+        keys = batch.select(
+            low=pl.min_horizontal('anchor_code_id', other).cast(pl.Int32),
+            high=pl.max_horizontal('anchor_code_id', other).cast(pl.Int32),
+        )
+        if keys.join(pair_keys, on=['low', 'high'], how='anti').height:
+            raise ValueError(f'training pair {other} identities do not join to pair facts')
+
+# -------------------------------------------------------------------------------------------------
+# Compatibility long-form artifacts
+# -------------------------------------------------------------------------------------------------
+
+def _compat_distances(pair_facts: pl.DataFrame) -> pl.DataFrame:
+    return pair_facts.select(
+        idx_i=pl.col('code_i_id'),
+        idx_j=pl.col('code_j_id'),
+        code_i=pl.col('code_i'),
+        code_j=pl.col('code_j'),
+        distance=pl.col('structural_distance'),
+        code_i_excludes_code_j=pl.col('code_i_excludes_code_j'),
+        code_j_excludes_code_i=pl.col('code_j_excludes_code_i'),
+        is_explicit_exclusion=pl.col('is_explicit_exclusion'),
+    )
+
+def _compat_relations(pair_facts: pl.DataFrame) -> pl.DataFrame:
+    return pair_facts.select(
+        idx_i=pl.col('code_i_id'),
+        idx_j=pl.col('code_j_id'),
+        code_i=pl.col('code_i'),
+        code_j=pl.col('code_j'),
+        relation_id=pl.col('structural_relation_id'),
+        relation=pl.col('structural_relation_name'),
+        code_i_excludes_code_j=pl.col('code_i_excludes_code_j'),
+        code_j_excludes_code_i=pl.col('code_j_excludes_code_i'),
+        is_explicit_exclusion=pl.col('is_explicit_exclusion'),
+    )
+
+# -------------------------------------------------------------------------------------------------
+# Bundle generation
+# -------------------------------------------------------------------------------------------------
+
+def _structural_relation_ids(pair_facts: pl.DataFrame) -> Dict[str, int]:
+    mapping = pair_facts.select('structural_relation_name', 'structural_relation_id').unique()
+    if mapping.get_column('structural_relation_name').is_duplicated().any():
+        raise ValueError('a structural relation name maps to more than one relation ID')
+    return {
+        name: int(relation_id)
+        for name, relation_id in mapping.sort('structural_relation_id').rows()
+    }
+
+def _checked_training_batches(
+    pair_facts: pl.DataFrame,
+    counts: Dict[str, int],
+    *,
+    cross_sector_cap: int,
+    cap_seed: int,
+) -> Iterator[pl.DataFrame]:
+    pair_keys = pair_facts.select(
+        low=pl.min_horizontal('code_i_id', 'code_j_id'),
+        high=pl.max_horizontal('code_i_id', 'code_j_id'),
+    )
+    for batch in iter_training_pair_batches(
+        pair_facts, cross_sector_cap=cross_sector_cap, cap_seed=cap_seed
+    ):
+        _validate_training_identity(batch, pair_keys)
+        counts['rows'] += batch.height
+        counts['exclusions'] += int(batch.get_column('negative_is_explicit_exclusion').sum())
+        yield batch.with_columns(pl.col('anchor_code_id').alias(TRAINING_PAIRS_PARTITION_COLUMN))
+
+def _record(
+    logical_name: str,
+    files: tuple[ArtifactFile, ...],
+    *,
+    exclusion_count: int = 0,
+) -> ArtifactRecord:
+    return ArtifactRecord(
+        path=ARTIFACT_FILENAMES[logical_name],
+        schema_version=ARTIFACT_SCHEMA_VERSIONS[logical_name],
+        row_count=sum(member.row_count for member in files),
+        exclusion_count=exclusion_count,
+        files=files,
+    )
+
+def _write_bundle_artifacts(
+    staging: Path,
+    *,
+    bundle_id: str,
+    codebook: pl.DataFrame,
+    pair_facts: pl.DataFrame,
+    distance_matrix: pl.DataFrame,
+    relation_matrix: pl.DataFrame,
+    cross_sector_cap: int,
+    cap_seed: int,
+) -> Dict[str, ArtifactRecord]:
+    exclusions = int(pair_facts.get_column('is_explicit_exclusion').sum())
+
+    def parquet(logical_name: str, frame: pl.DataFrame) -> tuple[ArtifactFile, ...]:
+        return (
+            write_versioned_parquet(
+                frame,
+                staging / ARTIFACT_FILENAMES[logical_name],
+                contract_version=CONTRACT_VERSION,
+                bundle_id=bundle_id,
+                schema_version=ARTIFACT_SCHEMA_VERSIONS[logical_name],
+            ),
+        )
+
+    records = {
+        'codebook': _record('codebook', parquet('codebook', codebook)),
+        'pair_facts': _record(
+            'pair_facts', parquet('pair_facts', pair_facts), exclusion_count=exclusions
+        ),
+        'distances': _record(
+            'distances',
+            parquet('distances', _compat_distances(pair_facts)),
+            exclusion_count=exclusions,
+        ),
+        'distance_matrix': _record('distance_matrix', parquet('distance_matrix', distance_matrix)),
+        'relations': _record(
+            'relations',
+            parquet('relations', _compat_relations(pair_facts)),
+            exclusion_count=exclusions,
+        ),
+        'relation_matrix': _record('relation_matrix', parquet('relation_matrix', relation_matrix)),
+    }
+
+    counts = {'rows': 0, 'exclusions': 0}
+    training_files = write_versioned_dataset_batches(
+        _checked_training_batches(
+            pair_facts, counts, cross_sector_cap=cross_sector_cap, cap_seed=cap_seed
+        ),
+        staging / ARTIFACT_FILENAMES['training_pairs'],
+        partition_column=TRAINING_PAIRS_PARTITION_COLUMN,
+        contract_version=CONTRACT_VERSION,
+        bundle_id=bundle_id,
+        schema_version=ARTIFACT_SCHEMA_VERSIONS['training_pairs'],
+    )
+    records['training_pairs'] = _record(
+        'training_pairs', training_files, exclusion_count=counts['exclusions']
+    )
+    if records['training_pairs'].row_count != counts['rows']:
+        raise ValueError('training_pairs member row counts disagree with generated rows')
+
+    # Imported here: the graph curriculum pulls in torch and graph-model dependencies.
+    from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
+        compute_difficulty_thresholds,
+    )
+
+    thresholds_path = staging / ARTIFACT_FILENAMES['difficulty_thresholds']
+    compute_difficulty_thresholds(
+        str(staging / ARTIFACT_FILENAMES['distances']),
+        str(staging / ARTIFACT_FILENAMES['training_pairs']),
+        output_path=str(thresholds_path),
+    )
+    records['difficulty_thresholds'] = _record(
+        'difficulty_thresholds',
+        (
+            ArtifactFile(
+                path=thresholds_path.name,
+                sha256=sha256_file(thresholds_path),
+                row_count=1,
+            ),
+        ),
+    )
+    return records
+
+def generate_supervision_bundle_from_frames(
+    *,
+    output_root: Path,
+    bundle_id: str,
+    generator_revision: str,
+    naics_vintage: int,
+    descriptions: pl.DataFrame,
+    pair_facts: pl.DataFrame,
+    description_fingerprint: Optional[str] = None,
+    structural_relation_ids: Optional[Mapping[str, int]] = None,
+    generation_parameters: Optional[Mapping[str, Any]] = None,
+    cross_sector_cap: int = CROSS_SECTOR_NEGATIVE_CAP,
+    cap_seed: int = CROSS_SECTOR_CAP_SEED,
+) -> Path:
+    '''
+    Validate canonical frames and publish them as one immutable supervision bundle.
+
+    Artifacts are written to ``<output_root>/.<bundle_id>.staging``; the manifest is written only
+    after every artifact validates, and the staging directory is then atomically renamed to
+    ``<output_root>/<bundle_id>``. An existing bundle is never overwritten. On failure, only the
+    staging directory created by this call is removed.
+
+    Returns:
+        Path to the published ``manifest.json``.
+    '''
+
+    output_root = Path(output_root)
+    final = output_root / bundle_id
+    staging = output_root / f'.{bundle_id}.staging'
+    if final.exists():
+        raise FileExistsError(f'supervision bundle {bundle_id} already exists at {final}')
+
+    codebook = build_codebook(descriptions)
+    pair_facts = _normalize_pair_facts(pair_facts)
+    validation_results = validate_pair_facts(pair_facts, descriptions, codebook)
+    distance_matrix = distance_matrix_from_pair_facts(pair_facts, codebook)
+    relation_matrix = relation_matrix_from_pair_facts(pair_facts, codebook)
+    _validate_matrices(pair_facts, codebook, distance_matrix, relation_matrix)
+    validation_results['matrix_reconciliation'] = True
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    try:
+        staging.mkdir(exist_ok=False)
+    except FileExistsError as exc:
+        raise FileExistsError(
+            f'staging directory for supervision bundle {bundle_id} already exists: {staging}'
+        ) from exc
+
+    try:
+        artifacts = _write_bundle_artifacts(
+            staging,
+            bundle_id=bundle_id,
+            codebook=codebook,
+            pair_facts=pair_facts,
+            distance_matrix=distance_matrix,
+            relation_matrix=relation_matrix,
+            cross_sector_cap=cross_sector_cap,
+            cap_seed=cap_seed,
+        )
+        validation_results.update(
+            {
+                'direct_positive_safety': True,
+                'training_exclusion_derivation': True,
+                'training_identity_joins': True,
+                'artifact_hashes_recorded': True,
+            }
+        )
+        parameters = {
+            'canonical_orientation': 'shallower code first; numeric code order on ties',
+            'reversed_anchor_rows': 'same-level cross-prefix pairs seed negatives only',
+            'cross_sector_negative_cap': cross_sector_cap,
+            'cross_sector_cap_seed': cap_seed,
+        } | dict(generation_parameters or {})
+        manifest = SupervisionManifest(
+            contract_version=CONTRACT_VERSION,
+            bundle_id=bundle_id,
+            generated_at=datetime.now(timezone.utc),
+            generator_revision=generator_revision,
+            naics_vintage=naics_vintage,
+            codebook_order=tuple(codebook.get_column('code').to_list()),
+            codebook_fingerprint=codebook_fingerprint(codebook),
+            description_fingerprint=(
+                description_fingerprint or descriptions_frame_fingerprint(descriptions)
+            ),
+            exclusion_fingerprint=exclusion_input_fingerprint(descriptions),
+            generation_parameters=parameters,
+            structural_relation_ids=dict(
+                structural_relation_ids or _structural_relation_ids(pair_facts)
+            ),
+            artifacts=artifacts,
+            validation_results=validation_results,
+        )
+        (staging / MANIFEST_FILENAME).write_text(manifest.model_dump_json(indent=2))
+        if final.exists():
+            raise FileExistsError(f'supervision bundle {bundle_id} already exists at {final}')
+        os.rename(staging, final)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    logger.info(
+        f'Published supervision bundle {bundle_id}: {artifacts["pair_facts"].row_count:,} pair '
+        f'facts ({artifacts["pair_facts"].exclusion_count:,} explicit exclusions), '
+        f'{artifacts["training_pairs"].row_count:,} training pairs'
+    )
+    return final / MANIFEST_FILENAME
+
+def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
+    '''
+    Build and publish a new supervision bundle from the configured descriptions.
+
+    The bundle ID is a fresh UUID4, and the description fingerprint is the SHA-256 of the exact
+    descriptions file, so training can later verify it runs against the same input.
+
+    Returns:
+        Path to the published ``manifest.json``.
+    '''
+
+    descriptions_path = Path(cfg.descriptions_parquet)
+    descriptions = pl.read_parquet(descriptions_path)
+    codebook = build_codebook(descriptions)
+    distances = compute_structural_distances(
+        str(descriptions_path), DistancesConfig(input_parquet=str(descriptions_path))
+    )
+    relations = compute_structural_relations(str(descriptions_path), cfg.relation_id)
+    pair_facts = build_pair_facts(distances, relations, descriptions, codebook)
+    return generate_supervision_bundle_from_frames(
+        output_root=Path(cfg.output_root),
+        bundle_id=str(uuid.uuid4()),
+        generator_revision=_generator_revision(),
+        naics_vintage=cfg.naics_vintage,
+        descriptions=descriptions,
+        pair_facts=pair_facts,
+        description_fingerprint=sha256_file(descriptions_path),
+        structural_relation_ids=cfg.relation_id,
+        generation_parameters={
+            'descriptions_parquet': str(descriptions_path.resolve()),
+            'output_root': str(Path(cfg.output_root).resolve()),
+        },
+    )
