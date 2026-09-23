@@ -202,11 +202,18 @@ def _build_ancestors_level(ancestors_df: pl.DataFrame, level: int) -> pl.DataFra
 def _build_siblings(relations_parquet: str, anchors: pl.DataFrame) -> pl.DataFrame:
     '''Build siblings stratum from relations parquet.
 
+    Relations from a supervision bundle carry explicit-exclusion columns; an explicitly excluded
+    sibling pair never becomes a positive. (Legacy relations hid such pairs behind a relation-ID
+    sentinel instead.)
+
     Returns dataframe with columns: level, anchor, positive (list of structs),
     num_positives. Each positive struct has stratum_id=2, positive code, stratum_wgt.
     '''
+    relations = pl.read_parquet(relations_parquet)
+    if 'is_explicit_exclusion' in relations.columns:
+        relations = relations.filter(~pl.col('is_explicit_exclusion'))
     return (
-        pl.read_parquet(relations_parquet).filter(pl.col('relation_id').eq(2)).select(
+        relations.filter(pl.col('relation_id').eq(2)).select(
             anchor=pl.col('code_i'),
             positive=pl.col('code_j'),
             stratum_wgt=pl.col('relation_id').rank(method='dense'),
@@ -230,6 +237,7 @@ def _build_siblings(relations_parquet: str, anchors: pl.DataFrame) -> pl.DataFra
 def enumerate_positives(
     descriptions_parquet: str = './data/naics_descriptions.parquet',
     relations_parquet: str = './data/naics_relations.parquet',
+    code_to_idx: Optional[Dict[str, int]] = None,
 ) -> pl.DataFrame:
     '''Enumerate all possible positives for each anchor across three strata.
 
@@ -241,6 +249,9 @@ def enumerate_positives(
     Args:
         descriptions_parquet: Path to descriptions parquet file
         relations_parquet: Path to relations parquet file
+        code_to_idx: Code-to-ID mapping from a supervision-bundle codebook. When supplied, it is
+            the only identity authority and codes absent from it are dropped; otherwise the legacy
+            descriptions lookup is used.
 
     Returns:
         DataFrame with columns:
@@ -252,7 +263,9 @@ def enumerate_positives(
     '''
     taxonomy = build_taxonomy(descriptions_parquet)
     anchors = build_anchor_list(descriptions_parquet)
-    code_to_idx = get_indices_codes('code_to_idx')
+    codebook_supplied = code_to_idx is not None
+    if code_to_idx is None:
+        code_to_idx = get_indices_codes('code_to_idx')  # type: ignore[assignment]
 
     # Build each stratum
     descendants = _build_descendants(anchors, taxonomy)
@@ -279,19 +292,33 @@ def enumerate_positives(
     siblings = _normalize_schema(siblings)
 
     # Combine all strata
-    return (
-        pl.concat([descendants, ancestors, siblings],
-                  how='diagonal_relaxed').explode('positive').unnest('positive').select(
-                      anchor_idx=pl.col('anchor').replace(code_to_idx).cast(pl.UInt32),
-                      positive_idx=pl.col('positive').replace(code_to_idx).cast(pl.UInt32),
-                      anchor_code=pl.col('anchor'),
-                      positive_code=pl.col('positive'),
-                      anchor_level=pl.col('level'),
-                      positive_level=pl.col('positive').str.len_chars(),
-                      stratum_id=pl.col('stratum_id'),
-                      stratum_wgt=pl.col('stratum_wgt'),
-                  ).sort('anchor_idx', 'stratum_id', 'positive_idx')
+    combined = pl.concat([descendants, ancestors, siblings],
+                         how='diagonal_relaxed').explode('positive').unnest('positive')
+    if codebook_supplied:
+        mapping = {code: int(code_id) for code, code_id in code_to_idx.items()}  # type: ignore[union-attr]
+        anchor_idx = pl.col('anchor').replace_strict(mapping, default=None).cast(pl.UInt32)
+        positive_idx = pl.col('positive').replace_strict(mapping, default=None).cast(pl.UInt32)
+    else:
+        anchor_idx = pl.col('anchor').replace(code_to_idx).cast(pl.UInt32)
+        positive_idx = pl.col('positive').replace(code_to_idx).cast(pl.UInt32)
+    positives = combined.select(
+        anchor_idx=anchor_idx,
+        positive_idx=positive_idx,
+        anchor_code=pl.col('anchor'),
+        positive_code=pl.col('positive'),
+        anchor_level=pl.col('level'),
+        positive_level=pl.col('positive').str.len_chars(),
+        stratum_id=pl.col('stratum_id'),
+        stratum_wgt=pl.col('stratum_wgt'),
     )
+    if codebook_supplied:
+        unknown = positives.filter(
+            pl.col('anchor_idx').is_null() | pl.col('positive_idx').is_null()
+        ).height
+        if unknown:
+            logger.info(f'Dropped {unknown:,} positive pairs naming codes outside the codebook')
+        positives = positives.drop_nulls(['anchor_idx', 'positive_idx'])
+    return positives.sort('anchor_idx', 'stratum_id', 'positive_idx')
 
 # -------------------------------------------------------------------------------------------------
 # Stratified positive sampling
@@ -412,6 +439,7 @@ def create_positive_sampler(
     relations_parquet: str = './data/naics_relations.parquet',
     max_per_stratum: int = 4,
     seed: int = 42,
+    code_to_idx: Optional[Dict[str, int]] = None,
 ) -> PositiveSampler:
     '''Create a PositiveSampler from data files.
 
@@ -420,9 +448,10 @@ def create_positive_sampler(
         relations_parquet: Path to relations parquet
         max_per_stratum: Maximum positives per stratum (default 4)
         seed: Random seed
+        code_to_idx: Optional supervision-bundle codebook mapping (see ``enumerate_positives``)
 
     Returns:
         Initialized PositiveSampler
     '''
-    positives_df = enumerate_positives(descriptions_parquet, relations_parquet)
+    positives_df = enumerate_positives(descriptions_parquet, relations_parquet, code_to_idx)
     return PositiveSampler(positives_df, max_per_stratum=max_per_stratum, seed=seed)

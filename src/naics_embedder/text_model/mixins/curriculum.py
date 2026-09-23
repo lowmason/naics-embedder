@@ -6,23 +6,84 @@ Curriculum learning mixin for NAICSContrastiveModel.
 
 Provides methods for:
 - Curriculum state management
-- Hard negative mining (embedding-based and router-guided)
-- False negative mask construction
+- Canonical candidate pools and the one checked negative selection (difficulty, geometric, and
+  router-guided proposals)
+- Post-selection pseudo-related candidates
 - Pseudo-label clustering for false negative detection
 '''
 
 import logging
-from typing import Any, Dict, Optional, Tuple
+from dataclasses import replace
+from typing import Any, Dict, List, Optional
 
 import torch
 
-from naics_embedder.text_model.false_negative_strategies import apply_false_negative_strategy
-from naics_embedder.text_model.mixins.distributed import (
-    GlobalNegativeContext,
-    gather_embeddings_global,
+from naics_embedder.supervision.candidates import (
+    CandidateEntityBatch,
+    CandidateProposal,
+    NegativeCandidateBatch,
+    SelectedNegativeBatch,
 )
+from naics_embedder.supervision.margins import structural_margins
+from naics_embedder.supervision.schema import (
+    SAMPLING_ROLE_TO_ID,
+    SamplingProvenance,
+    SamplingRole,
+    SelectionReason,
+)
+from naics_embedder.supervision.selection import canonical_occurrence_mask
+from naics_embedder.text_model.mixins.distributed import gather_candidate_entities
 
 logger = logging.getLogger(__name__)
+
+def _proposal_from_local_uids(
+    *,
+    local_candidate_uid: torch.Tensor,
+    active_candidates: NegativeCandidateBatch,
+    local_source_indices: torch.Tensor,
+) -> CandidateProposal:
+    '''
+    Translate collated difficulty proposals (local pool positions) into the active pool by UID.
+
+    Rank-major distributed gathering changes source positions but preserves occurrence identity,
+    so proposals are matched by candidate UID rather than position. Earlier proposals score higher;
+    padding (index -1) becomes an ineligible ``-inf`` entry.
+
+    Raises:
+        ValueError: On a malformed or out-of-bounds proposal, or a UID that is missing from, or
+            duplicated in, the active pool.
+    '''
+    if local_source_indices.ndim != 2:
+        raise ValueError('difficulty proposal indices must have shape [batch, proposal]')
+    if local_source_indices.ge(local_candidate_uid.shape[1]).any():
+        raise ValueError('difficulty proposal contains an out-of-bounds local source index')
+    safe = local_source_indices.clamp_min(0)
+    local_uids = local_candidate_uid.gather(
+        1,
+        safe.unsqueeze(-1).expand(-1, -1, 3),
+    )
+    matches = active_candidates.candidate_uid.unsqueeze(2).eq(
+        local_uids.unsqueeze(1)
+    ).all(dim=-1)
+    expected = local_source_indices.ge(0)
+    match_count = matches.sum(dim=1)
+    if (match_count[expected] != 1).any():
+        raise ValueError('difficulty proposal UID is missing or duplicated in active pool')
+    active_indices = matches.to(torch.int64).argmax(dim=1).masked_fill(~expected, -1)
+    width = local_source_indices.shape[1]
+    scores = torch.arange(
+        width,
+        0,
+        -1,
+        dtype=active_candidates.embedding.dtype,
+        device=active_candidates.embedding.device,
+    ).unsqueeze(0).expand_as(active_indices)
+    scores = scores.masked_fill(~expected, -torch.inf)
+    return CandidateProposal(
+        source_indices=active_indices,
+        scores=scores,
+        reason=SelectionReason.DIFFICULTY,
+    )
 
 class CurriculumMixin:
     '''
@@ -38,6 +99,8 @@ class CurriculumMixin:
     - code_to_pseudo_label: Dict[str, int]
     - hard_negative_miner: LorentzianHardNegativeMiner
     - router_guided_miner: RouterGuidedNegativeMiner
+    - selection_coordinator: NegativeSelectionCoordinator
+    - supervision_index: SupervisionIndex
     - false_negative_config: FalseNegativeConfig
     - hparams: hyperparameters
     '''
@@ -88,316 +151,241 @@ class CurriculumMixin:
                 on_epoch=True,
             )
 
-    def _build_false_negative_mask(self, batch: Dict[str, Any],
-                                   batch_size: int) -> Optional[torch.Tensor]:
-        '''
-        Build a mask to identify false negatives using pseudo-labels.
+    def _selection_seed(self) -> int:
+        '''Global seed for deterministic exclusion rotation (the training seed).'''
+        return int(getattr(self.hparams, 'selection_seed', 0))
 
-        False negatives are negative samples that are semantically similar to the anchor.
-
-        Args:
-            batch: Training batch with anchor_code and negative_codes
-            batch_size: Expected batch size
-
-        Returns:
-            Boolean mask tensor (batch_size, k_negatives) or None
-        '''
-        enable_clustering = self.current_curriculum_flags.get('enable_clustering', False)
-        if not (
-            enable_clustering and self.code_to_pseudo_label and 'negative_codes' in batch
-            and 'anchor_code' in batch
-        ):
-            return None
-
-        try:
-            assert isinstance(batch['negative_codes'], list), 'negative_codes must be a list'
-            assert len(batch['negative_codes']) == batch_size, (
-                f"Expected {batch_size} groups, got {len(batch['negative_codes'])}"
-            )
-            assert all(isinstance(codes, list) for codes in batch['negative_codes']), (
-                'Each entry must be a list of codes'
-            )
-
-            anchor_labels = torch.tensor(
-                [self.code_to_pseudo_label.get(code, -1) for code in batch['anchor_code']],
-                device=self.device,
-            )
-
-            neg_labels = torch.tensor(
-                [
-                    [self.code_to_pseudo_label.get(code, -2) for code in neg_codes_for_anchor]
-                    for neg_codes_for_anchor in batch['negative_codes']
-                ],
-                device=self.device,
-            )
-
-            false_negative_mask = anchor_labels.unsqueeze(1) == neg_labels
-            valid_anchor_mask = (anchor_labels > -1).unsqueeze(1)
-            valid_neg_mask = neg_labels > -2
-
-            return false_negative_mask & valid_anchor_mask & valid_neg_mask
-        except Exception as exc:
-            logger.warning(f'Failed to create false negative mask: {exc}')
-            return None
-
-    def _perform_hard_negative_mining(
+    def _select_negative_batch(
         self,
-        anchor_emb: torch.Tensor,
-        negative_emb_reshaped: torch.Tensor,
-        k_negatives: int,
-        batch_size: int,
-        batch_idx: int,
-        global_context: Optional[GlobalNegativeContext],
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        '''
-        Perform hard negative mining to select the most informative negatives.
-
-        Args:
-            anchor_emb: Anchor embeddings
-            negative_emb_reshaped: Negative embeddings (batch_size, k_negatives, embed_dim)
-            k_negatives: Number of negatives to select
-            batch_size: Batch size
-            batch_idx: Current batch index
-            global_context: Optional global negative context for distributed training
-
-        Returns:
-            Tuple of (hard_negatives, hard_neg_distances)
-        '''
-        if global_context is not None:
-            expanded = global_context.negatives_flat.unsqueeze(0).expand(batch_size, -1, -1)
-            global_distances_flat = self.hard_negative_miner.lorentz_distance.batched_forward(
-                anchor_emb,
-                expanded,
-            )
-            _, topk_indices = torch.topk(
-                global_distances_flat,
-                k=k_negatives,
-                dim=1,
-                largest=False,
-            )
-            hard_negatives = global_context.negatives_flat[topk_indices]
-            hard_neg_distances = global_distances_flat.gather(1, topk_indices)
-            self._log_hard_negative_stats(
-                hard_neg_distances, batch_idx, batch_size, used_global_batch=True
-            )
-            return hard_negatives, hard_neg_distances
-
-        candidate_negatives = negative_emb_reshaped.clone()
-        hard_negatives, hard_neg_distances = self.hard_negative_miner.mine_hard_negatives(
-            anchor_emb=anchor_emb,
-            candidate_negatives=candidate_negatives,
-            k=k_negatives,
-            return_distances=True,
-        )
-        self._log_hard_negative_stats(
-            hard_neg_distances, batch_idx, batch_size, used_global_batch=False
-        )
-        return hard_negatives, hard_neg_distances
-
-    def _apply_router_guided_sampling(
-        self,
+        *,
+        batch: Dict[str, Any],
         anchor_output: Dict[str, torch.Tensor],
-        negative_output: Dict[str, torch.Tensor],
-        negative_emb_reshaped: torch.Tensor,
-        hard_negatives: Optional[torch.Tensor],
-        batch_size: int,
-        k_negatives: int,
+        candidate_output: Dict[str, torch.Tensor],
+        candidate_uid: torch.Tensor,
         batch_idx: int,
-        global_context: Optional[GlobalNegativeContext],
-    ) -> torch.Tensor:
+    ) -> SelectedNegativeBatch:
         '''
-        Apply router-guided sampling to select confusing negatives.
+        Build the canonical candidate pool and perform the one checked negative selection.
 
-        Uses MoE router probabilities to find negatives that confuse the model.
+        Flow: local candidate entities -> optional distributed entity gather -> anchor-relative
+        supervision join and structural eligibility -> ``NegativeCandidateBatch`` ->
+        geometric/router proposals, then the difficulty proposal as fallback -> coordinator
+        selection (exclusion quota, dedup, backfill) -> the single gather.
 
         Args:
-            anchor_output: Anchor encoder output with gate_probs
-            negative_output: Negative encoder output with gate_probs
-            negative_emb_reshaped: Negative embeddings
-            hard_negatives: Optional hard negatives from embedding-based mining
-            batch_size: Batch size
-            k_negatives: Number of negatives
-            batch_idx: Current batch index
-            global_context: Optional global context for distributed training
-
-        Returns:
-            Selected negative embeddings
+            batch: Repaired collated batch.
+            anchor_output: Encoder output for the anchors.
+            candidate_output: Encoder output for the flattened candidate pool.
+            candidate_uid: ``[batch, candidate, 3]`` occurrence UIDs (rank, row, source slot).
+            batch_idx: Current batch index.
         '''
-        anchor_gate_probs = anchor_output.get('gate_probs')
-        negative_gate_probs = negative_output.get('gate_probs')
-        if anchor_gate_probs is None or negative_gate_probs is None:
-            if hard_negatives is not None:
-                return hard_negatives
-            logger.debug('Router-guided sampling skipped: gate probabilities not available')
-            return negative_emb_reshaped
+        batch_size = int(batch['batch_size'])
+        candidate_count = int(batch['k_candidates'])
+        embedding = candidate_output['embedding'].reshape(batch_size, candidate_count, -1)
+        raw_gate_probs = candidate_output.get('gate_probs')
+        gate_probs = (
+            None
+            if raw_gate_probs is None
+            else raw_gate_probs.reshape(batch_size, candidate_count, -1)
+        )
+        local_entities = CandidateEntityBatch(
+            candidate_uid=candidate_uid,
+            code_id=batch['candidate_code_id'],
+            embedding=embedding,
+            router_gate_probs=gate_probs,
+            valid_mask=batch['candidate_valid_mask'],
+        )
 
-        if global_context is not None:
-            global_negative_gate_probs = gather_embeddings_global(negative_gate_probs)
-            global_negative_gate_probs_reshaped = global_negative_gate_probs.view(
-                global_context.global_batch_size, global_context.global_k_negatives, -1
+        enable_geometric = self.current_curriculum_flags.get(
+            'enable_hard_negative_mining', False
+        )
+        enable_router = self.current_curriculum_flags.get(
+            'enable_router_guided_sampling', False
+        )
+        if self._should_use_global_batch(enable_geometric, enable_router):
+            gathered = gather_candidate_entities(local_entities)
+            entities = CandidateEntityBatch(
+                candidate_uid=gathered.candidate_uid.expand(batch_size, -1, -1),
+                code_id=gathered.code_id.expand(batch_size, -1),
+                embedding=gathered.embedding.expand(batch_size, -1, -1),
+                router_gate_probs=(
+                    None
+                    if gathered.router_gate_probs is None
+                    else gathered.router_gate_probs.expand(batch_size, -1, -1)
+                ),
+                valid_mask=gathered.valid_mask.expand(batch_size, -1),
             )
-            global_neg_gate_probs_flat = global_negative_gate_probs_reshaped.view(
-                -1, anchor_gate_probs.shape[-1]
+            sampling_role_id = torch.full_like(
+                entities.code_id,
+                SAMPLING_ROLE_TO_ID[SamplingRole.NEGATIVE],
+                dtype=torch.int8,
             )
-            negative_gate_probs_expanded = global_neg_gate_probs_flat.unsqueeze(0).expand(
-                batch_size, -1, -1
+            sampling_provenance_id = torch.full_like(
+                entities.code_id,
+                int(SamplingProvenance.DISTRIBUTED_POOL),
+                dtype=torch.int8,
             )
-            confusion_scores = self.router_guided_miner.compute_confusion_scores(
-                anchor_gate_probs, negative_gate_probs_expanded
-            )
-            _, router_topk_indices = torch.topk(
-                confusion_scores,
-                k=k_negatives,
-                dim=1,
-                largest=True,
-            )
-            router_hard_negatives = global_context.negatives_flat[router_topk_indices]
-            router_confusion_scores = confusion_scores.gather(1, router_topk_indices)
         else:
-            negative_gate_probs_local = negative_gate_probs.view(batch_size, k_negatives, -1)
-            router_hard_negatives, router_confusion_scores = (
-                self.router_guided_miner.mine_router_hard_negatives(
+            entities = local_entities
+            sampling_role_id = batch['candidate_sampling_role_id']
+            sampling_provenance_id = batch['candidate_sampling_provenance_id']
+
+        pair = self.supervision_index.join(
+            batch['anchor_code_id'],
+            entities.code_id,
+            entities.valid_mask,
+        )
+        # Anchor-relative margins follow the generator's rule: an ordinary candidate must be
+        # structurally farther than the positive, exactly like every generated training negative.
+        # Explicit exclusions are exempt. Runtime-sourced candidates (universe backfill, remote
+        # ranks) that fail the rule are ineligible for this anchor, so no loss repels a relative
+        # the generated supervision would never treat as a negative.
+        relation_margin, distance_margin = structural_margins(
+            negative_distance=pair.structural_distance,
+            negative_relation_id=pair.structural_relation_id,
+            positive_distance=batch['positive_structural_distance'].unsqueeze(1),
+            positive_relation_id=batch['positive_structural_relation_id'].unsqueeze(1),
+        )
+        structurally_farther = relation_margin.gt(0) & distance_margin.gt(0)
+        eligible = entities.valid_mask & (pair.is_explicit_exclusion | structurally_farther)
+        candidates = NegativeCandidateBatch(
+            candidate_uid=entities.candidate_uid,
+            code_id=entities.code_id,
+            embedding=entities.embedding,
+            structural_distance=pair.structural_distance,
+            structural_relation_id=pair.structural_relation_id,
+            anchor_excludes_candidate=pair.anchor_excludes_candidate,
+            candidate_excludes_anchor=pair.candidate_excludes_anchor,
+            is_explicit_exclusion=pair.is_explicit_exclusion,
+            semantic_target_id=pair.semantic_target_id,
+            semantic_source_id=pair.semantic_source_id,
+            sampling_role_id=sampling_role_id,
+            sampling_provenance_id=sampling_provenance_id,
+            relation_margin=relation_margin,
+            distance_margin=distance_margin,
+            router_gate_probs=entities.router_gate_probs,
+            valid_mask=eligible,
+            runtime_fields={'difficulty': pair.structural_distance},
+        )
+
+        # Phase 2+ miners are consulted first, so they rather than the upstream difficulty
+        # proposal choose the negatives. With both miners on, router_mix_ratio splits the slots:
+        # the geometric miner proposes its share and the router fills the rest. The difficulty
+        # proposal is the fallback before deterministic backfill, and the sole proposal in Phase 1.
+        selection_k = int(batch['selection_k'])
+        proposals: List[CandidateProposal] = []
+        if enable_geometric or enable_router:
+            # Miners score one occurrence per code (the one the coordinator keeps), so repeated
+            # codes in a global pool cannot crowd distinct codes out of a miner's top-k. Masking
+            # the anchor and positive codes is defensive: both already fail structural
+            # eligibility.
+            forbidden = candidates.code_id.eq(batch['anchor_code_id'].unsqueeze(1)) | (
+                candidates.code_id.eq(batch['positive_code_id'].unsqueeze(1))
+            )
+            proposable = canonical_occurrence_mask(
+                candidates.code_id,
+                candidates.candidate_uid,
+                candidates.valid_mask,
+            ) & ~forbidden
+            mining_candidates = replace(candidates, valid_mask=proposable)
+        if enable_geometric:
+            router_slots = 0
+            if enable_router:
+                mix_ratio = float(self.current_schedule_scalars.get('router_mix_ratio', 0.5))
+                router_slots = int(selection_k * min(max(mix_ratio, 0.0), 1.0))
+            geometric_slots = selection_k - router_slots
+            if geometric_slots > 0:
+                proposals.append(
+                    self.hard_negative_miner.propose(
+                        anchor_output['embedding'],
+                        mining_candidates,
+                        k=geometric_slots,
+                    )
+                )
+        if enable_router:
+            anchor_gate_probs = anchor_output.get('gate_probs')
+            if anchor_gate_probs is None or candidates.router_gate_probs is None:
+                raise ValueError(
+                    'router-guided selection requires anchor and candidate gate probabilities'
+                )
+            proposals.append(
+                self.router_guided_miner.propose(
                     anchor_gate_probs=anchor_gate_probs,
-                    negative_gate_probs=negative_gate_probs_local,
-                    candidate_negatives=negative_emb_reshaped,
-                    k=k_negatives,
-                    return_scores=True,
+                    candidates=mining_candidates,
+                    k=selection_k,
                 )
             )
-
-        router_mix_ratio = self.current_schedule_scalars.get('router_mix_ratio', 0.5)
-        router_mix_ratio = max(0.0, min(1.0, router_mix_ratio))
-
-        if hard_negatives is not None:
-            n_router = int(k_negatives * router_mix_ratio)
-            n_embedding = k_negatives - n_router
-            router_selected = router_hard_negatives[:, :n_router, :]
-            embedding_selected = hard_negatives[:, :n_embedding, :]
-            mixed_negatives = torch.cat([router_selected, embedding_selected], dim=1)
-        else:
-            mixed_negatives = router_hard_negatives
-
-        if batch_idx == 0 and router_confusion_scores is not None:
-            avg_confusion = router_confusion_scores.mean().item()
-            min_confusion = router_confusion_scores.min().item()
-            max_confusion = router_confusion_scores.max().item()
-            self.log(
-                'train/curriculum/router_confusion_mean',
-                avg_confusion,
-                batch_size=batch_size,
-                on_step=False,
-                on_epoch=True,
+        proposals.append(
+            _proposal_from_local_uids(
+                local_candidate_uid=candidate_uid,
+                active_candidates=candidates,
+                local_source_indices=batch['difficulty_proposal_indices'],
             )
-            self.log(
-                'train/curriculum/router_confusion_min',
-                min_confusion,
-                batch_size=batch_size,
-                on_step=False,
-                on_epoch=True,
-            )
-            self.log(
-                'train/curriculum/router_confusion_max',
-                max_confusion,
-                batch_size=batch_size,
-                on_step=False,
-                on_epoch=True,
-            )
-
-        return mixed_negatives
-
-    def _prepare_negative_embeddings(
-        self,
-        anchor_output: Dict[str, torch.Tensor],
-        negative_output: Dict[str, torch.Tensor],
-        anchor_emb: torch.Tensor,
-        negative_emb: torch.Tensor,
-        batch_size: int,
-        k_negatives: int,
-        batch_idx: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        '''
-        Prepare negative embeddings with optional hard negative mining.
-
-        Args:
-            anchor_output: Anchor encoder output
-            negative_output: Negative encoder output
-            anchor_emb: Anchor embeddings
-            negative_emb: Negative embeddings (flat)
-            batch_size: Batch size
-            k_negatives: Number of negatives per sample
-            batch_idx: Current batch index
-
-        Returns:
-            Tuple of (negative_emb_flat, negative_emb_reshaped)
-        '''
-        enable_hnm = self.current_curriculum_flags.get('enable_hard_negative_mining', False)
-        enable_router = self.current_curriculum_flags.get('enable_router_guided_sampling', False)
-        use_global_batch = self._should_use_global_batch(enable_hnm, enable_router)
-
-        global_context = None
-        if use_global_batch:
-            global_context = self._gather_global_negative_pool(
-                negative_emb, batch_size, k_negatives, batch_idx
-            )
-
-        negative_emb_reshaped = negative_emb.view(batch_size, k_negatives, -1)
-        hard_negatives: Optional[torch.Tensor] = None
-
-        if enable_hnm:
-            hard_negatives, _ = self._perform_hard_negative_mining(
-                anchor_emb,
-                negative_emb_reshaped,
-                k_negatives,
-                batch_size,
-                batch_idx,
-                global_context,
-            )
-            negative_emb_reshaped = hard_negatives
-
-        if enable_router:
-            negative_emb_reshaped = self._apply_router_guided_sampling(
-                anchor_output,
-                negative_output,
-                negative_emb_reshaped,
-                hard_negatives,
-                batch_size,
-                k_negatives,
-                batch_idx,
-                global_context,
-            )
-        elif enable_hnm and hard_negatives is not None:
-            negative_emb_reshaped = hard_negatives
-
-        negative_emb = negative_emb_reshaped.view(batch_size * k_negatives, -1)
-        return negative_emb, negative_emb_reshaped
-
-    def _apply_false_negative_strategy_wrapper(
-        self,
-        anchor_emb: torch.Tensor,
-        negative_emb_reshaped: torch.Tensor,
-        false_negative_mask: Optional[torch.Tensor],
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        '''
-        Apply false negative handling strategy.
-
-        Args:
-            anchor_emb: Anchor embeddings
-            negative_emb_reshaped: Negative embeddings (batch_size, k_negatives, embed_dim)
-            false_negative_mask: Optional mask of identified false negatives
-
-        Returns:
-            Tuple of (updated_mask, auxiliary_loss)
-        '''
-        if self.false_negative_config is None or negative_emb_reshaped is None:
-            return false_negative_mask, None
-
-        fn_mask, auxiliary_fn_loss = apply_false_negative_strategy(
-            self.false_negative_config,
-            anchor_emb,
-            negative_emb_reshaped,
-            false_negative_mask,
         )
-        return fn_mask, auxiliary_fn_loss
+
+        selection = self.selection_coordinator.select(
+            candidates,
+            anchor_code_ids=batch['anchor_code_id'],
+            positive_code_ids=batch['positive_code_id'],
+            k=selection_k,
+            epoch=int(self.current_epoch),
+            global_seed=self._selection_seed(),
+            proposals=tuple(proposals),
+        )
+        selected = candidates.select(selection)
+        self._log_selection_health(
+            candidates,
+            selected,
+            batch_size,
+            entity_valid_mask=entities.valid_mask,
+        )
+        return selected
+
+    def _build_selected_pseudo_related_mask(
+        self,
+        anchor_code_ids: torch.Tensor,
+        selected: SelectedNegativeBatch,
+    ) -> Optional[torch.Tensor]:
+        '''
+        Pseudo-related flags for the checked selection, from clustering pseudo-labels.
+
+        Built only after selection so every flag belongs to the selected candidate's identity.
+        Explicit exclusions and invalid entries are never pseudo-related. Identity or shape
+        errors propagate.
+
+        Args:
+            anchor_code_ids: ``[batch]`` anchor code IDs
+            selected: The checked selected-negative batch
+
+        Returns:
+            ``[batch, selected]`` boolean mask, or None when clustering is inactive
+        '''
+        if not self.current_curriculum_flags.get('enable_clustering', False):
+            return None
+        if not self.code_to_pseudo_label:
+            return None
+        id_to_code = self.supervision_index.id_to_code
+        device = selected.code_id.device
+        anchor_labels = torch.tensor(
+            [
+                self.code_to_pseudo_label.get(id_to_code[int(code_id)], -1)
+                for code_id in anchor_code_ids.tolist()
+            ],
+            device=device,
+        )
+        candidate_labels = torch.tensor(
+            [
+                [self.code_to_pseudo_label.get(id_to_code[int(code_id)], -2) for code_id in row]
+                for row in selected.code_id.tolist()
+            ],
+            device=device,
+        ).reshape(selected.code_id.shape)
+        pseudo_related = (
+            anchor_labels.unsqueeze(1).eq(candidate_labels)
+            & anchor_labels.unsqueeze(1).ge(0)
+            & candidate_labels.ge(0)
+        )
+        return pseudo_related & ~selected.is_explicit_exclusion & selected.valid_mask
 
     def _update_pseudo_labels(self) -> None:
         '''

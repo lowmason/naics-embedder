@@ -32,45 +32,30 @@ Download and preprocess all raw NAICS data files.
 uv run naics-embedder data preprocess
 ```
 
-### `data relations`
+### `data supervision`
 
-Compute pairwise graph relationships between all NAICS codes.
-
-**Requires:** `data/naics_descriptions.parquet`  
-**Generates:** `data/naics_relations.parquet`
-
-```bash
-uv run naics-embedder data relations
-```
-
-### `data distances`
-
-Compute pairwise graph distances between all NAICS codes.
+Build one immutable, validated Stage-3 supervision bundle: the codebook, pair facts (structural
+distance and relation plus directional explicit exclusions), legacy-compatible distance and
+relation views and matrices, training pairs, and curriculum difficulty thresholds. The manifest is
+written last and the bundle directory is published atomically.
 
 **Requires:** `data/naics_descriptions.parquet`  
-**Generates:** `data/naics_distances.parquet`
+**Generates:** `data/supervision/stage3-supervision-v1/<bundle-id>/` (prints
+`Supervision manifest: <path>`; set `supervision.manifest_path` to it before training)
 
 ```bash
-uv run naics-embedder data distances
+uv run naics-embedder data supervision
 ```
 
-### `data triplets`
+### `data relations`, `data distances`, `data triplets`
 
-Generate (anchor, positive, negative) training triplets.
-
-**Requires:** 
-- `data/naics_descriptions.parquet`
-- `data/naics_distances.parquet`
-
-**Generates:** `data/naics_training_pairs.parquet`
-
-```bash
-uv run naics-embedder data triplets
-```
+Deprecated stage commands. Publishing one partial authority would let artifacts from different
+generations mix, so each prints a migration notice and builds the complete supervision bundle
+(same as `data supervision`).
 
 ### `data all`
 
-Run the full data generation pipeline: preprocess, distances, and triplets.
+Run the full data generation pipeline: preprocess, then build the supervision bundle.
 
 ```bash
 uv run naics-embedder data all

@@ -1,6 +1,8 @@
 # Stage-3 Supervision Integrity
 
-**Status:** Approved design; awaiting written-spec review
+**Status:** COMPLETE (2026-09-23) — implemented by
+`specs/plans/completed/1-stage-3-supervision-integrity.md`; deferred items in
+`specs/deferred_items.md`
 
 **Next skill after approval:** `writing-plans` in a fresh session
 

@@ -5,10 +5,10 @@
 Logging mixin for NAICSContrastiveModel.
 
 Provides methods for logging various training and validation metrics:
-- Negative sample distribution
-- Tree distance distribution
+- Negative sample distribution (over the checked selection)
+- Tree distance distribution (over the checked selection)
 - Adaptive margin statistics
-- Global batch statistics
+- Selection health counters
 - Hard negative mining statistics
 - Router diversity metrics
 - Loss breakdown
@@ -18,6 +18,9 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence
 
 import torch
+
+from naics_embedder.supervision.candidates import NegativeCandidateBatch, SelectedNegativeBatch
+from naics_embedder.supervision.schema import SelectionReason
 
 logger = logging.getLogger(__name__)
 
@@ -105,189 +108,181 @@ class LoggingMixin:
                 on_epoch=True,
             )
 
-    def _log_negative_sample_stats_if_needed(self, batch: Dict[str, Any], batch_idx: int) -> None:
-        '''Log negative sample statistics at the start of each epoch.'''
-        if batch_idx != 0 or 'negative_codes' not in batch:
-            return
-        self._log_negative_sample_distribution(batch)
-        self._log_negative_tree_distance_distribution(batch)
-
-    def _log_negative_sample_distribution(self, batch: Dict[str, Any]) -> None:
+    def _log_negative_sample_distribution(self, relation_names: List[str], batch_size: int) -> None:
         '''
         Log distribution of negative sample types (child/sibling/cousin/distant).
 
-        Issue #12: Track negative sample type distribution per curriculum phase.
+        Issue #12: Track negative sample type distribution per curriculum phase. Relation names come
+        from the selected negatives' anchor-relative structural relation IDs in the bundle.
         '''
-        if self.curriculum_scheduler is None:
+        if self.curriculum_scheduler is None or not relation_names:
             return
 
-        try:
-            from naics_embedder.utils.utilities import get_relationship
+        child_relations = {'child', 'grandchild', 'great-grandchild', 'great-great-grandchild'}
+        cousin_relations = {
+            'cousin',
+            'nephew/niece',
+            'grand-nephew/niece',
+            'grand-grand-nephew/niece',
+            'cousin_1_times_removed',
+            'second_cousin',
+        }
+        sample_types = {'child': 0, 'sibling': 0, 'cousin': 0, 'distant': 0, 'unknown': 0}
+        for relation in relation_names:
+            if relation in child_relations:
+                sample_types['child'] += 1
+            elif relation == 'sibling':
+                sample_types['sibling'] += 1
+            elif relation in cousin_relations:
+                sample_types['cousin'] += 1
+            elif (
+                relation == 'cross_sector' or relation.startswith('third_cousin')
+                or relation.startswith('cousin_') or relation.startswith('second_cousin_')
+            ):
+                sample_types['distant'] += 1
+            else:
+                sample_types['unknown'] += 1
 
-            anchor_codes = batch['anchor_code']
-            negative_codes = batch['negative_codes']
+        total_samples = len(relation_names)
+        phase = self.curriculum_scheduler.get_phase(self.current_epoch)
+        for sample_type, count in sample_types.items():
+            self.log(
+                f'train/curriculum/negative_samples_{sample_type}',
+                count / total_samples,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
 
-            # Classify negative samples by relationship type
-            sample_types = {'child': 0, 'sibling': 0, 'cousin': 0, 'distant': 0, 'unknown': 0}
-            total_samples = 0
+        # Log summary every 5 epochs to reduce noise
+        if self.current_epoch % 5 == 0:
+            logger.info(
+                f'Negative sample distribution '
+                f'(Phase {phase}, Epoch {self.current_epoch}):\n'
+                f'  • Child: {sample_types["child"] / total_samples * 100:.1f}%\n'
+                f'  • Sibling: {sample_types["sibling"] / total_samples * 100:.1f}%\n'
+                f'  • Cousin: {sample_types["cousin"] / total_samples * 100:.1f}%\n'
+                f'  • Distant: {sample_types["distant"] / total_samples * 100:.1f}%\n'
+                f'  • Unknown: {sample_types["unknown"] / total_samples * 100:.1f}%'
+            )
 
-            for anchor_code, neg_codes in zip(anchor_codes, negative_codes):
-                for neg_code in neg_codes:
-                    try:
-                        relation = get_relationship(anchor_code, neg_code)
-
-                        # Classify into categories
-                        child_relations = [
-                            'child',
-                            'grandchild',
-                            'great-grandchild',
-                            'great-great-grandchild',
-                        ]
-                        if relation in child_relations:
-                            sample_types['child'] += 1
-                        elif relation == 'sibling':
-                            sample_types['sibling'] += 1
-                        elif relation in [
-                            'cousin',
-                            'nephew/niece',
-                            'grand-nephew/niece',
-                            'cousin_1_times_removed',
-                            'second_cousin',
-                        ]:
-                            sample_types['cousin'] += 1
-                        elif (
-                            relation in ['unrelated'] or relation.startswith('third_cousin')
-                            or relation.startswith('cousin_')
-                        ):
-                            sample_types['distant'] += 1
-                        else:
-                            sample_types['unknown'] += 1
-
-                        total_samples += 1
-                    except Exception:
-                        sample_types['unknown'] += 1
-                        total_samples += 1
-
-            if total_samples > 0:
-                phase = self.curriculum_scheduler.get_phase(self.current_epoch)
-
-                # Log to TensorBoard
-                for sample_type, count in sample_types.items():
-                    self.log(
-                        f'train/curriculum/negative_samples_{sample_type}',
-                        count / total_samples,
-                        batch_size=len(anchor_codes),
-                        on_step=False,
-                        on_epoch=True,
-                    )
-
-                # Log summary every 5 epochs to reduce noise
-                if self.current_epoch % 5 == 0:
-                    logger.info(
-                        f'Negative sample distribution '
-                        f'(Phase {phase}, Epoch {self.current_epoch}):\n'
-                        f'  • Child: {sample_types["child"] / total_samples * 100:.1f}%\n'
-                        f'  • Sibling: {sample_types["sibling"] / total_samples * 100:.1f}%\n'
-                        f'  • Cousin: {sample_types["cousin"] / total_samples * 100:.1f}%\n'
-                        f'  • Distant: {sample_types["distant"] / total_samples * 100:.1f}%\n'
-                        f'  • Unknown: {sample_types["unknown"] / total_samples * 100:.1f}%'
-                    )
-
-        except Exception as e:
-            logger.debug(f'Failed to log negative sample distribution: {e}')
-
-    def _log_negative_tree_distance_distribution(self, batch: Dict[str, Any]) -> None:
+    def _log_negative_tree_distance_distribution(
+        self, distances: torch.Tensor, batch_size: int
+    ) -> None:
         '''
         Log distribution of negative samples by tree distance bins.
 
-        Issue #23: Track tree-distance categories to verify Phase 1 weighting.
+        Issue #23: Track tree-distance categories to verify Phase 1 weighting. Distances are the
+        selected negatives' anchor-relative structural distances from the bundle.
         '''
-        if self.ground_truth_distances is None or self.code_to_idx is None:
+        total = distances.numel()
+        if total == 0:
             return
 
-        try:
-            anchor_codes = batch['anchor_code']
-            negative_codes = batch['negative_codes']
+        bins = {
+            'sibling_or_closer': int(distances.le(2.0).sum()),
+            'cousin': int((distances.gt(2.0) & distances.le(4.0)).sum()),
+            'distant': int(distances.gt(4.0).sum()),
+            'unknown': 0,
+        }
+        for name, count in bins.items():
+            self.log(
+                f'train/curriculum/tree_distance_{name}',
+                count / total,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+            )
 
-            bins = {'sibling_or_closer': 0, 'cousin': 0, 'distant': 0, 'unknown': 0}
-            total = 0
-
-            for anchor_code, neg_codes in zip(anchor_codes, negative_codes):
-                anchor_idx = self.code_to_idx.get(anchor_code)
-                if anchor_idx is None:
-                    continue
-
-                for neg_code in neg_codes:
-                    neg_idx = self.code_to_idx.get(neg_code)
-                    if neg_idx is None:
-                        bins['unknown'] += 1
-                        total += 1
-                        continue
-
-                    distance = self.ground_truth_distances[anchor_idx, neg_idx].item()
-
-                    if distance <= 2.0:
-                        bins['sibling_or_closer'] += 1
-                    elif distance <= 4.0:
-                        bins['cousin'] += 1
-                    else:
-                        bins['distant'] += 1
-
-                    total += 1
-
-            if total > 0:
-                for name, count in bins.items():
-                    self.log(
-                        f'train/curriculum/tree_distance_{name}',
-                        count / total,
-                        batch_size=len(anchor_codes),
-                        on_step=False,
-                        on_epoch=True,
-                    )
-        except Exception as e:
-            logger.debug(f'Failed to log tree distance distribution: {e}')
-
-    def _log_global_batch_stats(
+    def _log_selection_health(
         self,
-        global_negative_emb: torch.Tensor,
+        candidates: NegativeCandidateBatch,
+        selected: SelectedNegativeBatch,
         batch_size: int,
-        global_batch_size: int,
-        global_k_negatives: int,
+        *,
+        entity_valid_mask: torch.Tensor,
     ) -> None:
-        '''Log memory usage and size statistics for global batch sampling.'''
-        global_negatives_memory_mb = (
-            global_negative_emb.numel() * global_negative_emb.element_size() / (1024**2)
+        '''
+        Log low-cardinality integrity counters for one checked selection as epoch sums.
+
+        ``entity_valid_mask`` marks real (non-padding) candidates; ``candidates.valid_mask``
+        additionally applies anchor-relative structural eligibility. Counters carry no candidate
+        identities in their names or values.
+        '''
+        selectable_codes = candidates.code_id.masked_fill(~candidates.valid_mask, -1)
+        sorted_codes = selectable_codes.sort(dim=1).values
+        duplicates = (
+            sorted_codes[:, 1:].eq(sorted_codes[:, :-1]) & sorted_codes[:, 1:].ge(0)
+        ).sum()
+        reasons = selected.selection_reasons
+        selection_metrics = {
+            'train/integrity/anchors_with_exclusions':
+            candidates.is_explicit_exclusion.any(dim=1).sum(),
+            'train/integrity/quota_selections':
+            reasons.eq(int(SelectionReason.EXCLUSION_QUOTA)).sum(),
+            'train/integrity/geometric_selections':
+            reasons.eq(int(SelectionReason.GEOMETRIC)).sum(),
+            'train/integrity/router_selections':
+            reasons.eq(int(SelectionReason.ROUTER)).sum(),
+            'train/integrity/difficulty_selections':
+            reasons.eq(int(SelectionReason.DIFFICULTY)).sum(),
+            'train/integrity/deterministic_backfills':
+            reasons.eq(int(SelectionReason.BACKFILL)).sum(),
+            'train/integrity/invalid_candidates_ignored': (~entity_valid_mask).sum(),
+            'train/integrity/structurally_ineligible_candidates':
+            (entity_valid_mask & ~candidates.valid_mask).sum(),
+            'train/integrity/duplicate_candidates_removed': duplicates,
+        }
+        for name, value in selection_metrics.items():
+            self.log(
+                name,
+                value.to(torch.float32),
+                on_step=False,
+                on_epoch=True,
+                reduce_fx='sum',
+                batch_size=batch_size,
+            )
+
+    def _log_selected_negative_stats(
+        self,
+        anchor_emb: torch.Tensor,
+        selected: SelectedNegativeBatch,
+        batch_idx: int,
+        batch_size: int,
+    ) -> None:
+        '''
+        Epoch-start negative diagnostics computed on the checked selection.
+
+        Relation types, tree distances, and hard-negative distances all come from the same selected
+        identities and the bundle's anchor-relative structure, so they describe the negatives
+        actually used; no legacy artifact is read.
+        '''
+        if batch_idx != 0:
+            return
+        valid = selected.valid_mask
+        relation_names = [
+            self.relation_id_to_name.get(int(relation_id), 'unknown')
+            for relation_id in selected.structural_relation_id[valid].tolist()
+        ]
+        self._log_negative_sample_distribution(relation_names, batch_size)
+        self._log_negative_tree_distance_distribution(
+            selected.structural_distance[valid], batch_size
         )
-        similarity_matrix_memory_mb = batch_size * global_batch_size * global_k_negatives * 4 / (
-            1024**2
-        )
-        self.log(
-            'train/global_batch/global_negatives_memory_mb',
-            global_negatives_memory_mb,
-            batch_size=batch_size,
-            on_step=False,
-            on_epoch=True,
-        )
-        self.log(
-            'train/global_batch/similarity_matrix_memory_mb',
-            similarity_matrix_memory_mb,
-            batch_size=batch_size,
-            on_step=False,
-            on_epoch=True,
-        )
-        self.log(
-            'train/global_batch/global_batch_size',
-            global_batch_size,
-            batch_size=batch_size,
-            on_step=False,
-            on_epoch=True,
-        )
-        self.log(
-            'train/global_batch/global_k_negatives',
-            global_k_negatives,
-            batch_size=batch_size,
-            on_step=False,
-            on_epoch=True,
+
+        enable_hnm = self.current_curriculum_flags.get('enable_hard_negative_mining', False)
+        if not enable_hnm:
+            return
+        enable_router = self.current_curriculum_flags.get('enable_router_guided_sampling', False)
+        with torch.no_grad():
+            distances = self.hard_negative_miner.lorentz_distance.batched_forward(
+                anchor_emb,
+                selected.embedding,
+            )
+        self._log_hard_negative_stats(
+            distances[valid],
+            batch_idx,
+            batch_size,
+            used_global_batch=self._should_use_global_batch(enable_hnm, enable_router),
         )
 
     def _log_hard_negative_stats(
@@ -393,7 +388,7 @@ class LoggingMixin:
         contrastive_loss: torch.Tensor,
         scaled_load_balancing_loss: torch.Tensor,
         hierarchy_loss: torch.Tensor,
-        lambdarank_loss: torch.Tensor,
+        structural_preference_loss: torch.Tensor,
         radius_reg_loss: torch.Tensor,
         level_radius_loss: torch.Tensor,
         total_loss: torch.Tensor,
@@ -409,9 +404,12 @@ class LoggingMixin:
         )
         if hierarchy_loss.item() > 0:
             self.log('train/hierarchy_loss', hierarchy_loss, prog_bar=False, batch_size=batch_size)
-        if lambdarank_loss.item() > 0:
+        if structural_preference_loss.item() > 0:
             self.log(
-                'train/lambdarank_loss', lambdarank_loss, prog_bar=False, batch_size=batch_size
+                'train/structural_preference_loss',
+                structural_preference_loss,
+                prog_bar=False,
+                batch_size=batch_size,
             )
         if radius_reg_loss.item() > 0:
             self.log(

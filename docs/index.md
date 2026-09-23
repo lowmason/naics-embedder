@@ -29,7 +29,7 @@ search, hierarchical modeling, graph-based reasoning, and downstream machine lea
 
 - **Decoupled Contrastive Learning (DCL)**: Improved gradient flow and numerical stability
 - **Hierarchy Preservation Loss**: Directly optimizes embedding distances to match tree structure
-- **LambdaRank Loss**: Position-aware ranking optimization using NDCG
+- **Structural Preference Loss**: Pairwise structural ordering of each anchor's selected candidates
 - **Radius Regularization**: Prevents hyperbolic embeddings from collapsing or expanding too far
 
 ### Distributed Training

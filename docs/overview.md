@@ -399,11 +399,19 @@ L_hierarchy = weight · MSE(d_embedding, d_tree)
 
 For each pair of codes in the batch, the loss penalizes deviations between Lorentzian geodesic distance and NAICS tree distance. Default weight: 0.325.
 
-### LambdaRank Loss (Rank Order Preservation)
+### Structural Preference Loss (replaces LambdaRank)
 
-Global ranking optimization using LambdaRank to preserve rank-order relationships.
+Pairwise structural ordering over each anchor's positive plus its selected negatives. For every
+pair with unequal structural distance, with `i` structurally closer than `j`:
 
-Unlike pairwise losses, LambdaRank optimizes NDCG@k (Normalized Discounted Cumulative Gain), weighting pairs by their impact on ranking position. This provides position-aware optimization considering all pairs, not just anchor-positive-negative triplets. Default weight: 0.275.
+```
+L_ij = softplus((d_i - d_j + margin) / temperature)
+```
+
+The gradient pulls the structurally closer candidate in and pushes the farther one out. Explicit
+exclusions, padding, self, and duplicate codes never participate; comparisons are normalized per
+anchor. Default weight: 0.35 (`loss.structural_preference`). See the
+[Training Guide](text_training.md#structural-preference-loss).
 
 ### Radius Regularization
 
@@ -428,14 +436,14 @@ Default coefficient α = 0.01.
 ### Total Loss
 
 ```
-L_total = L_DCL + L_hierarchy + L_lambdarank + L_radius + L_load_balancing
+L_total = L_DCL + L_hierarchy + L_structural_preference + L_radius + L_load_balancing
 ```
 
 | Loss Component | Default Weight | Purpose |
 |----------------|----------------|---------|
 | DCL Contrastive | 1.0 (implicit) | Primary representation learning |
 | Hierarchy Preservation | 0.325 | Tree structure alignment |
-| LambdaRank | 0.275 | Rank-order preservation |
+| Structural Preference | 0.35 | Structural ordering of selected candidates |
 | Radius Regularization | 0.01 | Embedding stability |
 | Load Balancing | 0.01 | Expert utilization balance |
 
@@ -525,7 +533,7 @@ The system monitors and logs VRAM usage for distributed operations:
 | `LorentzOps` | `text_model/hyperbolic.py` | Static utility class for Lorentz operations |
 | `HyperbolicInfoNCELoss` | `text_model/loss.py` | DCL implementation |
 | `HierarchyPreservationLoss` | `text_model/loss.py` | Tree alignment loss |
-| `LambdaRankLoss` | `text_model/loss.py` | Ranking loss |
+| `StructuralPreferenceLoss` | `text_model/loss.py` | Structural ordering loss |
 | `CurriculumScheduler` | `text_model/curriculum.py` | SADC phase management |
 | `HyperbolicKMeans` | `text_model/hyperbolic_clustering.py` | Lorentz clustering |
 | `LorentzianHardNegativeMiner` | `text_model/hard_negative_mining.py` | HNM in hyperbolic space |
@@ -539,8 +547,8 @@ The `NAICSContrastiveModel` is decomposed into functional mixins for maintainabi
 | Mixin | Location | Purpose |
 |-------|----------|---------|
 | `DistributedMixin` | `text_model/mixins/distributed.py` | Global batch sampling for multi-GPU |
-| `LossMixin` | `text_model/mixins/loss.py` | Loss computation (hierarchy, LambdaRank, radius) |
-| `CurriculumMixin` | `text_model/mixins/curriculum.py` | Hard negative mining, router-guided sampling |
+| `LossMixin` | `text_model/mixins/loss.py` | Loss computation (hierarchy, structural preference, radius) |
+| `CurriculumMixin` | `text_model/mixins/curriculum.py` | Checked negative selection (hard negative and router-guided proposals) |
 | `LoggingMixin` | `text_model/mixins/logging.py` | Training and validation metric logging |
 | `ValidationMixin` | `text_model/mixins/validation.py` | Validation step and evaluation logic |
 | `OptimizerMixin` | `text_model/mixins/optimizer.py` | Optimizer and scheduler configuration |
@@ -588,7 +596,7 @@ Compilation can be disabled via environment variable: `NAICS_DISABLE_COMPILE=1`
 | LoRA | r / alpha / dropout | 8 / 16 / 0.1 |
 | MoE | num_experts / top_k / hidden_dim | 4 / 2 / 1024 |
 | Loss | temperature / curvature | 0.07 / 1.0 |
-| Loss Weights | hierarchy / rank_order / radius_reg / level_radius | 0.45 / 0.35 / 0.15 / 0.05 |
+| Loss Weights | hierarchy / structural_preference / radius_reg / level_radius | 0.45 / 0.35 / 0.15 / 0.05 |
 | MoE | load_balancing_coef | 0.01 |
 | Training | learning_rate / weight_decay | 2e-4 / 0.01 |
 | Training | warmup_steps | 500 |

@@ -4,6 +4,7 @@ from typer.testing import CliRunner
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
 
+
 @pytest.fixture
 def runner():
     return CliRunner()
@@ -24,17 +25,57 @@ def test_data_preprocess_invokes_download(monkeypatch, runner):
     assert result.exit_code == 0
     assert called['preprocess']
 
-def test_data_all_runs_pipeline_in_order(monkeypatch, runner):
+def test_data_all_runs_preprocess_then_one_supervision_build(monkeypatch, runner, tmp_path):
     order = []
+    manifest = tmp_path / 'bundle' / 'manifest.json'
     monkeypatch.setattr(data_cli, 'download_preprocess_data', lambda: order.append('preprocess'))
-    monkeypatch.setattr(data_cli, 'calculate_pairwise_relations', lambda: order.append('relations'))
-    monkeypatch.setattr(data_cli, 'calculate_pairwise_distances', lambda: order.append('distances'))
-    monkeypatch.setattr(data_cli, 'generate_training_triplets', lambda: order.append('triplets'))
+
+    def fake_generate(cfg):
+        order.append('supervision')
+        return manifest
+
+    monkeypatch.setattr(data_cli, 'generate_supervision_bundle', fake_generate)
 
     result = runner.invoke(data_cli.app, ['all'])
 
     assert result.exit_code == 0
-    assert order == ['preprocess', 'relations', 'distances', 'triplets']
+    assert order == ['preprocess', 'supervision']
+    assert str(manifest) in result.output
+
+def test_data_supervision_prints_the_manifest_path(monkeypatch, runner, tmp_path):
+    manifest = tmp_path / 'bundle-id' / 'manifest.json'
+    configs = []
+
+    def fake_generate(cfg):
+        configs.append(cfg)
+        return manifest
+
+    monkeypatch.setattr(data_cli, 'generate_supervision_bundle', fake_generate)
+
+    result = runner.invoke(data_cli.app, ['supervision'])
+
+    assert result.exit_code == 0
+    assert str(manifest) in result.output
+    assert configs[0].contract_version == 'stage3-supervision-v1'
+    assert configs[0].relation_id['cross_sector'] == 99
+
+@pytest.mark.parametrize('command', ['relations', 'distances', 'triplets'])
+def test_legacy_stage_commands_build_the_complete_bundle(monkeypatch, runner, tmp_path, command):
+    manifest = tmp_path / 'bundle-id' / 'manifest.json'
+    calls = []
+
+    def fake_generate(cfg):
+        calls.append(cfg)
+        return manifest
+
+    monkeypatch.setattr(data_cli, 'generate_supervision_bundle', fake_generate)
+
+    result = runner.invoke(data_cli.app, [command])
+
+    assert result.exit_code == 0
+    assert 'data supervision' in result.output
+    assert len(calls) == 1
+    assert str(manifest) in result.output
 
 def test_tools_config_passes_config_path(monkeypatch, runner, tmp_path):
     captured = {}

@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
+from naics_embedder.supervision.margins import structurally_eligible
+
 logger = logging.getLogger(__name__)
 
 class ValidationMixin:
@@ -27,6 +29,8 @@ class ValidationMixin:
     - device: torch.device
     - hparams: hyperparameters
     - loss_fn: contrastive loss function
+    - supervision_policy: SupervisionModePolicy
+    - supervision_index: SupervisionIndex for anchor-relative exclusion joins (repaired mode)
     - embedding_eval: EmbeddingEvaluator
     - embedding_stats: EmbeddingStatistics
     - hierarchy_metrics: HierarchyMetrics
@@ -64,8 +68,12 @@ class ValidationMixin:
         '''
         Perform a single validation step.
 
+        The contrastive loss covers every valid candidate in the collated pool. Validation uses
+        no mining, selection, or pseudo-labels, so ``val/contrastive_loss`` depends only on the
+        model and the (epoch-independent) validation pools. Explicit exclusions stay repulsive.
+
         Args:
-            batch: Validation batch with anchor, positive, and negatives
+            batch: Repaired validation batch with anchor, positive, and candidate pool
             batch_idx: Batch index
 
         Returns:
@@ -73,17 +81,48 @@ class ValidationMixin:
         '''
         anchor_output = self(batch['anchor'])
         positive_output = self(batch['positive'])
-        negative_output = self(batch['negatives'])
 
         anchor_emb = anchor_output['embedding']
         positive_emb = positive_output['embedding']
-        negative_emb = negative_output['embedding']
+        batch_size = int(batch['batch_size'])
 
-        batch_size = batch['batch_size']
-        k_negatives = batch['k_negatives']
+        if self.supervision_policy.name == 'legacy_containment':
+            # Local legacy negatives in collated order; nothing supervision-derived is used
+            k_negatives = int(batch['k_negatives'])
+            negative_emb = self(batch['negatives'])['embedding'].reshape(
+                batch_size, k_negatives, -1
+            )
+            valid_mask = torch.ones(
+                (batch_size, k_negatives), dtype=torch.bool, device=negative_emb.device
+            )
+            explicit = torch.zeros_like(valid_mask)
+        else:
+            candidate_output, _ = self._forward_candidate_pool(batch)
+            negative_emb = candidate_output['embedding'].reshape(
+                batch_size, int(batch['k_candidates']), -1
+            )
+            pair = self.supervision_index.join(
+                batch['anchor_code_id'],
+                batch['candidate_code_id'],
+                batch['candidate_valid_mask'],
+            )
+            # The same eligibility as training selection: ordinary candidates must be
+            # structurally farther than the positive; explicit exclusions are exempt.
+            structurally_farther = structurally_eligible(
+                negative_distance=pair.structural_distance,
+                negative_relation_id=pair.structural_relation_id,
+                positive_distance=batch['positive_structural_distance'].unsqueeze(1),
+                positive_relation_id=batch['positive_structural_relation_id'].unsqueeze(1),
+            )
+            explicit = pair.is_explicit_exclusion
+            valid_mask = batch['candidate_valid_mask'] & (explicit | structurally_farther)
 
         contrastive_loss = self.loss_fn(
-            anchor_emb, positive_emb, negative_emb, batch_size, k_negatives
+            anchor_emb,
+            positive_emb,
+            negative_emb,
+            valid_mask=valid_mask,
+            is_explicit_exclusion=explicit,
         )
 
         self.log(
@@ -491,6 +530,8 @@ class ValidationMixin:
 
     def _handle_clustering_update(self) -> None:
         '''Handle pseudo-label clustering updates based on curriculum schedule.'''
+        if not self.supervision_policy.enable_pseudo_related:
+            return
         if self.curriculum_scheduler is not None:
             fn_cluster_every_n_epochs = getattr(self.hparams, 'fn_cluster_every_n_epochs', 5)
             should_update = self.curriculum_scheduler.should_update_clustering(

@@ -71,7 +71,7 @@ naics-embedder/
 │   │   ├── naics_model.py    # PyTorch Lightning module (mixin-based) ⭐
 │   │   ├── mixins/           # ⭐ Functional mixins for NAICSContrastiveModel
 │   │   │   ├── distributed.py   # Global batch sampling for multi-GPU
-│   │   │   ├── loss.py          # Hierarchy, LambdaRank, radius losses
+│   │   │   ├── loss.py          # Hierarchy, structural preference, radius losses
 │   │   │   ├── curriculum.py    # Hard negative mining, router sampling
 │   │   │   ├── logging.py       # Training/validation metric logging
 │   │   │   ├── validation.py    # Validation step and evaluation
@@ -239,7 +239,7 @@ The `NAICSContrastiveModel` is decomposed into **functional mixins** for maintai
 | Mixin | Location | Responsibility |
 |-------|----------|----------------|
 | `DistributedMixin` | `mixins/distributed.py` | Global batch sampling, `all_gather` utilities |
-| `LossMixin` | `mixins/loss.py` | Hierarchy loss, LambdaRank, radius regularization |
+| `LossMixin` | `mixins/loss.py` | Hierarchy loss, structural preference, radius regularization |
 | `CurriculumMixin` | `mixins/curriculum.py` | Hard negative mining, router-guided sampling |
 | `LoggingMixin` | `mixins/logging.py` | Training/validation metric logging |
 | `ValidationMixin` | `mixins/validation.py` | Validation step, embedding evaluation |
@@ -396,10 +396,9 @@ uv run naics-embedder --help
 
 # Data preparation commands
 uv run naics-embedder data preprocess  # Download and preprocess NAICS data
-uv run naics-embedder data relations   # Compute relation metrics
-uv run naics-embedder data distances   # Compute distance metrics
-uv run naics-embedder data triplets    # Create training triplets
+uv run naics-embedder data supervision # Build the immutable Stage-3 supervision bundle
 uv run naics-embedder data all         # Run all data preparation steps
+# (data relations / distances / triplets are deprecated and build the same bundle)
 
 # Training commands
 uv run naics-embedder train            # Train model
@@ -576,7 +575,8 @@ adapts automatically based on the NAICS hierarchical structure and training prog
 
 - `HyperbolicInfoNCELoss` - Decoupled contrastive loss in Lorentz space
 - `HierarchyPreservationLoss` - Encourages distance correlation with ground truth
-- `RankOrderPreservationLoss` - Spearman rank correlation loss
+- `StructuralPreferenceLoss` - Pairwise structural ordering over selected candidates (replaces
+  LambdaRank; see `docs/text_training.md#stage-3-supervision-integrity`)
 
 **Steps:**
 

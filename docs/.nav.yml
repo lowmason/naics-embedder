@@ -28,7 +28,7 @@ nav:
               - Loss Functions:
                   - Contrastive: api/contrastive_loss.md
                   - Hierarchy Preservation: api/hierarchy_preservation_loss.md
-                  - Rank Order Preservation: api/rank_order_preservation_loss.md
+                  - Structural Preference: api/structural_preference_loss.md
           - HGCN Training:
               - Data Loading:
                   - Streaming DataSet: api/hgcn_streaming_dataset.md

@@ -11,17 +11,12 @@ This package organizes CLI commands into logical groups:
 '''
 
 import typer
-from rich.panel import Panel
 
 from .commands import data, tools, training
 
 # Create main Typer app
 app = typer.Typer(
-    help=Panel.fit(
-        '[bold cyan]NAICS Embedder[/bold cyan]\n\nText-enhanced Hyperbolic NAICS Embedding System',
-        border_style='cyan',
-        padding=(1, 2),
-    )  # type: ignore
+    help='NAICS Embedder\n\nText-enhanced Hyperbolic NAICS Embedding System'
 )
 
 # Add sub-apps

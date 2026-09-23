@@ -9,6 +9,7 @@ import polars as pl
 import pytest
 import torch
 
+from naics_embedder.data.supervision_bundle import generate_supervision_bundle_from_frames
 from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
     compute_degree_centrality,
     compute_difficulty_thresholds,
@@ -20,7 +21,11 @@ from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
     load_node_scores,
     load_relation_types,
     preprocess_curriculum_data,
+    resolve_graph_config,
+    resolve_graph_supervision_paths,
 )
+from naics_embedder.supervision.artifacts import load_validated_bundle
+from naics_embedder.utils.config import GraphConfig
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -423,3 +428,99 @@ class TestPreprocessCurriculumData:
         assert 'composite' in node_scores
         assert 'relation_types' in relation_types
         assert 'phase1_max_distance' in thresholds
+
+# -------------------------------------------------------------------------------------------------
+# Supervision bundle compatibility
+# -------------------------------------------------------------------------------------------------
+
+def test_graph_preprocessing_resolves_one_bundle_and_rejects_mixed_paths(
+    tmp_path,
+    generated_bundle,
+    descriptions_fixture,
+    pair_facts_fixture,
+):
+    first = resolve_graph_supervision_paths(generated_bundle)
+    other_manifest = generate_supervision_bundle_from_frames(
+        output_root=tmp_path / 'other',
+        bundle_id='bundle-b',
+        generator_revision='revision-a',
+        naics_vintage=2022,
+        descriptions=descriptions_fixture,
+        pair_facts=pair_facts_fixture,
+    )
+    other_bundle = load_validated_bundle(other_manifest)
+
+    assert first.distances == load_validated_bundle(generated_bundle).artifact_path(
+        'distances'
+    )
+    assert first.training_pairs == load_validated_bundle(
+        generated_bundle
+    ).artifact_path('training_pairs')
+    with pytest.raises(ValueError, match='distances.*bundle-a'):
+        resolve_graph_supervision_paths(
+            generated_bundle,
+            distances_path=other_bundle.artifact_path('distances'),
+        )
+
+@pytest.fixture
+def hierarchy_manifest(tmp_path, hierarchy_descriptions_parquet):
+    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+    from naics_embedder.utils.config import SupervisionBuildConfig
+
+    return generate_supervision_bundle(
+        SupervisionBuildConfig(
+            descriptions_parquet=hierarchy_descriptions_parquet,
+            output_root=str(tmp_path / 'bundles'),
+        )
+    )
+
+def test_graph_config_takes_every_structural_input_from_its_bundle(generated_bundle):
+    bundle = load_validated_bundle(generated_bundle)
+
+    cfg = resolve_graph_config(GraphConfig(supervision_manifest_path=str(generated_bundle)))
+
+    assert cfg.relations_parquet == str(bundle.artifact_path('relations'))
+    assert cfg.training_pairs_path == str(bundle.artifact_path('training_pairs'))
+    assert cfg.distance_matrix_parquet == str(bundle.artifact_path('distance_matrix'))
+    assert resolve_graph_config(cfg) == cfg
+
+def test_graph_config_rejects_an_explicit_path_from_another_source(generated_bundle, tmp_path):
+    cfg = GraphConfig(
+        supervision_manifest_path=str(generated_bundle),
+        relations_parquet=str(tmp_path / 'naics_relations.parquet'),
+    )
+
+    with pytest.raises(ValueError, match='relations path does not belong'):
+        resolve_graph_config(cfg)
+
+def test_graph_config_without_a_manifest_keeps_legacy_paths():
+    cfg = GraphConfig()
+
+    assert resolve_graph_config(cfg) is cfg
+
+def test_preprocessing_reads_relations_distances_and_pairs_from_one_bundle(
+    tmp_path, hierarchy_manifest, hierarchy_descriptions_parquet
+):
+    output_dir = tmp_path / 'curriculum_cache'
+
+    node_scores, relation_types, thresholds = preprocess_curriculum_data(
+        descriptions_parquet=hierarchy_descriptions_parquet,
+        output_dir=str(output_dir),
+        supervision_manifest_path=str(hierarchy_manifest),
+    )
+
+    bundle = load_validated_bundle(hierarchy_manifest)
+    expected = compute_difficulty_thresholds(
+        str(bundle.artifact_path('distances')),
+        str(bundle.artifact_path('training_pairs')),
+    )
+    assert thresholds == expected
+    assert node_scores['composite'].shape[0] == 17
+    assert (output_dir / 'difficulty_thresholds.json').exists()
+    with pytest.raises(ValueError, match='training_pairs path does not belong'):
+        preprocess_curriculum_data(
+            descriptions_parquet=hierarchy_descriptions_parquet,
+            triplets_parquet=str(tmp_path / 'naics_training_pairs'),
+            output_dir=str(output_dir),
+            supervision_manifest_path=str(hierarchy_manifest),
+        )

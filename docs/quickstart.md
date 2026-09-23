@@ -34,33 +34,36 @@ uv run naics-embedder data all
 This runs the complete data pipeline:
 
 1. **Preprocess** - Downloads and cleans raw NAICS taxonomy files
-2. **Relations** - Computes pairwise graph relationships
-3. **Distances** - Computes pairwise tree distances  
-4. **Triplets** - Generates training triplets for contrastive learning
+2. **Supervision** - Builds one immutable, validated Stage-3 supervision bundle (structural
+   facts, explicit exclusions, and training pairs) and prints `Supervision manifest: <path>`
 
 !!! tip "First-time setup"
     The data pipeline only needs to run once. Generated files are cached in `data/`.
 
 ### 2. Train the Model
 
-Start training with default configuration:
+Start training with the printed manifest (or set `supervision.manifest_path` in
+`conf/config.yaml`):
 
 ```bash
-uv run naics-embedder train
+uv run naics-embedder train supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
 **Common options:**
 
 ```bash
-# Resume from last checkpoint
+# Resume from last checkpoint (requires the same supervision contract)
 uv run naics-embedder train --ckpt-path last
 
 # Override hyperparameters
 uv run naics-embedder train training.learning_rate=1e-5 data_loader.batch_size=16
 
-# Skip validation (when you know data is valid)
+# Skip the advisory data/cache checks (the supervision bundle gate always runs)
 uv run naics-embedder train --skip-validation
 ```
+
+See [Stage-3 Supervision Integrity](text_training.md#stage-3-supervision-integrity) for exact
+resume versus weights-only migration.
 
 ### 3. Monitor Training
 
@@ -112,9 +115,8 @@ uv run naics-embedder tools --help
 |---------|-------------|
 | `data all` | Run complete data pipeline |
 | `data preprocess` | Download and preprocess NAICS files |
-| `data relations` | Compute pairwise relationships |
-| `data distances` | Compute pairwise distances |
-| `data triplets` | Generate training triplets |
+| `data supervision` | Build the immutable Stage-3 supervision bundle |
+| `data relations` / `distances` / `triplets` | Deprecated; build the supervision bundle |
 
 ### Training Commands
 

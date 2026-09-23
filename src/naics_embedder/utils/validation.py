@@ -10,6 +10,7 @@ begins. Early validation prevents runtime surprises from missing files or
 incompatible data.
 
 Functions:
+    require_valid_supervision_bundle: Mandatory repaired-mode gate before model/checkpoint work.
     validate_data_paths: Verify required data files exist and are accessible.
     validate_parquet_schema: Check parquet file has expected columns.
     validate_tokenization_cache: Verify tokenization cache compatibility.
@@ -24,6 +25,11 @@ from typing import List, Optional, Set
 
 import polars as pl
 
+from naics_embedder.supervision.artifacts import (
+    ValidatedSupervisionBundle,
+    load_validated_bundle,
+    sha256_file,
+)
 from naics_embedder.utils.config import Config, TokenizationConfig
 
 logger = logging.getLogger(__name__)
@@ -117,7 +123,9 @@ def validate_data_paths(cfg: Config) -> ValidationResult:
     Verify that required data files exist and are accessible.
 
     Checks for the existence of description, distance, relation, and triplet
-    parquet files required for training.
+    parquet files required for training. In repaired mode only the descriptions input is checked
+    here: structural facts and training pairs come from the supervision bundle, which
+    :func:`require_valid_supervision_bundle` validates.
 
     Args:
         cfg: Configuration containing data paths.
@@ -133,12 +141,22 @@ def validate_data_paths(cfg: Config) -> ValidationResult:
     '''
     result = ValidationResult.success()
 
-    required_files = {
-        'descriptions': cfg.data_loader.streaming.descriptions_parquet,
-        'distances': cfg.data_loader.streaming.distances_parquet,
-        'distance_matrix': cfg.data_loader.streaming.distance_matrix_parquet,
-        'relations': cfg.data_loader.streaming.relations_parquet,
-    }
+    required_files = {'descriptions': cfg.data_loader.streaming.descriptions_parquet}
+    if cfg.supervision.mode == 'repaired':
+        path = Path(required_files['descriptions'])
+        if not path.exists():
+            result.add_error(
+                f'Descriptions file not found: {path}\n  Run: uv run naics-embedder data all'
+            )
+        return result
+
+    required_files.update(
+        {
+            'distances': cfg.data_loader.streaming.distances_parquet,
+            'distance_matrix': cfg.data_loader.streaming.distance_matrix_parquet,
+            'relations': cfg.data_loader.streaming.relations_parquet,
+        }
+    )
 
     for name, path_str in required_files.items():
         path = Path(path_str)
@@ -367,7 +385,7 @@ def validate_training_config(cfg: Config) -> ValidationResult:
         result.merge(validate_descriptions_schema(cfg))
 
     dist_path = Path(cfg.data_loader.streaming.distances_parquet)
-    if dist_path.exists():
+    if cfg.supervision.mode == 'legacy_containment' and dist_path.exists():
         result.merge(validate_distances_schema(cfg))
 
     # Validate tokenization cache
@@ -415,3 +433,56 @@ def require_valid_config(cfg: Config) -> None:
             ],
             details='\n'.join(result.errors),
         )
+
+# -------------------------------------------------------------------------------------------------
+# Stage-3 Supervision Gate
+# -------------------------------------------------------------------------------------------------
+
+def require_valid_supervision_bundle(cfg: Config) -> Optional[ValidatedSupervisionBundle]:
+    '''
+    Mandatory repaired-mode gate, run before any DataModule, checkpoint, or model work.
+
+    Unlike the advisory checks above, this gate cannot be skipped: repaired training fails
+    closed unless ``supervision.manifest_path`` names a bundle that passes every contract,
+    integrity, and relational check and was generated from the configured descriptions.
+
+    Args:
+        cfg: Training configuration.
+
+    Returns:
+        The validated bundle, or None in explicit legacy containment mode.
+
+    Raises:
+        ValidationError: If the manifest path is unset or the descriptions input differs from the
+            one the bundle was generated from.
+        FileNotFoundError: If the manifest does not exist.
+        ValueError: If the bundle violates its contract.
+    '''
+    if cfg.supervision.mode == 'legacy_containment':
+        return None
+    if not cfg.supervision.manifest_path:
+        raise ValidationError(
+            'Repaired Stage-3 training requires supervision.manifest_path',
+            remediation=[
+                'Run: uv run naics-embedder data supervision',
+                'Set supervision.manifest_path to the printed immutable manifest path',
+            ],
+        )
+    bundle = load_validated_bundle(
+        cfg.supervision.manifest_path,
+        expected_contract=cfg.supervision.contract_version,
+    )
+    descriptions_hash = sha256_file(Path(cfg.data_loader.streaming.descriptions_parquet))
+    if descriptions_hash != bundle.manifest.description_fingerprint:
+        raise ValidationError(
+            'Descriptions input does not match the supervision bundle',
+            remediation=[
+                'Point data_loader.streaming.descriptions_parquet at the bundle input, or',
+                'Regenerate the bundle: uv run naics-embedder data supervision',
+            ],
+            details=(
+                f'bundle {bundle.manifest.bundle_id}: expected '
+                f'{bundle.manifest.description_fingerprint}, found {descriptions_hash}'
+            ),
+        )
+    return bundle

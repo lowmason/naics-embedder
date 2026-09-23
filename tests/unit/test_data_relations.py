@@ -3,6 +3,7 @@ import pytest
 
 from naics_embedder.data import compute_relations
 
+
 @pytest.mark.unit
 def test_get_relations_handles_child_sibling_and_cousin():
     depths = {'A': 0, 'B': 1, 'C': 2, 'D': 1, 'E': 2}
@@ -18,23 +19,6 @@ def test_get_relations_handles_child_sibling_and_cousin():
     assert compute_relations._get_relations('B', 'C', depths, ancestors) == 'child'
     assert compute_relations._get_relations('B', 'D', depths, ancestors) == 'sibling'
     assert compute_relations._get_relations('C', 'E', depths, ancestors) == 'cousin'
-
-@pytest.mark.unit
-def test_get_relation_matrix_is_symmetric():
-    df = pl.DataFrame({
-        'code_i': ['11', '11'],
-        'code_j': ['21', '31'],
-        'relation_id': [1, 2],
-    })
-
-    matrix = compute_relations._get_relation_matrix(df)
-
-    assert matrix.shape == (3, 3)
-    cols = matrix.columns
-    assert matrix[cols[1]][0] == pytest.approx(1.0)
-    assert matrix[cols[0]][1] == pytest.approx(1.0)
-    assert matrix[cols[2]][0] == pytest.approx(2.0)
-    assert matrix[cols[0]][2] == pytest.approx(2.0)
 
 @pytest.mark.unit
 def test_get_relations_handles_extended_family_names():
@@ -67,29 +51,72 @@ def test_get_relations_handles_extended_family_names():
     removed = compute_relations._get_relations('D', 'I', depths, ancestors)
     assert removed == 'cousin_2_times_removed'
 
+RELATION_IDS = {
+    'child': 1,
+    'sibling': 2,
+    'grandchild': 3,
+    'great-grandchild': 4,
+    'nephew/niece': 5,
+    'great-great-grandchild': 6,
+    'cousin': 7,
+    'grand-nephew/niece': 8,
+    'grand-grand-nephew/niece': 9,
+    'cousin_1_times_removed': 10,
+    'second_cousin': 11,
+    'cousin_2_times_removed': 12,
+    'second_cousin_1_times_removed': 13,
+    'third_cousin': 14,
+    'cross_sector': 99,
+}
+
+def _relation(frame: pl.DataFrame, code_i: str, code_j: str) -> tuple[int, str]:
+    row = frame.filter(pl.col('code_i').eq(code_i) & pl.col('code_j').eq(code_j)).row(
+        0, named=True
+    )
+    return row['structural_relation_id'], row['structural_relation_name']
+
+@pytest.fixture
+def structural_relations(hierarchy_descriptions_parquet):
+    return compute_relations.compute_structural_relations(
+        hierarchy_descriptions_parquet, RELATION_IDS
+    )
+
 @pytest.mark.unit
-def test_get_exclusions_matches_description_codes(monkeypatch: pytest.MonkeyPatch):
-    descriptions_df = pl.DataFrame(
-        {
-            'code': ['111111', '222222', '333333'],
-            'excluded': ['desc', None, 'desc'],
-            'excluded_codes': [['222222'], None, ['111111']],
-        }
-    )
+def test_structural_relations_are_structural_only(structural_relations):
+    assert structural_relations.columns == [
+        'idx_i',
+        'idx_j',
+        'code_i',
+        'code_j',
+        'structural_relation_id',
+        'structural_relation_name',
+    ]
 
-    monkeypatch.setattr(
-        'naics_embedder.data.compute_relations.pl.read_parquet',
-        lambda *_args, **_kwargs: descriptions_df,
-    )
+@pytest.mark.unit
+def test_excluded_pairs_keep_tree_relations(structural_relations):
+    # '311111' excludes '321111' (merged 31-33 sector) and '441111' excludes '311211'.
+    assert _relation(structural_relations, '311111', '321111') == (14, 'third_cousin')
+    assert _relation(structural_relations, '311211', '441111') == (99, 'cross_sector')
 
-    relations_df = pl.DataFrame({
-        'code_i': ['111111', '333333'],
-        'code_j': ['222222', '999999'],
-    })
+@pytest.mark.unit
+def test_no_structural_relation_is_an_exclusion_sentinel(structural_relations):
+    assert not structural_relations.get_column('structural_relation_id').eq(0).any()
+    assert not structural_relations.get_column('structural_relation_name').eq('excluded').any()
+    assert set(structural_relations.get_column('structural_relation_name')) <= set(RELATION_IDS)
 
-    exclusions = compute_relations._get_exclusions(relations_df)
+@pytest.mark.unit
+def test_cross_sector_is_an_explicit_structural_value(structural_relations):
+    assert _relation(structural_relations, '31', '44') == (99, 'cross_sector')
+    assert _relation(structural_relations, '31', '321') == (1, 'child')
+    assert _relation(structural_relations, '311', '321') == (2, 'sibling')
+    assert _relation(structural_relations, '3112', '31111') == (5, 'nephew/niece')
+    assert structural_relations.filter(
+        pl.col('code_i').eq('321') & pl.col('code_j').eq('311')
+    ).height == 0
 
-    assert exclusions.height == 1
-    row = exclusions.row(0, named=True)
-    assert row['code_i'] == '111111'
-    assert row['code_j'] == '222222'
+@pytest.mark.unit
+def test_unmapped_tree_relation_is_fatal(hierarchy_descriptions_parquet):
+    incomplete = {name: rid for name, rid in RELATION_IDS.items() if name != 'nephew/niece'}
+
+    with pytest.raises(ValueError, match='nephew/niece'):
+        compute_relations.compute_structural_relations(hierarchy_descriptions_parquet, incomplete)

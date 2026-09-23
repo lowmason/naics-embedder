@@ -4,15 +4,10 @@
 
 import logging
 from itertools import combinations
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import networkx as nx
-import numpy as np
 import polars as pl
-
-from naics_embedder.utils.config import RelationsConfig, load_config
-from naics_embedder.utils.console import log_table as _log_table
-from naics_embedder.utils.utilities import parquet_stats as _parquet_stats
 
 logger = logging.getLogger(__name__)
 
@@ -163,98 +158,42 @@ def _get_relations(i: str, j: str, depths: Dict[str, int], ancestors: Dict[str, 
             return f'{degree_name}_cousin_{removed}_times_removed'
 
 # -------------------------------------------------------------------------------------------------
-# Exclusions
+# Structural relations
 # -------------------------------------------------------------------------------------------------
 
-def _get_exclusions(relations_df: pl.DataFrame) -> pl.DataFrame:
-    descriptions_df = pl.read_parquet('./data/naics_descriptions.parquet')
+CROSS_SECTOR_RELATION_NAME = 'cross_sector'
+CROSS_SECTOR_RELATION_ID = 99
 
-    codes = set(descriptions_df.get_column('code').unique().sort().to_list())
+def compute_structural_relations(
+    input_parquet: str,
+    relation_ids: Mapping[str, int],
+) -> pl.DataFrame:
+    '''
+    Compute canonical structural relations for every unordered pair of distinct codes.
 
-    exclusions = (
-        descriptions_df.filter(pl.col('excluded').is_not_null()).select(
-            code_i=pl.col('code'),
-            code_j=pl.col('excluded_codes'),
-        ).explode('code_j').filter(pl.col('code_j').is_not_null(),
-                                   pl.col('code_j').is_in(codes)).join(
-                                       descriptions_df.select(code_j=pl.col('code')),
-                                       on='code_j',
-                                       how='inner',
-                                   ).join(
-                                       relations_df.select(pl.col('code_i'), pl.col('code_j')),
-                                       on=['code_i', 'code_j'],
-                                       how='inner',
-                                   ).select(
-                                       code_i=pl.col('code_i'),
-                                       code_j=pl.col('code_j'),
-                                       excluded=pl.lit(True),
-                                   ).unique().sort('code_i', 'code_j')
-    )
+    Rows follow the canonical pair orientation (shallower code first, code order on ties); the
+    relation name describes ``code_j`` relative to ``code_i`` and is not a bidirectional label.
+    Codes in different sector trees receive the explicit ``cross_sector`` relation. No exclusion
+    processing happens here and nothing is written.
 
-    print(f'Number of exclusions: {exclusions.height: ,}\n')
+    Args:
+        input_parquet: Descriptions parquet with ``index``, ``level``, and ``code`` columns.
+        relation_ids: Mapping of structural relation names to IDs. Every relation name produced
+            by the hierarchy must be mapped; ``cross_sector`` defaults to 99.
 
-    return exclusions
+    Returns:
+        DataFrame with ``idx_i``, ``idx_j``, ``code_i``, ``code_j``,
+        ``structural_relation_id``, ``structural_relation_name``.
 
-# -------------------------------------------------------------------------------------------------
-# Relation matrix
-# -------------------------------------------------------------------------------------------------
+    Raises:
+        ValueError: If the hierarchy produces a relation name absent from ``relation_ids``.
+    '''
 
-def _get_relation_matrix(df: pl.DataFrame) -> pl.DataFrame:
-    '''Create relation matrix from relations_df DataFrame.'''
-
-    codes = sorted(set(df['code_i'].to_list() + df['code_j'].to_list()))
-    n_codes = len(codes)
-
-    code_to_idx = {code: idx for idx, code in enumerate(codes)}
-
-    rel_matrix = np.zeros((n_codes, n_codes), dtype=float)
-    for row in df.iter_rows(named=True):
-        i = code_to_idx[row['code_i']]
-        j = code_to_idx[row['code_j']]
-        dist = row['relation_id']
-        rel_matrix[i, j] = dist
-        rel_matrix[j, i] = dist
-
-    rel_matrix_schema = []
-    for code, idx in code_to_idx.items():
-        rel_matrix_schema.append((f'idx_{idx}-code_{code}', pl.Float64))
-
-    return pl.from_numpy(data=rel_matrix, schema=rel_matrix_schema)
-
-# -------------------------------------------------------------------------------------------------
-# Distance stats
-# -------------------------------------------------------------------------------------------------
-
-def _relation_stats(relations_df: pl.DataFrame):
-    stats_df = (
-        relations_df.group_by('relation_id', 'relation').agg(cnt=pl.len()).with_columns(
-            pct=pl.col('cnt').truediv(pl.col('cnt').sum()).mul(100)
-        ).sort('relation_id')
-    )
-
-    _log_table(
-        df=stats_df,
-        title='Relation Statistics',
-        headers=['Relation ID:relation_id', 'Relation:relation', 'cnt', 'pct'],
-        logger=logger,
-        output='./outputs/relation_stats.pdf',
-    )
-
-# -------------------------------------------------------------------------------------------------
-# Main Entry Point
-# -------------------------------------------------------------------------------------------------
-
-def calculate_pairwise_relations() -> pl.DataFrame:
-    # Load configuration from YAML
-    cfg = load_config(RelationsConfig, './data/relations.yaml')
-
-    logger.info('Configuration:')
-    logger.info(cfg.model_dump_json(indent=2))
-    logger.info('')
+    cross_sector_id = relation_ids.get(CROSS_SECTOR_RELATION_NAME, CROSS_SECTOR_RELATION_ID)
 
     df_list = []
-    for sector in _sectors(cfg.input_parquet):
-        G = _sector_tree(sector, cfg.input_parquet)
+    for sector in _sectors(input_parquet):
+        G = _sector_tree(sector, input_parquet)
 
         pairs = [(i, j) if int(i) < int(j) else (j, i) for i, j in combinations(G.nodes, 2)]
 
@@ -281,86 +220,43 @@ def calculate_pairwise_relations() -> pl.DataFrame:
     pair_relations = pl.concat(df_list).select(
         pl.col('code_i'),
         pl.col('code_j'),
-        relation_id=pl.col('relationship').replace_strict(cfg.relation_id,
+        relation_id=pl.col('relationship').replace_strict(dict(relation_ids),
                                                           default=None).cast(pl.Int8),
         relation=pl.col('relationship'),
     )
 
-    naics_i = pl.scan_parquet(cfg.input_parquet).select(
+    unmapped = sorted(
+        pair_relations.filter(pl.col('relation_id').is_null()).get_column('relation').unique()
+    )
+    if unmapped:
+        raise ValueError(
+            f'hierarchy relations missing from the relation_id mapping: {unmapped}; '
+            'an unmapped relation must never fall back to the cross_sector ID'
+        )
+
+    naics_i = pl.scan_parquet(input_parquet).select(
         idx_i=pl.col('index'), lvl_i=pl.col('level'), code_i=pl.col('code')
     )
 
-    naics_j = pl.scan_parquet(cfg.input_parquet).select(
+    naics_j = pl.scan_parquet(input_parquet).select(
         idx_j=pl.col('index'), lvl_j=pl.col('level'), code_j=pl.col('code')
     )
 
-    relations_df = (
-        naics_i.join(naics_j, how='cross').with_columns(
-            sector_i=pl.col('code_i').str.slice(0, 2), sector_j=pl.col('code_j').str.slice(0, 2)
-        ).with_columns(
-            keep=(
-                (pl.col('lvl_i') <= pl.col('lvl_j'))
-                & (pl.col('sector_i') == pl.col('sector_j'))
+    # Canonical orientation: shallower code first, numeric code order on ties. Tree pairs above
+    # use the same orientation, so every in-tree pair joins its structural relation exactly once.
+    return (
+        naics_i.join(naics_j, how='cross').filter(
+            (pl.col('lvl_i') < pl.col('lvl_j'))
+            | (
+                (pl.col('lvl_i') == pl.col('lvl_j'))
                 & (pl.col('code_i').cast(pl.UInt32) < pl.col('code_j').cast(pl.UInt32))
             )
-            | ((pl.col('lvl_i') <= pl.col('lvl_j')) & (pl.col('sector_i') != pl.col('sector_j')))
-        ).filter(pl.col('keep')
-                 ).collect().join(pair_relations, how='left', on=['code_i', 'code_j']).select(
-                     idx_i=pl.col('idx_i'),
-                     idx_j=pl.col('idx_j'),
-                     code_i=pl.col('code_i'),
-                     code_j=pl.col('code_j'),
-                     relation_id=pl.col('relation_id').fill_null(99),
-                     relation=pl.col('relation').fill_null('unrelated'),
-                 ).sort('idx_i', 'idx_j')
-    )
-
-    exclusions = _get_exclusions(relations_df)
-
-    relations_df = (
-        relations_df.join(exclusions, on=['code_i', 'code_j'], how='left').with_columns(
-            excluded=pl.col('excluded').fill_null(False)
-        ).select(
-            pl.col('idx_i'),
-            pl.col('idx_j'),
-            pl.col('code_i'),
-            pl.col('code_j'),
-            relation_id=pl.when(pl.col('excluded')).then(pl.lit(0)).otherwise(
-                pl.col('relation_id')
-            ),
-            relation=pl.when(pl.col('excluded')).then(pl.lit('excluded')).otherwise(
-                pl.col('relation')
-            ),
+        ).collect().join(pair_relations, how='left', on=['code_i', 'code_j']).select(
+            idx_i=pl.col('idx_i'),
+            idx_j=pl.col('idx_j'),
+            code_i=pl.col('code_i'),
+            code_j=pl.col('code_j'),
+            structural_relation_id=pl.col('relation_id').fill_null(cross_sector_id),
+            structural_relation_name=pl.col('relation').fill_null(CROSS_SECTOR_RELATION_NAME),
         ).sort('idx_i', 'idx_j')
     )
-
-    (relations_df.write_parquet(cfg.output_parquet))
-
-    _relation_stats(relations_df)
-
-    _parquet_stats(
-        parquet_df=relations_df,
-        message='NAICS pairwise relations written to',
-        output_parquet=cfg.output_parquet,
-        logger=logger,
-    )
-
-    relations_matrix = _get_relation_matrix(relations_df)
-
-    (relations_matrix.write_parquet(cfg.relation_matrix_parquet))
-
-    _parquet_stats(
-        parquet_df=relations_matrix,
-        message='NAICS relations matrix written to',
-        output_parquet=cfg.relation_matrix_parquet,
-        logger=logger,
-    )
-
-    return relations_df
-
-# -------------------------------------------------------------------------------------------------
-# Main Entry Point
-# -------------------------------------------------------------------------------------------------
-
-if __name__ == '__main__':
-    calculate_pairwise_relations()

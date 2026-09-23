@@ -137,6 +137,19 @@ def _load_codes_and_indices(descriptions_parquet: str,
         code_to_idx = {row['code']: row['index'] for row in df_codes.iter_rows(named=True)}
         return codes, code_to_idx
 
+# The only negative fields HGCN consumes. Rebuilt Stage-3 training pairs also carry semantic
+# target/source, exclusion provenance, and identity columns; none of them enter graph training.
+GRAPH_NEGATIVE_COLUMNS = (
+    'negative_idx',
+    'negative_code',
+    'relation_margin',
+    'distance_margin',
+)
+
+def _project_graph_negative(row: Dict[str, Any]) -> Dict[str, Any]:
+    '''Project a training-pair row onto the legacy graph negative fields.'''
+    return {name: row[name] for name in GRAPH_NEGATIVE_COLUMNS}
+
 def _load_negative_candidates(
     triplets_parquet: str,
     required_pairs: Optional[Set[Tuple[int, int]]] = None,
@@ -180,14 +193,7 @@ def _load_negative_candidates(
     if pairs_lazy is not None:
         scan = scan.join(pairs_lazy, on=['anchor_idx', 'positive_idx'], how='inner')
 
-    df = scan.select(
-        'anchor_idx',
-        'positive_idx',
-        'negative_idx',
-        'negative_code',
-        'relation_margin',
-        'distance_margin',
-    ).collect()
+    df = scan.select('anchor_idx', 'positive_idx', *GRAPH_NEGATIVE_COLUMNS).collect()
 
     logger.info(f'Loaded {len(df):,} negative candidate rows')
 
@@ -197,14 +203,7 @@ def _load_negative_candidates(
         key = (row['anchor_idx'], row['positive_idx'])
         if key not in result:
             result[key] = []
-        result[key].append(
-            {
-                'negative_idx': row['negative_idx'],
-                'negative_code': row['negative_code'],
-                'relation_margin': row['relation_margin'],
-                'distance_margin': row['distance_margin'],
-            }
-        )
+        result[key].append(_project_graph_negative(row))
 
     logger.info(f'Grouped into {len(result):,} (anchor, positive) pairs')
     return result

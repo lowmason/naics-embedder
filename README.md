@@ -243,13 +243,12 @@ uv synv
 
 ### 8.1 Download and preprocess NAICS data
 
-Prepare the NAICS dataset with four text channels.
+Prepare the NAICS dataset with four text channels, then build the immutable Stage-3 supervision
+bundle (structural facts, explicit exclusions, and training pairs, all validated together):
 
 ``` bash
 uv run naics-embedder data preprocess
-uv run naics-embedder data relations
-uv run naics-embedder data distances
-uv run naics-embedder data triplets
+uv run naics-embedder data supervision
 ```
 
 Or:
@@ -258,15 +257,25 @@ Or:
 uv run naics-embedder data all
 ```
 
+`data supervision` prints `Supervision manifest: <path>`. The former `data relations`,
+`data distances`, and `data triplets` commands now print a migration notice and build the same
+bundle.
+
 ### 8.2 Training the Contrastive Model
 
 The text encoder uses the Structure-Aware Dynamic Curriculum (SADC) scheduler by default. It progresses through three phases in a single run—structural initialization, geometric refinement, and false-negative mitigation—activating the appropriate sampling flags automatically.
 
-Run training with the base config:
+Run training with the base config and the printed manifest:
 
 ``` bash
-uv run naics-embedder train --config conf/config.yaml 
+uv run naics-embedder train --config conf/config.yaml \
+  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
+
+Training validates the bundle before anything else and fails closed on any mismatch. See
+[Stage-3 Supervision Integrity](docs/text_training.md#stage-3-supervision-integrity) for the
+operator workflow, exact resume versus weights-only checkpoint migration, legacy containment, and
+the rollout gates.
 
 ### 8.3 Running HGCN Refinement
 

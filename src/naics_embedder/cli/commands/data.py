@@ -9,25 +9,25 @@ preparation pipeline. Commands should be run in order or via ``data all``.
 
 Pipeline Stages:
     1. preprocess: Download and clean raw NAICS data files
-    2. relations: Compute pairwise graph relationships
-    3. distances: Compute pairwise graph distances
-    4. triplets: Generate training triplets for contrastive learning
+    2. supervision: Build one immutable, validated Stage-3 supervision bundle
 
 Commands:
     preprocess: Download raw NAICS files and produce descriptions parquet.
-    relations: Build relationship annotations between all NAICS codes.
-    distances: Compute tree distances between all NAICS codes.
-    triplets: Generate (anchor, positive, negative) training triplets.
+    supervision: Build codebook, pair facts, compatibility distance/relation artifacts,
+        training pairs, and curriculum thresholds as one versioned bundle.
+    relations, distances, triplets: Deprecated stage commands; each prints a migration notice
+        and builds the complete supervision bundle.
     all: Run the complete data generation pipeline.
 '''
+
+from pathlib import Path
 
 import typer
 from rich.console import Console
 
-from naics_embedder.data.compute_distances import calculate_pairwise_distances
-from naics_embedder.data.compute_relations import calculate_pairwise_relations
-from naics_embedder.data.create_triplets import generate_training_triplets
 from naics_embedder.data.download_data import download_preprocess_data
+from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+from naics_embedder.utils.config import SupervisionBuildConfig, load_config
 from naics_embedder.utils.console import configure_logging
 
 # -------------------------------------------------------------------------------------------------
@@ -39,6 +39,8 @@ console = Console()
 app = typer.Typer(
     help='Data generation and preprocessing commands for NAICS taxonomy.', no_args_is_help=True
 )
+
+SUPERVISION_CONFIG = 'data/supervision.yaml'
 
 # -------------------------------------------------------------------------------------------------
 # Download and preprocess data
@@ -73,110 +75,81 @@ def preprocess():
     console.print('\n[bold]Preprocessing complete.[/bold]\n')
 
 # -------------------------------------------------------------------------------------------------
-# Compute pairwise graph relationships
+# Build the Stage-3 supervision bundle
 # -------------------------------------------------------------------------------------------------
+
+def _build_supervision_bundle() -> Path:
+    cfg = load_config(SupervisionBuildConfig, SUPERVISION_CONFIG)
+    manifest_path = generate_supervision_bundle(cfg)
+    typer.echo(f'Supervision manifest: {manifest_path}')
+    typer.echo(
+        'Set supervision.manifest_path to this immutable manifest before repaired Stage-3 '
+        'training.'
+    )
+    return manifest_path
+
+@app.command('supervision')
+def supervision():
+    '''
+    Build one immutable, validated Stage-3 supervision bundle.
+
+    Computes structural distances and relations in canonical pair orientation, attaches both
+    directional exclusion flags, and derives the codebook, pair facts, compatibility
+    distance/relation artifacts and matrices, training pairs, and curriculum difficulty
+    thresholds from those facts. Every artifact carries the bundle ID and schema version; the
+    manifest is written only after all artifacts validate, and an existing bundle is never
+    overwritten.
+
+    Requires:
+        ``data/naics_descriptions.parquet`` - From the preprocess stage.
+
+    Output:
+        ``data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json`` and its artifacts.
+        The manifest path is printed; configure it as ``supervision.manifest_path``.
+
+    Example:
+        Build a supervision bundle::
+
+            $ uv run naics-embedder data supervision
+    '''
+
+    configure_logging('data_supervision.log')
+
+    console.rule('[bold green]Stage 2: Building Supervision Bundle[/bold green]')
+
+    _build_supervision_bundle()
+
+    console.print('\n[bold]Supervision bundle complete.[/bold]\n')
+
+# -------------------------------------------------------------------------------------------------
+# Deprecated partial-authority stages
+# -------------------------------------------------------------------------------------------------
+
+def _migrate_stage(stage: str) -> None:
+    typer.echo(
+        f'`data {stage}` no longer publishes a standalone artifact; relations, distances, and '
+        'triplets are generated together by `naics-embedder data supervision`. Building the '
+        'complete supervision bundle now.'
+    )
+    supervision()
 
 @app.command('relations')
 def relations():
-    '''
-    Compute pairwise graph relationships between all NAICS codes.
+    '''Deprecated: builds the complete supervision bundle (see ``data supervision``).'''
 
-    Analyzes the NAICS hierarchy to determine relationship types between
-    every pair of codes (child, sibling, cousin, etc.). These relationships
-    are used for curriculum-based sampling during training.
-
-    Requires:
-        ``data/naics_descriptions.parquet`` - From the preprocess stage.
-
-    Output:
-        ``data/naics_relations.parquet`` - Pairwise relationship annotations.
-        ``data/naics_relation_matrix.parquet`` - Sparse matrix representation.
-
-    Example:
-        Compute all pairwise relationships::
-
-            $ uv run naics-embedder data relations
-    '''
-
-    configure_logging('data_relations.log')
-
-    console.rule('[bold green]Stage 2: Computing Relations[/bold green]')
-
-    calculate_pairwise_relations()
-
-    console.print('\n[bold]Relation computation complete.[/bold]\n')
-
-# -------------------------------------------------------------------------------------------------
-# Compute pairwise graph distances
-# -------------------------------------------------------------------------------------------------
+    _migrate_stage('relations')
 
 @app.command('distances')
 def distances():
-    '''
-    Compute pairwise graph distances between all NAICS codes.
+    '''Deprecated: builds the complete supervision bundle (see ``data supervision``).'''
 
-    Calculates tree distances in the NAICS hierarchy for every pair of codes.
-    Distance is computed as the sum of edges traversed to reach the lowest
-    common ancestor. Used for hierarchy preservation loss and evaluation.
-
-    Requires:
-        ``data/naics_descriptions.parquet`` - From the preprocess stage.
-
-    Output:
-        ``data/naics_distances.parquet`` - Pairwise distance annotations.
-        ``data/naics_distance_matrix.parquet`` - Sparse matrix representation.
-
-    Example:
-        Compute all pairwise distances::
-
-            $ uv run naics-embedder data distances
-    '''
-
-    configure_logging('data_distances.log')
-
-    console.rule('[bold green]Stage 2: Computing Distances[/bold green]')
-
-    calculate_pairwise_distances()
-
-    console.print('\n[bold]Distance computation complete.[/bold]\n')
-
-# -------------------------------------------------------------------------------------------------
-# Generate training triplets
-# -------------------------------------------------------------------------------------------------
+    _migrate_stage('distances')
 
 @app.command('triplets')
 def triplets():
-    '''
-    Generate (anchor, positive, negative) training triplets.
+    '''Deprecated: builds the complete supervision bundle (see ``data supervision``).'''
 
-    Creates training triplets for contrastive learning by sampling anchors
-    from the NAICS taxonomy and pairing them with positive samples (related
-    codes) and negative samples (distant codes).
-
-    Triplet generation uses the distance and relation annotations to ensure
-    meaningful contrastive pairs that respect the hierarchical structure.
-
-    Requires:
-        ``data/naics_descriptions.parquet`` - From the preprocess stage.
-        ``data/naics_distances.parquet`` - From the distances stage.
-        ``data/naics_relations.parquet`` - From the relations stage.
-
-    Output:
-        ``data/naics_training_pairs/`` - Directory of parquet files with triplets.
-
-    Example:
-        Generate training triplets::
-
-            $ uv run naics-embedder data triplets
-    '''
-
-    configure_logging('data_triplets.log')
-
-    console.rule('[bold green]Stage 3: Generating Triplets[/bold green]')
-
-    generate_training_triplets()
-
-    console.print('\n[bold]Triplet generation complete.[/bold]\n')
+    _migrate_stage('triplets')
 
 # -------------------------------------------------------------------------------------------------
 # Run full data generation pipeline
@@ -187,12 +160,12 @@ def all_data():
     '''
     Run the complete data generation pipeline.
 
-    Executes all data preparation stages in order: preprocess, relations,
-    distances, and triplets. This is the recommended way to prepare data
-    for training from scratch.
+    Executes both data preparation stages in order: preprocess, then one complete supervision
+    bundle build. This is the recommended way to prepare data for training from scratch.
 
     Output:
-        All data files required for training will be created in ``data/``.
+        ``data/naics_descriptions.parquet`` and a new supervision bundle whose manifest path is
+        printed.
 
     Example:
         Run the full pipeline::
@@ -209,8 +182,6 @@ def all_data():
     console.rule('[bold green]Starting Full Data Pipeline[/bold green]')
 
     preprocess()
-    relations()
-    distances()
-    triplets()
+    supervision()
 
     console.rule('[bold green]Full Data Pipeline Complete![/bold green]')
