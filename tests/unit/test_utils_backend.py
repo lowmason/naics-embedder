@@ -5,6 +5,7 @@ import torch
 
 from naics_embedder.utils import backend
 
+
 @pytest.mark.unit
 def test_get_device_prefers_cuda(monkeypatch):
     monkeypatch.setattr(torch.cuda, 'is_available', lambda: True, raising=False)

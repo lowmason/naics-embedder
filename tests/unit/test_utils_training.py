@@ -18,6 +18,7 @@ from naics_embedder.utils.training import (
     save_training_summary,
 )
 
+
 def _build_config(tmp_path: Path) -> Config:
     cfg = Config()
     cfg.experiment_name = 'unit-test'

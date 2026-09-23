@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import polars as pl
 
+
 class NaicsHierarchy:
     '''In-memory representation of the NAICS hierarchy derived from relations parquet data.'''
 
