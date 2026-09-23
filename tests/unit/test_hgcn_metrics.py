@@ -5,7 +5,9 @@ from unittest.mock import Mock
 
 import polars as pl
 import pytest
+import pytorch_lightning as pyl
 import torch
+from torch.utils.data import DataLoader
 
 from naics_embedder.graph_model.hgcn import HGCNLightningModule, save_outputs
 from naics_embedder.metrics import StructuralMetricInputError
@@ -221,3 +223,75 @@ def test_hgcn_does_not_skip_unexpected_spearman_failure(monkeypatch, spearman_hg
     )
     with pytest.raises(RuntimeError, match='structural-spearman-v1.*n_pairs=6'):
         module._compute_full_validation_metrics(module.forward())
+
+@pytest.mark.unit
+@pytest.mark.parametrize('epochs,validate_every', [(1, 1), (2, 1), (3, 2)])
+def test_trainer_history_associates_spearman_with_its_epoch(
+    tmp_path, monkeypatch, spearman_hgcn, structural_distance_matrices, epochs, validate_every
+):
+    module, metadata = spearman_hgcn
+    monkeypatch.delattr(module, 'forward')
+    monkeypatch.delattr(module, 'log')
+    prediction, _ = structural_distance_matrices
+    constant_prediction = torch.ones_like(prediction)
+    constant_prediction.fill_diagonal_(0.0)
+
+    def distances(*_args, **_kwargs):
+        return constant_prediction if module.current_epoch == 1 else prediction
+
+    monkeypatch.setattr(module.embedding_evaluator, 'compute_pairwise_distances', distances)
+    loader = DataLoader(
+        [
+            {
+                'anchor_idx': torch.tensor(0),
+                'positive_idx': torch.tensor(1),
+                'negative_indices': torch.tensor([2, 3]),
+            }
+        ],
+        batch_size=1,
+        num_workers=0,
+    )
+    trainer = pyl.Trainer(
+        accelerator='cpu',
+        devices=1,
+        max_epochs=epochs,
+        check_val_every_n_epoch=validate_every,
+        limit_train_batches=1,
+        limit_val_batches=1,
+        num_sanity_val_steps=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        default_root_dir=tmp_path,
+    )
+    trainer.fit(module, train_dataloaders=loader, val_dataloaders=loader)
+    save_outputs(
+        str(tmp_path),
+        module.embeddings.detach(),
+        metadata,
+        module.cfg,
+        module.model,
+        module.export_history(),
+    )
+    history = json.loads((tmp_path / 'training_log.json').read_text())
+    json.dumps(history, allow_nan=False)
+    assert [record['epoch'] for record in history] == list(range(1, epochs + 1))
+    key = 'val_structural_spearman_v1'
+    for record in history:
+        epoch = record['epoch']
+        if epoch % validate_every:
+            assert not any(name.startswith('val_') for name in record)
+            continue
+        assert record[f'{key}_n_pairs'] == record[f'{key}_n_total'] == 6
+        assert isinstance(record[f'{key}_n_pairs'], int)
+        assert record[f'{key}_definition'] == 'structural-spearman-v1'
+        assert 'val_relation_accuracy' in record
+        if epoch == 2:
+            assert record[key] is None
+            assert record[f'{key}_status'] == 'undefined'
+            assert record[f'{key}_reason'] == 'constant_prediction'
+        else:
+            assert record[key] == pytest.approx(0.87831006565368, abs=1e-7)
+            assert record[f'{key}_status'] == 'defined'
+            assert record[f'{key}_reason'] is None

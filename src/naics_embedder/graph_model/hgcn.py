@@ -429,6 +429,8 @@ class HGCNLightningModule(pyl.LightningModule):
         self._train_level.clear()
         self._train_w_triplet.clear()
         self._train_w_level.clear()
+        self._val_epoch_metrics.clear()
+        self._full_val_metrics.clear()
 
     def _load_curriculum_thresholds(self, cfg: GraphConfig) -> Dict[str, Any]:
         cache_dir = Path(cfg.curriculum_cache_dir)
@@ -1042,9 +1044,18 @@ class HGCNLightningModule(pyl.LightningModule):
             epoch_stats['w_level'] = float(np.mean(self._train_w_level))
 
         self.history.append(epoch_stats)
+        self._update_validation_history()
 
     def on_validation_epoch_end(self) -> None:
-        if not self._val_epoch_metrics or not self.history:
+        self._update_validation_history()
+
+    def _update_validation_history(self) -> None:
+        # During fit, validation finishes before the current training history row exists.
+        if (
+            not self._val_epoch_metrics or not self.history or self.history[-1]['epoch'] != int(
+                self.current_epoch + 1
+            )
+        ):
             return
 
         avg_metrics = {

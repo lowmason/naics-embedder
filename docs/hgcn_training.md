@@ -77,6 +77,9 @@ Lightning logs `val/structural_spearman_v1` only when defined, plus
 }
 ```
 
+Validation fields are attached to the matching training epoch, including the first epoch.
+Epochs without validation do not inherit a previous epoch's values or metadata.
+
 Defined values are numeric with status `defined` and a `null` reason. Undefined results remain
 non-fatal, with one of the documented reasons, and do not produce a numeric Lightning scalar.
 Malformed matrices, including shape mismatches and non-finite off-diagonal entries loaded from
