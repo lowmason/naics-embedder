@@ -30,9 +30,14 @@ from .commands import data, tools, training
 # filters of their own on import, so running last keeps these suppressions ahead of them.
 configure_warnings()
 
-# Create main Typer app
+# Create main Typer app. Typer requires help to be a string (it runs inspect.cleandoc on it), so
+# the banner is styled with Rich markup rather than passed as a Panel renderable.
 app = typer.Typer(
-    help='NAICS Embedder\n\nText-enhanced Hyperbolic NAICS Embedding System'
+    help=(
+        '[bold cyan]NAICS Embedder[/bold cyan]\n\n'
+        'Text-enhanced Hyperbolic NAICS Embedding System'
+    ),
+    rich_markup_mode='rich',
 )
 
 # Add sub-apps
