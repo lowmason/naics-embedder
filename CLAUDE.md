@@ -53,12 +53,11 @@ search, clustering, and downstream ML tasks.
 naics-embedder/
 ├── src/naics_embedder/       # Main source code (77 Python files)
 │   ├── cli/                  # CLI entry point and command groups
-│   │   ├── cli.py            # Top-level Typer app
 │   │   ├── commands/         # Command implementations
 │   │   │   ├── data.py       # Data preparation commands
 │   │   │   ├── tools.py      # Utility tools commands
 │   │   │   └── training.py   # Training command (661 lines)
-│   │   └── __init__.py
+│   │   └── __init__.py       # Top-level Typer app
 │   ├── data/                 # Data preprocessing and generation
 │   │   ├── download_data.py  # Download and preprocess NAICS data
 │   │   ├── compute_relations.py   # Compute relationship measures
@@ -846,7 +845,7 @@ The system uses **centralized warning suppression** (`utils/warnings.py`):
 
 - Suppresses known benign warnings from dependencies
 - Documents rationale for each suppressed warning
-- Applied globally via `cli/cli.py` at startup
+- Applied globally by `cli/__init__.py` when the CLI package is imported
 
 ```python
 from naics_embedder.utils.warnings import configure_warnings, list_suppressed_warnings

@@ -169,7 +169,6 @@ source = ['src/naics_embedder']
 omit = [
     '*/tests/*',
     '*/__init__.py',
-    '*/cli.py',
 ]
 
 [tool.coverage.report]
