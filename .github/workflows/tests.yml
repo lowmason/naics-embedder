@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint:
-    # Lint once: ruff's results don't depend on the Python version
+    # Lint and check formatting once, on Python 3.12: the version .python-version pins locally
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -23,12 +23,20 @@ jobs:
         run: pip install uv
 
       - name: Install dev tools from uv.lock
-        # Only the dev group (it pins ruff), not the project or its torch wheels
+        # Only the dev group (it pins ruff and yapf), not the project or its torch wheels
         run: uv sync --locked --only-group dev
 
       - name: Lint with ruff
         # --no-sync stops uv run from installing the full project first
         run: uv run --no-sync ruff check src/ tests/
+
+      - name: Check formatting with yapf
+        # --all needs no merge base, so the shallow checkout is enough. UV_NO_SYNC keeps the
+        # script's plain `uv run` calls from installing the full project. This step is skipped
+        # when ruff fails: --check reruns ruff, so it would only repeat ruff's errors
+        run: ./scripts/format_code.sh --check --all
+        env:
+          UV_NO_SYNC: '1'
 
   test:
     strategy:
