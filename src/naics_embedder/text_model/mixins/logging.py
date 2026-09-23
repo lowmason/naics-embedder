@@ -156,7 +156,8 @@ class LoggingMixin:
                         ]:
                             sample_types['cousin'] += 1
                         elif (
-                            relation in ['unrelated'] or relation.startswith('third_cousin')
+                            relation in ['unrelated', 'cross_sector']
+                            or relation.startswith('third_cousin')
                             or relation.startswith('cousin_')
                         ):
                             sample_types['distant'] += 1

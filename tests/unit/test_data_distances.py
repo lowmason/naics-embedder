@@ -13,12 +13,13 @@ from naics_embedder.data.compute_distances import (
     _find_common_ancestor,
     _get_distance,
     _get_distance_matrix,
-    _get_exclusions,
     _join_sectors,
     _sector_codes,
     _sector_tree,
     _sectors,
+    compute_structural_distances,
 )
+from naics_embedder.utils.config import DistancesConfig
 
 # -------------------------------------------------------------------------------------------------
 # Sector Utilities Tests
@@ -464,7 +465,7 @@ class TestDistanceOutputs:
             {
                 'code_i': ['111111', '111111', '222222'],
                 'code_j': ['222222', '333333', '333333'],
-                'distance': [1.0, 2.0, 3.0],
+                'structural_distance': [1.0, 2.0, 3.0],
             }
         )
 
@@ -486,40 +487,63 @@ class TestDistanceOutputs:
         # Diagonal entries should remain zero unless explicitly populated
         assert values[0, 0] == pytest.approx(0.0)
 
-    def test_get_exclusions_filters_pairs_not_in_descriptions(self, monkeypatch):
-        '''_get_exclusions should only keep valid code pairs present in descriptions parquet.'''
 
-        descriptions_df = pl.DataFrame(
-            {
-                'code': ['111111', '222222', '333333'],
-                'excluded': ['desc', None, 'other'],
-                'excluded_codes': [
-                    ['222222', '999999'],
-                    None,
-                    ['111111'],
-                ],
-            }
+# -------------------------------------------------------------------------------------------------
+# Structural-only distances
+# -------------------------------------------------------------------------------------------------
+
+def _distance(frame: pl.DataFrame, code_i: str, code_j: str) -> float:
+    return frame.filter(pl.col('code_i').eq(code_i) & pl.col('code_j').eq(code_j)).item(
+        0, 'structural_distance'
+    )
+
+@pytest.mark.unit
+class TestStructuralDistances:
+    '''Exclusion processing never touches structural distance.'''
+
+    @pytest.fixture
+    def distances(self, hierarchy_descriptions_parquet):
+        return compute_structural_distances(
+            hierarchy_descriptions_parquet,
+            DistancesConfig(input_parquet=hierarchy_descriptions_parquet),
         )
 
-        monkeypatch.setattr(
-            'naics_embedder.data.compute_distances.pl.read_parquet',
-            lambda *_args, **_kwargs: descriptions_df,
+    def test_output_is_structural_only(self, distances):
+        assert distances.columns == [
+            'idx_i',
+            'idx_j',
+            'code_i',
+            'code_j',
+            'structural_distance',
+        ]
+
+    def test_excluded_pairs_keep_tree_distances(self, distances):
+        # '311111' excludes '321111' (merged 31-33 sector) and '441111' excludes '311211'.
+        assert _distance(distances, '311111', '321111') == 8.0
+        assert _distance(distances, '311211', '441111') == 99.0
+
+    def test_no_structural_distance_is_an_exclusion_sentinel(self, distances):
+        assert distances.get_column('structural_distance').min() > 0.0
+
+    def test_values_follow_the_tree(self, distances):
+        assert _distance(distances, '31', '321') == 0.5
+        assert _distance(distances, '311', '321') == 2.0
+        assert _distance(distances, '3112', '31111') == 3.0
+        assert _distance(distances, '31', '44') == 99.0
+
+    def test_every_unordered_pair_appears_once_in_canonical_orientation(self, distances):
+        n_codes = 17
+        assert distances.height == n_codes * (n_codes - 1) // 2
+        oriented = distances.with_columns(
+            level_i=pl.col('code_i').str.len_chars(),
+            level_j=pl.col('code_j').str.len_chars(),
         )
-
-        distances_df = pl.DataFrame(
-            {
-                'code_i': ['111111', '333333'],
-                'code_j': ['222222', '444444'],
-                'idx_i': [0, 1],
-                'idx_j': [1, 2],
-                'distance': [0.5, 1.0],
-            }
+        non_canonical = oriented.filter(
+            pl.col('level_i').gt(pl.col('level_j'))
+            | (pl.col('level_i').eq(pl.col('level_j')) & pl.col('code_i').ge(pl.col('code_j')))
         )
-
-        exclusions = _get_exclusions(distances_df)
-
-        assert exclusions.height == 1
-        row = exclusions.row(0, named=True)
-        assert row['code_i'] == '111111'
-        assert row['code_j'] == '222222'
-        assert row['excluded'] is True
+        assert non_canonical.height == 0
+        # Same-level pairs across a merged-sector prefix are no longer emitted twice.
+        assert distances.filter(
+            pl.col('code_i').eq('321') & pl.col('code_j').eq('311')
+        ).height == 0

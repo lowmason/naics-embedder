@@ -20,3 +20,4 @@ relation_id:
   cousin_2_times_removed: 12
   second_cousin_1_times_removed: 13
   third_cousin: 14
+  cross_sector: 99

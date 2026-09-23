@@ -168,39 +168,6 @@ def _get_distance(i: str, j: str, depths: Dict[str, int], ancestors: Dict[str, L
     return float(max(distance, 0.0))
 
 # -------------------------------------------------------------------------------------------------
-# Exclusions
-# -------------------------------------------------------------------------------------------------
-
-def _get_exclusions(distances_df: pl.DataFrame) -> pl.DataFrame:
-    descriptions_df = pl.read_parquet('./data/naics_descriptions.parquet')
-
-    codes = set(descriptions_df.get_column('code').unique().sort().to_list())
-
-    exclusions = (
-        descriptions_df.filter(pl.col('excluded').is_not_null()).select(
-            code_i=pl.col('code'),
-            code_j=pl.col('excluded_codes'),
-        ).explode('code_j').filter(pl.col('code_j').is_not_null(),
-                                   pl.col('code_j').is_in(codes)).join(
-                                       descriptions_df.select(code_j=pl.col('code')),
-                                       on='code_j',
-                                       how='inner',
-                                   ).join(
-                                       distances_df.select(pl.col('code_i'), pl.col('code_j')),
-                                       on=['code_i', 'code_j'],
-                                       how='inner',
-                                   ).select(
-                                       code_i=pl.col('code_i'),
-                                       code_j=pl.col('code_j'),
-                                       excluded=pl.lit(True),
-                                   ).unique().sort('code_i', 'code_j')
-    )
-
-    print(f'Number of exclusions: {exclusions.height: ,}\n')
-
-    return exclusions
-
-# -------------------------------------------------------------------------------------------------
 # Distance matrix
 # -------------------------------------------------------------------------------------------------
 
@@ -216,7 +183,7 @@ def _get_distance_matrix(df: pl.DataFrame) -> pl.DataFrame:
     for row in df.iter_rows(named=True):
         i = code_to_idx[row['code_i']]
         j = code_to_idx[row['code_j']]
-        dist = row['distance']
+        dist = row['structural_distance']
         dist_matrix[i, j] = dist
         dist_matrix[j, i] = dist
 
@@ -232,9 +199,9 @@ def _get_distance_matrix(df: pl.DataFrame) -> pl.DataFrame:
 
 def _distance_stats(distances_df: pl.DataFrame):
     stats_df = (
-        distances_df.group_by('distance').agg(cnt=pl.len()).with_columns(
+        distances_df.group_by('structural_distance').agg(cnt=pl.len()).with_columns(
             pct=pl.col('cnt').truediv(pl.col('cnt').sum()).mul(100)
-        ).sort('distance')
+        ).sort('structural_distance')
     )
 
     _log_table(
@@ -249,17 +216,31 @@ def _distance_stats(distances_df: pl.DataFrame):
 # Main Entry Point
 # -------------------------------------------------------------------------------------------------
 
-def calculate_pairwise_distances() -> pl.DataFrame:
-    # Load configuration from YAML
-    cfg = load_config(DistancesConfig, './data/distances.yaml')
+CROSS_SECTOR_DISTANCE = 99.0
+
+def compute_structural_distances(input_parquet: str, cfg: DistancesConfig) -> pl.DataFrame:
+    '''
+    Compute structural distances for every unordered pair of distinct codes.
+
+    Rows follow the canonical pair orientation (shallower code first, code order on ties), so
+    each unordered pair appears exactly once. Codes in different sector trees receive the explicit
+    cross-sector distance. No exclusion processing happens here and nothing is written.
+
+    Args:
+        input_parquet: Descriptions parquet with ``index``, ``level``, and ``code`` columns.
+        cfg: Distance configuration (logged for provenance).
+
+    Returns:
+        DataFrame with ``idx_i``, ``idx_j``, ``code_i``, ``code_j``, ``structural_distance``.
+    '''
 
     logger.info('Configuration:')
     logger.info(cfg.model_dump_json(indent=2))
     logger.info('')
 
     df_list = []
-    for sector in _sectors(cfg.input_parquet):
-        G = _sector_tree(sector, cfg.input_parquet)
+    for sector in _sectors(input_parquet):
+        G = _sector_tree(sector, input_parquet)
 
         pairs = [(i, j) if int(i) < int(j) else (j, i) for i, j in combinations(G.nodes, 2)]
 
@@ -287,47 +268,37 @@ def calculate_pairwise_distances() -> pl.DataFrame:
         pl.col('code_i'), pl.col('code_j'), distance=pl.col('distance')
     )
 
-    naics_i = pl.scan_parquet(cfg.input_parquet).select(
+    naics_i = pl.scan_parquet(input_parquet).select(
         idx_i=pl.col('index'), lvl_i=pl.col('level'), code_i=pl.col('code')
     )
 
-    naics_j = pl.scan_parquet(cfg.input_parquet).select(
+    naics_j = pl.scan_parquet(input_parquet).select(
         idx_j=pl.col('index'), lvl_j=pl.col('level'), code_j=pl.col('code')
     )
 
-    distances_df = (
-        naics_i.join(naics_j, how='cross').with_columns(
-            sector_i=pl.col('code_i').str.slice(0, 2), sector_j=pl.col('code_j').str.slice(0, 2)
-        ).with_columns(
-            keep=(
-                (pl.col('lvl_i') <= pl.col('lvl_j'))
-                & (pl.col('sector_i') == pl.col('sector_j'))
+    # Canonical orientation: shallower code first, numeric code order on ties. Tree pairs above
+    # use the same orientation, so every in-tree pair joins its structural value exactly once.
+    return (
+        naics_i.join(naics_j, how='cross').filter(
+            (pl.col('lvl_i') < pl.col('lvl_j'))
+            | (
+                (pl.col('lvl_i') == pl.col('lvl_j'))
                 & (pl.col('code_i').cast(pl.UInt32) < pl.col('code_j').cast(pl.UInt32))
             )
-            | ((pl.col('lvl_i') <= pl.col('lvl_j')) & (pl.col('sector_i') != pl.col('sector_j')))
-        ).filter(pl.col('keep')
-                 ).collect().join(pair_relations, how='left', on=['code_i', 'code_j']).select(
-                     pl.col('idx_i'),
-                     pl.col('idx_j'),
-                     pl.col('code_i'),
-                     pl.col('code_j'),
-                     distance=pl.col('distance').fill_null(99.0),
-                 ).sort('idx_i', 'idx_j')
-    )
-
-    exclusions = _get_exclusions(distances_df)
-
-    distances_df = (
-        distances_df.join(exclusions, on=['code_i', 'code_j'], how='left').with_columns(
-            excluded=pl.col('excluded').fill_null(False)
-        ).select(
+        ).collect().join(pair_relations, how='left', on=['code_i', 'code_j']).select(
             pl.col('idx_i'),
             pl.col('idx_j'),
             pl.col('code_i'),
             pl.col('code_j'),
-            distance=pl.when(pl.col('excluded')).then(pl.lit(0)).otherwise(pl.col('distance')),
+            structural_distance=pl.col('distance').fill_null(CROSS_SECTOR_DISTANCE),
         ).sort('idx_i', 'idx_j')
     )
+
+def calculate_pairwise_distances() -> pl.DataFrame:
+    # Load configuration from YAML
+    cfg = load_config(DistancesConfig, './data/distances.yaml')
+
+    distances_df = compute_structural_distances(cfg.input_parquet, cfg)
 
     (distances_df.write_parquet(cfg.distances_parquet))
 
