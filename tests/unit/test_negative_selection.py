@@ -295,6 +295,24 @@ def test_canonical_occurrence_is_the_smallest_valid_uid_per_code():
             }
 
 
+def test_canonical_occurrence_handles_empty_pools_and_narrow_dtypes():
+    empty = canonical_occurrence_mask(
+        torch.zeros((2, 0), dtype=torch.long),
+        torch.zeros((2, 0, 3), dtype=torch.long),
+        torch.zeros((2, 0), dtype=torch.bool),
+    )
+    # In int32, code 2**30 + 5 shifted by the 2-bit slot width wraps onto code 5's keys, which
+    # would interleave the two code groups; the key must be built in int64.
+    code_id = torch.tensor([[2**30 + 5, 5, 2**30 + 5]])
+    uid = torch.tensor([[[0, 0, 0], [0, 0, 1], [0, 0, 2]]])
+    valid = torch.ones((1, 3), dtype=torch.bool)
+
+    narrow = canonical_occurrence_mask(code_id.to(torch.int32), uid.to(torch.int32), valid)
+
+    assert empty.shape == (2, 0)
+    assert narrow.tolist() == [[True, True, False]]
+
+
 def test_malformed_score_in_an_unreached_proposal_is_still_fatal(candidate_batch):
     filling = CandidateProposal(
         source_indices=torch.tensor([[0, 1, 2]]),

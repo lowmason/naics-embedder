@@ -275,9 +275,10 @@ class CurriculumMixin:
         selection_k = int(batch['selection_k'])
         proposals: List[CandidateProposal] = []
         if enable_geometric or enable_router:
-            # Miners score one occurrence per code (the one the coordinator keeps) and never the
-            # anchor or positive code, so repeated codes in a global pool cannot crowd distinct
-            # codes out of a miner's top-k.
+            # Miners score one occurrence per code (the one the coordinator keeps), so repeated
+            # codes in a global pool cannot crowd distinct codes out of a miner's top-k. Masking
+            # the anchor and positive codes is defensive: both already fail structural
+            # eligibility.
             forbidden = candidates.code_id.eq(batch['anchor_code_id'].unsqueeze(1)) | (
                 candidates.code_id.eq(batch['positive_code_id'].unsqueeze(1))
             )

@@ -64,12 +64,15 @@ def canonical_occurrence_mask(
         ValueError: If the identities cannot be ordered in one 64-bit key.
     '''
 
+    if valid_mask.numel() == 0:
+        return torch.zeros_like(valid_mask)
     device = valid_mask.device
     valid = valid_mask.cpu()
-    code = code_id.cpu().masked_fill(~valid, 0)
-    uid = candidate_uid.cpu().masked_fill(~valid.unsqueeze(-1), 0)
+    # Build keys in int64 whatever the input dtype: narrower shifts would wrap and interleave codes.
+    code = code_id.cpu().to(torch.int64).masked_fill(~valid, 0)
+    uid = candidate_uid.cpu().to(torch.int64).masked_fill(~valid.unsqueeze(-1), 0)
     widths = [int(uid[..., component].max()).bit_length() for component in range(3)]
-    code_width = int(code.max()).bit_length() if code.numel() else 0
+    code_width = int(code.max()).bit_length()
     if code_width + sum(widths) > 62:
         raise ValueError('candidate identities are too large to order in one 64-bit key')
 
