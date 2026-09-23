@@ -23,6 +23,7 @@ from naics_embedder.supervision.candidates import (
     NegativeCandidateBatch,
     SelectedNegativeBatch,
 )
+from naics_embedder.supervision.margins import structural_margins
 from naics_embedder.supervision.schema import (
     SAMPLING_ROLE_TO_ID,
     SamplingProvenance,
@@ -165,8 +166,9 @@ class CurriculumMixin:
         Build the canonical candidate pool and perform the one checked negative selection.
 
         Flow: local candidate entities -> optional distributed entity gather -> anchor-relative
-        supervision join -> ``NegativeCandidateBatch`` -> difficulty/geometric/router proposals ->
-        coordinator selection (exclusion quota, dedup, backfill) -> the single gather.
+        supervision join and structural eligibility -> ``NegativeCandidateBatch`` ->
+        geometric/router proposals, then the difficulty proposal as fallback -> coordinator
+        selection (exclusion quota, dedup, backfill) -> the single gather.
 
         Args:
             batch: Repaired collated batch.
@@ -231,12 +233,19 @@ class CurriculumMixin:
             entities.code_id,
             entities.valid_mask,
         )
-        relation_margin = pair.structural_relation_id.to(torch.float32) - batch[
-            'positive_structural_relation_id'
-        ].to(torch.float32).unsqueeze(1)
-        distance_margin = pair.structural_distance - batch[
-            'positive_structural_distance'
-        ].unsqueeze(1)
+        # Anchor-relative margins follow the generator's rule: an ordinary candidate must be
+        # structurally farther than the positive, exactly like every generated training negative.
+        # Explicit exclusions are exempt. Runtime-sourced candidates (universe backfill, remote
+        # ranks) that fail the rule are ineligible for this anchor, so no loss repels a relative
+        # the generated supervision would never treat as a negative.
+        relation_margin, distance_margin = structural_margins(
+            negative_distance=pair.structural_distance,
+            negative_relation_id=pair.structural_relation_id,
+            positive_distance=batch['positive_structural_distance'].unsqueeze(1),
+            positive_relation_id=batch['positive_structural_relation_id'].unsqueeze(1),
+        )
+        structurally_farther = relation_margin.gt(0) & distance_margin.gt(0)
+        eligible = entities.valid_mask & (pair.is_explicit_exclusion | structurally_farther)
         candidates = NegativeCandidateBatch(
             candidate_uid=entities.candidate_uid,
             code_id=entities.code_id,
@@ -253,26 +262,30 @@ class CurriculumMixin:
             relation_margin=relation_margin,
             distance_margin=distance_margin,
             router_gate_probs=entities.router_gate_probs,
-            valid_mask=entities.valid_mask,
+            valid_mask=eligible,
             runtime_fields={'difficulty': pair.structural_distance},
         )
 
-        proposals: List[CandidateProposal] = [
-            _proposal_from_local_uids(
-                local_candidate_uid=candidate_uid,
-                active_candidates=candidates,
-                local_source_indices=batch['difficulty_proposal_indices'],
-            )
-        ]
+        # Phase 2+ miners are consulted first, so they rather than the upstream difficulty
+        # proposal choose the negatives. With both miners on, router_mix_ratio splits the slots:
+        # the geometric miner proposes its share and the router fills the rest. The difficulty
+        # proposal is the fallback before deterministic backfill, and the sole proposal in Phase 1.
         selection_k = int(batch['selection_k'])
+        proposals: List[CandidateProposal] = []
         if enable_geometric:
-            proposals.append(
-                self.hard_negative_miner.propose(
-                    anchor_output['embedding'],
-                    candidates,
-                    k=selection_k,
+            router_slots = 0
+            if enable_router:
+                mix_ratio = float(self.current_schedule_scalars.get('router_mix_ratio', 0.5))
+                router_slots = int(selection_k * min(max(mix_ratio, 0.0), 1.0))
+            geometric_slots = selection_k - router_slots
+            if geometric_slots > 0:
+                proposals.append(
+                    self.hard_negative_miner.propose(
+                        anchor_output['embedding'],
+                        candidates,
+                        k=geometric_slots,
+                    )
                 )
-            )
         if enable_router:
             anchor_gate_probs = anchor_output.get('gate_probs')
             if anchor_gate_probs is None or candidates.router_gate_probs is None:
@@ -286,6 +299,13 @@ class CurriculumMixin:
                     k=selection_k,
                 )
             )
+        proposals.append(
+            _proposal_from_local_uids(
+                local_candidate_uid=candidate_uid,
+                active_candidates=candidates,
+                local_source_indices=batch['difficulty_proposal_indices'],
+            )
+        )
 
         selection = self.selection_coordinator.select(
             candidates,
@@ -297,7 +317,12 @@ class CurriculumMixin:
             proposals=tuple(proposals),
         )
         selected = candidates.select(selection)
-        self._log_selection_health(candidates, selected, batch_size)
+        self._log_selection_health(
+            candidates,
+            selected,
+            batch_size,
+            entity_valid_mask=entities.valid_mask,
+        )
         return selected
 
     def _build_selected_pseudo_related_mask(

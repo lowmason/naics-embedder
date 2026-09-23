@@ -233,6 +233,7 @@ class NAICSContrastiveModel(
         self.supervision_index: Optional[SupervisionIndex] = None
         self.selection_coordinator: Optional[NegativeSelectionCoordinator] = None
         self.naics_hierarchy: Optional[NaicsHierarchy] = None
+        self.relation_id_to_name: Dict[int, str] = {}
         if self.supervision_policy.require_bundle:
             # Load the validated supervision bundle before any model construction: the single
             # authority for code identity, structural facts, exclusions, the evaluation
@@ -258,6 +259,10 @@ class NAICSContrastiveModel(
                     )
                 bundle = supervision_bundle
             runtime_contract = contract_for_bundle(bundle.manifest, supervision_mode)
+            self.relation_id_to_name = {
+                relation_id: name
+                for name, relation_id in bundle.manifest.structural_relation_ids.items()
+            }
             self.supervision_index = SupervisionIndex.from_bundle(bundle)
             self.selection_coordinator = NegativeSelectionCoordinator()
             self.naics_hierarchy = load_naics_hierarchy(str(bundle.artifact_path('relations')))

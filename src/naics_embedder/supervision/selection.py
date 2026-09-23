@@ -139,8 +139,14 @@ class NegativeSelectionCoordinator:
                     if code_id not in ordinary_codes or code_id in chosen_codes:
                         continue
                     score = float(scores[row][proposal_slot])
+                    if score == -math.inf:
+                        continue  # the ineligible marker used by every strategy
                     if not math.isfinite(score):
-                        continue
+                        raise ValueError(
+                            f'{SelectionReason(reason).name} proposal for anchor code ID '
+                            f'{anchors[row]} has a malformed score {score} at source index '
+                            f'{index}'
+                        )
                     best_score_by_code[code_id] = max(
                         score,
                         best_score_by_code.get(code_id, -math.inf),

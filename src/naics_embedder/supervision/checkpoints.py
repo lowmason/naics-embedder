@@ -137,8 +137,9 @@ def load_weights_only(model: torch.nn.Module, path: str | Path) -> MigrationRepo
     runtime bundle built them.
 
     Raises:
-        ValueError: If the checkpoint has no state dict, or carries parameters that are neither
-            allowlisted nor known-excluded, or allowlisted parameters with mismatched shapes.
+        ValueError: If the checkpoint has no state dict, carries parameters that are neither
+            allowlisted nor known-excluded or allowlisted parameters with mismatched shapes, or
+            contributes no allowlisted parameter at all.
     '''
 
     checkpoint = _load_checkpoint(path)
@@ -162,6 +163,10 @@ def load_weights_only(model: torch.nn.Module, path: str | Path) -> MigrationRepo
     if unexpected:
         raise ValueError(
             f'weights-only checkpoint has unexpected parameter groups: {sorted(unexpected)}'
+        )
+    if not loaded:
+        raise ValueError(
+            f'weights-only checkpoint {path} has no allowlisted encoder parameters to load'
         )
     model.load_state_dict(loaded, strict=False)
     missing = tuple(

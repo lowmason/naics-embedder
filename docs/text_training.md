@@ -226,7 +226,22 @@ is recomputed for each local anchor.
 When an anchor has explicit exclusions in its pool, final selection reserves exactly one slot for
 one of them; the other slots come from strategy proposals over non-exclusion candidates, with
 duplicates removed by code (keeping the smallest UID), ties broken by code ID then UID, and a
-deterministic backfill. The reserved exclusion rotates across epochs:
+deterministic backfill. Proposals are consulted in order:
+
+1. **Phase 2+ miners.** With hard-negative mining on, the geometric miner proposes its share of the
+   `K` slots; with router-guided mining also on, the router fills the rest.
+   `router_mix_ratio` (from `curriculum.anneal`, default 0.5) sets the router's share, so both
+   miners together decide the selection whenever they are enabled.
+2. **The difficulty proposal** from the data layer, which is the only proposal in Phase 1 and the
+   fallback afterwards.
+3. **Deterministic backfill** from the remaining eligible codes.
+
+Ordinary candidates are **eligible** only if they are structurally farther from the anchor than
+the positive, the same rule every generated training negative satisfies (including its
+cross-sector, equal-distance, and lineal special cases). Candidates sourced at runtime, such as
+universe backfill and the multi-GPU global pool, therefore never repel a relative the generated
+supervision would not treat as a negative. Explicit exclusions are exempt because their exclusion
+is authoritative. The reserved exclusion rotates across epochs:
 
 ```text
 index = (stable_hash(seed, anchor_code_id) + epoch) mod n_exclusions
@@ -305,7 +320,8 @@ is not contract-compliant Stage-3 training:
   weights are set (`loss.rank_order_weight` and `data_loader.streaming.phase1_exclusion_weight`
   are accepted only in this mode);
 - hard-negative and router-based reordering and pseudo-related elimination or attraction are
-  disabled; training uses local, unmined negatives in collated order;
+  disabled; training uses local, unmined negatives in collated order, with the legacy
+  repeat-last padding of shorter negative lists;
 - MoE routing, load balancing, and radius regularizers still run;
 - runs log `LEGACY CONTAINMENT` at startup and `train/integrity/legacy_containment = 1` each epoch;
 - checkpoints are tagged with bundle ID `legacy-containment` and codebook fingerprint
@@ -327,9 +343,16 @@ They prove, in order, that a forced reorder keeps every candidate field on one i
 structural preference gradient corrects an inverted pair, that bundle validation fails closed, and
 that a full training step feeds every loss the same selected candidates.
 
-During training, the epoch-summed integrity counters
-`train/integrity/anchors_with_exclusions`, `quota_selections`, `invalid_candidates_ignored`,
-`deterministic_backfills`, and `duplicate_candidates_removed` report selection health.
+During training, epoch-summed integrity counters report selection health:
+`train/integrity/anchors_with_exclusions`, the per-reason selections (`quota_selections`,
+`geometric_selections`, `router_selections`, `difficulty_selections`, `deterministic_backfills`),
+`invalid_candidates_ignored` (padding), `structurally_ineligible_candidates`, and
+`duplicate_candidates_removed`.
+
+Validation scores every eligible candidate of each validation pool, including every exclusion,
+with no mining or pseudo-labels, so `val/contrastive_loss` depends only on the model and the
+epoch-independent validation pools. Its values are not comparable with legacy runs, whose
+validation contrasted a fixed negative list.
 
 ---
 
@@ -371,9 +394,11 @@ The model is decomposed into functional **mixins** for maintainability:
 **Curriculum-driven behavior:**
 
 - Reads curriculum flags from `CurriculumScheduler`.
-- Phase 2+ proposals (source indices into the canonical pool):
-  - Embedding-based hard negative proposals (Lorentzian distance).
-  - Router-guided proposals (gate confusion).
+- Phase 2+ proposals (source indices into the canonical pool), consulted before the difficulty
+  proposal:
+  - Embedding-based hard negative proposals (Lorentzian distance), for a `1 - router_mix_ratio`
+    share of the slots when router mining is also on.
+  - Router-guided proposals (gate confusion) fill the remaining slots.
   - Norm-adaptive margins via `NormAdaptiveMargin` (sech-based decay) are logged for annealing.
 - Phase 3:
   - Pseudo-related candidates from clustering, derived only after selection and never including

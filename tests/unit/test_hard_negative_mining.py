@@ -171,8 +171,8 @@ class _SelectionHost(DistributedMixin, CurriculumMixin):
         self.selection_coordinator = NegativeSelectionCoordinator()
         self.health = []
 
-    def _log_selection_health(self, candidates, selected, batch_size):
-        self.health.append((candidates, selected))
+    def _log_selection_health(self, candidates, selected, batch_size, *, entity_valid_mask):
+        self.health.append((candidates, selected, entity_valid_mask))
 
 
 def _host_batch(pools: list[list[int]], anchor: int = 0, positive: int = 1) -> dict:
@@ -247,11 +247,148 @@ def test_select_negative_batch_keeps_every_field_on_one_identity(validated_bundl
     )
     expected_distance = index.structural_distance[0][selected.code_id]
     assert torch.equal(selected.structural_distance, expected_distance)
-    assert torch.equal(
-        selected.relation_margin,
-        index.structural_relation_id[0][selected.code_id].to(torch.float32) - 1.0,
-    )
+    # Positive: child at distance 0.5. Code 2 is the anchor's sibling exclusion (relation 2,
+    # distance 2.0 -> raw deltas); codes 3 and 4 are cross-sector (fixed 15 / 10 margins).
+    expected_margins = {2: (1.0, 1.5), 3: (15.0, 10.0), 4: (15.0, 10.0)}
+    for row in range(selected.code_id.shape[0]):
+        for slot, code in enumerate(selected.code_id[row].tolist()):
+            assert selected.relation_margin[row, slot].item() == expected_margins[code][0]
+            assert selected.distance_margin[row, slot].item() == expected_margins[code][1]
     assert len(host.health) == 1
+
+
+# Production-shaped hierarchy (tests/fixtures/supervision.py HIERARCHY_CODES): code IDs follow
+# lexicographic order. '311111' (4) excludes '321111' (11); '3111' (2) is its grandparent and
+# '31111' (3) its parent; the '44' family (12-16) is cross-sector for it.
+HIERARCHY_ANCHOR = 4
+HIERARCHY_GRANDPARENT = 2
+HIERARCHY_PARENT = 3
+HIERARCHY_EXCLUSION = 11
+CROSS_SECTOR_CODES = [12, 13, 14, 15, 16]
+
+
+@pytest.fixture
+def hierarchy_index(tmp_path, hierarchy_descriptions_parquet):
+    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+    from naics_embedder.supervision.artifacts import load_validated_bundle
+    from naics_embedder.utils.config import SupervisionBuildConfig
+
+    manifest = generate_supervision_bundle(
+        SupervisionBuildConfig(
+            descriptions_parquet=hierarchy_descriptions_parquet,
+            output_root=str(tmp_path / 'bundles'),
+        )
+    )
+    return SupervisionIndex.from_bundle(load_validated_bundle(manifest))
+
+
+def _hierarchy_batch(index, pool, positive, selection_k):
+    batch = _host_batch([pool], anchor=HIERARCHY_ANCHOR, positive=positive)
+    batch['selection_k'] = selection_k
+    batch['positive_structural_distance'] = torch.tensor(
+        [float(index.structural_distance[HIERARCHY_ANCHOR, positive])]
+    )
+    batch['positive_structural_relation_id'] = index.structural_relation_id[
+        HIERARCHY_ANCHOR, positive
+    ].reshape(1)
+    return batch
+
+
+def _code_embedding(code_id: int) -> torch.Tensor:
+    '''The embedding ``_candidate_output`` gives a candidate with this code ID.'''
+    return _candidate_output({'candidate_code_id': torch.tensor([[code_id]])})['embedding'][0]
+
+
+def _hierarchy_candidate_output(batch: dict) -> dict:
+    # Hierarchy code IDs reach 16, so gate probabilities scale by 1/20 to stay in [0, 1].
+    output = _candidate_output(batch)
+    code_ids = batch['candidate_code_id'].clamp_min(0).to(torch.float32).reshape(-1)
+    output['gate_probs'] = torch.stack([code_ids / 20.0, 1.0 - code_ids / 20.0], dim=1)
+    return output
+
+
+def _select_with_flags(index, flags, pool, positive, selection_k, anchor_embedding, mix=None):
+    host = _SelectionHost(index, flags)
+    if mix is not None:
+        host.current_schedule_scalars = {'router_mix_ratio': mix}
+    batch = _hierarchy_batch(index, pool, positive, selection_k)
+    candidate_output = _hierarchy_candidate_output(batch)
+    selected = host._select_negative_batch(
+        batch=batch,
+        anchor_output={
+            'embedding': anchor_embedding.unsqueeze(0),
+            'gate_probs': torch.tensor([[0.5, 0.5]]),
+        },
+        candidate_output=candidate_output,
+        candidate_uid=_local_uid(batch),
+        batch_idx=0,
+    )
+    return host, selected
+
+
+def _reasons(selected) -> list:
+    return [SelectionReason(reason) for reason in selected.selection_reasons[0].tolist()]
+
+
+def test_miners_choose_negatives_before_the_difficulty_proposal(hierarchy_index):
+    pool = [HIERARCHY_EXCLUSION] + CROSS_SECTOR_CODES
+    anchor_embedding = _code_embedding(13)
+    mining = {'enable_hard_negative_mining': True, 'enable_router_guided_sampling': True}
+
+    _, mined = _select_with_flags(
+        hierarchy_index, mining, pool, HIERARCHY_GRANDPARENT, 4, anchor_embedding
+    )
+    _, unmined = _select_with_flags(
+        hierarchy_index, {}, pool, HIERARCHY_GRANDPARENT, 4, anchor_embedding
+    )
+
+    # The difficulty proposal covers the whole pool, yet mining decides once it is enabled.
+    assert _reasons(mined) == [
+        SelectionReason.EXCLUSION_QUOTA,
+        SelectionReason.GEOMETRIC,
+        SelectionReason.GEOMETRIC,
+        SelectionReason.ROUTER,
+    ]
+    assert _reasons(unmined) == [SelectionReason.EXCLUSION_QUOTA] + [SelectionReason.DIFFICULTY] * 3
+    # Geometric slots go to the codes nearest the anchor embedding (code 13's): on the hyperboloid
+    # d(x, y) = |asinh(x) - asinh(y)| here, so 1.4 (code 14) is nearer 1.3 than 1.2 (code 12).
+    assert set(mined.code_id[0, 1:3].tolist()) == {13, 14}
+
+
+@pytest.mark.parametrize(
+    ('mix', 'expected'),
+    [
+        (0.0, [SelectionReason.GEOMETRIC] * 3),
+        (1.0, [SelectionReason.ROUTER] * 3),
+    ],
+)
+def test_router_mix_ratio_splits_mined_slots(hierarchy_index, mix, expected):
+    pool = [HIERARCHY_EXCLUSION] + CROSS_SECTOR_CODES
+    anchor_embedding = _code_embedding(13)
+    mining = {'enable_hard_negative_mining': True, 'enable_router_guided_sampling': True}
+
+    _, selected = _select_with_flags(
+        hierarchy_index, mining, pool, HIERARCHY_GRANDPARENT, 4, anchor_embedding, mix=mix
+    )
+
+    assert _reasons(selected) == [SelectionReason.EXCLUSION_QUOTA] + expected
+
+
+def test_structurally_closer_relative_is_never_selected_even_when_nearest(hierarchy_index):
+    # Positive: the grandparent. The parent is structurally closer than the positive, sits first
+    # in the difficulty proposal, and is geometrically nearest to the anchor embedding.
+    pool = [HIERARCHY_PARENT, HIERARCHY_EXCLUSION] + CROSS_SECTOR_CODES
+    anchor_embedding = _code_embedding(HIERARCHY_PARENT)
+
+    for flags in ({}, {'enable_hard_negative_mining': True}):
+        host, selected = _select_with_flags(
+            hierarchy_index, flags, pool, HIERARCHY_GRANDPARENT, 4, anchor_embedding
+        )
+        candidates, _, entity_valid = host.health[0]
+
+        assert HIERARCHY_PARENT not in selected.code_id[0].tolist()
+        assert HIERARCHY_EXCLUSION in selected.code_id[0].tolist()
+        assert (entity_valid & ~candidates.valid_mask)[0].tolist() == [True] + [False] * 6
 
 
 def test_select_negative_batch_rejects_router_mining_without_gate_probs(validated_bundle):

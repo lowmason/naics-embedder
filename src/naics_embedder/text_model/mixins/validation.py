@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
+from naics_embedder.supervision.margins import structurally_eligible
+
 logger = logging.getLogger(__name__)
 
 class ValidationMixin:
@@ -96,15 +98,24 @@ class ValidationMixin:
             explicit = torch.zeros_like(valid_mask)
         else:
             candidate_output, _ = self._forward_candidate_pool(batch)
-            valid_mask = batch['candidate_valid_mask']
             negative_emb = candidate_output['embedding'].reshape(
                 batch_size, int(batch['k_candidates']), -1
             )
-            explicit = self.supervision_index.join(
+            pair = self.supervision_index.join(
                 batch['anchor_code_id'],
                 batch['candidate_code_id'],
-                valid_mask,
-            ).is_explicit_exclusion
+                batch['candidate_valid_mask'],
+            )
+            # The same eligibility as training selection: ordinary candidates must be
+            # structurally farther than the positive; explicit exclusions are exempt.
+            structurally_farther = structurally_eligible(
+                negative_distance=pair.structural_distance,
+                negative_relation_id=pair.structural_relation_id,
+                positive_distance=batch['positive_structural_distance'].unsqueeze(1),
+                positive_relation_id=batch['positive_structural_relation_id'].unsqueeze(1),
+            )
+            explicit = pair.is_explicit_exclusion
+            valid_mask = batch['candidate_valid_mask'] & (explicit | structurally_farther)
 
         contrastive_loss = self.loss_fn(
             anchor_emb,

@@ -20,6 +20,7 @@ from naics_embedder.supervision.artifacts import (
     aggregate_fingerprint,
 )
 from naics_embedder.supervision.index import SupervisionIndex
+from naics_embedder.supervision.margins import structurally_eligible
 from naics_embedder.supervision.schema import SAMPLING_ROLE_TO_ID, SamplingProvenance, SamplingRole
 from naics_embedder.supervision.selection import stable_hash
 from naics_embedder.utils.config import SamplingConfig, SansStaticConfig, StreamingConfig
@@ -1014,10 +1015,12 @@ def build_candidate_pool(
     remaining non-exclusion universe when needed. Because final selection admits exactly one
     exclusion, the pool keeps at least ``final_k - 1`` ordinary codes when any exclusion exists (or
     ``final_k`` when none does), and at least ``n_candidates - exclusions``. The anchor and positive
-    codes never appear.
+    codes never appear. Ordinary codes are structurally farther than the positive, the rule every
+    generated training negative satisfies; backfill draws only such codes.
 
     Raises:
-        ValueError: If ``final_k < 1`` or the universe cannot supply ``final_k`` selectable codes.
+        ValueError: If ``final_k < 1``, a raw ordinary candidate is not structurally farther than
+            the positive, or the universe cannot supply ``final_k`` selectable codes.
     '''
 
     if final_k < 1:
@@ -1029,6 +1032,14 @@ def build_candidate_pool(
         if code_id not in forbidden
     )
     exclusion_set = set(exclusion_ids)
+    eligible_codes = structurally_eligible(
+        negative_distance=supervision_index.structural_distance[anchor_code_id],
+        negative_relation_id=supervision_index.structural_relation_id[anchor_code_id],
+        positive_distance=supervision_index.structural_distance[anchor_code_id, positive_code_id],
+        positive_relation_id=supervision_index.structural_relation_id[
+            anchor_code_id, positive_code_id
+        ],
+    ).tolist()
 
     def normalized_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
         normalized = {key: item[key] for key in RAW_CANDIDATE_KEYS if key in item}
@@ -1051,8 +1062,14 @@ def build_candidate_pool(
     by_code: Dict[int, Dict[str, Any]] = {}
     for item in raw_candidates:
         code_id = int(item['negative_code_id'])
-        if code_id not in forbidden:
-            by_code.setdefault(code_id, normalized_candidate(item))
+        if code_id in forbidden:
+            continue
+        if code_id not in exclusion_set and not eligible_codes[code_id]:
+            raise ValueError(
+                f'raw candidate code ID {code_id} for anchor code ID {anchor_code_id} is not '
+                f'structurally farther than positive code ID {positive_code_id}'
+            )
+        by_code.setdefault(code_id, normalized_candidate(item))
     for code_id in exclusion_ids:
         by_code.setdefault(code_id, backfill_candidate(code_id))
 
@@ -1067,8 +1084,8 @@ def build_candidate_pool(
         universe = [
             code_id
             for code_id in range(len(supervision_index.id_to_code))
-            if code_id not in forbidden and code_id not in exclusion_set
-            and code_id not in by_code
+            if eligible_codes[code_id] and code_id not in forbidden
+            and code_id not in exclusion_set and code_id not in by_code
         ]
         rng.shuffle(universe)
         for code_id in universe[:ordinary_target - len(kept_ordinary)]:
@@ -1079,7 +1096,7 @@ def build_candidate_pool(
         raise ValueError(
             f'anchor code ID {anchor_code_id} requires {final_k} selectable candidates; only '
             f'{len(kept_ordinary) + exclusion_slots} exist (one exclusion slot plus unique '
-            'non-exclusion codes)'
+            'non-exclusion codes structurally farther than the positive)'
         )
     return [by_code[code_id] for code_id in (*exclusion_ids, *kept_ordinary)]
 

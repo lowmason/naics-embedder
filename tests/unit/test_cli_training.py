@@ -243,6 +243,25 @@ def test_weights_only_never_passes_checkpoint_to_trainer(training_env, monkeypat
     assert training_env.trainer.fit_calls[0]['ckpt_path'] is None
 
 @pytest.mark.unit
+def test_weights_only_without_an_existing_checkpoint_is_fatal(training_env, monkeypatch):
+    training_env.checkpoint_info = CheckpointInfo(path=None, is_same_stage=False, exists=False)
+    monkeypatch.setattr(
+        training,
+        'load_weights_only',
+        lambda *_args: pytest.fail('nothing to migrate'),
+    )
+
+    with pytest.raises(typer.Exit) as excinfo:
+        training.train(
+            ckpt_path='missing.ckpt',
+            checkpoint_load_mode=CheckpointLoadMode.WEIGHTS_ONLY,
+            skip_validation=True,
+        )
+
+    assert excinfo.value.exit_code == 1
+    assert training_env.trainer is None
+
+@pytest.mark.unit
 def test_supervision_gate_runs_before_datamodule_checkpoint_and_model(training_env):
     training.train(skip_validation=True)
 

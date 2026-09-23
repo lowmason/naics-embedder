@@ -622,6 +622,12 @@ def train(
 
         if checkpoint_info.exists:
             console.print(f'[green]✓[/green] Using checkpoint: [cyan]{checkpoint_path}[/cyan]\n')
+        elif checkpoint_load_mode is CheckpointLoadMode.WEIGHTS_ONLY:
+            # An explicit migration with nothing to migrate must not silently train from scratch
+            raise ValueError(
+                '--checkpoint-load-mode weights_only requires --ckpt-path naming an existing '
+                f'checkpoint; none found for {ckpt_path!r}'
+            )
         elif ckpt_path:
             console.print(f'[yellow]Warning:[/yellow] Checkpoint not found at {ckpt_path}')
             console.print('Starting training from scratch.\n')

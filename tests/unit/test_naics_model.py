@@ -432,11 +432,17 @@ class TestTrainingStep:
             for call in log.call_args_list
             if call.args[0].startswith('train/integrity/')
         }
+        # Mining is off, so the difficulty proposal fills every ordinary slot: row 0 selects its
+        # exclusion by quota plus two codes; row 1 (no exclusion in its pool) selects three.
         assert counters == {
             'train/integrity/anchors_with_exclusions': 1.0,
             'train/integrity/quota_selections': 1.0,
-            'train/integrity/invalid_candidates_ignored': 1.0,
+            'train/integrity/geometric_selections': 0.0,
+            'train/integrity/router_selections': 0.0,
+            'train/integrity/difficulty_selections': 5.0,
             'train/integrity/deterministic_backfills': 0.0,
+            'train/integrity/invalid_candidates_ignored': 1.0,
+            'train/integrity/structurally_ineligible_candidates': 0.0,
             'train/integrity/duplicate_candidates_removed': 1.0,
         }
         for call in log.call_args_list:

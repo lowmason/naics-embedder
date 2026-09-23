@@ -229,6 +229,105 @@ def test_forced_reorder_preserves_uid_across_every_loss_field(
     )
 
 
+# -------------------------------------------------------------------------------------------------
+# Real coordinator: mining decides once enabled, and never selects a structurally closer relative
+# -------------------------------------------------------------------------------------------------
+
+# Hierarchy fixture code IDs: anchor '311111' (4), positive '3111' (2, its grandparent), parent
+# '31111' (3, structurally closer than the positive), exclusion '321111' (11), cross-sector
+# '44'-family codes (12-16).
+HIERARCHY_POOL = [3, 11, 12, 13, 14, 15, 16]
+
+
+@pytest.fixture
+def hierarchy_model(monkeypatch, tmp_path, hierarchy_descriptions_parquet):
+    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+    from naics_embedder.utils.config import SupervisionBuildConfig
+
+    manifest = generate_supervision_bundle(
+        SupervisionBuildConfig(
+            descriptions_parquet=hierarchy_descriptions_parquet,
+            output_root=str(tmp_path / 'bundles'),
+        )
+    )
+    monkeypatch.setattr(model_module, 'MultiChannelEncoder', StubMultiChannelEncoder)
+    model = model_module.NAICSContrastiveModel(
+        base_model_name='test-stub',
+        num_experts=2,
+        top_k=1,
+        moe_hidden_dim=4,
+        hierarchy_weight=0.0,
+        radius_reg_weight=0.0,
+        level_radius_weight=0.0,
+        load_balancing_coef=0.0,
+        supervision_manifest_path=str(manifest),
+    )
+    model.current_schedule_scalars = {'router_mix_ratio': 0.5}
+    monkeypatch.setattr(model, '_update_curriculum_state', lambda *_args: None)
+    monkeypatch.setattr(model, 'log', Mock())
+    return model
+
+
+def _hierarchy_batch(model):
+    index = model.supervision_index
+    item = _repaired_item(HIERARCHY_POOL)
+    item.update(
+        anchor_code_id=4,
+        anchor_code=index.id_to_code[4],
+        anchor_embedding=_encoded(4),
+        positive_code_id=2,
+        positive_code=index.id_to_code[2],
+        positive_embedding=_encoded(2),
+        positive_structural_distance=float(index.structural_distance[4, 2]),
+        positive_structural_relation_id=int(index.structural_relation_id[4, 2]),
+        selection_k=4,
+    )
+    for candidate in item['candidate_pool']:
+        candidate['negative_code'] = index.id_to_code[candidate['negative_code_id']]
+    return collate_fn([item], supervision_mode='repaired')
+
+
+@pytest.mark.parametrize(
+    ('flags', 'expected'),
+    [
+        (
+            {'enable_hard_negative_mining': True, 'enable_router_guided_sampling': True},
+            [
+                SelectionReason.EXCLUSION_QUOTA,
+                SelectionReason.GEOMETRIC,
+                SelectionReason.GEOMETRIC,
+                SelectionReason.ROUTER,
+            ],
+        ),
+        ({}, [SelectionReason.EXCLUSION_QUOTA] + [SelectionReason.DIFFICULTY] * 3),
+    ],
+)
+def test_real_coordinator_step_mines_when_enabled_and_respects_eligibility(
+    hierarchy_model, monkeypatch, flags, expected
+):
+    hierarchy_model.current_curriculum_flags = flags
+    captured = {}
+    original = hierarchy_model._compute_contrastive_loss
+
+    def spy(anchor_emb, positive_emb, selected, effective_mask):
+        captured['selected'] = selected
+        return original(anchor_emb, positive_emb, selected, effective_mask)
+
+    monkeypatch.setattr(hierarchy_model, '_compute_contrastive_loss', spy)
+
+    loss = hierarchy_model.training_step(_hierarchy_batch(hierarchy_model), batch_idx=0)
+    loss.backward()
+
+    selected = captured['selected']
+    reasons = [SelectionReason(reason) for reason in selected.selection_reasons[0].tolist()]
+    assert reasons == expected
+    # The parent leads the difficulty proposal and is the anchor's nearest code, yet it is
+    # structurally closer than the grandparent positive, so no path may select it.
+    assert 3 not in selected.code_id[0].tolist()
+    assert 11 in selected.code_id[0].tolist()
+    assert torch.isfinite(loss)
+
+
 def test_old_parallel_arrays_misalign_but_checked_selection_does_not(candidate_batch):
     order = [2, 0, 1]
     reordered_embeddings = candidate_batch.embedding[:, order]

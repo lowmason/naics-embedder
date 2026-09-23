@@ -219,6 +219,48 @@ def test_k_must_be_at_least_one(candidate_batch):
         _select(candidate_batch, k=0)
 
 
+@pytest.mark.parametrize('bad_score', [float('nan'), float('inf')])
+def test_malformed_proposal_scores_are_fatal(candidate_batch, bad_score):
+    proposal = CandidateProposal(
+        source_indices=torch.tensor([[2, 1, 0]]),
+        scores=torch.tensor([[1.0, bad_score, 0.5]]),
+        reason=SelectionReason.ROUTER,
+    )
+
+    with pytest.raises(ValueError, match='ROUTER proposal .* anchor code ID 100'):
+        NegativeSelectionCoordinator().select(
+            candidate_batch,
+            anchor_code_ids=torch.tensor([100]),
+            positive_code_ids=torch.tensor([104]),
+            k=3,
+            epoch=0,
+            global_seed=7,
+            proposals=(proposal, ),
+        )
+
+
+def test_negative_infinity_marks_an_ineligible_proposal_entry(candidate_batch):
+    proposal = CandidateProposal(
+        source_indices=torch.tensor([[2, 1, 0]]),
+        scores=torch.tensor([[1.0, float('-inf'), 0.5]]),
+        reason=SelectionReason.GEOMETRIC,
+    )
+
+    selection = NegativeSelectionCoordinator().select(
+        candidate_batch,
+        anchor_code_ids=torch.tensor([100]),
+        positive_code_ids=torch.tensor([104]),
+        k=3,
+        epoch=0,
+        global_seed=7,
+        proposals=(proposal, ),
+    )
+
+    reasons = [SelectionReason(reason) for reason in selection.reasons[0].tolist()]
+    assert candidate_batch.select(selection).code_id.tolist() == [[103, 101, 102]]
+    assert reasons == [SelectionReason.GEOMETRIC] * 2 + [SelectionReason.BACKFILL]
+
+
 def test_stable_hash_matches_a_sha256_of_the_packed_seed_and_anchor():
     digest = hashlib.sha256(struct.pack('>qq', 7, 10)).digest()
 

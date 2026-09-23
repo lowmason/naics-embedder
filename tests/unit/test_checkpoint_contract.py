@@ -142,6 +142,14 @@ def test_weights_only_reports_loaded_skipped_and_missing_without_restoring_state
     )
 
 
+def test_weights_only_rejects_a_checkpoint_with_no_encoder_weights(tmp_path, tiny_repaired_model):
+    path = tmp_path / 'loss_only.ckpt'
+    torch.save({'state_dict': {'loss_fn.legacy_buffer': torch.ones(1)}}, path)
+
+    with pytest.raises(ValueError, match='no allowlisted encoder parameters'):
+        load_weights_only(tiny_repaired_model, path)
+
+
 def test_weights_only_rejects_shape_mismatched_encoder_weights(tmp_path, tiny_repaired_model):
     path = tmp_path / 'legacy.ckpt'
     torch.save({'state_dict': {'encoder.0.weight': torch.ones((5, 5))}}, path)
