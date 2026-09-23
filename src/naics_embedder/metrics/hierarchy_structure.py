@@ -8,6 +8,7 @@ import torch
 from naics_embedder.text_model.hyperbolic import compute_hyperbolic_radii
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
 
+
 def compute_radius_structure_metrics(
     embeddings: torch.Tensor,
     codes: Sequence[str],

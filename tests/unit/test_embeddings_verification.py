@@ -6,6 +6,7 @@ from naics_embedder.tools.embeddings_verification import (
     verify_stage4,
 )
 
+
 def _write_embeddings(path, codes, spatial_vectors):
     rows = []
     for idx, (code, vec) in enumerate(zip(codes, spatial_vectors)):
