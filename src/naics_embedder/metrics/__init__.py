@@ -41,6 +41,11 @@ from .qcew import (
 
 # Evaluation runner
 from .runner import NAICSEvaluationRunner
+from .structural_spearman import (
+    STRUCTURAL_SPEARMAN_DEFINITION,
+    STRUCTURAL_SPEARMAN_KEY,
+    StructuralMetricInputError,
+)
 
 __all__ = [
     # Core
@@ -48,6 +53,9 @@ __all__ = [
     'EmbeddingStatistics',
     'HierarchyMetrics',
     'RetrievalMetrics',
+    'STRUCTURAL_SPEARMAN_DEFINITION',
+    'STRUCTURAL_SPEARMAN_KEY',
+    'StructuralMetricInputError',
     # Graph
     'GraphDownstreamEvaluator',
     'GraphEmbeddingDataset',
