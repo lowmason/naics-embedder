@@ -119,12 +119,17 @@ join_multiple_lines = false
 # split_before_dot only picks where an overflowing chain breaks; YAPF still packs chains onto as few
 # lines as fit, so fence hand-aligned vertical chains with `# yapf: disable` / `# yapf: enable`.
 split_before_dot = true
+# Break before operators, so wrapped expressions start continuation lines with `+`, `-`, `and`, ...
 split_before_logical_operator = true
+split_before_arithmetic_operator = true
 align_closing_bracket_with_visual_indent = true
 dedent_closing_brackets = true
 continuation_indent_width = 4
 split_before_first_argument = false
 split_before_closing_bracket = true
+
+# --- Dict literals: keep each value on its key's line ---
+allow_split_before_dict_value = false
 
 # --- Split penalties: prefer fewer, longer lines (existing manual line breaks are not kept) ---
 coalesce_brackets = false
