@@ -304,6 +304,8 @@ def _directed_pair_facts(pair_facts: pl.DataFrame) -> pl.DataFrame:
         ]
     )
 
+TRAINING_VALIDATION_CHUNK_FILES = 128
+
 def validate_training_pairs_members(
     paths: List[Path],
     pair_facts: pl.DataFrame,
@@ -315,10 +317,19 @@ def validate_training_pairs_members(
     Every identity must be a known code ID, no direct positive may be an explicit exclusion,
     exclusion and semantic columns must be internally consistent, and every anchor/positive and
     anchor/negative view must match the pair facts (structure and both exclusion directions).
+    Members are checked in bounded chunks of files, which is exact because every row check is
+    row-local and every uniqueness check is a join against the pair facts.
     '''
 
     if not paths:
         return
+    directed = _directed_pair_facts(pair_facts)
+    for start in range(0, len(paths), TRAINING_VALIDATION_CHUNK_FILES):
+        _validate_training_chunk(
+            paths[start:start + TRAINING_VALIDATION_CHUNK_FILES], directed, n_codes
+        )
+
+def _validate_training_chunk(paths: List[Path], directed: pl.DataFrame, n_codes: int) -> None:
     scan = pl.scan_parquet([str(path) for path in paths])
     ids = ('anchor_code_id', 'positive_code_id', 'negative_code_id')
     expected_target = pl.when(pl.col('negative_is_explicit_exclusion')).then(
@@ -349,7 +360,6 @@ def validate_training_pairs_members(
     if summary['repeats']:
         raise ValueError('a training negative repeats its anchor or positive code')
 
-    directed = _directed_pair_facts(pair_facts)
     positives = scan.select(
         anchor=pl.col('anchor_code_id').cast(pl.Int32),
         other=pl.col('positive_code_id').cast(pl.Int32),
