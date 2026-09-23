@@ -52,12 +52,12 @@ search, clustering, and downstream ML tasks.
 
 ```bash
 naics-embedder/
-├── src/naics_embedder/       # Main source code (77 Python files)
+├── src/naics_embedder/       # Main source code (81 Python files)
 │   ├── cli/                  # CLI entry point and command groups
 │   │   ├── commands/         # Command implementations
 │   │   │   ├── data.py       # Data preparation commands
 │   │   │   ├── tools.py      # Utility tools commands
-│   │   │   └── training.py   # Training command (661 lines)
+│   │   │   └── training.py   # Training command
 │   │   └── __init__.py       # Top-level Typer app
 │   ├── data/                 # Data preprocessing and generation
 │   │   ├── download_data.py  # Download and preprocess NAICS data
@@ -107,16 +107,16 @@ naics-embedder/
 │   └── utils/                # Backend utilities, config, console
 │       ├── backend.py        # Device selection, GPU memory detection
 │       ├── compile.py        # ⭐ torch.compile config and CompiledLorentzOps
-│       ├── config.py         # Pydantic config models (1,042 lines) ⭐
+│       ├── config.py         # Pydantic config models ⭐
 │       ├── console.py        # Rich console logging, table formatting
 │       ├── hyperbolic.py     # LorentzManifold, CurvatureManager, ManifoldAdapter
 │       ├── training.py       # Hardware detection, checkpoint resolution
 │       ├── validation.py     # Data & config validation system
 │       ├── warnings.py       # Centralized warning management
 │       └── utilities.py      # General helper functions
-├── tests/                    # Comprehensive test suite (~9,093 lines)
+├── tests/                    # Comprehensive test suite
 │   ├── conftest.py           # Pytest fixtures
-│   ├── unit/                 # 19 unit test files
+│   ├── unit/                 # 53 unit test files
 │   │   ├── test_config.py
 │   │   ├── test_curriculum.py
 │   │   ├── test_datamodule.py
@@ -132,7 +132,7 @@ naics-embedder/
 │   │   ├── test_streaming_dataset.py
 │   │   ├── test_tokenization_cache.py
 │   │   └── ...
-│   └── integration/          # Integration tests (placeholder)
+│   └── integration/          # Integration tests
 ├── conf/                     # Configuration files
 │   ├── config.yaml           # Base training configuration
 │   ├── data/                 # Data generation configs
@@ -151,7 +151,7 @@ naics-embedder/
 │   ├── text_training.md
 │   ├── hgcn_training.md
 │   ├── benchmarks.md
-│   └── api/                  # 27 API reference files (auto-generated)
+│   └── api/                  # 32 API reference files (auto-generated)
 ├── scripts/                  # Utility scripts
 │   └── format_code.sh        # ruff check --fix + yapf (see Python Formatting)
 ├── outputs/                  # Training outputs and visualizations
@@ -858,8 +858,7 @@ warnings_list = list_suppressed_warnings()  # Get list of suppressed warnings
 
 ### Test Suite
 
-The project has a comprehensive test suite with **~9,093 lines** of test code across **19 unit
-test files**:
+The project has a comprehensive test suite with **53 unit test files**:
 
 ```bash
 # Run all tests
@@ -965,7 +964,7 @@ uv run mkdocs serve
 **Update API docs:**
 
 API documentation is **auto-generated** from docstrings using `mkdocstrings`. The system has
-**27 API reference pages**.
+**32 API reference pages**.
 
 To add new module to docs:
 
@@ -1192,8 +1191,8 @@ git push -u origin claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U
 
 **Training:**
 
-- `text_model/naics_model.py` - Main PyTorch Lightning module (2,030 lines)
-- `cli/commands/training.py` - Training CLI commands (661 lines)
+- `text_model/naics_model.py` - Main PyTorch Lightning module
+- `cli/commands/training.py` - Training CLI commands
 
 **Data:**
 
@@ -1201,7 +1200,7 @@ git push -u origin claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U
 
 **Utils:**
 
-- `utils/config.py` - Configuration models (1,042 lines)
+- `utils/config.py` - Configuration models
 - `utils/training.py` - Training utilities
 - `utils/validation.py` - Validation system
 - `utils/hyperbolic.py` - Hyperbolic manifold utilities
@@ -1277,7 +1276,7 @@ Different training dynamics require different curriculum strategies.
 - **docs/text_training.md:** Detailed text model training guide
 - **docs/hgcn_training.md:** HGCN refinement guide
 - **docs/benchmarks.md:** Performance benchmarks
-- **API Docs:** <https://lowmason.github.io/naics-embedder/> (27 auto-generated pages)
+- **API Docs:** <https://lowmason.github.io/naics-embedder/> (32 auto-generated pages)
 - **Reports:** See `reports/` for generated analysis (SADC, HGCN curriculum, etc.)
 
 ## Contact and Support
