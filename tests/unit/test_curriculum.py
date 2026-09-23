@@ -7,6 +7,7 @@ import pytest
 from naics_embedder.text_model.curriculum import CurriculumScheduler
 from naics_embedder.utils.config import AnnealConfig
 
+
 def test_inverse_tree_distance_weighting_masks_siblings():
     '''Phase 1 weighting should mask siblings and favor closer non-siblings.'''
 
