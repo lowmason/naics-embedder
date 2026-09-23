@@ -1294,8 +1294,9 @@ For questions about the test suite:
 ### CI/CD
 
 - **GitHub Actions**: `.github/workflows/tests.yml`
-- **Runs on**: Push to `main`, pull requests
-- **Includes**: Test suite, coverage reporting, linting
+- **Runs on**: Push to `main`/`master`, and pull requests targeting them
+- **Includes**: Ruff lint (`uv run ruff check src tests`), test suite on Python 3.10 and 3.12,
+  coverage upload to Codecov
 
 ---
 

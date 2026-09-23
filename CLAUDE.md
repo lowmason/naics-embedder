@@ -172,7 +172,7 @@ naics-embedder/
 ├── logs/                     # Training logs (gitignored)
 ├── .github/workflows/        # CI/CD workflows
 │   ├── docs.yml              # Build and deploy docs to GitHub Pages
-│   └── tests.yml             # Run pytest with coverage
+│   └── tests.yml             # Ruff lint, then pytest with coverage
 ├── pyproject.toml            # Project metadata and dependencies
 ├── uv.lock                   # Locked dependency versions
 ├── mkdocs.yml                # Documentation config
@@ -429,7 +429,8 @@ uv run pytest -n auto
 
 **Tools:**
 
-- **Ruff:** Linting and import sorting via `ruff check`. There is no formatter step.
+- **Ruff:** Linting and import sorting via `ruff check`, which CI runs on every push and pull
+  request to `main`/`master`. There is no formatter step.
 - **YAPF:** No longer used. Its `[tool.yapf]` config was removed from `pyproject.toml` in
   December 2025. `yapf` is still in the `dev` dependency group, but don't run it (see below).
 
@@ -437,7 +438,7 @@ uv run pytest -n auto
 
 - **Line length:** 105 characters (E501)
 - **Quotes:** Single quotes (`'` not `"`) for inline strings and docstrings (Q)
-- **Imports:** Sorted (I)
+- **Imports:** Sorted, followed by 2 blank lines before a `def`/`class` and 1 otherwise (I)
 
 **Conventions (no tool checks these; follow them by hand):**
 
@@ -919,13 +920,14 @@ During training, the model computes validation metrics every epoch:
 **Workflows:**
 
 1. **Documentation** (`.github/workflows/docs.yml`)
-   - **Trigger:** Push to `main` or `master` branch
+   - **Trigger:** Push to `main` or `master` branch, or manual `workflow_dispatch`
    - **Action:** Build and deploy MkDocs documentation to GitHub Pages
    - **Output:** <https://lowmason.github.io/naics-embedder/>
 
 2. **Tests** (`.github/workflows/tests.yml`)
-   - **Trigger:** Push, pull request
-   - **Action:** Run pytest with coverage (Python 3.10, 3.12)
+   - **Trigger:** Push to `main`/`master`, and pull requests targeting them
+   - **Action:** Lint with `uv run ruff check src tests`, then run pytest with coverage
+     (Python 3.10, 3.12)
    - **Reports:** Coverage (`coverage.xml`) uploaded to Codecov
 
 ### Documentation
@@ -1198,7 +1200,8 @@ When working on this codebase:
 - [ ] Use `logging` instead of `print`
 - [ ] Write unit tests for new functionality in `tests/unit/`
 - [ ] Run tests before committing: `uv run pytest`
-- [ ] Lint: `uv run ruff check src/ tests/` (no formatter; don't run `ruff format` or yapf)
+- [ ] Lint: `uv run ruff check src/ tests/` (CI enforces it; no formatter, so don't run
+  `ruff format` or yapf)
 - [ ] Test changes with a quick training run:
   `uv run naics-embedder train training.trainer.max_epochs=2`
 - [ ] Check hyperbolic validity when modifying geometry code
