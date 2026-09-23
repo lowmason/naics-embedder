@@ -4,9 +4,17 @@ Unit tests for the main CLI module.
 Tests the top-level Typer application setup and basic CLI functionality.
 '''
 
+import importlib
+import os
+import subprocess
+import sys
+import textwrap
+import warnings
+
 import pytest
 
 from naics_embedder.cli import app
+from naics_embedder.utils.warnings import list_suppressed_warnings
 
 # -------------------------------------------------------------------------------------------------
 # Tests for CLI app setup
@@ -107,12 +115,68 @@ class TestWarningConfiguration:
     '''Tests for warning configuration in CLI.'''
 
     def test_configure_warnings_called_on_import(self):
-        '''Test that warnings are configured when CLI is imported.'''
-        # The import of naics_embedder.cli calls configure_warnings()
-        # We just verify the import succeeds
+        '''Test that importing naics_embedder.cli installs every centralized warning filter.'''
         from naics_embedder import cli
 
-        assert cli.app is not None
+        with warnings.catch_warnings():
+            warnings.resetwarnings()
+            # Reload re-executes only cli/__init__.py; cached command modules do not re-run
+            importlib.reload(cli)
+            installed = {
+                message.pattern
+                for action, message, *_ in warnings.filters
+                if action == 'ignore' and message is not None
+            }
+
+        suppressed = {pattern for pattern, _ in list_suppressed_warnings()}
+        assert suppressed - installed == set()
+
+# -------------------------------------------------------------------------------------------------
+# Tests for CUDA allocator configuration
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestAllocatorConfiguration:
+    '''Tests for the PyTorch allocator setting exported by the CLI.'''
+
+    def test_allocator_conf_set_before_torch_is_imported(self):
+        '''Test that PYTORCH_ALLOC_CONF is exported before anything looks up torch.'''
+        # A fresh interpreter is the only place torch is not already loaded. The meta-path
+        # finder records the variable at the first lookup of torch, then defers to the real
+        # finders.
+        probe = textwrap.dedent(
+            """
+            import os
+            import sys
+
+            seen = []
+
+            class TorchImportSpy:
+                @staticmethod
+                def find_spec(name, path=None, target=None):
+                    if name == 'torch' and not seen:
+                        seen.append(os.environ.get('PYTORCH_ALLOC_CONF'))
+                    return None
+
+            sys.meta_path.insert(0, TorchImportSpy)
+            import naics_embedder.cli
+
+            print(seen)
+            """
+        )
+        # Importing naics_embedder.cli in this process sets the variable; don't let it leak in
+        env = {key: value for key, value in os.environ.items() if key != 'PYTORCH_ALLOC_CONF'}
+
+        result = subprocess.run(
+            [sys.executable, '-c', probe],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines()[-1] == str(['expandable_segments:True'])
 
 # -------------------------------------------------------------------------------------------------
 # Integration tests

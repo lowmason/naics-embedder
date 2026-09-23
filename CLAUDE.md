@@ -830,7 +830,7 @@ The system uses **centralized warning suppression** (`utils/warnings.py`):
 
 - Suppresses known benign warnings from dependencies
 - Documents rationale for each suppressed warning
-- Applied globally via `cli/cli.py` at startup
+- Applied globally by `cli/__init__.py` when the CLI package is imported
 
 ```python
 from naics_embedder.utils.warnings import configure_warnings, list_suppressed_warnings
