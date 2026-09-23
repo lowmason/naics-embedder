@@ -76,9 +76,14 @@ environments = [
 
 
 # -------------------------------------------------------------------------------------------------
+<<<<<<< HEAD
 # Ruff configuration (lint only; no formatter is configured):
 #   1. Rules: pycodestyle errors (E), pyflakes (F), isort (I), quotes (Q)
 #   2. Single quotes for strings and docstrings
+=======
+# Ruff configuration: linting only (rules E, F, I, Q); no formatter is configured.
+# House style (single quotes, dot-aligned chaining, section dividers): see CLAUDE.md
+>>>>>>> origin/main
 # -------------------------------------------------------------------------------------------------
 
 [tool.ruff]
