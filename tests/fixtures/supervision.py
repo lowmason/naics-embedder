@@ -9,6 +9,7 @@ import polars as pl
 import pytest
 
 from naics_embedder.data.supervision_bundle import generate_supervision_bundle_from_frames
+from naics_embedder.supervision.artifacts import load_validated_bundle
 
 
 @pytest.fixture
@@ -167,6 +168,14 @@ def generated_bundle(tmp_path, descriptions_fixture, pair_facts_fixture):
         naics_vintage=2022,
         descriptions=descriptions_fixture,
         pair_facts=pair_facts_fixture,
+    )
+
+
+@pytest.fixture
+def validated_bundle(generated_bundle):
+    return load_validated_bundle(
+        generated_bundle,
+        expected_contract='stage3-supervision-v1',
     )
 
 

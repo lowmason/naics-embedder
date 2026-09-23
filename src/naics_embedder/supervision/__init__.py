@@ -1,3 +1,5 @@
+# Stable, dependency-light exports only. Runtime types live in submodules (artifacts, index,
+# candidates, selection, checkpoints) so importing configuration never pulls in torch.
 from naics_embedder.supervision.schema import (
     CONTRACT_VERSION,
     MINING_CONTRACT_VERSION,

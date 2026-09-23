@@ -33,7 +33,12 @@ from naics_embedder.data.create_triplets import (
     iter_training_pair_batches,
 )
 from naics_embedder.supervision.artifacts import (
+    STRUCTURAL_PAIR_COLUMNS,
+    codebook_fingerprint,
     sha256_file,
+    validate_exclusion_derivation,
+    validate_matrix,
+    validate_structural_pairs,
     write_versioned_dataset_batches,
     write_versioned_parquet,
 )
@@ -86,14 +91,6 @@ def build_codebook(descriptions: pl.DataFrame) -> pl.DataFrame:
     if codebook.get_column('code').n_unique() != codebook.height:
         raise ValueError('codebook contains duplicate NAICS code strings')
     return codebook
-
-def codebook_fingerprint(codebook: pl.DataFrame) -> str:
-    '''SHA-256 over the ordered ``code_id``/``code`` rows of a codebook.'''
-
-    payload = '\n'.join(
-        f'{row["code_id"]}\t{row["code"]}' for row in codebook.iter_rows(named=True)
-    )
-    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 # -------------------------------------------------------------------------------------------------
 # Exclusion provenance
@@ -169,60 +166,6 @@ def attach_exclusion_provenance(
 # Pair facts
 # -------------------------------------------------------------------------------------------------
 
-def _validate_structural_pairs(structural: pl.DataFrame, codebook: pl.DataFrame) -> None:
-    '''Fail closed on identity, orientation, uniqueness, coverage, or sentinel violations.'''
-
-    identities = codebook.select(code_id=pl.col('code_id'), expected=pl.col('code'))
-    for side in ('i', 'j'):
-        checked = structural.select(f'code_{side}_id', f'code_{side}').join(
-            identities.rename({'code_id': f'code_{side}_id'}),
-            on=f'code_{side}_id',
-            how='left',
-        )
-        if checked.filter(pl.col('expected').ne_missing(pl.col(f'code_{side}'))).height:
-            raise ValueError(f'pair facts code_{side} IDs disagree with the codebook')
-
-    if structural.filter(pl.col('code_i_id').eq(pl.col('code_j_id'))).height:
-        raise ValueError('pair facts must describe distinct codes')
-
-    # Uniqueness first: a pair emitted in both orientations is diagnosed as a duplicate rather
-    # than as a single non-canonical row.
-    unordered = structural.select(
-        low=pl.min_horizontal('code_i_id', 'code_j_id'),
-        high=pl.max_horizontal('code_i_id', 'code_j_id'),
-    )
-    if unordered.is_duplicated().any():
-        raise ValueError('pair facts contain duplicate unordered code pairs')
-
-    level_i = pl.col('code_i').str.len_chars()
-    level_j = pl.col('code_j').str.len_chars()
-    non_canonical = structural.filter(
-        level_i.gt(level_j) | (level_i.eq(level_j) & pl.col('code_i').ge(pl.col('code_j')))
-    )
-    if non_canonical.height:
-        example = non_canonical.row(0, named=True)
-        raise ValueError(
-            'pair facts violate canonical orientation (shallower code first, code order on '
-            f'ties): {non_canonical.height:,} rows, e.g. {example["code_i"]}/{example["code_j"]}'
-        )
-
-    expected_pairs = codebook.height * (codebook.height - 1) // 2
-    if structural.height != expected_pairs:
-        raise ValueError(
-            f'pair facts cover {structural.height:,} pairs but the codebook requires '
-            f'{expected_pairs:,} unordered pairs'
-        )
-
-    if structural.select(pl.any_horizontal(pl.all().is_null()).any()).item():
-        raise ValueError('pair facts contain null structural values')
-    if structural.filter(pl.col('structural_distance').eq(0.0)).height:
-        raise ValueError('distinct-code pair facts cannot contain structural distance zero')
-    if structural.filter(
-        pl.col('structural_relation_id').eq(0)
-        | pl.col('structural_relation_name').eq('excluded')
-    ).height:
-        raise ValueError('structural relation fields contain an exclusion sentinel')
-
 def build_pair_facts(
     distances: pl.DataFrame,
     relations: pl.DataFrame,
@@ -266,7 +209,7 @@ def build_pair_facts(
     )
     if structural.height != distances.height or structural.height != relations.height:
         raise ValueError('structural distance and relation frames describe different pairs')
-    _validate_structural_pairs(structural, codebook)
+    validate_structural_pairs(structural, codebook)
     return attach_exclusion_provenance(structural, descriptions, codebook)
 
 # -------------------------------------------------------------------------------------------------
@@ -419,27 +362,11 @@ def validate_pair_facts(
         ValueError: On the first failed check, naming the violated invariant.
     '''
 
-    structural_columns = [
-        'code_i_id',
-        'code_j_id',
-        'code_i',
-        'code_j',
-        'structural_distance',
-        'structural_relation_id',
-        'structural_relation_name',
-    ]
-    _validate_structural_pairs(pair_facts.select(structural_columns), codebook)
+    structural = pair_facts.select(STRUCTURAL_PAIR_COLUMNS)
+    validate_structural_pairs(structural, codebook)
+    validate_exclusion_derivation(pair_facts)
 
-    derived = pl.col('code_i_excludes_code_j') | pl.col('code_j_excludes_code_i')
-    if pair_facts.filter(pl.col('is_explicit_exclusion').ne(derived)).height:
-        raise ValueError(
-            'pair facts exclusion derivation is inconsistent: is_explicit_exclusion must equal '
-            'code_i_excludes_code_j OR code_j_excludes_code_i'
-        )
-
-    published = attach_exclusion_provenance(
-        pair_facts.select(structural_columns), descriptions, codebook
-    )
+    published = attach_exclusion_provenance(structural, descriptions, codebook)
     flags = ['code_i_excludes_code_j', 'code_j_excludes_code_i', 'is_explicit_exclusion']
     if not published.select(flags).equals(pair_facts.select(flags)):
         raise ValueError('pair facts exclusion flags disagree with the published exclusions')
@@ -462,25 +389,14 @@ def _validate_matrices(
     distance_matrix: pl.DataFrame,
     relation_matrix: pl.DataFrame,
 ) -> None:
-    expected_columns = [
-        f'idx_{code_id}-code_{code}' for code_id, code in codebook.select('code_id', 'code').rows()
-    ]
-    code_i_id = pair_facts.get_column('code_i_id').to_numpy()
-    code_j_id = pair_facts.get_column('code_j_id').to_numpy()
     for name, matrix, column in (
         ('distance_matrix', distance_matrix, 'structural_distance'),
         ('relation_matrix', relation_matrix, 'structural_relation_id'),
     ):
-        if matrix.columns != expected_columns:
-            raise ValueError(f'{name} columns do not follow the codebook order')
-        values = matrix.to_numpy()
-        expected = pair_facts.get_column(column).to_numpy()
-        if not (
-            np.array_equal(values[code_i_id, code_j_id], expected)
-            and np.array_equal(values[code_j_id, code_i_id], expected)
-            and not np.diagonal(values).any()
-        ):
-            raise ValueError(f'{name} does not reconcile with the long-form pair facts')
+        try:
+            validate_matrix(matrix, pair_facts, codebook, column)
+        except ValueError as exc:
+            raise ValueError(f'{name}: {exc}') from exc
 
 def _validate_training_identity(batch: pl.DataFrame, pair_keys: pl.DataFrame) -> None:
     '''Every anchor/positive and anchor/negative identity must join to a canonical pair fact.'''

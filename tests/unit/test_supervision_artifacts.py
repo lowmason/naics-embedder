@@ -15,7 +15,7 @@ from naics_embedder.data.supervision_bundle import (
     generate_supervision_bundle_from_frames,
     relation_matrix_from_pair_facts,
 )
-from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.supervision.artifacts import load_validated_bundle, sha256_file
 from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.utils.config import SupervisionBuildConfig
 
@@ -410,3 +410,120 @@ def test_production_bundle_uses_a_uuid_and_the_descriptions_file_hash(
     assert manifest['structural_relation_ids']['cross_sector'] == 99
     assert manifest['artifacts']['pair_facts']['row_count'] == 17 * 16 // 2
     assert manifest['artifacts']['pair_facts']['exclusion_count'] == 2
+
+
+# -------------------------------------------------------------------------------------------------
+# Fail-closed bundle loading
+# -------------------------------------------------------------------------------------------------
+
+def _rewrite_member(manifest_path, logical_name, transform, member_index=0):
+    '''Rewrite one member (keeping its contract metadata) and re-hash it in the manifest.'''
+
+    manifest = json.loads(manifest_path.read_text())
+    member = manifest['artifacts'][logical_name]['files'][member_index]
+    path = manifest_path.parent / member['path']
+    table = pq.read_table(path)
+    frame = transform(pl.from_arrow(table))
+    pq.write_table(frame.to_arrow().replace_schema_metadata(table.schema.metadata), path)
+    member['sha256'] = sha256_file(path)
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+
+def test_loader_accepts_a_generated_bundle(generated_bundle):
+    bundle = load_validated_bundle(generated_bundle, expected_contract=CONTRACT_VERSION)
+
+    assert bundle.manifest.bundle_id == 'bundle-a'
+    assert bundle.manifest_path == generated_bundle.resolve()
+    assert bundle.artifact_path('pair_facts') == generated_bundle.parent.resolve() / (
+        'naics_pair_facts.parquet'
+    )
+    with pytest.raises(ValueError, match='no .*missing_artifact'):
+        bundle.artifact_path('missing_artifact')
+
+
+def test_loader_rejects_another_contract_version(generated_bundle):
+    with pytest.raises(ValueError, match='expected supervision contract stage3-supervision-v2'):
+        load_validated_bundle(generated_bundle, expected_contract='stage3-supervision-v2')
+
+
+def test_loader_rejects_bytes_that_do_not_match_the_manifest_hash(generated_bundle):
+    manifest = json.loads(generated_bundle.read_text())
+    path = generated_bundle.parent / manifest['artifacts']['codebook']['files'][0]['path']
+    path.write_bytes(path.read_bytes() + b'tampered')
+
+    with pytest.raises(ValueError, match='codebook hash mismatch'):
+        load_validated_bundle(generated_bundle)
+
+
+def test_loader_rejects_a_missing_member(generated_bundle):
+    manifest = json.loads(generated_bundle.read_text())
+    member = manifest['artifacts']['training_pairs']['files'][0]
+    (generated_bundle.parent / member['path']).unlink()
+
+    with pytest.raises(ValueError, match='training_pairs artifact missing'):
+        load_validated_bundle(generated_bundle)
+
+
+def test_loader_rejects_rehashed_inconsistent_pair_facts(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'pair_facts',
+        lambda frame: frame.with_columns(is_explicit_exclusion=pl.lit(False)),
+    )
+
+    with pytest.raises(ValueError, match='pair_facts.*bundle-a.*exclusion derivation'):
+        load_validated_bundle(generated_bundle)
+
+
+def test_loader_rejects_a_rehashed_structural_sentinel(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'pair_facts',
+        lambda frame: frame.with_columns(
+            structural_distance=pl.when(pl.col('is_explicit_exclusion'))
+            .then(pl.lit(0.0, dtype=pl.Float32))
+            .otherwise(pl.col('structural_distance'))
+        ),
+    )
+
+    with pytest.raises(ValueError, match='pair_facts.*bundle-a.*structural distance zero'):
+        load_validated_bundle(generated_bundle)
+
+
+def test_loader_rejects_a_rehashed_matrix_that_drifts_from_pair_facts(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'distance_matrix',
+        lambda frame: frame.with_columns(pl.col(frame.columns[1]) + 1.0),
+    )
+
+    with pytest.raises(ValueError, match='distance_matrix.*bundle-a.*reconcile'):
+        load_validated_bundle(generated_bundle)
+
+
+def test_loader_rejects_a_rehashed_excluded_direct_positive(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'training_pairs',
+        lambda frame: frame.with_columns(positive_is_explicit_exclusion=pl.lit(True)),
+    )
+
+    with pytest.raises(ValueError, match='training_pairs.*bundle-a.*direct positive'):
+        load_validated_bundle(generated_bundle)
+
+
+def test_loader_rejects_training_exclusions_that_disagree_with_pair_facts(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'training_pairs',
+        lambda frame: frame.with_columns(
+            anchor_excludes_negative=pl.lit(False),
+            negative_excludes_anchor=pl.lit(False),
+            negative_is_explicit_exclusion=pl.lit(False),
+            negative_semantic_target=pl.lit('unknown'),
+            negative_semantic_source=pl.lit('unlabeled'),
+        ),
+    )
+
+    with pytest.raises(ValueError, match='training_pairs.*bundle-a.*pair facts'):
+        load_validated_bundle(generated_bundle)
