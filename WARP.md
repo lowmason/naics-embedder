@@ -232,7 +232,7 @@ YAPF formats Python and Ruff lints it (`[tool.yapf]` and `[tool.ruff]` in `pypro
 ./scripts/format_code.sh --check path/to/changed_file.py
 ```
 
-`ruff check src tests` currently fails on pre-existing violations, so judge a change by the files it touches and don't mass-fix unrelated code (never run `./scripts/format_code.sh --all` in a feature PR). Never run `ruff format`: it switches every string to double quotes and puts 2 blank lines between top-level definitions, so it rewrites code you didn't touch. See CLAUDE.md for the full style guide.
+`ruff check src tests` is clean; keep it that way. Some files still don't match yapf, so judge a change by the files it touches: format those and don't mass-fix unrelated code (never run `./scripts/format_code.sh --all` in a feature PR). Never run `ruff format`: it switches every string to double quotes and puts 2 blank lines between top-level definitions, so it rewrites code you didn't touch. See CLAUDE.md for the full style guide.
 
 ## Working with configuration
 

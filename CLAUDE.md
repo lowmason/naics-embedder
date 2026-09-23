@@ -472,10 +472,10 @@ result = (
 ./scripts/format_code.sh --check src/naics_embedder/text_model/loss.py
 ```
 
-**Known drift:** Files edited while the formatter was missing (late 2025 to Sep 2026) may not
-match YAPF, and `ruff check src/ tests/` currently fails on pre-existing violations (I001, E501,
-E741). Judge a change by the files it touches: format those, don't mass-fix unrelated code, and
-keep `./scripts/format_code.sh --all` out of feature PRs.
+**Known drift:** `ruff check src/ tests/` is clean; keep it that way. Some files edited while the
+formatter was missing (late 2025 to Sep 2026) still don't match YAPF. Judge a change by the files
+it touches: format those, don't mass-fix unrelated code, and keep `./scripts/format_code.sh --all`
+out of feature PRs.
 
 ### Markdown Formatting
 
