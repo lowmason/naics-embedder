@@ -17,6 +17,10 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
+from naics_embedder.metrics.structural_spearman import (
+    STRUCTURAL_SPEARMAN_KEY,
+    StructuralMetricInputError,
+)
 from naics_embedder.supervision.margins import structurally_eligible
 
 logger = logging.getLogger(__name__)
@@ -189,6 +193,8 @@ class ValidationMixin:
             # Save metrics to JSON
             self._save_evaluation_metrics(epoch_metrics)
 
+        except StructuralMetricInputError:
+            raise
         except Exception as e:
             logger.error(f'Error during evaluation: {e}', exc_info=True)
 
@@ -345,6 +351,45 @@ class ValidationMixin:
             embeddings, metric='lorentz', curvature=curvature
         )
 
+        spearman_result = self.hierarchy_metrics.spearman_correlation(emb_dists, gt_dists)
+        spearman_value = (
+            self._to_python_scalar(spearman_result['correlation'])
+            if spearman_result['status'] == 'defined' else None
+        )
+        spearman_fields = {
+            STRUCTURAL_SPEARMAN_KEY: spearman_value,
+            f'{STRUCTURAL_SPEARMAN_KEY}_n_pairs': spearman_result['n_pairs'],
+            f'{STRUCTURAL_SPEARMAN_KEY}_n_total': spearman_result['n_total'],
+            f'{STRUCTURAL_SPEARMAN_KEY}_status': spearman_result['status'],
+            f'{STRUCTURAL_SPEARMAN_KEY}_reason': spearman_result['reason'],
+            f'{STRUCTURAL_SPEARMAN_KEY}_definition': spearman_result['definition'],
+        }
+        if spearman_value is not None:
+            self.log(
+                f'val/{STRUCTURAL_SPEARMAN_KEY}',
+                spearman_value,
+                batch_size=num_samples,
+                sync_dist=True,
+            )
+        else:
+            logger.warning(
+                '%s undefined: %s (n_pairs=%d, n_total=%d)',
+                spearman_result['definition'],
+                spearman_result['reason'],
+                spearman_result['n_pairs'],
+                spearman_result['n_total'],
+            )
+        for count, value in (
+            ('n_pairs', spearman_result['n_pairs']),
+            ('n_total', spearman_result['n_total']),
+        ):
+            self.log(
+                f'val/{STRUCTURAL_SPEARMAN_KEY}_{count}',
+                value,
+                batch_size=num_samples,
+                sync_dist=True,
+            )
+
         radius_metrics = self._log_radius_structure_metrics(embeddings, codes, num_samples)
         retrieval_metrics = self._log_hierarchy_retrieval_metrics(
             emb_dists,
@@ -382,21 +427,6 @@ class ValidationMixin:
                 batch_size=num_samples,
                 sync_dist=True,
             )
-
-        # Compute Spearman for backward compatibility
-        spearman_result = self.hierarchy_metrics.spearman_correlation(emb_dists, gt_dists)
-        self.log(
-            'val/spearman_correlation',
-            self._to_python_scalar(spearman_result['correlation']),
-            batch_size=num_samples,
-            sync_dist=True,
-        )
-        self.log(
-            'val/spearman_n_pairs',
-            self._to_python_scalar(spearman_result['n_pairs']),
-            batch_size=num_samples,
-            sync_dist=True,
-        )
 
         distortion = self.hierarchy_metrics.distortion(emb_dists, gt_dists)
         self.log(
@@ -474,8 +504,7 @@ class ValidationMixin:
             # Hierarchy preservation
             'cophenetic_correlation': self._to_python_scalar(cophenetic_result['correlation']),
             'cophenetic_n_pairs': int(cophenetic_result['n_pairs']),
-            'spearman_correlation': self._to_python_scalar(spearman_result['correlation']),
-            'spearman_n_pairs': int(spearman_result['n_pairs']),
+            **spearman_fields,
             # Ranking metrics
             'ndcg@5': self._to_python_scalar(ndcg_result['ndcg@5']),
             'ndcg@10': self._to_python_scalar(ndcg_result['ndcg@10']),
