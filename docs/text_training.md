@@ -345,8 +345,9 @@ term is logged as `train/structural_preference_loss` and configured under
 - **Graph preprocessing** — `uv run python -m
   naics_embedder.graph_model.curriculum.preprocess_curriculum --supervision-manifest <path>` and
   `supervision_manifest_path` in `conf/graph.yaml` read relations, distances, the distance matrix,
-  and training pairs from one bundle; HGCN consumes only its legacy negative fields
-  (`negative_idx`, `negative_code`, `relation_margin`, `distance_margin`).
+  training pairs, and (for HGCN) the curriculum difficulty thresholds from one bundle; HGCN
+  consumes only its legacy negative fields (`negative_idx`, `negative_code`, `relation_margin`,
+  `distance_margin`).
 
 ### Exact Resume versus Weights-Only Migration
 

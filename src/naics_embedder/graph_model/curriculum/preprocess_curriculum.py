@@ -59,6 +59,7 @@ class GraphSupervisionPaths:
     distances: Path
     distance_matrix: Path
     training_pairs: Path
+    difficulty_thresholds: Path
 
 def resolve_graph_supervision_paths(
     manifest_path: PathLike,
@@ -67,6 +68,7 @@ def resolve_graph_supervision_paths(
     distances_path: Optional[PathLike] = None,
     distance_matrix_path: Optional[PathLike] = None,
     training_pairs_path: Optional[PathLike] = None,
+    difficulty_thresholds_path: Optional[PathLike] = None,
 ) -> GraphSupervisionPaths:
     '''
     Validate one bundle and resolve the graph inputs from it.
@@ -84,12 +86,14 @@ def resolve_graph_supervision_paths(
         distances=bundle.artifact_path('distances').resolve(),
         distance_matrix=bundle.artifact_path('distance_matrix').resolve(),
         training_pairs=bundle.artifact_path('training_pairs').resolve(),
+        difficulty_thresholds=bundle.artifact_path('difficulty_thresholds').resolve(),
     )
     supplied = {
         'relations': relations_path,
         'distances': distances_path,
         'distance_matrix': distance_matrix_path,
         'training_pairs': training_pairs_path,
+        'difficulty_thresholds': difficulty_thresholds_path,
     }
     for logical_name, candidate in supplied.items():
         if candidate is None:
@@ -123,12 +127,17 @@ def resolve_graph_config(cfg: GraphConfig) -> GraphConfig:
             cfg.distance_matrix_parquet
             if 'distance_matrix_parquet' in explicit and cfg.distance_matrix_parquet else None
         ),
+        difficulty_thresholds_path=(
+            cfg.difficulty_thresholds_path
+            if 'difficulty_thresholds_path' in explicit and cfg.difficulty_thresholds_path else None
+        ),
     )
     return cfg.model_copy(
         update={
             'relations_parquet': str(paths.relations),
             'training_pairs_path': str(paths.training_pairs),
             'distance_matrix_parquet': str(paths.distance_matrix),
+            'difficulty_thresholds_path': str(paths.difficulty_thresholds),
         }
     )
 

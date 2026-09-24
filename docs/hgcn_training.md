@@ -16,11 +16,13 @@ Integrates NAICS taxonomy directly into embedding geometry.
 - Level metadata
 
 Set `supervision_manifest_path` in `conf/graph.yaml` to the manifest printed by
-`uv run naics-embedder data supervision`. Relations, training pairs, and the distance matrix are
-then read from that one validated bundle, and any explicitly configured path from another source
-is rejected. Without a manifest, HGCN falls back to the legacy
-`./data/naics_relations.parquet`, `./data/naics_training_pairs.parquet`, and
-`./data/naics_distance_matrix.parquet` files, which `data all` no longer writes. HGCN consumes
+`uv run naics-embedder data supervision`. Relations, training pairs, the distance matrix, and the
+curriculum difficulty thresholds are then read from that one validated bundle, and any explicitly
+configured path from another source is rejected. HGCN does not read `supervision.manifest_path`
+from `conf/config.yaml`, so set both. Without a manifest, HGCN falls back to the legacy
+`./data/naics_relations.parquet`, `./data/naics_training_pairs.parquet`,
+`./data/naics_distance_matrix.parquet`, and `<curriculum_cache_dir>/difficulty_thresholds.json`
+files, which `data all` no longer writes. HGCN consumes
 only its legacy negative fields (`negative_idx`, `negative_code`, `relation_margin`,
 `distance_margin`); the repaired Stage-3 semantics and selection policy do not change its training.
 

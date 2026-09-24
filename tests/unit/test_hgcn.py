@@ -183,6 +183,18 @@ def test_curriculum_phase_transitions(graph_inputs):
     assert discrimination.use_hard_negatives is True
 
 @pytest.mark.unit
+def test_curriculum_reads_the_configured_thresholds_file_over_the_cache_dir(graph_inputs, tmp_path):
+    thresholds = tmp_path / 'bundle_thresholds.json'
+    thresholds.write_text(json.dumps({'phase1_max_relation': 2, 'phase1_max_distance': 0.75}))
+    module, _ = graph_inputs(difficulty_thresholds_path=str(thresholds))
+    module.trainer = SimpleNamespace(current_epoch=0)
+
+    warmup = module._get_curriculum_state(batch_idx=0)
+
+    assert warmup.max_relation == 2
+    assert warmup.max_distance == pytest.approx(0.75)
+
+@pytest.mark.unit
 def test_adaptive_margin_respects_bounds(graph_inputs):
     module, embeddings = graph_inputs(use_adaptive_margin=True)
     anchors = torch.tensor([0, 1, 2], dtype=torch.long)

@@ -438,8 +438,10 @@ class HGCNLightningModule(pyl.LightningModule):
         self._full_val_metrics.clear()
 
     def _load_curriculum_thresholds(self, cfg: GraphConfig) -> Dict[str, Any]:
-        cache_dir = Path(cfg.curriculum_cache_dir)
-        thresholds_path = cache_dir / 'difficulty_thresholds.json'
+        if cfg.difficulty_thresholds_path:
+            thresholds_path = Path(cfg.difficulty_thresholds_path)
+        else:
+            thresholds_path = Path(cfg.curriculum_cache_dir) / 'difficulty_thresholds.json'
         if not thresholds_path.exists():
             return {}
 
