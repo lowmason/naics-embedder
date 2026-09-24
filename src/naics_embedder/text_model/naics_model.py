@@ -70,7 +70,11 @@ __all__ = [
     'gather_embeddings_global',
 ]
 from naics_embedder.utils.config import FalseNegativeConfig
-from naics_embedder.utils.naics_hierarchy import NaicsHierarchy, load_naics_hierarchy
+from naics_embedder.utils.naics_hierarchy import (
+    HierarchyIntegrityError,
+    NaicsHierarchy,
+    load_naics_hierarchy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +286,8 @@ class NAICSContrastiveModel(
                         'NAICS relations parquet not found at %s; hierarchy diagnostics disabled',
                         relations_parquet_path,
                     )
+                except HierarchyIntegrityError as exc:
+                    logger.warning('Hierarchy diagnostics disabled: %s', exc)
         if checkpoint_contract is not None and checkpoint_contract != runtime_contract:
             raise ValueError(
                 f'runtime checkpoint contract {checkpoint_contract.model_dump()} does not match '

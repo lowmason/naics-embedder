@@ -20,6 +20,7 @@ Distributed candidate gathering is covered by the Gloo tests in
 import logging
 from unittest.mock import Mock, patch
 
+import polars as pl
 import pytest
 import pytorch_lightning as pyl
 import torch
@@ -899,6 +900,26 @@ def legacy_model(model_config):
 @pytest.fixture
 def legacy_batch(sample_training_batch):
     return sample_training_batch
+
+def test_legacy_containment_drops_hierarchy_diagnostics_on_a_broken_relations_file(
+    model_config, tmp_path
+):
+    relations = tmp_path / 'naics_relations.parquet'
+    pl.DataFrame(
+        {
+            'code_i': ['71', '711', '711'],
+            'code_j': ['711', '7111', '7113'],
+            'relation_id': [1, 1, 0],  # legacy 'excluded' label in place of 'child'
+        }
+    ).write_parquet(relations)
+
+    model = NAICSContrastiveModel(
+        **model_config,
+        supervision_mode='legacy_containment',
+        relations_parquet_path=str(relations),
+    )
+
+    assert model.naics_hierarchy is None
 
 def test_legacy_containment_disables_contaminated_and_reordering_paths(
     legacy_model, legacy_batch, monkeypatch
