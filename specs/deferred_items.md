@@ -56,3 +56,14 @@
       fails on main and on this branch (cause not investigated; outside the Stage-3 scope).
       Size: quick-fix. Done when: the test passes.
       → retired 2026-09-23: fixed by PR #75 (line-ending-independent split); test passes on main.
+
+## 3-employment-statistics-coverage — 2026-09-24
+- [ ] Review: the national-total employment comparison in `check_invariants`
+      (scripts/employment_statistics_coverage.py) has no rounding allowance, so
+      annual-average rounding (+46 in 2022, +27 in 2023) makes `run` exit 2 on the
+      2022–2025 files. Kept as-is under the 2026-09-24 ruling (no re-run, no code
+      change); evidence in specs/findings/employment-statistics-coverage.md,
+      section 6. Fix: give that comparison the `cells/2 + 1` employment allowance
+      that `_nested_excess` already applies, plus a fixture test. Size: quick-fix.
+      Done when: `run` on the 2022–2025 files reports no invariant failure and a
+      test pins the allowance.

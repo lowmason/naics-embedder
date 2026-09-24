@@ -4,10 +4,11 @@
 > reconcile step; route each unticked stage per its ROUTING line; never plan
 > this document wholesale.
 
-**Status: APPROVED (2026-09-23).** Derived in a session that could not ask questions, then the
-six open questions were answered interactively and the eleven-stage partition approved at the
-human checkpoint (decisions D1–D6 below). Stage 1 is next, per its ROUTING line, in a fresh
-session.
+**Status: APPROVED (2026-09-23); resumed 2026-09-24.** Derived in a session that could not ask
+questions, then the six open questions were answered interactively and the eleven-stage partition
+approved at the human checkpoint (decisions D1–D6 below). Stage 1 is complete. The resume
+re-validated Stages 2–11 against it and recorded D7 and D8 (below). Stage 2 is next, per its
+ROUTING line, in a fresh session.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at local main 0892c69, which is origin/main 620bee2 plus the two
@@ -20,6 +21,15 @@ Lorentz distances in float64) is absent from the Staleness list; PRs #104 and #1
 config key a stage adds must be declared in the Pydantic models. The separate
 `specs/lambda-remote-workflow.md` (APPROVED) is not a stage here; Stages 7–10 are multi-seed
 campaigns that benefit from it but do not require it.
+
+**Resume (2026-09-24).** Stage 1's stamp is authoritative: plan 3, merged as PR #108 (fa0cfc1).
+Stages 2–11 were re-validated at origin/main fa0cfc1. Since the evidence base (620bee2) nothing
+under `src/` or `conf/` has changed, so every Gap analysis row stands: PR #106 added two lines to
+one test, and PR #108 added `scripts/employment_statistics_coverage.py`, its tests and the
+finding. Stage 1 shipped more than its Produces named: the script came with the finding, and
+Stage 3 now lists it under Consumes as prior art. Stage 3 takes the finding's grain (years, not
+areas) and D7; Stages 4, 7, 8 and 10 take D8. Stages 2, 5, 6, 9 and 11 needed no edit: none
+consumes Stage 1, and D8 reaches Stages 9 and 11 only through Stage 4's tooling.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -53,6 +63,25 @@ checkpoint. Each fixes the named stage; the stage entries cite them.
   statistic the spec does not name. Decision: the validation query split's MRR (Req 3); both
   panels are used only between configurations, under Req 5.
 
+**Decisions (2026-09-24).** Two ambiguities that Stage 1's finding made live, answered by the user
+at the resume checkpoint.
+
+- **D7 — The time-respecting outcome (Req 2; Stage 3).** The finding takes branch A, so the panel
+  includes a time-respecting outcome; neither the spec nor D1 names its variable or says whether
+  the same-year outcome stays. Decision: log annual-average employment in year t+1, from year-t
+  features (the representation, plus D1's covariates from the year-t row); the same-year outcome
+  is dropped. With 2022–2025 final, feature years run 2022–2024, and splits by time seal
+  2024→2025 for the seen regime. That leaves the seen regime's repeated grouped inner folds two
+  feature years; Stage 3's plan fits them to that.
+- **D8 — Regressor regimes under Req 5 (Stages 4 and 7; every later decision).** Req 2 reports
+  the seen-code and held-out-code regimes separately, but Req 5 counts two panels, each with its
+  own δ and half the error rate, and ends its tie order on "the higher regressor-panel estimate".
+  The finding runs both regimes. Decision: each regime counts as a panel under Req 5, which then
+  has three: the outcome panel and the two regressor regimes. Adoption needs non-inferiority on
+  all three (the 95 % interval, unchanged) and superiority on at least one; each panel gets its
+  own δ and a third of the error rate, so superiority reads the 98⅓ % interval. The final
+  tie-break stays open (Open questions).
+
 ## Gap analysis
 
 | Req | Verdict | Evidence | Note |
@@ -85,6 +114,13 @@ checkpoint. Each fixes the named stage; the stage entries cite them.
 | (none) | in-code-but-not-in-spec | `data/download_data.py:239`, `:260-272` | 68 cross-reference rows without a code reference are dropped, and exclusion text is also harvested from "Excluded" description paragraphs; the spec counts 43 non-redirection rows (4,601 − 4,558). Stage 5 reconciles the two counts. |
 | (none) | in-code-but-not-in-spec | `text_model/dataloader/tokenization_cache.py:74` | Title channel fixed at 24 tokens; Req 9's window policy covers it in Stage 5. |
 
+## Open questions
+
+- **D8's final tie-break (Req 5; Stage 4).** Req 5's tie order ends on "the higher
+  regressor-panel estimate", and under D8 the regressor panel has two regime estimates. Which one
+  breaks the tie (seen, held-out or their mean) is unresolved. Stage 4's planning session asks the
+  user before it builds the tie order.
+
 ## Stages
 
 **Sequencing.** The order follows the spec's Rollout note (items 1–6) at finer grain: item 1 is
@@ -98,12 +134,15 @@ is untouched until Req 15 runs (user adjudication Q2); Stage 4 retires the gate'
 the comparison tool, not in the stage. Stage 1 is the investigation the Rollout note puts first;
 its finding fixes Stage 3's parameters, so it stands alone although it produces no software.
 
-**Deferred items.** `specs/deferred_items.md` was read, not edited. I4 (selection coordinator
-cost), M9 and M10 (pseudo-label and provenance handling in the curriculum mixin) are mooted by
-Stage 7, which deletes that machinery. M6 and M8 (legacy path fields; three commands each building
-a bundle) fall to Stage 5, which reversions the bundle contract. The degenerate graph-curriculum
-thresholds change with D* in Stage 5 and leave with Stage 11. Each is retired through /deferred
-by the stage that discharges it.
+**Deferred items.** `specs/deferred_items.md` was read, not edited, at derivation. I4 (selection
+coordinator cost), M9 and M10 (pseudo-label and provenance handling in the curriculum mixin) are
+mooted by Stage 7, which deletes that machinery. M6 and M8 (legacy path fields; three commands
+each building a bundle) fall to Stage 5, which reversions the bundle contract. The degenerate
+graph-curriculum thresholds change with D* in Stage 5 and leave with Stage 11. Each is retired
+through /deferred by the stage that discharges it. The resume added plan 3's one entry as that
+plan handed it over: the national-total rounding allowance in
+`scripts/employment_statistics_coverage.py`. No stage discharges it. It is a standalone
+quick-fix, which Stage 3 inherits only if it reuses that script's checks.
 
 - [x] Stage 1: Employment-statistics coverage
       Objective: Verify which public employment series publish NAICS 2022 six-digit cells, for
@@ -158,47 +197,54 @@ by the stage that discharges it.
       Req 2's comparators, fitting and two regimes.
       Spec: Req 2 (all bullets except the open item); Req 4 (regressor splits: sealed outer set,
       repeated grouped inner folds); Req 1 (regressor estimand); Verification "Panels"
-      (regressor half); D1.
+      (regressor half); D1; D7.
       Gap closed: Req 2 (remainder); Req 1 (regressor half).
-      Consumes: Stage 1's finding (branch, population, row grain, outcome). A 2,125-code
-      coordinate table in the arm's export form (tangent coordinates at the origin for a
-      hyperbolic arm, raw otherwise), taken as input however it was produced: today only the
-      train command's interactive prompt writes one (`cli/commands/training.py:788-800`).
+      Consumes: Stage 1's finding (`specs/findings/employment-statistics-coverage.md`): its
+      decision block, the excluded codes (section 4) and its Sources (the QCEW files and their
+      hashes, kept outside the repo). As prior art, Stage 1's
+      `scripts/employment_statistics_coverage.py`: a QCEW reader with disclosure classification
+      and split-code recovery, whose national-total check awaits plan 3's deferred rounding fix.
+      A 2,125-code coordinate table in the arm's export form (tangent coordinates at the origin
+      for a hyperbolic arm, raw otherwise), taken as input however it was produced: today only
+      the train command's interactive prompt writes one (`cli/commands/training.py:788-800`).
       Stage 2's selection log.
       Produces: The panel as a command that takes a coordinate table and returns per-unit
-      scores (four-digit-parent groups; years or areas) for every comparator in each regime,
-      fitted by ridge on standardized features with a nested-cross-validated penalty, with log
-      establishment counts and log wages as the covariates (D1); the sealed outer sets; the
-      multi-level variant; the branch record Stage 1 dictated.
+      scores (four-digit-parent groups; years, per the finding) for every comparator in each
+      regime, on D7's outcome, fitted by ridge on standardized features with a
+      nested-cross-validated penalty, with log establishment counts and log wages as the
+      covariates (D1); the sealed outer sets; the multi-level variant; the branch record Stage 1
+      dictated.
       Exit: The panel reports the seen-code and held-out-code regimes separately, with one-hot
       only in the seen regime; a test shows the penalty is tuned inside the remainder and the
-      outer set is read once; the branch taken (time-respecting outcome or not; seen regime run
-      or not) is recorded with Stage 1's reasons.
+      outer set is read once; a test shows every row's features are dated before its outcome
+      (D7); the branch record matches the finding's decision block.
       ROUTING: writing-plans
 
 - [ ] Stage 4: Decision rule and diagnostics
       Objective: Implement Req 5's decision procedure and record, and demote the structural
       statistics to stratified diagnostics that nothing selects on.
       Spec: Req 5; Req 6; Req 1 (taxonomy agreement never a selection criterion); Verification
-      "Decision records", "Diagnostics".
+      "Decision records", "Diagnostics"; D8.
       Gap closed: Req 5 (except the reference configuration and δ, which Stage 7 supplies);
       Req 6; Req 1 (selection-criterion half).
       Consumes: Stage 2's and Stage 3's per-unit score interfaces (codes with their queries;
-      four-digit groups). No trained arms yet: the tooling is exercised on synthetic scores.
-      Produces: Decision tooling: paired resampling over each panel's unit with seeds nested,
-      95 % non-inferiority and 97.5 % superiority intervals, δ as a stated multiple of a
-      reference's across-seed standard deviation, the non-dominated set, the tie order, and a
-      decision-record schema; a seed-sweep driver that runs a configuration for N seeds and
-      collects both panels' per-unit scores; the diagnostics report over all 2,125 codes
+      four-digit groups in each regressor regime). No trained arms yet: the tooling is exercised
+      on synthetic scores.
+      Produces: Decision tooling over D8's three panels: paired resampling over each panel's
+      unit with seeds nested, 95 % non-inferiority and 98⅓ % superiority intervals, δ as a
+      stated multiple of a reference's across-seed standard deviation, the non-dominated set,
+      the tie order (its final tie-break: Open questions), and a decision-record schema; a
+      seed-sweep driver that runs a configuration for N seeds and collects every panel's
+      per-unit scores; the diagnostics report over all 2,125 codes
       (sector-separation AUC, within-sector rank correlation averaged over sectors and queries,
       MAP over ancestors, NDCG with integer lowest-common-ancestor grades, the Pearson
       statistic without the cophenetic name, unary pairs excluded from parent retrieval);
       `verify-stage4`'s fixed thresholds retired and the unwired taxonomy-tasks suite removed;
       structural statistics off progress bars and headlines.
-      Exit: On synthetic arms with known effects the tooling adopts and rejects per the rule and
-      writes records with every field Verification "Decision records" lists; the diagnostics
-      report contains only Req 6's statistics, stratified as listed, with no threshold and no
-      pass/fail; no monitor, gate or headline reads a structural statistic.
+      Exit: On synthetic arms with known effects on D8's three panels, the tooling adopts and
+      rejects per the rule and writes records with every field Verification "Decision records"
+      lists; the diagnostics report contains only Req 6's statistics, stratified as listed, with
+      no threshold and no pass/fail; no monitor, gate or headline reads a structural statistic.
       ROUTING: writing-plans
 
 - [ ] Stage 5: Supervision target and text
@@ -269,7 +315,7 @@ by the stage that discharges it.
       selects nothing; monitors read validation splits); Req 5 (reference configuration, δ);
       Req 6 (no structural monitor); Verification "No inert terms", "Coverage", "Radius",
       "Exclusions" (training half), "Text" (unary pairs absent from positive supervision),
-      "Selection hygiene"; D2, D5, D6.
+      "Selection hygiene"; D2, D5, D6, D8.
       Gap closed: Req 11; Req 10; Req 13; Req 8 (b, training side of c); Req 4 (monitors);
       Req 5 (reference configuration and δ).
       Consumes: Stage 6's encoder and query path; Stage 5's D*, redirection table and unary
@@ -285,8 +331,8 @@ by the stage that discharges it.
       false-negative clustering, the logged margin, pre-drawn tuples, eligibility rules,
       inverse-distance draws, the exclusion quota, the relation margin axis (D5), and legacy
       containment (D2); monitors for checkpointing, early stopping and learning rate reading
-      the validation query split's MRR (D6); a decision record fixing δ for both panels from at
-      least 5 seeds.
+      the validation query split's MRR (D6); a decision record fixing δ for each of D8's three
+      panels from at least 5 seeds.
       Exit: On a real batch every objective term has a nonzero gradient (test); on a trained
       run the gradient with respect to radius is nonzero, radii vary within each level, the 20
       sectors sit at distinct positive radii, and manifold validity and distance resolution
@@ -294,23 +340,24 @@ by the stage that discharges it.
       covers all 2,125 codes at every step with no pre-drawn tuples (test); no exclusion pair
       acts as a code–code negative and each cross-reference query scores its referencing code
       (test); unary pairs are absent from positive supervision; the selection log shows only
-      validation splits read; a decision record fixes δ for both panels from at least 5 seeds.
+      validation splits read; a decision record fixes δ for each of D8's three panels from at
+      least 5 seeds.
       ROUTING: brainstorming
 
 - [ ] Stage 8: Geometry × dimension
       Objective: Implement the Euclidean and spherical arms and run the crossed nine-cell
       comparison under Req 5.
       Spec: Req 12; Req 5 (several arms, ties); Req 2 (export form per arm); Verification
-      "Geometry × dimension".
+      "Geometry × dimension"; D8.
       Gap closed: Req 12 (geometry arms and the decision).
       Consumes: Stage 7's reference configuration and δ; Stage 4's tooling and seed-sweep
       driver; Stage 6's configurable dimension.
       Produces: Geometry as a configuration factor with per-arm distance, decoding and export
       (the radial term only in the hyperbolic arm); the nine-cell decision record; the selected
       cell as the reference for Stage 9.
-      Exit: All nine cells have at least 5 seeds scored on both panels; the decision record
-      names the non-dominated set and the chosen cell under the tie order; each arm's export
-      uses tangent coordinates for hyperbolic and raw coordinates otherwise.
+      Exit: All nine cells have at least 5 seeds scored on D8's three panels; the decision
+      record names the non-dominated set and the chosen cell under the tie order; each arm's
+      export uses tangent coordinates for hyperbolic and raw coordinates otherwise.
       ROUTING: writing-plans
 
 - [ ] Stage 9: Backbone and one-factor ablations
@@ -337,7 +384,7 @@ by the stage that discharges it.
       stays, with arm D repaired only to run in the text stage's space.
       Spec: Req 15; Req 16; Req 4 (graph-stage rows: no private validation tail, no last-epoch
       export, selected like every other arm); Verification "Decision experiment",
-      "Deliverable"; D3.
+      "Deliverable"; D3; D8.
       Gap closed: Req 15; Req 16 (composition and deliverable); Req 4 (graph-stage rows).
       Consumes: Stage 9's selected text stage; Stage 4's tooling and seed-sweep driver; Stage
       6's export command; Stage 5's bundle as the graph stage's structural input.
@@ -347,9 +394,9 @@ by the stage that discharges it.
       geometry, its level-radius term per D3, checkpoint selected on validation, no private
       tail, no last-epoch export); arm E (text-shuffle control, run only if D wins); the
       keep-or-drop record; the deliverable, a 2,125-code table from the selected arm.
-      Exit: Arms A–D have at least 5 seeds on both panels under the shared selection protocol;
-      E ran if and only if D won, and its result is recorded; the decision record states keep
-      or drop under Req 5; the 2,125-code table exists for the selected arm.
+      Exit: Arms A–D have at least 5 seeds on D8's three panels under the shared selection
+      protocol; E ran if and only if D won, and its result is recorded; the decision record
+      states keep or drop under Req 5; the 2,125-code table exists for the selected arm.
       ROUTING: writing-plans
 
 - [ ] Stage 11: Graph-stage outcome: repairs or removal
