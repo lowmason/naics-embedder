@@ -356,6 +356,7 @@ def test_render_decision_uses_fixed_wording():
     text = esc.render_decision(esc.decide(summaries, WINDOW, WINDOW), summaries, WINDOW)
     assert text.startswith('<!-- decision:begin -->\n- **Branch:** A. The verified window')
     assert '- **Row grain:** a six-digit code in a reference year (national, private' in text
+    assert '- **Rule:** plan 3, survival floor 506 codes, ask band 405 to 607;' in text
     assert text.rstrip().endswith('<!-- decision:end -->')
 
 # -------------------------------------------------------------------------------------------------
@@ -428,7 +429,10 @@ def test_run_writes_tables_and_decision(tmp_path):
     assert report['msa_rows'][-1] == {'year': 2025, 'rows': 0}
     vintage = {row['year']: row['outside_codebook'] for row in report['vintage']}
     assert vintage == {2021: 1, 2022: 0, 2023: 0, 2024: 0, 2025: 0}
-    assert '<!-- decision:begin -->' in (out_dir / 'decision.md').read_text()
+    assert (report['decision']['floor'], report['decision']['band']) == (2, [0, 0])
+    text = (out_dir / 'decision.md').read_text()
+    assert '<!-- decision:begin -->' in text
+    assert '- **Rule:** plan 3, survival floor 2 codes, ask band 0 to 0;' in text
     assert '### Decision inputs' in (out_dir / 'tables.md').read_text()
 
 def test_main_exit_code_signals_stop_and_ask(tmp_path, monkeypatch):

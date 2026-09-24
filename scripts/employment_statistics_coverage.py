@@ -574,6 +574,8 @@ class Decision:
     seen_regime: bool
     needs_user: bool  # a deciding count fell inside the ask band: stop and ask
     reasons: tuple[str, ...]
+    floor: int = SURVIVAL_FLOOR  # the thresholds decide() applied; render_decision reports them
+    band: tuple[int, int] = ASK_BAND
 
 def summarize_grain(cells: pl.DataFrame, grain: str, window: Sequence[int]) -> GrainSummary:
     '''Reduce one grain's cells to the counts the decision rule reads.'''
@@ -656,7 +658,7 @@ def decide(
     if not surviving:
         best = max((summary.seen for summary in candidates), default=0)
         reasons.append('no grain below the code survives suppression')
-        return Decision('C', None, False, False, in_band(best), tuple(reasons))
+        return Decision('C', None, False, False, in_band(best), tuple(reasons), floor, band)
     chosen = surviving[0]
     needs_user = in_band(chosen.seen)
     for summary in candidates[:candidates.index(chosen)]:
@@ -683,7 +685,7 @@ def decide(
     time_respecting = window_ok and chosen.time_eligible >= floor
     return Decision(
         'A' if time_respecting else 'B', chosen.grain, time_respecting, True, needs_user,
-        tuple(reasons)
+        tuple(reasons), floor, band
     )
 
 BRANCH_TEXT = {
@@ -720,11 +722,12 @@ def render_decision(
             f'{chosen.heldout_population} for the held-out-code regime, of the 1,012 six-digit '
             'codes in the codebook.',
         ]
+    low, high = decision.band
     lines += [
         f'- **Time-respecting outcome:** {"yes" if decision.time_respecting else "no"}.',
         f'- **Seen-code regime:** {"yes" if decision.seen_regime else "no"}.',
-        f'- **Rule:** plan 3, survival floor {SURVIVAL_FLOOR} codes, ask band {ASK_BAND[0]} to '
-        f'{ASK_BAND[1]}; user review {"required" if decision.needs_user else "not required"}.',
+        f'- **Rule:** plan 3, survival floor {decision.floor} codes, ask band {low} to {high}; '
+        f'user review {"required" if decision.needs_user else "not required"}.',
         '- **Reasons:**',
         *[f'  - {reason}' for reason in decision.reasons],
         '<!-- decision:end -->',

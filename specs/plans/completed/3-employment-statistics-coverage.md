@@ -1372,6 +1372,8 @@ Expected: `6 failed, 20 passed`, with each failure an `AttributeError` naming `G
 
 - [x] **Step 3: Implement the decision rule**
 
+> Deviation: after PR #108's review, `Decision` also carries the `floor` and `band` it was decided with, and `render_decision` prints those, not the module defaults; the default output is byte-identical.
+
 Append this block to the end of `scripts/employment_statistics_coverage.py`, one blank line after
 the existing last line:
 
