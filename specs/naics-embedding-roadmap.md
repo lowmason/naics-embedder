@@ -105,7 +105,7 @@ a bundle) fall to Stage 5, which reversions the bundle contract. The degenerate 
 thresholds change with D* in Stage 5 and leave with Stage 11. Each is retired through /deferred
 by the stage that discharges it.
 
-- [ ] Stage 1: Employment-statistics coverage
+- [x] Stage 1: Employment-statistics coverage
       Objective: Verify which public employment series publish NAICS 2022 six-digit cells, for
       which reference years and grains, how much suppression removes at each, and which Req 2
       branch the regressor panel therefore takes.
@@ -115,14 +115,16 @@ by the stage that discharges it.
       Consumes: Nothing from a prior stage. The bundle codebook (2,125 codes, 1,012 six-digit)
       as the code universe; `metrics/qcew.py` as prior art only (its 2022, private, one-row-
       per-code slice is the rejected definition).
-      Produces: A written finding (`reports/employment-statistics-coverage.md` unless the stage
-      spec says otherwise) recording years, grains, the suppressed share per year, grain and
-      series, the panel population and row grain, whether a time-respecting outcome exists,
-      whether the seen-code regime can run, and reasons for each "no". Stage 3 reads it
-      verbatim.
+      Produces: A written finding (`specs/findings/employment-statistics-coverage.md`; the
+      default `reports/` path is gitignored) recording years, grains, the suppressed share per
+      year, grain and series, the panel population and row grain, whether a time-respecting
+      outcome exists, whether the seen-code regime can run, and reasons for each "no". Stage 3
+      reads it verbatim.
       Exit: The four items of Verification "Employment-statistics coverage" are recorded with
       the source files and the dates they were read; the chosen Req 2 branch is named.
       ROUTING: writing-plans
+      Stage 1: COMPLETE (2026-09-24) — implemented by plan 3
+      (specs/plans/completed/3-employment-statistics-coverage.md). Next: resume the roadmap.
 
 - [ ] Stage 2: Outcome panel and sealed splits
       Objective: Build the text→code decoding panel and the sealed validation and test splits
