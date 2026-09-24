@@ -42,12 +42,14 @@ annual-average single file. All four years are final on the read date.
   release of first quarter 2022 Quarterly Census of Employment and Wages (QCEW) data", and "Data
   from 2022 forward are classified under the NAICS 2022 system." while "Data from 2017-2021 are
   classified under the NAICS 2017 system." (Sources, Pages).
-- **The files agree** ("Vintage check (national six-digit codes)"). The 2021 national slice
-  publishes 1,075 six-digit codes, 139 of them outside the NAICS 2022 codebook (212111, 212112,
-  212113 and others), and leaves 96 codebook codes unpublished besides the split codes of
-  section 6. Each of 2022–2025 publishes 1,029 codes, 0 of them outside the codebook, and leaves
-  the same 3 codebook codes unpublished: 112130, 517122 and 541120, which BLS lists as not used in
-  the United States (the first and last) or not used by BLS (517122).
+- **The files agree** ("Vintage check (national six-digit codes)"). The check sets aside the 38
+  BLS 238 codes and 999999, which every slice publishes outside the codebook by design
+  (section 6). Besides those, the 2021 national slice publishes 139 six-digit codes outside the
+  NAICS 2022 codebook among its 1,075 (212111, 212112, 212113 and others), and leaves 96 codebook
+  codes unpublished besides the split codes. Each of 2022–2025 publishes 1,029 codes, 0 of them
+  outside the codebook besides the 38 BLS 238 codes and 999999, and leaves the same 3 codebook
+  codes unpublished: 112130, 517122 and 541120, which BLS lists as not used in the United States
+  (the first and last) or not used by BLS (517122).
 - **No 2026 annual file.** Annual averages are "published with the 4th quarter data for that
   reference year", and the calendar dates fourth-quarter 2026 data "To be determined, 2027". The
   window therefore ends at 2025.
@@ -316,8 +318,13 @@ The run exits 2 on the two invariant failures of section 6. Its `coverage/decisi
 The checks outside the script feed "Appendix: checks outside the script":
 
 - **Independent recount:** the `/tmp/esc-recount.py` listing of plan 3
-  (`specs/plans/completed/3-employment-statistics-coverage.md`, Task 6 Step 3), run with the
-  `--qcew-dir` and codebook paths above.
+  (`specs/plans/completed/3-employment-statistics-coverage.md`, Task 6 Step 3), which takes the
+  QCEW directory and the codebook as positional arguments:
+
+```bash
+uv run python /tmp/esc-recount.py ~/Downloads/Data/QCEW /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/naics_codebook.parquet
+```
+
 - **Lookup files:** the `grep` and `cat` commands of that plan's Task 5 Step 4.
 - **National six-digit reconciliation:**
 
