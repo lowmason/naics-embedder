@@ -85,7 +85,30 @@ matched against all realized training text, including the rebuilt examples chann
 7,200 training queries. Both splits had 0 exact matches and 0 near-duplicates (provenance
 `held_out_leakage`).
 
-**Limitation.** A query whose words appear reordered inside a longer segment is not caught.
+**Limitations.** Matching compares whole queries with whole segments, so it misses two kinds of
+query:
+
+- a query whose words appear reordered inside a longer segment;
+- a query that spans a segment break: a sentence end (a break also follows abbreviations such as
+  "U.S.") or the `; ` joining two examples-channel entries.
+
+A review audit measured the second kind after the draw. It matched every validation and test
+query, normalized, as whole words against unsplit texts: each whole title, description and
+exclusion text, and each code's joined examples channel. Every hit spans a sentence end or two
+adjacent examples-channel entries.
+
+| Unsplit text | Validation queries found | Test queries found |
+|---|---:|---:|
+| Titles | 0 | 0 |
+| Descriptions | 2 | 0 |
+| Exclusion texts | 0 | 0 |
+| Joined examples channels | 2 | 1 |
+
+Req 3 lists its training text as titles, descriptions, examples-channel entries, exclusion text and
+training queries. Whole titles, descriptions and exclusion texts hold no test query, and the
+realized check covers individual examples-channel entries and training queries, so no test query
+matches Req 3's training text exactly and Verification "Leakage" holds as written. The one test
+query in a joined channel spans two entries, neither of which contains it.
 
 ## 3. Roles (D4)
 
@@ -160,10 +183,15 @@ It decodes under cosine distance over all 1,012 candidates.
 The log was a scratch file, and this record is its copy.
 
 **Sealing.** The test split was not opened: no `open` record exists for it. The logged
-open-then-read path runs on fixture data in `tests/unit/test_outcome_panel.py`.
+open-then-read path runs on fixture data in `tests/unit/test_outcome_panel.py`. `OutcomePanel`
+alone enforces the seal: the committed table, `data/naics_index_roles.parquet` and a bundle's
+`index_roles` member all carry every entry's role, so later stages read queries only through the
+panel. Drawing the table, rebuilding the descriptions and the review's leakage audit (section 2)
+read every entry directly; none of those reads selects anything.
 
 **What the numbers mean.** These are a floor, not memorization. The code texts hold
-examples-role entries and never queries, and no held-out query matches any training text.
+examples-role entries and never queries, and no held-out query matches any training segment
+(section 2).
 
 ## 6. What later stages read
 
