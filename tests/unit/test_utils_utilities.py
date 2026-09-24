@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Dict, cast
 
 import httpx
 import pytest
@@ -8,7 +7,6 @@ from naics_embedder.utils.config import DirConfig
 from naics_embedder.utils.utilities import (
     download_with_retry,
     make_directories,
-    map_relationships,
     setup_directory,
     sorted_embedding_columns,
 )
@@ -28,17 +26,6 @@ def test_make_directories_creates_all(tmp_path):
 
     for path in cfg.model_dump().values():
         assert Path(path).exists()
-
-@pytest.mark.unit
-def test_map_relationships_returns_both_mappings():
-    forward = cast(Dict[str, int], map_relationships('child'))
-    reverse = cast(Dict[int, str], map_relationships(1))
-
-    assert forward['child'] == 1
-    assert reverse[1] == 'child'
-
-    with pytest.raises(ValueError):
-        map_relationships(1.5)  # type: ignore[arg-type]
 
 @pytest.mark.unit
 def test_download_with_retry_succeeds_after_retry(monkeypatch):

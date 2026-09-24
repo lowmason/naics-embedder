@@ -36,36 +36,6 @@ def make_directories(dir_config: DirConfig = DirConfig()) -> None:
     logging.info('\n')
 
 # -------------------------------------------------------------------------------------------------
-# Get relationship mapping
-# -------------------------------------------------------------------------------------------------
-
-def map_relationships(key: Union[str, int]) -> Union[Dict[str, int], Dict[int, str]]:
-    relation_map = [
-        ('child', 1),
-        ('sibling', 2),
-        ('grandchild', 3),
-        ('great-grandchild', 4),
-        ('nephew/niece', 5),
-        ('great-great-grandchild', 6),
-        ('cousin', 7),
-        ('grand-nephew/niece', 8),
-        ('grand-grand-nephew/niece', 9),
-        ('cousin_1_times_removed', 10),
-        ('second_cousin', 11),
-        ('cousin_2_times_removed', 12),
-        ('second_cousin_1_times_removed', 13),
-        ('third_cousin', 14),
-        ('cross_sector', 99),
-    ]
-
-    if isinstance(key, str):
-        return {rel: rel_id for rel, rel_id in relation_map}
-    elif isinstance(key, int):
-        return {rel_id: rel for rel, rel_id in relation_map}
-    else:
-        raise ValueError('Key must be either str or int.')
-
-# -------------------------------------------------------------------------------------------------
 # Indices, codes, and mappings
 # -------------------------------------------------------------------------------------------------
 
