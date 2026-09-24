@@ -8,8 +8,16 @@ from typer.testing import CliRunner
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
 from naics_embedder.metrics import StructuralMetricInputError
+from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.supervision.artifacts import load_validated_bundle
+from tests.fixtures.regressor_panel import (
+    CODEBOOK,
+    HELDOUT_GROUPS,
+    SETTINGS,
+    coordinate_table,
+    text_only_table,
+)
 
 @pytest.fixture
 def runner():
@@ -424,3 +432,116 @@ def test_outcome_baseline_refuses_descriptions_that_hold_every_entry(runner, tmp
     assert result.exit_code == 1
     assert 'Outcome baseline failed' in result.output
     assert SelectionLog(tmp_path / 'selection_log.jsonl').records() == []
+
+# -------------------------------------------------------------------------------------------------
+# Regressor panel
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_text_only_table_embeds_with_the_regressor_configs_backbone(monkeypatch, runner, tmp_path):
+    calls = []
+
+    def fake_build(descriptions, output, *, backbone, max_length, batch_size):
+        calls.append((descriptions, output, backbone, max_length, batch_size))
+        return output
+
+    monkeypatch.setattr(tools_cli, 'build_text_only_table', fake_build)
+    output = tmp_path / 'text_only.parquet'
+
+    result = runner.invoke(
+        tools_cli.app,
+        ['text-only-table', '--descriptions', 'descriptions.parquet', '--output',
+         str(output)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (Path('descriptions.parquet'), output, 'sentence-transformers/all-MiniLM-L6-v2', 512, 32)
+    ]
+    assert 'text_only_provenance.json' in result.output
+
+def _regressor_arguments(tmp_path):
+    coordinates = tmp_path / 'arm.parquet'
+    text_only = tmp_path / 'text_only.parquet'
+    coordinate_table(CODEBOOK).write_parquet(coordinates)
+    text_only_table(CODEBOOK).write_parquet(text_only)
+    return [
+        'regressor-panel',
+        '--coordinates',
+        str(coordinates),
+        '--text-only',
+        str(text_only),
+        '--codebook',
+        'naics_codebook.parquet',
+    ]
+
+@pytest.fixture
+def fixture_panel(monkeypatch, tmp_path, regressor_rows):
+    '''The fixture panel in place of the real one: every opening below is a fixture's.'''
+
+    log = SelectionLog(tmp_path / 'selection_log.jsonl')
+    loaded = []
+
+    def fake_load(cfg, codebook, *, log_path, levels):
+        loaded.append((codebook, log_path, tuple(levels)))
+        return RegressorPanel(regressor_rows, HELDOUT_GROUPS, log, SETTINGS)
+
+    monkeypatch.setattr(tools_cli, 'load_regressor_panel', fake_load)
+    return log, loaded
+
+@pytest.mark.unit
+def test_regressor_panel_needs_an_open_purpose_for_the_test_split(runner, tmp_path, fixture_panel):
+    log, loaded = fixture_panel
+
+    result = runner.invoke(tools_cli.app, [*_regressor_arguments(tmp_path), '--split', 'test'])
+
+    assert result.exit_code == 1
+    assert '--open-purpose' in result.output
+    assert loaded == []
+    assert log.records() == []
+
+@pytest.mark.unit
+def test_regressor_panel_scores_validation_and_reports_undefined_cells(
+    runner, tmp_path, fixture_panel
+):
+    log, loaded = fixture_panel
+    output = tmp_path / 'predictions.parquet'
+    levels = ['--level', '6', '--level', '3', '--level', '2']
+
+    result = runner.invoke(
+        tools_cli.app, [*_regressor_arguments(tmp_path), *levels, '--output',
+                        str(output)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert loaded == [('naics_codebook.parquet', None, (2, 3, 6))]
+    assert 'seen, level 2: undefined' in result.output
+    assert 'heldout, level 3: undefined' in result.output
+    assert [(r['event'], r['panel'], r['split'], r['detail']['level']) for r in log.records()] == [
+        ('read', 'regressor_seen', 'validation', 3),
+        ('read', 'regressor_seen', 'validation', 6),
+        ('read', 'regressor_heldout', 'validation', 6),
+    ]
+    assert set(pl.read_parquet(output).get_column('split')) == {'validation'}
+
+@pytest.mark.unit
+def test_regressor_panel_opens_each_regime_once_before_its_test_read(
+    runner, tmp_path, fixture_panel
+):
+    log, _ = fixture_panel
+    arguments = [
+        *_regressor_arguments(tmp_path), '--split', 'test', '--open-purpose', 'fixture opening'
+    ]
+
+    first = runner.invoke(tools_cli.app, arguments)
+    second = runner.invoke(tools_cli.app, arguments)
+
+    assert first.exit_code == 0, first.output
+    assert [(r['event'], r['panel'], r['split']) for r in log.records()] == [
+        ('open', 'regressor_seen', 'test'),
+        ('read', 'regressor_seen', 'test'),
+        ('open', 'regressor_heldout', 'test'),
+        ('read', 'regressor_heldout', 'test'),
+    ]
+    assert second.exit_code == 1
+    assert 'reopen_reason' in second.output
