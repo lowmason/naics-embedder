@@ -190,3 +190,112 @@ def test_grain_cells_never_read_suppression_as_zero(universe, frames):
 def test_grain_cells_drop_unknown_counties(universe, frames):
     cells = esc.grain_cells(frames[2024], universe, ('238110', '238120'), 'county')
     assert set(cells.get_column('area_fips').to_list()) == {'01001', '01003', '09110'}
+
+# -------------------------------------------------------------------------------------------------
+# Tables
+# -------------------------------------------------------------------------------------------------
+
+def test_code_status_counts_use_the_whole_universe(universe, frames):
+    cells = _cells(frames, universe, 'national')
+    rows = {row['series']: row for row in esc.code_status_counts(cells, universe, 2024, '5')}
+    employment = rows['employment']
+    assert (employment['disclosed'], employment['suppressed'], employment['other']) == (2, 2, 1)
+    assert employment['absent'] == 2
+    assert employment['recovered_via_parent'] == 2
+    establishments = rows['establishments']
+    assert (establishments['disclosed'], establishments['suppressed']) == (4, 0)
+
+def test_area_coverage_counts_cells_and_codes(universe, frames):
+    row = esc.area_coverage(_cells(frames, universe, 'state'), universe, 'state', 2024)
+    assert (row['areas'], row['published_cells'], row['suppressed_cells']) == (3, 5, 1)
+    assert (row['codes_usable'], row['codes_usable_2plus_areas']) == (2, 1)
+    assert (row['codes_published_never_usable'], row['codes_absent']) == (1, 4)
+    assert (row['codes_without_usable'], row['share_without_usable']) == (5, pytest.approx(5 / 7))
+    assert (row['estabs_suppressed_cells'], row['estabs_suppressed_share']) == (0, 0.0)
+    assert row['median_usable_areas'] == 2.0
+
+def test_size_by_status_compares_establishment_counts(universe, frames):
+    rows = esc.size_by_status(_cells(frames, universe, 'state'), 'state', 2024)
+    by_status = {row['status']: row for row in rows}
+    assert by_status[esc.DISCLOSED]['cells'] == 4
+    assert by_status[esc.DISCLOSED]['median_estabs'] == 3.0
+    assert by_status[esc.SUPPRESSED]['median_estabs'] == 2.0
+
+def test_vintage_report_flags_codes_outside_the_codebook(universe, frames):
+    published = {
+        2021: {'111110', '454110', '238111', '238112'},
+        2024: set(frames[2024].filter(pl.col('agglvl_code') == '18')['industry_code'].to_list()),
+    }
+    rows = {row['year']: row for row in esc.vintage_report(published, universe, ('238110', ))}
+    assert rows[2021]['outside_codebook'] == 1
+    assert rows[2021]['outside_examples'] == ['454110']
+    assert rows[2024]['outside_codebook'] == 2  # 238121 and 238122: 238120 not passed as split
+    assert rows[2024]['unpublished_examples'] == ['112130', '238120']
+
+def test_private_gaps_and_exclusions(universe, frames):
+    national = _cells(frames, universe, 'national')
+    gaps = {
+        row['code']: row['ownerships_with_cells']
+        for row in esc.private_gaps(national, universe, 2025)
+    }
+    assert gaps == {'112130': [], '921110': ['1']}
+    excluded = {
+        row['code']: row['reason']
+        for row in esc.excluded_codes(national, universe, WINDOW)
+    }
+    assert excluded == {
+        '112130': 'no private cell',
+        '238120': 'private cells never usable',
+        '541511': 'private cells never usable',
+        '541512': 'private cells never usable',
+        '921110': 'no private cell',
+    }
+
+def test_connecticut_areas_switch_in_2024(universe, frames):
+    rows = {row['year']: row for row in esc.connecticut_areas(_cells(frames, universe, 'county'))}
+    assert (rows[2023]['legacy_counties'], rows[2023]['planning_regions']) == (1, 0)
+    assert (rows[2024]['legacy_counties'], rows[2024]['planning_regions']) == (0, 1)
+
+# -------------------------------------------------------------------------------------------------
+# Checks
+# -------------------------------------------------------------------------------------------------
+
+def test_check_invariants_pass_on_consistent_files(frames):
+    assert esc.check_invariants(frames[2024], 2024) == []
+
+def test_check_invariants_catch_detail_above_its_total():
+    rows = _annual_rows(2024)
+    for row in rows:
+        if (row['area_fips'], row['industry_code'], row['agglvl_code']) == (
+            '01000', '111110', '58'
+        ):
+            row['annual_avg_emplvl'], row['total_annual_wages'] = '80', '8000'
+    failures = esc.check_invariants(esc.read_annual_csv(_csv_bytes(rows)), 2024)
+    assert any('state cells exceed their national cell' in failure for failure in failures)
+    assert not any('county cells exceed' in failure for failure in failures)
+
+def test_singlefile_header_reads_the_first_line(tmp_path):
+    path = tmp_path / '2024_annual_singlefile.zip'
+    with zipfile.ZipFile(path, 'w') as archive:
+        archive.writestr('2024.annual.singlefile.csv', _csv_bytes(_annual_rows(2024)))
+    header = esc.singlefile_header(path)
+    assert header == list(CSV_COLUMNS)
+    assert esc.resolve_estabs_column(header) == 'annual_avg_estabs'
+
+def test_file_conventions_describe_six_digit_rows(frames):
+    row = esc.file_conventions(frames[2024], 2024)
+    assert row['disclosure_codes'] == {'blank': 12, '-': 1, 'N': 5}
+    assert row['own_code_0_rows'] == 0
+    assert row['suppressed_rows'] == 5
+    assert row['suppressed_rows_with_emp_or_wages'] == 0
+    assert row['suppressed_rows_with_estabs'] == 5
+
+def test_compare_national_slices_finds_differences(frames):
+    national = frames[2024].filter(pl.col('area_fips') == 'US000')
+    assert esc.compare_national_slices(frames[2024], national, 2024) == []
+    changed = national.with_columns(
+        emp=pl.when(pl.col('industry_code') == '111110').then(99).otherwise(pl.col('emp'))
+    )
+    assert esc.compare_national_slices(frames[2024], changed, 2024) == [
+        '2024: 1 national rows differ between the single file and the slice'
+    ]

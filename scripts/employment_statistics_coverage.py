@@ -18,7 +18,7 @@ import logging
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Collection, Sequence
+from typing import Collection, Mapping, Sequence
 
 import polars as pl
 
@@ -270,3 +270,275 @@ def grain_cells(
         cells = cells.filter(~pl.col('area_fips').str.ends_with(UNKNOWN_COUNTY_SUFFIX))
     labelled = cells.with_columns(status=disclosure_status(), estabs_status=estabs_status())
     return labelled.select(CELL_COLUMNS)
+
+# -------------------------------------------------------------------------------------------------
+# Tables
+# -------------------------------------------------------------------------------------------------
+
+def code_status_counts(cells: pl.DataFrame, universe: Universe, year: int,
+                       own: str) -> list[dict[str, object]]:
+    '''National grain: how many codebook codes are disclosed, suppressed, other or absent.'''
+    subset = cells.filter((pl.col('year') == year) & (pl.col('own_code') == own))
+    if not subset.get_column('code').is_unique().all():
+        raise ValueError(f'{year} own {own}: more than one national cell for a code')
+    recovered = subset.filter(pl.col('source') == 'five_digit_parent').height
+    rows = []
+    for series, column in SERIES:
+        counts = dict(subset.group_by(column).len().iter_rows())
+        rows.append(
+            {
+                'year': year,
+                'own_code': own,
+                'series': series,
+                DISCLOSED: counts.get(DISCLOSED, 0),
+                SUPPRESSED: counts.get(SUPPRESSED, 0),
+                OTHER: counts.get(OTHER, 0),
+                ABSENT: len(universe.six_digit) - subset.height,
+                'recovered_via_parent': recovered,
+                'suppressed_share': counts.get(SUPPRESSED, 0) / len(universe.six_digit),
+            }
+        )
+    return rows
+
+def area_coverage(cells: pl.DataFrame, universe: Universe, grain: str,
+                  year: int) -> dict[str, object]:
+    '''Private cells at one grain and year: suppressed shares and code-level survival.
+
+    Cell shares divide by the published private cells; code shares divide by the codebook's
+    six-digit codes, so an absent code counts as having no usable cell.
+    '''
+    subset = cells.filter((pl.col('year') == year) & (pl.col('own_code') == PRIVATE))
+    usable = subset.filter(pl.col('status') == DISCLOSED)
+    per_code = usable.group_by('code').agg(pl.col('area_fips').n_unique().alias('areas'))
+    published = subset.height
+    suppressed = subset.filter(pl.col('status') == SUPPRESSED).height
+    estabs_suppressed = subset.filter(pl.col('estabs_status') == SUPPRESSED).height
+    codes_published = subset.get_column('code').n_unique()
+    without_usable = len(universe.six_digit) - per_code.height
+    return {
+        'grain': grain,
+        'year': year,
+        'areas': subset.get_column('area_fips').n_unique(),
+        'published_cells': published,
+        'suppressed_cells': suppressed,
+        'other_cells': subset.filter(pl.col('status') == OTHER).height,
+        'suppressed_share': suppressed / published if published else None,
+        'estabs_suppressed_cells': estabs_suppressed,
+        'estabs_suppressed_share': estabs_suppressed / published if published else None,
+        'codes_usable': per_code.height,
+        'codes_usable_2plus_areas': per_code.filter(pl.col('areas') >= 2).height,
+        'codes_published_never_usable': codes_published - per_code.height,
+        'codes_absent': len(universe.six_digit) - codes_published,
+        'codes_without_usable': without_usable,
+        'share_without_usable': without_usable / len(universe.six_digit),
+        'median_usable_areas': per_code.get_column('areas').median() if per_code.height else None,
+    }
+
+def size_by_status(cells: pl.DataFrame, grain: str, year: int) -> list[dict[str, object]]:
+    '''Establishment counts of private disclosed and suppressed cells: is suppression selective?'''
+    subset = cells.filter(
+        (pl.col('year') == year) & (pl.col('own_code') == PRIVATE)
+        & pl.col('status').is_in([DISCLOSED, SUPPRESSED])
+    )
+    summary = subset.group_by('status').agg(
+        pl.len().alias('cells'),
+        pl.col('estabs').median().alias('median_estabs'),
+        pl.col('estabs').quantile(0.9).alias('p90_estabs'),
+    ).sort('status')
+    return [{'grain': grain, 'year': year, **row} for row in summary.to_dicts()]
+
+def vintage_report(
+    published_by_year: Mapping[int, Collection[str]], universe: Universe, split: Collection[str]
+) -> list[dict[str, object]]:
+    '''Per year, national six-digit codes outside the codebook and codebook codes unpublished.
+
+    BLS residential and nonresidential children of the split codes and 999999 (unclassified) are
+    expected outside the codebook; anything else there means a different NAICS vintage.
+    '''
+    codebook = set(universe.six_digit)
+    expected_extra = {code[:5] + digit for code in split for digit in '12'} | {'999999'}
+    rows = []
+    for year in sorted(published_by_year):
+        published = set(published_by_year[year])
+        outside = sorted(published - codebook - expected_extra)
+        unpublished = sorted(codebook - published - set(split))
+        rows.append(
+            {
+                'year': year,
+                'published_six_digit': len(published),
+                'outside_codebook': len(outside),
+                'outside_examples': outside[:12],
+                'codebook_unpublished': len(unpublished),
+                'unpublished_examples': unpublished[:12],
+            }
+        )
+    return rows
+
+def private_gaps(cells: pl.DataFrame, universe: Universe, year: int) -> list[dict[str, object]]:
+    '''National codes with no private cell in a year, and the ownerships that do have one.'''
+    subset = cells.filter(pl.col('year') == year)
+    private = set(subset.filter(pl.col('own_code') == PRIVATE).get_column('code').to_list())
+    owners = dict(
+        subset.group_by('code').agg(pl.col('own_code').unique().sort().alias('owners')).iter_rows()
+    )
+    return [
+        {
+            'code': code,
+            'ownerships_with_cells': owners.get(code, [])
+        } for code in universe.six_digit if code not in private
+    ]
+
+def excluded_codes(cells: pl.DataFrame, universe: Universe,
+                   window: Sequence[int]) -> list[dict[str, object]]:
+    '''Codes with no usable private cell anywhere in the window at one grain, with the reason.'''
+    private = cells.filter((pl.col('own_code') == PRIVATE) & pl.col('year').is_in(list(window)))
+    published = set(private.get_column('code').to_list())
+    usable = set(private.filter(pl.col('status') == DISCLOSED).get_column('code').to_list())
+    return [
+        {
+            'code': code,
+            'reason': 'private cells never usable' if code in published else 'no private cell',
+        } for code in universe.six_digit if code not in usable
+    ]
+
+def connecticut_areas(county_cells: pl.DataFrame) -> list[dict[str, object]]:
+    '''Connecticut county-equivalents per year: legacy counties or planning regions (from 2024).'''
+    rows = []
+    for year in sorted(set(county_cells.get_column('year').to_list())):
+        areas = set(
+            county_cells.filter(
+                (pl.col('year') == year)
+                & pl.col('area_fips').str.starts_with('09')
+            ).get_column('area_fips').to_list()
+        )
+        regions = {area for area in areas if '09110' <= area <= '09190'}
+        rows.append(
+            {
+                'year': year,
+                'legacy_counties': len(areas & set(CONNECTICUT_LEGACY)),
+                'planning_regions': len(regions),
+            }
+        )
+    return rows
+
+# -------------------------------------------------------------------------------------------------
+# Checks
+# -------------------------------------------------------------------------------------------------
+
+def _disclosed_private(frame: pl.DataFrame, level: str) -> pl.DataFrame:
+    return frame.filter(
+        (pl.col('agglvl_code') == level) & (pl.col('own_code') == PRIVATE)
+        & (pl.col('disclosure_code') == '')
+    )
+
+def _nested_excess(detail: pl.DataFrame, parents: pl.DataFrame, year: int, child: str,
+                   parent: str) -> list[str]:
+    '''Detail cells may not sum past their parent cell (employment allows annual-average rounding).'''
+    sums = detail.group_by('parent', 'industry_code').agg(
+        pl.col('emp').sum(),
+        pl.col('wages').sum(),
+        pl.len().alias('cells'),
+    )
+    joined = sums.join(
+        parents.select('parent', 'industry_code', 'emp', 'wages'),
+        on=['parent', 'industry_code'],
+        suffix='_parent',
+    )
+    bad = joined.filter(
+        (pl.col('emp') > pl.col('emp_parent') + pl.col('cells') / 2 + 1)
+        | (pl.col('wages') > pl.col('wages_parent'))
+    )
+    failures = [
+        f'{year}: {child} cells exceed their {parent} cell for {row["parent"]} '
+        f'{row["industry_code"]}' for row in bad.head(20).to_dicts()
+    ]
+    if bad.height > 20:
+        failures.append(f'{year}: {bad.height} {child}-over-{parent} excesses in all')
+    return failures
+
+def check_invariants(frame: pl.DataFrame, year: int) -> list[str]:
+    '''Describe every failed invariant of one year's single file (empty when all hold).
+
+    Disclosed private detail never sums past a published total: six-digit cells against the
+    national private total, states (50 plus DC) against the nation per code, and counties
+    (unknown locations included) against their state per code.
+    '''
+    total = frame.filter(
+        (pl.col('agglvl_code') == NATIONAL_TOTAL_AGGLVL)
+        & (pl.col('own_code') == PRIVATE)
+        & (pl.col('industry_code') == TOTAL_INDUSTRY)
+        & (pl.col('area_fips') == NATIONAL_AREA)
+    )
+    if total.height != 1:
+        return [f'{year}: expected one national private total row, found {total.height}']
+    failures = []
+    national = _disclosed_private(frame, GRAINS['national'][0])
+    for column in ('emp', 'wages'):
+        detail, whole = national.get_column(column).sum(), total.get_column(column).item()
+        if detail > whole:
+            failures.append(f'{year}: disclosed six-digit {column} {detail} exceeds total {whole}')
+    states = _disclosed_private(frame, GRAINS['state'][0])
+    failures += _nested_excess(
+        states.filter(pl.col('area_fips').str.slice(0, 2).cast(pl.Int32) <= 56).with_columns(
+            parent=pl.lit(NATIONAL_AREA)
+        ),
+        national.rename({'area_fips': 'parent'}),
+        year,
+        'state',
+        'national',
+    )
+    counties = _disclosed_private(frame, GRAINS['county'][0])
+    failures += _nested_excess(
+        counties.with_columns(parent=pl.col('area_fips').str.slice(0, 2) + '000'),
+        states.rename({'area_fips': 'parent'}),
+        year,
+        'county',
+        'state',
+    )
+    return failures
+
+def singlefile_header(path: Path) -> list[str]:
+    '''Column names on the first line of a QCEW annual single-file zip.'''
+    with zipfile.ZipFile(path) as archive:
+        member = next(name for name in archive.namelist() if name.endswith('.csv'))
+        with archive.open(member) as handle:
+            first = handle.readline().decode()
+    return [name.strip().strip('"') for name in first.strip().split(',')]
+
+def file_conventions(frame: pl.DataFrame, year: int) -> dict[str, object]:
+    '''What one annual file's six-digit rows show about the conventions the tables rely on.'''
+    six = frame.filter(pl.col('agglvl_code').is_in([six for six, _ in GRAINS.values()]))
+    codes = dict(six.group_by('disclosure_code').len().sort('disclosure_code').iter_rows())
+    suppressed = six.filter(pl.col('disclosure_code') == 'N')
+    shows_values = (pl.col('emp') != 0) | (pl.col('wages') != 0)
+    return {
+        'year': year,
+        'disclosure_codes': {
+            code or 'blank': count
+            for code, count in codes.items()
+        },
+        'own_code_0_rows': six.filter(pl.col('own_code') == '0').height,
+        'suppressed_rows': suppressed.height,
+        'suppressed_rows_with_emp_or_wages': suppressed.filter(shows_values).height,
+        'suppressed_rows_with_estabs': suppressed.filter(pl.col('estabs') > 0).height,
+    }
+
+def compare_national_slices(frame: pl.DataFrame, national_slice: pl.DataFrame,
+                            year: int) -> list[str]:
+    '''The single file and the Open Data Access US000 slice must agree on every national row.'''
+    keys = ['own_code', 'industry_code', 'agglvl_code']
+    values = ['disclosure_code', 'estabs', 'emp', 'wages']
+    levels = [NATIONAL_TOTAL_AGGLVL, *GRAINS['national']]
+    left = frame.filter(
+        (pl.col('area_fips') == NATIONAL_AREA)
+        & pl.col('agglvl_code').is_in(levels)
+    ).select(*keys, *values)
+    right = national_slice.filter(pl.col('agglvl_code').is_in(levels)).select(*keys, *values)
+    joined = left.join(right, on=keys, how='full', suffix='_slice', coalesce=True)
+    differs = pl.any_horizontal(
+        [pl.col(name).ne_missing(pl.col(f'{name}_slice')) for name in values]
+    )
+    mismatched = joined.filter(differs).height
+    if mismatched:
+        return [f'{year}: {mismatched} national rows differ between the single file and the slice']
+    return []
