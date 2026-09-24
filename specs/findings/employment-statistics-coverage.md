@@ -1,7 +1,7 @@
 # Employment-statistics coverage: finding
 
-**Status: DRAFT.** Roadmap Stage 1 (`specs/naics-embedding-roadmap.md`). This finding discharges
-Verification "Employment-statistics coverage" and the Req 2 (open) item of
+**Status: FINAL (2026-09-24).** Roadmap Stage 1 (`specs/naics-embedding-roadmap.md`). This
+finding discharges Verification "Employment-statistics coverage" and the Req 2 (open) item of
 `specs/naics-embedding.md` (d9126ce). It is produced by plan 3 with
 `scripts/employment_statistics_coverage.py`. Stage 3 reads the decision block verbatim.
 
@@ -25,31 +25,229 @@ Verification "Employment-statistics coverage" and the Req 2 (open) item of
 
 ## 1. Reference years published on NAICS 2022 at six digits
 
-<!-- Task 7 -->
+The window is 2022, 2023, 2024 and 2025: every reference year coded on NAICS 2022 that has an
+annual-average single file. All four years are final on the read date.
+
+- **Finality.** BLS's release calendar says "Final quarterly and annual averages data for each
+  year will be available with the release of first quarter data (preliminary) for the subsequent
+  year." First-quarter 2026 data came out on "Friday, Aug. 28, 2026", which made 2025 final; the
+  first-quarter releases of 2023, 2024 and 2025 had made 2022, 2023 and 2024 final (Sources,
+  Pages).
+- **The two 2025 dates.** The 2025 files carry Last-Modified dates of Fri, 21 Aug 2026 (12:51:16
+  GMT for the national slice, 13:12:50 GMT for the single file), a week before that release. Both
+  dates are recorded here as read. The same order holds for every window year: each year's files
+  carry a Last-Modified date before the first-quarter release that made the year final (Sources,
+  Files and Pages).
+- **The NAICS 2022 boundary.** BLS introduced NAICS 2022 "on September 7, 2022, with the full data
+  release of first quarter 2022 Quarterly Census of Employment and Wages (QCEW) data", and "Data
+  from 2022 forward are classified under the NAICS 2022 system." while "Data from 2017-2021 are
+  classified under the NAICS 2017 system." (Sources, Pages).
+- **The files agree** ("Vintage check (national six-digit codes)"). The 2021 national slice
+  publishes 1,075 six-digit codes, 139 of them outside the NAICS 2022 codebook (212111, 212112,
+  212113 and others), and leaves 96 codebook codes unpublished besides the split codes of
+  section 6. Each of 2022–2025 publishes 1,029 codes, 0 of them outside the codebook, and leaves
+  the same 3 codebook codes unpublished: 112130, 517122 and 541120, which BLS lists as not used in
+  the United States (the first and last) or not used by BLS (517122).
+- **No 2026 annual file.** Annual averages are "published with the 4th quarter data for that
+  reference year", and the calendar dates fourth-quarter 2026 data "To be determined, 2027". The
+  window therefore ends at 2025.
+- **No earlier years.** Years before 2022 are coded on NAICS 2017, and Req 2 excludes them:
+  "Training on changes coded on an earlier NAICS vintage (Claude C28) is not used without a
+  concordance (rejected here; cross-vintage work is Out of scope)."
 
 ## 2. Grains at which six-digit series are published
 
-<!-- Task 7 -->
+QCEW publishes NAICS 2022 six-digit cells at four grains, each at an aggregation level titled
+"-- by ownership sector" in `agglevel_titles.csv` ("Lookup files"). Area counts are the `areas`
+column of "Private cells by grain and year".
+
+- **By year: national** (six-digit level 18, five-digit level 17). One area, `US000`, in every
+  year.
+- **By area: state** (58 and 57). 53 areas in every year: the 51 codes up to FIPS 56 (the 50
+  states and DC) plus Puerto Rico (`72000`) and the Virgin Islands (`78000`).
+- **By area: county** (78 and 77). 3,223 areas in 2022 and 2023 and 3,224 in 2024 and 2025, not
+  counting the "Unknown Or Undefined" codes ending in 999. Connecticut's 8 legacy counties give
+  way to its 9 planning regions in 2024 ("Connecticut county-equivalents"). BLS suspended
+  Colorado's industry and substate data on November 20, 2024 and resumed them on February 19,
+  2025; Colorado has 64 counties with private six-digit rows in every year ("Single-file scan").
+- **By area: MSA** (48 and 47). 388 areas in 2022 and 2023, 393 in 2024 and none in 2025. The 2024
+  change follows the new OMB delineations, which "QCEW data will reflect" from first-quarter 2024
+  data, and "Historical data will not be re-tabulated". BLS dropped MSA industry detail from
+  third-quarter 2025 data, so the 2025 annual file has no MSA six-digit rows ("MSA six-digit rows
+  per year"). MSA rows carry private ownership only ("Single-file scan").
+- **CSA and MicroSA** carry no industry detail: `agglevel_titles.csv` gives them only level 30,
+  "CMSA or CSA, Total Covered", and level 80, "MicroSA, Total Covered" ("Lookup files").
+
+Six-digit cells are published by ownership, with no total-covered row: no six-digit row in any
+year has `own_code` 0 ("File conventions (six-digit rows)"). Summing ownerships is invalid wherever
+one of them is suppressed, so the panel reads private ownership (`own_code` 5).
 
 ## 3. Suppressed share per year, grain and series
 
-<!-- Task 7 -->
+From "Private cells by grain and year". Cell shares divide by the published private cells. The
+last column divides by the codebook's 1,012 six-digit codes, so an absent code counts as a code
+with no usable cell.
+
+| Grain | Year | Areas | Published cells | Suppressed share of cells (employment and wages) | Suppressed share of cells (establishments) | Codes with no usable cell (of 1,012) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| national | 2022 | 1 | 980 | 0.0000 | 0.0000 | 32 (0.0316) |
+| national | 2023 | 1 | 980 | 0.0000 | 0.0000 | 32 (0.0316) |
+| national | 2024 | 1 | 980 | 0.0000 | 0.0000 | 32 (0.0316) |
+| national | 2025 | 1 | 980 | 0.0000 | 0.0000 | 32 (0.0316) |
+| state | 2022 | 53 | 45,737 | 0.2225 | 0.0017 | 35 (0.0346) |
+| state | 2023 | 53 | 45,819 | 0.2184 | 0.0012 | 34 (0.0336) |
+| state | 2024 | 53 | 45,848 | 0.2495 | 0.0031 | 34 (0.0336) |
+| state | 2025 | 53 | 45,824 | 0.2614 | 0.0031 | 34 (0.0336) |
+| county | 2022 | 3,223 | 866,433 | 0.7153 | 0.0136 | 56 (0.0553) |
+| county | 2023 | 3,223 | 878,426 | 0.7157 | 0.0147 | 59 (0.0583) |
+| county | 2024 | 3,224 | 880,769 | 0.7568 | 0.0255 | 62 (0.0613) |
+| county | 2025 | 3,224 | 880,614 | 0.7660 | 0.0242 | 64 (0.0632) |
+| MSA | 2022 | 388 | 232,153 | 0.6402 | 0.0077 | 51 (0.0504) |
+| MSA | 2023 | 388 | 234,131 | 0.6381 | 0.0076 | 53 (0.0524) |
+| MSA | 2024 | 393 | 238,195 | 0.8074 | 0.0139 | 120 (0.1186) |
+| MSA | 2025 | 0 | 0 | - | - | 1,012 (1.0000) |
+
+At the national grain, private ownership ("National grain: codebook codes by status",
+`own_code` 5, the `employment` rows):
+
+- 2022: 980 disclosed, 0 suppressed, 0 other, 32 absent.
+- 2023: 980 disclosed, 0 suppressed, 0 other, 32 absent.
+- 2024: 980 disclosed, 0 suppressed, 0 other, 32 absent.
+- 2025: 980 disclosed, 0 suppressed, 0 other, 32 absent.
+
+Employment and wages share one disclosure flag, so their rows in that table are identical in every
+year and ownership. Establishment counts survive suppression when positive: at the state grain in
+2022, 10,176 private cells are suppressed for employment and wages but only 80 for
+establishments. The government ownerships, reported but not read by the rule, are suppressed
+nationally: state government (`own_code` 2) suppresses 80 to 95 codes a year and local government
+(3) 163 to 179, while federal government (1) suppresses none.
+
+Suppression removes small cells ("Establishments of disclosed and suppressed private cells"). The
+median suppressed cell has 3 to 4 establishments at the state grain against 56 to 65 for a
+disclosed cell, 1 against 9 to 12 at the county grain, and 2 to 3 against 14 to 15 at the MSA
+grain. The national grain has no suppressed private cell. At any area grain, dropping suppressed
+cells would therefore truncate the outcome from below.
 
 ## 4. Panel population, row grain, time-respecting outcome and seen-code regime
 
-<!-- Task 7 -->
+The pre-registered rule names **branch A** at the **national grain**. A row is a six-digit code in
+a reference year, in private ownership, from QCEW annual averages for 2022–2025. Of the codebook's
+1,012 six-digit codes, 980 can run the seen-code regime, and the same 980 form the held-out-code
+population (decision block). No deciding count fell in the ask band of 405 to 607, so the rule
+needed no user review.
+
+- **Time-respecting outcome: yes.** The window is four consecutive final years, 2022–2025, above
+  the minimum of 3. At the national grain 980 codes are time-eligible against the floor of 506:
+  each has a usable pair for 2024→2025 and a usable earlier pair.
+- **Seen-code regime: yes.** All three candidate grains survive. 980 codes can run the regime at
+  the national grain, 978 at the state grain and 948 at the county grain, each above the floor of
+  506. The rule takes the grain with the lowest mean suppressed share: national at 0.0000, against
+  0.2379 for state and 0.7384 for county. MSA is not a candidate: it has no six-digit rows in
+  2025.
+- **Excluded codes: 32**, all for "no private cell" ("Codes excluded at the chosen grain"). Three
+  have no national cell in any ownership: 112130, 517122 and 541120, the codes BLS does not use
+  (section 1). The other 29 are public-administration codes in NAICS 92, 921110 to 928120, with
+  cells in government ownerships only ("Codes with no private national cell (last year)").
+
+Neither answer is "no". The panel therefore follows Req 2's first branch: "If the verified window
+supports a time-respecting outcome (the outcome dated after the features, with splits by time),
+the panel includes one (ChatGPT C15; Claude C28)."
 
 ## 5. Other public employment series screened
 
-<!-- Task 7 -->
+**CES.** The CES handbook (`https://www.bls.gov/opub/hom/ces/presentation.htm`, read 2026-09-24)
+says "Using data from the CES sample, the CES-National program produces and publishes thousands of
+data series, including national estimates of employment, hours, and earnings by detailed
+industry." The CES Published Series page (`https://www.bls.gov/web/empsit/cesseriespub.htm`, read
+2026-09-24) adds that "CES industry codes are based on NAICS codes, but are not always a
+one-to-one mapping with the NAICS structure due to sample size limitations." CES cannot serve: its
+estimates come from a sample, not a census count; its industry detail does not reach all 1,012
+six-digit codes; and it publishes no establishment counts beside employment and earnings.
+
+**OEWS.** The OEWS handbook (`https://www.bls.gov/opub/hom/oews/presentation.htm`, read
+2026-09-24) says the program publishes "U.S. industry-specific estimates by 2-, 3-, most 4-, and
+some 5- and 6-digit NAICS levels", and that "Modeled estimates developed from a sample will differ
+from the results of a census." OEWS cannot serve: its industry detail stops short of all six-digit
+codes, its estimates are modeled from a sample, and its rows are occupational employment and wage
+estimates with no establishment counts.
+
+**BED.** The BED handbook (`https://www.bls.gov/opub/hom/bdm/presentation.htm`, read 2026-09-24)
+says "Data on the private sector are available for the nation as a whole and by NAICS sector and
+subsector. In addition, BED state data are available by NAICS sector." BED cannot serve: its
+industry detail ends at the three-digit subsector.
+
+Roadmap D1 settles the source: "covariates are log establishment counts and log wages from the same
+QCEW rows". Among these programs only QCEW publishes employment, establishment counts and wages on
+one row for each six-digit code, so QCEW is the panel's source.
 
 ## 6. File conventions verified
 
-<!-- Task 7 -->
+- **Disclosure codes and columns** ("File conventions (six-digit rows)", over every six-digit level
+  and ownership). The disclosure code is blank or `N`, with no other code in any year: 467,112
+  blank and 852,716 `N` rows in 2022, 472,235 and 862,595 in 2023, 392,184 and 949,625 in 2024, and
+  336,210 and 761,027 in 2025. The establishment column is `annual_avg_estabs` in every year. No
+  six-digit row has `own_code` 0.
+- **Suppressed rows.** Every `N` row has zero employment and wages
+  (`suppressed_rows_with_emp_or_wages` is 0 in every year), and most keep a positive establishment
+  count: 837,846 of 852,716 in 2022, 846,712 of 862,595 in 2023, 921,691 of 949,625 in 2024 and
+  737,563 of 761,027 in 2025. The rule reads an `N` row's zero establishment count as suppressed.
+- **Split codes.** QCEW publishes none of the codebook's 19 six-digit codes under NAICS 238. BLS
+  "uses six-digit NAICS codes ending in “1” for residential construction units and “2” for
+  nonresidential construction units, instead of “0.”" (Sources, Pages), and `industry_titles.csv`
+  lists the 38 such codes and no 238 code ending in 0 ("Lookup files"). Each of the 19 is its
+  five-digit parent's only child, so the script reads each from the parent's row ("Split codes
+  recovered from their five-digit parent"; `recovered_via_parent` is 19 for private ownership in
+  every year). There are no direct 238 codes. The plan expected 17 split codes, two direct 238
+  codes and 34 BLS codes, inferred from BLS's count of "1,030 industries"; that count also leaves
+  out the two codes not used in the United States (1,012 − 19 + 38 + 1 − 2 = 1,030). The run uses
+  19 under the project owner's ruling of 2026-09-24.
+- **999999.** `industry_titles.csv` has one 999999 row ("Lookup files"), and the vintage check
+  treats the code as expected outside the codebook.
+- **Unknown and pseudo-counties.** `area_titles.csv` has 53 "Unknown Or Undefined" codes ending in
+  999 ("Lookup files"). 51 of them carry county-level rows in each year's file, and the county
+  grain drops them all. No overseas, multi-county or out-of-state code (ending in 996, 997 or 998)
+  and no legacy Alaska division carries county-level rows ("Single-file scan").
+- **Connecticut and MSA.** Section 2 gives the Connecticut recode ("Connecticut county-equivalents")
+  and the MSA break ("MSA six-digit rows per year", "Single-file scan").
+- **Reconciliation.**
+  - The single files and the Open Data Access `US000` slices agree on every national row in every
+    year: "Invariant failures" lists no disagreement between them.
+  - Disclosed state detail never exceeds its national cell, and disclosed county detail never
+    exceeds its state cell, for any code and year: "Invariant failures" has no such row.
+  - Disclosed national six-digit employment exceeds the national private total by 46 in 2022
+    (128,718,106 against 128,718,060) and by 27 in 2023 (131,289,708 against 131,289,681). These
+    are the two rows of "Invariant failures", and the run exits 2 on them. "National six-digit
+    reconciliation" shows that they are rounding, not a data fault: all 1,000 national private
+    six-digit rows are disclosed, wages, which are exact dollar sums, reconcile to the total with a
+    difference of 0 in every year, and the employment residual changes sign (+46, +27, -5, -9), as
+    the sector-level residual does (+0, +2, -1, -1). Each annual-average employment figure is
+    rounded separately, and the national check is the one comparison in the script with no
+    rounding allowance. Under the project owner's ruling of 2026-09-24 the run stands as it is,
+    with no re-run and no change to the check.
+- **Independent recount.** The stdlib-`csv` recount of plan 3 Task 6 Step 3 gives 980 disclosed, 0
+  suppressed, 0 other and 32 absent codes in every year ("Independent recount"). That matches the
+  `employment` rows for `own_code` 5 in "National grain: codebook codes by status".
 
 ## 7. Consequences for later stages
 
-<!-- Task 7 -->
+- Stage 3 takes the decision block: branch A, one row per six-digit code and reference year
+  (national, private ownership) for 2022–2025, with 980 codes for the seen-code regime and 980 for
+  the held-out-code regime.
+- D1's covariates: a usable row carries employment and wages under one disclosure flag.
+  Establishment counts stay published on most suppressed rows, but a suppressed row is not usable.
+  At the national grain no private cell is suppressed in 2022–2025, so every row carries all three
+  series.
+- `metrics/qcew.py` reads `tot_wages` where the files say `total_annual_wages`, and keeps one row
+  per code (2022, private): the rejected definition. It also selects no `agglvl_code`,
+  `area_fips` or `disclosure_code`, so its per-code mean pools the rows of every grain and reads
+  zero-filled suppressed cells as zeros.
+- An area design must handle Connecticut's 2024 recode. An MSA design has only 2022–2024 and a
+  2023/2024 break.
+- At any area grain, suppression removes small cells (section 3), so a design that drops them
+  truncates the outcome from below.
+- The 2026 annual file does not exist yet, so the window ends at 2025.
+- derive-roadmap's resume step re-validates later stages against this finding; no other stage
+  entry is edited here.
 
 ## Sources
 
@@ -89,6 +287,7 @@ quote.
 | BLS and QCEW NAICS Differences | `https://www.bls.gov/cew/additional-resources/bls-and-qcew-naics-differences.htm` | 2026-09-24 | "There are two NAICS codes included in the NAICS 2022 manual that are not used in the United States." (112130 and 541120) and "There is one NAICS code included in the NAICS 2022 manual that is not used by BLS." (517122) |
 | Schedule of News Releases and Full Data Availability for County Employment and Wages | `https://www.bls.gov/cew/release-calendar.htm` | 2026-09-24 | "Final quarterly and annual averages data for each year will be available with the release of first quarter data (preliminary) for the subsequent year." |
 | Schedule of News Releases and Full Data Availability for County Employment and Wages | `https://www.bls.gov/cew/release-calendar.htm` | 2026-09-24 | First-quarter release rows: 1st Quarter 2026, "Friday, Aug. 28, 2026"; 1st Quarter 2025, "Tuesday, Sep. 9, 2025"; 1st Quarter 2024 full data, "Wednesday, Sep. 4, 2024"; 1st Quarter 2023 full data, "Wednesday, Sep. 6, 2023". |
+| Schedule of News Releases and Full Data Availability for County Employment and Wages | `https://www.bls.gov/cew/release-calendar.htm` | 2026-09-24 | "Concerning the QCEW full data update, for each reference year, preliminary quarterly data are published for each quarter on the date of the news release, including annual average data (preliminary) published with the 4th quarter data for that reference year." The 4th Quarter 2026 row reads "To be determined, 2027". |
 | Change in the presentation of Metropolitan Statistical Area (MSA) data in QCEW | `https://www.bls.gov/cew/notices/2025/change-in-the-presentation-of-metropolitan-statistical-area-data-in-qcew.htm` | 2026-09-24 | "Beginning with third quarter 2025 data, to be released on March 10, 2026, the Quarterly Census of Employment and Wages (QCEW) will publish Metropolitan Statistical Area (MSA) employment and wages at only the total covered employment for the area. Data for detailed industry within the area will no longer be available." |
 | QCEW News Release Notes (August 21, 2024, 2024/1) | `https://www.bls.gov/cew/about-data/news-release-notes.htm` | 2026-09-24 | "The replacement of Connecticut's eight counties with the state's nine planning regions was announced in June 2022. Effective with this news release, the QCEW program will tabulate data using the new planning regions as county-equivalents." |
 | QCEW News Release Notes (August 21, 2024, 2024/1) | `https://www.bls.gov/cew/about-data/news-release-notes.htm` | 2026-09-24 | "With the full data update for first quarter 2024 on September 4, 2024, QCEW data will reflect the new definitions." and "Historical data will not be re-tabulated to reflect the new definitions." (the entry links OMB Bulletin 23-01) |
@@ -102,7 +301,73 @@ quote.
 
 ## Reproduction
 
-<!-- Task 7 -->
+The script is `scripts/employment_statistics_coverage.py` at commit 74714f6. Its inputs are the
+files and hashes under Sources, plus the supervision bundle's codebook (sha256
+`5c485aa96fc9d016c8aa7f95e269f4222b85e8ee395e529facc7a9f8adcaab7b`). From the repository root:
+
+```bash
+uv run python scripts/employment_statistics_coverage.py manifest --qcew-dir ~/Downloads/Data/QCEW
+uv run python scripts/employment_statistics_coverage.py run --qcew-dir ~/Downloads/Data/QCEW --codebook /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/naics_codebook.parquet --final-years 2022 2023 2024 2025 --out-dir ~/Downloads/Data/QCEW/coverage
+```
+
+The run exits 2 on the two invariant failures of section 6. Its `coverage/decision.md` and
+`coverage/tables.md` are pasted verbatim above.
+
+The checks outside the script feed "Appendix: checks outside the script":
+
+- **Independent recount:** the `/tmp/esc-recount.py` listing of plan 3
+  (`specs/plans/completed/3-employment-statistics-coverage.md`, Task 6 Step 3), run with the
+  `--qcew-dir` and codebook paths above.
+- **Lookup files:** the `grep` and `cat` commands of that plan's Task 5 Step 4.
+- **National six-digit reconciliation:**
+
+```bash
+uv run python -c 'import csv, pathlib; d = pathlib.Path("~/Downloads/Data/QCEW").expanduser(); rows = lambda y: list(csv.DictReader((d / f"{y}_US000_annual.csv").open())); pick = lambda rs, lvl: [r for r in rs if r["own_code"] == "5" and r["agglvl_code"] == lvl]; [print("| {} | {:,} | {} | {:+,} | {:+,} | {:+,} |".format(y, len(six), sum(r["disclosure_code"] == "N" for r in six), sum(int(r["annual_avg_emplvl"]) for r in six if r["disclosure_code"] == "") - int(tot["annual_avg_emplvl"]), sum(int(r["total_annual_wages"]) for r in six if r["disclosure_code"] == "") - int(tot["total_annual_wages"]), sum(int(r["annual_avg_emplvl"]) for r in pick(rs, "14")) - int(tot["annual_avg_emplvl"]))) for y in (2022, 2023, 2024, 2025) for rs in [rows(y)] for six in [pick(rs, "18")] for tot in [pick(rs, "11")[0]]]'
+```
+
+- **Single-file scan:** this script, run with `uv run python`:
+
+```python
+import zipfile
+from pathlib import Path
+
+import polars as pl
+
+QCEW = Path('~/Downloads/Data/QCEW').expanduser()
+LEGACY = [
+    '02030', '02040', '02080', '02120', '02160', '02190', '02200', '02210', '02250', '02260',
+    '55901'
+]
+
+def owners(frame: pl.DataFrame, levels: list[str]) -> str:
+    codes = frame.filter(pl.col('agglvl_code').is_in(levels))['own_code'].unique().sort()
+    return ', '.join(codes.to_list()) or 'none'
+
+for year in (2022, 2023, 2024, 2025):
+    with zipfile.ZipFile(QCEW / f'{year}_annual_singlefile.zip') as archive:
+        member = next(name for name in archive.namelist() if name.endswith('.csv'))
+        data = archive.read(member)
+    frame = pl.read_csv(
+        data,
+        columns=['area_fips', 'own_code', 'agglvl_code'],
+        infer_schema=False,
+    )
+    county = frame.filter(pl.col('agglvl_code').is_in(['77', '78']))
+    suffix = pl.col('area_fips').str.slice(2)
+    unknown = county.filter(suffix == '999')['area_fips'].n_unique()
+    pseudo = county.filter(suffix.is_in(['996', '997', '998'])).height
+    legacy = county.filter(pl.col('area_fips').is_in(LEGACY)).height
+    colorado = county.filter(
+        (pl.col('agglvl_code') == '78') & (pl.col('own_code') == '5')
+        & pl.col('area_fips').str.starts_with('08') & (suffix != '999')
+    )['area_fips'].n_unique()
+    msa_rows = frame.filter(pl.col('agglvl_code').is_in(['47', '48'])).height
+    print(
+        f'| {year} | {county["area_fips"].n_unique():,} | {unknown} | {pseudo} | {legacy} | '
+        f'{colorado} | {msa_rows:,} | {owners(frame, ["47", "48"])} | '
+        f'{owners(frame, ["18", "58", "78"])} |'
+    )
+```
 
 ## Appendix: generated tables
 
@@ -361,3 +626,57 @@ quote.
 | 927110 | no private cell |
 | 928110 | no private cell |
 | 928120 | no private cell |
+
+## Appendix: checks outside the script
+
+These tables come from the lookup files and from checks run on the downloaded files outside the
+script. Reproduction gives each command.
+
+### Lookup files
+
+| Check | File | Result |
+| --- | --- | --- |
+| Levels of the four grains | `agglevel_titles.csv` | 11 "National, Total -- by ownership sector"; 17 "National, NAICS 5-digit -- by ownership sector"; 18 "National, NAICS 6-digit -- by ownership sector"; 47 "MSA, NAICS 5-digit -- by ownership sector"; 48 "MSA, NAICS 6-digit -- by ownership sector"; 57 "State, NAICS 5-digit -- by ownership sector"; 58 "State, NAICS 6-digit -- by ownership sector"; 77 "County, NAICS 5-digit -- by ownership sector"; 78 "County, NAICS 6-digit -- by ownership sector" |
+| CSA and MicroSA levels | `agglevel_titles.csv` | 30 "CMSA or CSA, Total Covered" and 80 "MicroSA, Total Covered"; no industry-detail level for either |
+| NAICS 238 six-digit codes | `industry_titles.csv` | 38 codes ending in 1 or 2 (238111 to 238992); 0 codes ending in 0 |
+| 999999 | `industry_titles.csv` | 1 row |
+| Unknown or undefined areas | `area_titles.csv` | 53 codes ending in 999, one each for the 50 states, DC, Puerto Rico and the Virgin Islands; `11000` and `11001` match the search only through their title, "District of Columbia, not unknown" |
+| Connecticut | `area_titles.csv` | 8 legacy counties (`09001` to `09015`) and 9 planning regions (`09110` to `09190`) |
+| Ownership | `ownership_titles.csv` | 1 "Federal Government", 2 "State Government", 3 "Local Government", 5 "Private" |
+| Duplicate rows | `area_titles.csv` | every area row appears twice (`"09001"` is on 2 lines); the script does not read this file |
+
+### Single-file scan
+
+Rows of each year's single file. County-level rows are aggregation levels 77 and 78; MSA rows are
+47 and 48.
+
+| Year | County-level areas, 999 codes included | Areas ending in 999 with rows | Rows ending in 996, 997 or 998 | Legacy Alaska division or 55901 rows | Colorado counties with private six-digit rows | MSA rows | MSA `own_code` values | Six-digit (18, 58, 78) `own_code` values |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| 2022 | 3,274 | 51 | 0 | 0 | 64 | 419,768 | 5 | 1, 2, 3, 5 |
+| 2023 | 3,274 | 51 | 0 | 0 | 64 | 422,930 | 5 | 1, 2, 3, 5 |
+| 2024 | 3,275 | 51 | 0 | 0 | 64 | 430,234 | 5 | 1, 2, 3, 5 |
+| 2025 | 3,275 | 51 | 0 | 0 | 64 | 0 | none | 1, 2, 3, 5 |
+
+### National six-digit reconciliation
+
+From the Open Data Access `US000` slices, private ownership. Each difference is disclosed detail
+minus the national private total (level 11): six-digit detail (level 18) for employment and wages,
+and sector detail (level 14) in the last column.
+
+| Year | Six-digit private rows | `N` rows | Employment: detail − total | Wages: detail − total | Sector employment: detail − total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2022 | 1,000 | 0 | +46 | +0 | +0 |
+| 2023 | 1,000 | 0 | +27 | +0 | +2 |
+| 2024 | 1,000 | 0 | -5 | +0 | -1 |
+| 2025 | 1,000 | 0 | -9 | +0 | -1 |
+
+### Independent recount
+
+The stdlib-`csv` recount of national private statuses (plan 3 Task 6 Step 3).
+
+| Year | disclosed | suppressed | other | absent |
+| --- | ---: | ---: | ---: | ---: |
+| 2022 | 980 | 0 | 0 | 32 |
+| 2023 | 980 | 0 | 0 | 32 |
+| 2024 | 980 | 0 | 0 | 32 |
+| 2025 | 980 | 0 | 0 | 32 |
