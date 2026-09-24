@@ -1,6 +1,7 @@
 import hashlib
 import json
 from io import BytesIO
+from pathlib import Path
 from typing import Dict, List, Set, cast
 
 import polars as pl
@@ -425,6 +426,9 @@ def test_preprocess_refuses_a_held_out_query_that_matches_training_text(preproce
 
     with pytest.raises(ValueError, match='held-out queries match training text'):
         download_data.download_preprocess_data(preprocess_cfg)
+    # Every check runs before either file is written
+    assert not Path(preprocess_cfg.output_parquet).exists()
+    assert not Path(preprocess_cfg.index_roles_parquet).exists()
 
 @pytest.mark.unit
 def test_preprocess_needs_the_role_table(preprocess_cfg, tmp_path):
@@ -432,3 +436,30 @@ def test_preprocess_needs_the_role_table(preprocess_cfg, tmp_path):
 
     with pytest.raises(FileNotFoundError, match='data roles'):
         download_data.download_preprocess_data(missing)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('pinned_by', ['config', 'graph'])
+def test_preprocess_refuses_what_a_shipped_config_pins(preprocess_cfg, pinned_by):
+    # The fixture runs in tmp_path, where PINNING_CONFIGS' relative conf/ paths resolve
+    output = Path(preprocess_cfg.output_parquet)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b'descriptions')
+    manifest = Path('bundle') / 'manifest.json'
+    manifest.parent.mkdir()
+    manifest.write_text(
+        json.dumps({'description_fingerprint': hashlib.sha256(b'descriptions').hexdigest()})
+    )
+    config, text = {
+        'config': ('conf/config.yaml', f'supervision:\n  manifest_path: {manifest}\n'),
+        'graph': ('conf/graph.yaml', f'supervision_manifest_path: {manifest}\n'),
+    }[pinned_by]
+    Path(config).write_text(text)
+
+    with pytest.raises(FileExistsError, match='pins'):
+        download_data.download_preprocess_data(preprocess_cfg)
+    assert output.read_bytes() == b'descriptions'
+    assert not Path(preprocess_cfg.index_roles_parquet).exists()
+
+    download_data.download_preprocess_data(preprocess_cfg, force=True)
+    assert output.read_bytes() != b'descriptions'
+    assert Path(preprocess_cfg.index_roles_parquet).is_file()
