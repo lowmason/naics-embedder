@@ -177,8 +177,8 @@ This plan's own decisions are stated here so that no reviewer needs to re-derive
   `./scripts/format_code.sh --check --all` must pass.
 - **Git.**
   - Never push to `main`.
-  - Never push, cherry-pick or merge the held local commits 271f085 "config" and 4ce2834 "graph
-    config".
+  - Never push, cherry-pick or merge the held local commits "config" and "graph config"
+    (271f085 and 4ce2834 at the time; every sync rewrites their SHAs, so match them by subject).
   - Never run bare `git stash`.
   - Commit on this branch only, ending each message with the session's attribution trailer.
 - **Data safety.**
@@ -201,8 +201,9 @@ This plan's own decisions are stated here so that no reviewer needs to re-derive
   Run every command from its root.
 - **Branch:** `claude/outcome-panel-sealed-splits-522fa329`, cut from origin/main `167d3c9`
   (PR #109). This plan is its first commit.
-- **Main checkout:** `/Users/lowell/Projects/naics-embedder` stays on local `main` (4ce2834: plan
-  3's e04231e plus the two held commits). Do not check anything out there.
+- **Main checkout:** `/Users/lowell/Projects/naics-embedder` stays on local `main` (then 4ce2834:
+  plan 3's e04231e plus the two held commits, whose SHAs every sync rewrites). Do not check
+  anything out there.
 - **Census copies:** `~/Downloads/Data/`. The pre-flight lists their sha256s.
 - **Working directory:** the Bash tool can reset its working directory to the main checkout
   between calls. Run `pwd` before Task 9's data commands and before every commit, and if it

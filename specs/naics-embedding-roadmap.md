@@ -12,9 +12,10 @@ re-validated Stages 3–11 against Stage 2, recorded D9 and added Stage 12 (belo
 per its ROUTING line, in a fresh session.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
-8057916. Evidence was read at local main 0892c69, which is origin/main 620bee2 plus the two
-unpushed config commits (81a32a7, 0892c69) that point `conf/config.yaml` and `conf/graph.yaml` at
-bundle 18403d29; 620bee2..8057916 changes only `tests/unit/test_hgcn_metrics.py`. Paths below are
+8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
+(`config` and `graph config`) that point `conf/config.yaml` and `conf/graph.yaml` at bundle
+18403d29; every sync rewrites their SHAs, so they are named by subject. 620bee2..8057916 changes
+only `tests/unit/test_hgcn_metrics.py`. Paths below are
 under `src/naics_embedder/` unless they start with `conf/`, `tests/`, `specs/` or `outputs/`.
 Spec staleness since d9126ce: PR #102 makes the Staleness line "The graph stage's configuration
 still names no bundle" true only of origin's shipped `conf/graph.yaml`; PR #100 (downstream
