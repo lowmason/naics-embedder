@@ -7,7 +7,7 @@ import operator
 import time
 from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 if TYPE_CHECKING:
     import torch
@@ -273,3 +273,28 @@ def setup_directory(dir_path: str) -> Path:
     path = Path(dir_path)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+# -------------------------------------------------------------------------------------------------
+# Embedding columns
+# -------------------------------------------------------------------------------------------------
+
+def sorted_embedding_columns(columns: Sequence[str], prefix: str) -> List[str]:
+    '''
+    Select the columns that start with a prefix, sorted into embedding-dimension order.
+
+    Numeric suffixes sort as integers, so ``hyp_e2`` comes before ``hyp_e10``. Non-numeric
+    suffixes sort after all numeric ones, in string order.
+
+    Args:
+        columns: Column names, e.g. ``DataFrame.columns``
+        prefix: Prefix shared by the embedding columns
+
+    Returns:
+        The matching column names, or an empty list if none match
+    '''
+
+    def _sort_key(name: str) -> Tuple[int, Union[int, str]]:
+        suffix = name[len(prefix):]
+        return (0, int(suffix)) if suffix.isdigit() else (1, suffix)
+
+    return sorted((col for col in columns if col.startswith(prefix)), key=_sort_key)
