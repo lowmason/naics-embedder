@@ -1,0 +1,61 @@
+{
+  "codes_with_role": {
+    "examples": 1010,
+    "test": 893,
+    "training": 988,
+    "validation": 939
+  },
+  "eligibility": {
+    "eligible": 16318,
+    "entries": 20373,
+    "exact_entry": 941,
+    "exact_static": 768,
+    "near_duplicate_entry": 2685,
+    "near_duplicate_static": 813,
+    "withheld": 4055,
+    "withheld_exact": 1539,
+    "withheld_near_duplicate": 2516
+  },
+  "examples_floor": 1,
+  "fractions": {
+    "examples": "3/10",
+    "test": "3/20",
+    "training": "7/20",
+    "validation": "1/5"
+  },
+  "generated_at": "2026-09-24T19:44:33.957207+00:00",
+  "generator_revision": "0c18cdb5570fe9c8f70b11a5b4307fd08a9910d7",
+  "held_out_leakage": {
+    "test": {
+      "exact": 0,
+      "near_duplicate": 0
+    },
+    "validation": {
+      "exact": 0,
+      "near_duplicate": 0
+    }
+  },
+  "index_file": {
+    "sha256": "6506b37b9546dd9cec1f8b79e0b38b68e547a5cce5fd6f8332d35024dbd6cd63",
+    "sheet": "2022NAICS",
+    "url": "https://www.census.gov/naics/2022NAICS/2022_NAICS_Index_File.xlsx"
+  },
+  "library_versions": {
+    "numpy": "2.3.4",
+    "polars": "1.35.1",
+    "scikit-learn": "1.9.1"
+  },
+  "near_duplicate_min_jaccard": "9/10",
+  "role_table": {
+    "path": "conf/data/index_roles.csv",
+    "sha256": "05099381db725244b54ee263222933568f82fd5b212064697e8c7b2cfa6e8a3a"
+  },
+  "roles": {
+    "examples": 6118,
+    "test": 3013,
+    "training": 7200,
+    "validation": 4042
+  },
+  "schema_version": "index-roles-v1",
+  "seed": 20260924
+}
