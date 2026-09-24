@@ -299,3 +299,60 @@ def test_compare_national_slices_finds_differences(frames):
     assert esc.compare_national_slices(frames[2024], changed, 2024) == [
         '2024: 1 national rows differ between the single file and the slice'
     ]
+
+# -------------------------------------------------------------------------------------------------
+# Decision rule
+# -------------------------------------------------------------------------------------------------
+
+def _summary(grain, share, seen, time, complete=True, by_area=0):
+    return esc.GrainSummary(grain, complete, share, seen, by_area, time, seen)
+
+def test_summarize_grain_counts_what_the_rule_reads(universe, frames):
+    national = esc.summarize_grain(_cells(frames, universe, 'national'), 'national', WINDOW)
+    assert national.complete
+    assert national.mean_suppressed_share == pytest.approx(0.4)
+    assert (national.seen_by_year, national.seen_by_area, national.time_eligible) == (2, 0, 2)
+    assert national.heldout_population == 2
+    county = esc.summarize_grain(_cells(frames, universe, 'county'), 'county', WINDOW)
+    assert (county.seen_by_year, county.seen_by_area, county.time_eligible) == (1, 1, 1)
+    msa = esc.summarize_grain(_cells(frames, universe, 'msa'), 'msa', WINDOW)
+    assert not msa.complete
+
+def test_decide_prefers_the_least_suppressed_surviving_grain():
+    summaries = [
+        _summary('national', 0.01, 990, 980),
+        _summary('state', 0.30, 900, 850),
+        _summary('county', 0.55, 700, 600),
+        _summary('msa', 0.001, 999, 999, complete=False),
+    ]
+    decision = esc.decide(summaries, WINDOW, WINDOW)
+    assert (decision.branch, decision.grain) == ('A', 'national')
+    assert decision.time_respecting and decision.seen_regime and not decision.needs_user
+
+def test_decide_is_cross_sectional_without_three_consecutive_final_years():
+    summaries = [_summary('national', 0.01, 990, 980)]
+    assert esc.decide(summaries, (2024, 2025), (2024, 2025)).branch == 'B'
+    assert esc.decide(summaries, WINDOW, (2022, 2023, 2024)).branch == 'B'
+    assert esc.decide(summaries, (2022, 2023, 2025), (2022, 2023, 2025)).branch == 'B'
+
+def test_decide_is_held_out_only_when_no_grain_survives():
+    summaries = [_summary('national', 0.2, 300, 300), _summary('state', 0.6, 200, 100)]
+    decision = esc.decide(summaries, WINDOW, WINDOW)
+    assert (decision.branch, decision.grain, decision.seen_regime) == ('C', None, False)
+    assert not decision.needs_user
+
+def test_decide_asks_when_a_deciding_count_is_in_the_band():
+    ahead_in_band = [_summary('national', 0.01, 500, 500), _summary('state', 0.3, 800, 700)]
+    decision = esc.decide(ahead_in_band, WINDOW, WINDOW)
+    assert (decision.branch, decision.grain, decision.needs_user) == ('A', 'state', True)
+    time_in_band = [_summary('national', 0.01, 990, 450)]
+    decision = esc.decide(time_in_band, WINDOW, WINDOW)
+    assert (decision.branch, decision.needs_user) == ('B', True)
+    assert esc.decide([_summary('national', 0.2, 450, 0)], WINDOW, WINDOW).needs_user
+
+def test_render_decision_uses_fixed_wording():
+    summaries = [_summary('national', 0.01, 990, 980)]
+    text = esc.render_decision(esc.decide(summaries, WINDOW, WINDOW), summaries, WINDOW)
+    assert text.startswith('<!-- decision:begin -->\n- **Branch:** A. The verified window')
+    assert '- **Row grain:** a six-digit code in a reference year (national, private' in text
+    assert text.rstrip().endswith('<!-- decision:end -->')

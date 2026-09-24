@@ -542,3 +542,188 @@ def compare_national_slices(frame: pl.DataFrame, national_slice: pl.DataFrame,
     if mismatched:
         return [f'{year}: {mismatched} national rows differ between the single file and the slice']
     return []
+
+# -------------------------------------------------------------------------------------------------
+# Decision rule (pre-registered in plan 3)
+# -------------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class GrainSummary:
+    '''What the decision rule reads about one grain's private cells over the window.'''
+
+    grain: str
+    complete: bool  # six-digit rows in every window year
+    mean_suppressed_share: float  # suppressed / published cells, averaged over the years
+    seen_by_year: int  # codes usable in the last year and in an earlier one
+    seen_by_area: int  # codes usable in two or more areas in the last year (0 when national)
+    time_eligible: int  # codes with a same-area usable pair in the last pair and an earlier one
+    heldout_population: int  # codes usable at least once in the window
+
+    @property
+    def seen(self) -> int:
+        return max(self.seen_by_year, self.seen_by_area)
+
+@dataclass(frozen=True)
+class Decision:
+    branch: str  # 'A' time-respecting, 'B' cross-sectional, 'C' held-out codes only
+    grain: str | None
+    time_respecting: bool
+    seen_regime: bool
+    needs_user: bool  # a deciding count fell inside the ask band: stop and ask
+    reasons: tuple[str, ...]
+
+def summarize_grain(cells: pl.DataFrame, grain: str, window: Sequence[int]) -> GrainSummary:
+    '''Reduce one grain's cells to the counts the decision rule reads.'''
+    private = cells.filter(pl.col('own_code') == PRIVATE)
+    disclosed = private.filter(pl.col('status') == DISCLOSED)
+    usable = disclosed.select('year', 'area_fips', 'code').unique()
+    years = sorted(window)
+    shares = []
+    for year in years:
+        subset = private.filter(pl.col('year') == year)
+        if subset.height:
+            shares.append(subset.filter(pl.col('status') == SUPPRESSED).height / subset.height)
+
+    def codes(frame: pl.DataFrame) -> set[str]:
+        return set(frame.get_column('code').to_list())
+
+    def paired(start: int) -> set[str]:
+        first = usable.filter(pl.col('year') == start).select('area_fips', 'code')
+        second = usable.filter(pl.col('year') == start + 1).select('area_fips', 'code')
+        return codes(first.join(second, on=['area_fips', 'code']))
+
+    last = years[-1]
+    in_last = codes(usable.filter(pl.col('year') == last))
+    seen_by_year = len(in_last & codes(usable.filter(pl.col('year').is_in(years[:-1]))))
+    seen_by_area = 0
+    if grain != 'national':
+        areas = usable.filter(pl.col('year') == last).group_by('code').agg(
+            pl.col('area_fips').n_unique().alias('areas')
+        )
+        seen_by_area = areas.filter(pl.col('areas') >= 2).height
+    starts = [year for year in years[:-1] if year + 1 in years]
+    time_eligible = 0
+    if len(starts) >= 2:
+        earlier = set().union(*(paired(start) for start in starts[:-1]))
+        time_eligible = len(paired(starts[-1]) & earlier)
+    return GrainSummary(
+        grain=grain,
+        complete=len(shares) == len(years),
+        mean_suppressed_share=sum(shares) / len(shares) if shares else 1.0,
+        seen_by_year=seen_by_year,
+        seen_by_area=seen_by_area,
+        time_eligible=time_eligible,
+        heldout_population=usable.get_column('code').n_unique(),
+    )
+
+def decide(
+    summaries: Sequence[GrainSummary],
+    window: Sequence[int],
+    final_years: Collection[int],
+    floor: int = SURVIVAL_FLOOR,
+    band: tuple[int, int] = ASK_BAND,
+) -> Decision:
+    '''Apply plan 3's pre-registered rule.
+
+    A candidate is a CANDIDATE_GRAINS grain with six-digit rows in every window year; it
+    survives when at least `floor` codes can run the seen-code regime. The chosen grain is the
+    surviving candidate with the lowest mean suppressed share (ties: national, state, county).
+    The outcome is time-respecting when the window is at least MIN_WINDOW_YEARS consecutive
+    final years and at least `floor` codes are time-eligible at the chosen grain. A deciding
+    count inside `band` sets needs_user.
+    '''
+
+    def in_band(count: int) -> bool:
+        return band[0] <= count <= band[1]
+
+    order = {grain: rank for rank, grain in enumerate(CANDIDATE_GRAINS)}
+    candidates = sorted(
+        (summary for summary in summaries if summary.grain in order and summary.complete),
+        key=lambda summary: (summary.mean_suppressed_share, order[summary.grain]),
+    )
+    reasons = [
+        f'{s.grain}: {s.seen} codes can run the seen-code regime (floor {floor}); '
+        f'mean suppressed share {s.mean_suppressed_share:.4f}' for s in candidates
+    ]
+    reasons += [
+        f'{s.grain}: not a candidate (not a candidate grain, or no six-digit rows in a window year)'
+        for s in summaries if s not in candidates
+    ]
+    surviving = [summary for summary in candidates if summary.seen >= floor]
+    if not surviving:
+        best = max((summary.seen for summary in candidates), default=0)
+        reasons.append('no grain below the code survives suppression')
+        return Decision('C', None, False, False, in_band(best), tuple(reasons))
+    chosen = surviving[0]
+    needs_user = in_band(chosen.seen)
+    for summary in candidates[:candidates.index(chosen)]:
+        if in_band(summary.seen):
+            needs_user = True
+            reasons.append(
+                f'{summary.grain} ranks ahead of {chosen.grain} with {summary.seen} '
+                f'codes, inside the ask band {band}'
+            )
+    years = sorted(window)
+    consecutive = years == list(range(years[0], years[0] + len(years)))
+    final = all(year in final_years for year in years)
+    window_ok = len(years) >= MIN_WINDOW_YEARS and consecutive and final
+    if not window_ok:
+        reasons.append(
+            f'window {years} is not {MIN_WINDOW_YEARS} or more consecutive final years '
+            f'(final: {sorted(final_years)})'
+        )
+    elif in_band(chosen.time_eligible):
+        needs_user = True
+    reasons.append(
+        f'{chosen.grain}: {chosen.time_eligible} codes are time-eligible (floor {floor})'
+    )
+    time_respecting = window_ok and chosen.time_eligible >= floor
+    return Decision(
+        'A' if time_respecting else 'B', chosen.grain, time_respecting, True, needs_user,
+        tuple(reasons)
+    )
+
+BRANCH_TEXT = {
+    'A': 'The verified window supports a time-respecting outcome (the outcome dated after the '
+    'features, with splits by time), so the panel includes one.',
+    'B': 'The verified window does not support a time-respecting outcome, so the panel is '
+    'cross-sectional.',
+    'C': 'No grain below the code survives suppression, so the panel is held-out-codes only and '
+    'the one-hot comparison could not run.',
+}
+ROW_GRAIN = {
+    'national': 'a six-digit code in a reference year (national, private ownership)',
+    'state': 'a six-digit code in a state in a reference year (private ownership)',
+    'county': 'a six-digit code in a county in a reference year (private ownership)',
+}
+
+def render_decision(
+    decision: Decision, summaries: Sequence[GrainSummary], window: Sequence[int]
+) -> str:
+    '''The finding's "Decision for Stage 3" block, in fixed wording.'''
+    chosen = next((summary for summary in summaries if summary.grain == decision.grain), None)
+    lines = [
+        '<!-- decision:begin -->',
+        f'- **Branch:** {decision.branch}. {BRANCH_TEXT[decision.branch]}',
+        f'- **Source:** QCEW annual averages, reference years {", ".join(map(str, window))}, '
+        'private ownership (own_code 5).',
+    ]
+    if chosen is None:
+        lines.append('- **Row grain:** one row per code; no grain below the code survives.')
+    else:
+        lines += [
+            f'- **Row grain:** {ROW_GRAIN[chosen.grain]}.',
+            f'- **Population:** {chosen.seen} codes for the seen-code regime and '
+            f'{chosen.heldout_population} for the held-out-code regime, of the 1,012 six-digit '
+            'codes in the codebook.',
+        ]
+    lines += [
+        f'- **Time-respecting outcome:** {"yes" if decision.time_respecting else "no"}.',
+        f'- **Seen-code regime:** {"yes" if decision.seen_regime else "no"}.',
+        f'- **Rule:** plan 3, survival floor {SURVIVAL_FLOOR} codes, ask band {ASK_BAND[0]} to '
+        f'{ASK_BAND[1]}; user review {"required" if decision.needs_user else "not required"}.',
+        '- **Reasons:**',
+        *[f'  - {reason}' for reason in decision.reasons],
+        '<!-- decision:end -->',
+    ]
+    return '\n'.join(lines) + '\n'
