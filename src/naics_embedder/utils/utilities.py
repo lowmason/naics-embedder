@@ -278,6 +278,10 @@ def setup_directory(dir_path: str) -> Path:
 # Embedding columns
 # -------------------------------------------------------------------------------------------------
 
+# Embedding column prefixes: Stage 3 exports write hyp_e{i}; HGCN (Stage 4) writes hgcn_e{i}.
+STAGE3_EMBEDDING_PREFIX = 'hyp_e'
+STAGE4_EMBEDDING_PREFIX = 'hgcn_e'
+
 def sorted_embedding_columns(columns: Sequence[str], prefix: str) -> List[str]:
     '''
     Select the columns that start with a prefix, sorted into embedding-dimension order.
