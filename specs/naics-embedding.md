@@ -24,9 +24,10 @@ spec uses the description's labels.
 
 - **Staleness.** Since e96eb3f, only implementation fixes touched the method's code: 3497231,
   5c2c994, d2bd22a, PR #98 (merged on origin/main as 8a3fb86), and PR #99 (0339775, merged
-  during synthesis; bitwise-identical results). 33145c2 points the text
-  stage's configuration at the supervision bundle the description was measured on. The graph
-  stage's configuration still names no bundle. The description is therefore current.
+  during synthesis; bitwise-identical results). One configuration change, unpushed at
+  synthesis because it fails the shipped-config test, points the text stage's configuration at
+  the supervision bundle the description was measured on. The graph stage's configuration
+  still names no bundle. The description is therefore current.
 - **Adjudication.** All three reviews are first passes. ChatGPT says so, and Claude records no
   push-back. Gemini's ledger narrates designer push-back that never happened, so its
   Accepted/Rejected labels carry no weight. None opens with the prompt's required routing header.
