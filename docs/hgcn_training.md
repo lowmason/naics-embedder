@@ -34,6 +34,9 @@ uv run python -m naics_embedder.graph_model.hgcn
 
 This reads `conf/graph.yaml`. For another graph config, call
 `naics_embedder.graph_model.hgcn.main('path/to/graph.yaml')` from a script or notebook.
+`GraphConfig` rejects keys it does not define, so a misspelled key, or the text-model
+`conf/config.yaml` passed by mistake, raises a validation error instead of silently falling back
+to the defaults and the legacy files.
 
 ## 4. HGCN Layer Operation
 
