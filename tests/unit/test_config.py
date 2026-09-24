@@ -16,6 +16,7 @@ from naics_embedder.utils.config import (
     DirConfig,
     DistancesConfig,
     DownloadConfig,
+    GraphConfig,
     SamplingConfig,
     SansStaticConfig,
     StructuralPreferenceConfig,
@@ -514,3 +515,33 @@ def test_structural_preference_config_bounds(field, value, message):
 
     with pytest.raises(ValidationError, match=message):
         StructuralPreferenceConfig(**data)
+
+# -------------------------------------------------------------------------------------------------
+# GraphConfig Tests
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestGraphConfig:
+    '''The HGCN configuration read from conf/graph.yaml.'''
+
+    def test_from_yaml_rejects_a_misspelled_key(self, tmp_path):
+        yaml_path = tmp_path / 'graph.yaml'
+        yaml_path.write_text(yaml.dump({'supervision_manifest': '/tmp/bundle/manifest.json'}))
+
+        with pytest.raises(ValidationError) as excinfo:
+            GraphConfig.from_yaml(str(yaml_path))
+
+        assert [(error['loc'], error['type']) for error in excinfo.value.errors()] == [
+            (('supervision_manifest', ), 'extra_forbidden')
+        ]
+
+    def test_from_yaml_rejects_the_text_model_config(self):
+        with pytest.raises(ValidationError) as excinfo:
+            GraphConfig.from_yaml('conf/config.yaml')
+
+        assert {error['type'] for error in excinfo.value.errors()} == {'extra_forbidden'}
+
+    def test_checked_in_graph_yaml_sets_only_graph_config_fields(self):
+        cfg = GraphConfig.from_yaml('conf/graph.yaml')
+
+        assert cfg.model_fields_set == set(yaml.safe_load(Path('conf/graph.yaml').read_text()))

@@ -909,6 +909,8 @@ class TrainingConfig(BaseModel):
 class GraphConfig(BaseModel):
     '''Base configuration for HGCN training.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     encodings_parquet: str = Field(
         default='./output/hyperbolic_projection/encodings.parquet',
         description='Path to input hyperbolic embeddings parquet file',
