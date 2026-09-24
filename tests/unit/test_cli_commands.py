@@ -1,11 +1,14 @@
+import json
 from pathlib import Path
 
+import polars as pl
 import pytest
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
 from naics_embedder.metrics import StructuralMetricInputError
+from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.supervision.artifacts import load_validated_bundle
 
 @pytest.fixture
@@ -312,3 +315,79 @@ def test_verify_stage4_rejects_relations_from_outside_its_bundle(
     assert result.exit_code == 1
     assert 'relations path does not belong' in result.output
     assert verify_inputs == {}
+
+# -------------------------------------------------------------------------------------------------
+# Outcome panel: lexical baseline
+# -------------------------------------------------------------------------------------------------
+
+BASELINE_ROLES = [
+    (0, '111110', 'Soybean farming', 'examples'),
+    (1, '111110', 'Edamame farming', 'validation'),
+    (2, '111120', 'Canola farming', 'examples'),
+    (3, '111120', 'Sunflower farming', 'validation'),
+    (4, '111120', 'Rapeseed farming', 'test'),
+]
+
+def _baseline_inputs(tmp_path, examples):
+    roles = tmp_path / 'naics_index_roles.parquet'
+    descriptions = tmp_path / 'naics_descriptions.parquet'
+    pl.DataFrame(
+        BASELINE_ROLES,
+        schema={
+            'entry_id': pl.Int64,
+            'code': pl.Utf8,
+            'text': pl.Utf8,
+            'role': pl.Utf8
+        },
+        orient='row',
+    ).write_parquet(roles)
+    pl.DataFrame(
+        {
+            'code': ['111110', '111120', '112130'],
+            'title': ['Soybean Farming', 'Oilseed Farming', 'Dual-Purpose Cattle Ranching'],
+            'description': ['Grows soybeans.', 'Grows oilseeds.', 'Raises cattle.'],
+            'examples': examples,
+            'excluded': [None, None, None],
+        },
+        schema_overrides={
+            'excluded': pl.Utf8
+        },
+    ).write_parquet(descriptions)
+    return [
+        '--index-roles',
+        str(roles),
+        '--descriptions',
+        str(descriptions),
+        '--log',
+        str(tmp_path / 'selection_log.jsonl'),
+    ]
+
+@pytest.mark.unit
+def test_outcome_baseline_scores_validation_and_logs_one_read(runner, tmp_path):
+    arguments = _baseline_inputs(tmp_path, ['Soybean farming', 'Canola farming', None])
+    output = tmp_path / 'baseline.json'
+
+    result = runner.invoke(tools_cli.app, ['outcome-baseline', *arguments, '--output', str(output)])
+
+    assert result.exit_code == 0, result.output
+    assert 'mrr' in result.output
+    records = SelectionLog(tmp_path / 'selection_log.jsonl').records()
+    assert [(r['event'], r['split'], r['n_queries'])
+            for r in records] == [('read', 'validation', 2)]
+    summary = json.loads(output.read_text())['summary']
+    assert summary['n_queries'] == 2
+    assert summary['n_candidates'] == 3
+
+@pytest.mark.unit
+def test_outcome_baseline_refuses_descriptions_that_hold_every_entry(runner, tmp_path):
+    stale = [
+        'Soybean farming; Edamame farming',
+        'Canola farming; Sunflower farming; Rapeseed farming',
+        None,
+    ]
+
+    result = runner.invoke(tools_cli.app, ['outcome-baseline', *_baseline_inputs(tmp_path, stale)])
+
+    assert result.exit_code == 1
+    assert 'Outcome baseline failed' in result.output
+    assert SelectionLog(tmp_path / 'selection_log.jsonl').records() == []
