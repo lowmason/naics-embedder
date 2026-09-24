@@ -163,7 +163,10 @@ class GraphEmbeddingDataset:
                 f'{STAGE3_EMBEDDING_PREFIX}* columns.'
             )
 
-        tensor = torch.from_numpy(frame.select(embed_cols).to_numpy()).float()
+        # to_numpy() returns a read-only view when the columns happen to sit back-to-back in
+        # memory. torch.tensor copies either way and keeps the Fortran layout, which the float32
+        # distances below are sensitive to; to_numpy(writable=True) would copy views to C order.
+        tensor = torch.tensor(frame.select(embed_cols).to_numpy(), dtype=torch.float32)
         codes = frame.get_column(code_column).to_list()
         levels = frame.get_column(level_column).to_list()
 

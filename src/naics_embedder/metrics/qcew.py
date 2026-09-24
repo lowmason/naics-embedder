@@ -92,7 +92,9 @@ def _load_qcew_slice(
 def _tangent_from_frame(
     frame: pl.DataFrame, embed_cols: Sequence[str], curvature: float
 ) -> np.ndarray:
-    tensor = torch.from_numpy(frame.select(embed_cols).to_numpy()).float()
+    # to_numpy() returns a read-only view when the columns happen to sit back-to-back in memory,
+    # so copy it with torch.tensor rather than wrapping it with torch.from_numpy.
+    tensor = torch.tensor(frame.select(embed_cols).to_numpy(), dtype=torch.float32)
     with torch.no_grad():
         tangent = LorentzOps.log_map_zero(tensor, c=curvature)
     return tangent[:, 1:].detach().cpu().numpy()

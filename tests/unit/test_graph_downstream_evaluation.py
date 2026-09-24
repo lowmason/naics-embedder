@@ -1,5 +1,7 @@
 import csv
+import warnings
 
+import numpy as np
 import polars as pl
 import pytest
 import torch
@@ -8,6 +10,7 @@ from naics_embedder.metrics import (
     GraphDownstreamEvaluator,
     GraphEmbeddingDataset,
     QCEWBenchmarkConfig,
+    qcew,
     run_qcew_employment_benchmark,
 )
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
@@ -139,3 +142,67 @@ def test_qcew_benchmark_runs(tmp_path):
     assert set(results.keys()) == {'embedding', 'one_hot', 'hybrid', 'metadata'}
     assert results['embedding']['rmse'] >= 0.0
     assert results['one_hot']['r2'] <= 1.0
+
+# -------------------------------------------------------------------------------------------------
+# Polars-to-torch embedding conversion
+# -------------------------------------------------------------------------------------------------
+
+EMBED_COLS = ['hgcn_e0', 'hgcn_e1', 'hgcn_e2']
+NOT_WRITABLE_WARNING = 'The given NumPy array is not writable'
+
+def _embedding_frame(*, contiguous: bool) -> pl.DataFrame:
+    '''Build the fixture's embeddings frame with its hgcn_e* columns in one Fortran buffer.
+
+    Polars' to_numpy() returns a read-only zero-copy view when the selected columns sit
+    back-to-back in memory. After a join or parquet read that is up to the allocator; here it is
+    fixed. contiguous=False stores the columns in reverse, so selecting them in numeric order
+    always takes the copying path instead.
+    '''
+    dataset, _ = _graph_fixture()
+    values = dataset.embeddings.double().numpy()
+    columns = EMBED_COLS
+    if not contiguous:
+        values, columns = values[:, ::-1], EMBED_COLS[::-1]
+    embeddings = pl.DataFrame(np.asfortranarray(values), schema=columns, orient='row')
+    frame = pl.DataFrame({'code': dataset.codes, 'level': dataset.levels}).hstack(embeddings)
+
+    read_only = not frame.select(EMBED_COLS).to_numpy().flags.writeable
+    assert read_only == contiguous, 'fixture no longer controls whether to_numpy() copies'
+    return frame
+
+@pytest.fixture
+def torch_warns_always():
+    '''Re-arm torch warnings that otherwise fire at most once per process.
+
+    The not-writable warning is one, so an earlier test in the same process could trip it and
+    leave the test below unable to see it.
+    '''
+    previous = torch.is_warn_always_enabled()
+    torch.set_warn_always(True)
+    yield
+    torch.set_warn_always(previous)
+
+@pytest.mark.usefixtures('torch_warns_always')
+@pytest.mark.parametrize(
+    'convert',
+    [
+        GraphEmbeddingDataset.from_dataframe,
+        lambda frame: qcew._tangent_from_frame(frame, EMBED_COLS, curvature=1.0),
+    ],
+    ids=['graph_dataset', 'qcew_tangent'],
+)
+def test_embedding_conversion_never_hands_torch_read_only_memory(convert):
+    frame = _embedding_frame(contiguous=True)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings('error', message=NOT_WRITABLE_WARNING, category=UserWarning)
+        convert(frame)
+
+def test_graph_dataset_layout_does_not_depend_on_column_contiguity():
+    contiguous = GraphEmbeddingDataset.from_dataframe(_embedding_frame(contiguous=True))
+    split = GraphEmbeddingDataset.from_dataframe(_embedding_frame(contiguous=False))
+
+    assert torch.equal(contiguous.embeddings, split.embeddings)
+    # Equal values are not enough: float32 reductions such as the evaluator's pairwise distances
+    # round differently for C- and Fortran-ordered embeddings.
+    assert contiguous.embeddings.stride() == split.embeddings.stride()
