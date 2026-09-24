@@ -18,6 +18,7 @@ from naics_embedder.utils.config import (
     DistancesConfig,
     DownloadConfig,
     GraphConfig,
+    OutcomePanelConfig,
     SamplingConfig,
     SansStaticConfig,
     StructuralPreferenceConfig,
@@ -507,6 +508,53 @@ class TestSupervisionBuildConfig:
     def test_rejects_unknown_keys(self):
         with pytest.raises(ValidationError):
             SupervisionBuildConfig(rank_order_weight=0.35)
+
+@pytest.mark.unit
+class TestOutcomePanelConfig:
+    '''How index-entry roles are drawn (roadmap D4), and the selection log.'''
+
+    def test_yaml_matches_defaults(self):
+        cfg = load_config(OutcomePanelConfig, 'data/outcome_panel.yaml')
+
+        assert cfg == OutcomePanelConfig()
+        assert cfg.fractions == {
+            'examples': 0.30,
+            'training': 0.35,
+            'validation': 0.20,
+            'test': 0.15,
+        }
+        assert cfg.seed == 20260924
+        assert cfg.selection_log == './logs/selection_log.jsonl'
+
+    @pytest.mark.parametrize(
+        'fractions',
+        [
+            {
+                'examples': 0.30,
+                'training': 0.35,
+                'validation': 0.35
+            },
+            {
+                'examples': 0.30,
+                'training': 0.35,
+                'validation': 0.20,
+                'test': 0.10
+            },
+            {
+                'examples': 0.60,
+                'training': 0.35,
+                'validation': 0.20,
+                'test': -0.15
+            },
+        ],
+    )
+    def test_fractions_name_every_role_and_sum_to_one(self, fractions):
+        with pytest.raises(ValidationError):
+            OutcomePanelConfig(fractions=fractions)
+
+    def test_rejects_unknown_keys(self):
+        with pytest.raises(ValidationError):
+            OutcomePanelConfig(test_fraction=0.15)
 
 # -------------------------------------------------------------------------------------------------
 # Repaired Stage-3 runtime configuration

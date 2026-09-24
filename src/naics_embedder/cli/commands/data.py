@@ -12,6 +12,8 @@ Pipeline Stages:
     2. supervision: Build one immutable, validated Stage-3 supervision bundle
 
 Commands:
+    roles: Draw the frozen index-entry role table, once; it is committed and preprocess applies
+        it.
     preprocess: Download raw NAICS files and produce descriptions parquet.
     supervision: Build codebook, pair facts, compatibility distance/relation artifacts,
         training pairs, and curriculum thresholds as one versioned bundle.
@@ -28,8 +30,14 @@ from rich.console import Console
 from typing_extensions import Annotated
 
 from naics_embedder.data.download_data import download_preprocess_data
+from naics_embedder.data.index_role_table import generate_index_role_table
 from naics_embedder.data.supervision_bundle import generate_supervision_bundle
-from naics_embedder.utils.config import DownloadConfig, SupervisionBuildConfig, load_config
+from naics_embedder.utils.config import (
+    DownloadConfig,
+    OutcomePanelConfig,
+    SupervisionBuildConfig,
+    load_config,
+)
 from naics_embedder.utils.console import configure_logging
 
 # -------------------------------------------------------------------------------------------------
@@ -44,6 +52,7 @@ app = typer.Typer(
 
 SUPERVISION_CONFIG = 'data/supervision.yaml'
 DOWNLOAD_CONFIG = 'data/download.yaml'
+OUTCOME_PANEL_CONFIG = 'data/outcome_panel.yaml'
 
 SourceDirOption = Annotated[
     Optional[str],
@@ -106,6 +115,54 @@ def preprocess(
         raise typer.Exit(code=1)
 
     console.print('\n[bold]Preprocessing complete.[/bold]\n')
+
+# -------------------------------------------------------------------------------------------------
+# Draw the index-entry role table
+# -------------------------------------------------------------------------------------------------
+
+@app.command('roles')
+def roles(
+    source_dir: SourceDirOption = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            '--force',
+            help='Redraw an existing table: reassigns every entry and unseals the splits',
+        ),
+    ] = False,
+):
+    '''
+    Draw the frozen index-entry role table, once.
+
+    Gives every Census index entry exactly one role, per code and stratified: examples-channel
+    text, or a training, validation or test query for the outcome panel (roadmap D4). No
+    validation or test query matches any training text. The table is committed, and preprocess
+    applies it from then on.
+
+    Output:
+        ``conf/data/index_roles.csv`` and ``conf/data/index_roles_provenance.json``.
+
+    Example:
+        Draw the table from local copies of the Census files::
+
+            $ uv run naics-embedder data roles --source-dir ~/Downloads/Data
+    '''
+
+    configure_logging('data_roles.log')
+
+    console.rule('[bold green]Drawing Index-Entry Roles[/bold green]')
+
+    try:
+        table_path = generate_index_role_table(
+            _download_config(source_dir),
+            load_config(OutcomePanelConfig, OUTCOME_PANEL_CONFIG),
+            force=force,
+        )
+    except FileExistsError as exc:
+        console.print(f'[bold red]{exc}[/bold red]')
+        raise typer.Exit(code=1)
+
+    typer.echo(f'Index-entry role table: {table_path}')
 
 # -------------------------------------------------------------------------------------------------
 # Build the Stage-3 supervision bundle

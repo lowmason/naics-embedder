@@ -1,0 +1,22 @@
+# The outcome panel (roadmap Stage 2): how index-entry roles are drawn, and the selection log
+
+# data roles records the draw here, beside the frozen table (download.yaml: index_roles_csv)
+provenance_json: ./conf/data/index_roles_provenance.json
+
+# Per code, stratified: largest-remainder quotas of these shares, remainder ties broken by a draw
+# seeded with (seed, code), at least examples_floor examples-channel entries (roadmap D4)
+seed: 20260924
+fractions:
+  examples: 0.30
+  training: 0.35
+  validation: 0.20
+  test: 0.15
+examples_floor: 1
+
+# Exact matches and near-duplicates (character-trigram Jaccard at or above this) of any training
+# text never become validation or test queries (Req 3, Verification "Leakage")
+near_duplicate_min_jaccard: 0.9
+
+# Every validation or test read, and every test-split opening, is appended here (Req 4). logs/ is
+# gitignored: a log inside a worktree goes when the worktree is removed.
+selection_log: ./logs/selection_log.jsonl

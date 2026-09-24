@@ -108,6 +108,36 @@ def test_legacy_stage_commands_build_the_complete_bundle(monkeypatch, runner, tm
     assert len(calls) == 1
     assert str(manifest) in result.output
 
+def test_data_roles_draws_the_table_with_both_configs(monkeypatch, runner, tmp_path):
+    calls = []
+
+    def fake_generate(download_cfg, panel_cfg, force):
+        calls.append((download_cfg, panel_cfg, force))
+        return tmp_path / 'index_roles.csv'
+
+    monkeypatch.setattr(data_cli, 'generate_index_role_table', fake_generate)
+
+    result = runner.invoke(data_cli.app, ['roles', '--source-dir', '/sources'])
+
+    assert result.exit_code == 0
+    [(download_cfg, panel_cfg, force)] = calls
+    assert download_cfg.source_dir == '/sources'
+    assert panel_cfg.seed == 20260924
+    assert force is False
+    assert 'index_roles.csv' in result.output
+
+def test_data_roles_refuses_to_redraw_without_force(monkeypatch, runner):
+
+    def refuse(download_cfg, panel_cfg, force):
+        raise FileExistsError('the role table exists; pass --force to redraw it')
+
+    monkeypatch.setattr(data_cli, 'generate_index_role_table', refuse)
+
+    result = runner.invoke(data_cli.app, ['roles'])
+
+    assert result.exit_code == 1
+    assert '--force' in result.output
+
 def test_tools_config_passes_config_path(monkeypatch, runner, tmp_path):
     captured = {}
     monkeypatch.setattr(

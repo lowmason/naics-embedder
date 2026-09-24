@@ -4,6 +4,7 @@
 
 import logging
 from enum import Enum
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union
 
@@ -408,6 +409,51 @@ class SupervisionBuildConfig(BaseModel):
             'cross_sector': 99,
         }
     )
+
+class OutcomePanelConfig(BaseModel):
+    '''How the outcome panel's index-entry roles are drawn (roadmap D4), and its selection log.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    provenance_json: str = Field(
+        default='./conf/data/index_roles_provenance.json',
+        description='Where `data roles` records how the role table was drawn',
+    )
+    seed: int = Field(default=20260924, description='Base seed; each code draws with (seed, code)')
+    fractions: Dict[str, float] = Field(
+        default_factory=lambda: {
+            'examples': 0.30,
+            'training': 0.35,
+            'validation': 0.20,
+            'test': 0.15,
+        },
+        description="Target share of each code's index entries per role",
+    )
+    examples_floor: int = Field(
+        default=1, ge=0, description='Minimum examples-channel entries for a code with entries'
+    )
+    near_duplicate_min_jaccard: float = Field(
+        default=0.9,
+        gt=0.0,
+        le=1.0,
+        description='Character-trigram Jaccard similarity at which two texts are near-duplicates',
+    )
+    selection_log: str = Field(
+        default='./logs/selection_log.jsonl',
+        description='Append-only log of every panel read and test-split opening',
+    )
+
+    @field_validator('fractions')
+    @classmethod
+    def validate_fractions(cls, value: Dict[str, float]) -> Dict[str, float]:
+        roles = {'examples', 'training', 'validation', 'test'}
+        if set(value) != roles:
+            raise ValueError(f'fractions must name exactly {sorted(roles)}')
+        if any(share < 0 for share in value.values()):
+            raise ValueError('fractions must be non-negative')
+        if sum(Fraction(str(share)) for share in value.values()) != 1:
+            raise ValueError('fractions must sum to 1')
+        return value
 
 class SupervisionRuntimeConfig(BaseModel):
     '''Which supervision contract training runs under, and the one authoritative bundle.'''
