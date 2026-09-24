@@ -208,6 +208,7 @@ examples-role entries and never queries, and no held-out query matches any train
   - trains the query→code term on `OutcomePanel.training_queries()`
   - selects on validation MRR (D6), logged to `OutcomePanelConfig.selection_log`
   - opens the test split once, with `OutcomePanel.open_test`, for the final configuration
+    (erratum, 2026-09-24: not Stage 7, which reads validation only; roadmap Stage 12 opens it)
 
 ## Reproduction
 
