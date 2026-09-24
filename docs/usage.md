@@ -147,7 +147,7 @@ uv run naics-embedder train --config conf/config.yaml
 - `--config PATH` - Path to base config YAML file (default: `conf/config.yaml`)
 - `--ckpt-path PATH` - Path to checkpoint file to resume from, or `"last"` to auto-detect the latest checkpoint in the experiment directory
 - `--skip-validation` - Skip pre-flight validation of data files and caches
-- `OVERRIDES...` - Config overrides (e.g., `training.learning_rate=1e-4 data.batch_size=64`)
+- `OVERRIDES...` - Config overrides (e.g., `training.learning_rate=1e-4 data_loader.batch_size=64`)
 
 **Examples:**
 

@@ -1033,9 +1033,6 @@ uv run naics-embedder train loss.hierarchy_weight=0.5
 
 # Train longer
 uv run naics-embedder train training.trainer.max_epochs=30
-
-# Adjust curriculum settings
-uv run naics-embedder train curriculum.enabled=true
 ```
 
 ### 3. OOM (Out of Memory) Errors
@@ -1048,9 +1045,6 @@ uv run naics-embedder train data_loader.batch_size=8
 
 # Increase gradient accumulation
 uv run naics-embedder train training.trainer.accumulate_grad_batches=4
-
-# Enable gradient checkpointing (if not already)
-uv run naics-embedder train model.use_gradient_checkpointing=true
 
 # Use mixed precision (if not already)
 uv run naics-embedder train training.trainer.precision="16-mixed"
