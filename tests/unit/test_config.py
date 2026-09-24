@@ -103,6 +103,24 @@ class TestDownloadConfig:
 
         with pytest.raises(ValidationError):
             DownloadConfig(output_parquet='./data/output.csv')
+        with pytest.raises(ValidationError):
+            DownloadConfig(index_roles_parquet='./data/roles.csv')
+
+    def test_yaml_matches_defaults(self):
+        '''The shipped YAML pins the index file and names the committed role table.'''
+
+        cfg = load_config(DownloadConfig, 'data/download.yaml')
+
+        assert cfg == DownloadConfig()
+        assert cfg.index_sha256 == (
+            '6506b37b9546dd9cec1f8b79e0b38b68e547a5cce5fd6f8332d35024dbd6cd63'
+        )
+        assert cfg.index_roles_csv == './conf/data/index_roles.csv'
+        assert cfg.source_dir is None
+
+    def test_index_sha256_must_be_a_hex_digest(self):
+        with pytest.raises(ValidationError):
+            DownloadConfig(index_sha256='not-a-digest')
 
 # -------------------------------------------------------------------------------------------------
 # DistancesConfig Tests

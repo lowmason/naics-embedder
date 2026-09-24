@@ -21,13 +21,15 @@ Commands:
 '''
 
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
+from typing_extensions import Annotated
 
 from naics_embedder.data.download_data import download_preprocess_data
 from naics_embedder.data.supervision_bundle import generate_supervision_bundle
-from naics_embedder.utils.config import SupervisionBuildConfig, load_config
+from naics_embedder.utils.config import DownloadConfig, SupervisionBuildConfig, load_config
 from naics_embedder.utils.console import configure_logging
 
 # -------------------------------------------------------------------------------------------------
@@ -41,13 +43,37 @@ app = typer.Typer(
 )
 
 SUPERVISION_CONFIG = 'data/supervision.yaml'
+DOWNLOAD_CONFIG = 'data/download.yaml'
+
+SourceDirOption = Annotated[
+    Optional[str],
+    typer.Option(
+        '--source-dir',
+        help='Read the Census files from this directory, by file name, instead of downloading',
+    ),
+]
+
+def _download_config(source_dir: Optional[str]) -> DownloadConfig:
+    cfg = load_config(DownloadConfig, DOWNLOAD_CONFIG)
+    if source_dir is not None:
+        cfg = cfg.model_copy(update={'source_dir': source_dir})
+    return cfg
 
 # -------------------------------------------------------------------------------------------------
 # Download and preprocess data
 # -------------------------------------------------------------------------------------------------
 
 @app.command('preprocess')
-def preprocess():
+def preprocess(
+    source_dir: SourceDirOption = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            '--force',
+            help='Overwrite a descriptions file that a configured supervision bundle pins',
+        ),
+    ] = False,
+):
     '''
     Download and preprocess all raw NAICS data files.
 
@@ -56,9 +82,12 @@ def preprocess():
 
     The output file contains columns for code, title, description, examples,
     and exclusions for each NAICS code at all hierarchy levels (2-6 digit).
+    Each code's examples channel holds its examples-role index entries only,
+    per the committed role table (``data roles``).
 
     Output:
         ``data/naics_descriptions.parquet`` - Unified NAICS taxonomy data.
+        ``data/naics_index_roles.parquet`` - Every index entry with its role.
 
     Example:
         Download and preprocess NAICS data::
@@ -70,7 +99,11 @@ def preprocess():
 
     console.rule('[bold green]Stage 1: Preprocessing[/bold green]')
 
-    download_preprocess_data()
+    try:
+        download_preprocess_data(_download_config(source_dir), force=force)
+    except FileExistsError as exc:
+        console.print(f'[bold red]{exc}[/bold red]')
+        raise typer.Exit(code=1)
 
     console.print('\n[bold]Preprocessing complete.[/bold]\n')
 

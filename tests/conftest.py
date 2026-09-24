@@ -11,7 +11,7 @@ import polars as pl
 import pytest
 import torch
 
-pytest_plugins = ('tests.fixtures.supervision', )
+pytest_plugins = ('tests.fixtures.naics_sources', 'tests.fixtures.supervision')
 
 # -------------------------------------------------------------------------------------------------
 # Test Configuration

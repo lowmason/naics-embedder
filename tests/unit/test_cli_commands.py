@@ -18,20 +18,48 @@ def no_logging(monkeypatch):
     monkeypatch.setattr(tools_cli, 'configure_logging', lambda *_, **__: None)
 
 def test_data_preprocess_invokes_download(monkeypatch, runner):
-    called = {}
+    calls = []
     monkeypatch.setattr(
-        data_cli, 'download_preprocess_data', lambda: called.setdefault('preprocess', True)
+        data_cli, 'download_preprocess_data', lambda cfg, force: calls.append((cfg, force))
     )
 
     result = runner.invoke(data_cli.app, ['preprocess'])
 
     assert result.exit_code == 0
-    assert called['preprocess']
+    [(cfg, force)] = calls
+    assert cfg.source_dir is None
+    assert cfg.index_roles_csv == './conf/data/index_roles.csv'
+    assert force is False
+
+def test_data_preprocess_passes_source_dir_and_force(monkeypatch, runner):
+    calls = []
+    monkeypatch.setattr(
+        data_cli, 'download_preprocess_data', lambda cfg, force: calls.append((cfg, force))
+    )
+
+    result = runner.invoke(data_cli.app, ['preprocess', '--source-dir', '/sources', '--force'])
+
+    assert result.exit_code == 0
+    assert [(cfg.source_dir, force) for cfg, force in calls] == [('/sources', True)]
+
+def test_data_preprocess_reports_a_refused_overwrite(monkeypatch, runner):
+
+    def refuse(cfg, force):
+        raise FileExistsError('pinned; pass --force to overwrite it')
+
+    monkeypatch.setattr(data_cli, 'download_preprocess_data', refuse)
+
+    result = runner.invoke(data_cli.app, ['preprocess'])
+
+    assert result.exit_code == 1
+    assert '--force' in result.output
 
 def test_data_all_runs_preprocess_then_one_supervision_build(monkeypatch, runner, tmp_path):
     order = []
     manifest = tmp_path / 'bundle' / 'manifest.json'
-    monkeypatch.setattr(data_cli, 'download_preprocess_data', lambda: order.append('preprocess'))
+    monkeypatch.setattr(
+        data_cli, 'download_preprocess_data', lambda cfg, force: order.append('preprocess')
+    )
 
     def fake_generate(cfg):
         order.append('supervision')

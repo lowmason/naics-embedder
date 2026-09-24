@@ -2,12 +2,26 @@
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import hashlib
+import json
 import logging
+from dataclasses import dataclass
 from io import BytesIO
-from typing import Dict, Optional, Set, Tuple
+from pathlib import Path, PurePosixPath
+from typing import Dict, Optional, Sequence, Set, Tuple
+from urllib.parse import unquote, urlparse
 
 import polars as pl
+import yaml
 
+from naics_embedder.panels.index_roles import (
+    attach_role_text,
+    read_role_table,
+    verify_examples_channel,
+    verify_role_leakage,
+)
+from naics_embedder.supervision.artifacts import sha256_file, validate_index_role_table
+from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.utils.config import DownloadConfig, load_config
 from naics_embedder.utils.utilities import download_with_retry as _download_with_retry
 from naics_embedder.utils.utilities import make_directories
@@ -39,6 +53,11 @@ def _read_xlsx_bytes(
         BytesIO(data), sheet_name=sheet, columns=list(schema.keys()), schema_overrides=schema
     ).rename(mapping=cols)
 
+def _local_source(url: str, source_dir: str) -> Path:
+    '''The local copy of a source file: the URL's file name inside ``source_dir``.'''
+
+    return Path(source_dir).expanduser() / unquote(PurePosixPath(urlparse(url).path).name)
+
 def _read_xlsx(
     url: str,
     sheet: str,
@@ -48,13 +67,35 @@ def _read_xlsx(
     initial_delay: float = 1.0,
     backoff_factor: float = 2.0,
     timeout: float = 30.0,
+    source_dir: Optional[str] = None,
+    expected_sha256: Optional[str] = None,
 ) -> Optional[pl.DataFrame]:
-    '''Download and read Excel file from URL.'''
+    '''
+    Read an Excel file from its URL, or from its local copy in ``source_dir``.
 
-    data = _download_with_retry(url, max_retries, initial_delay, backoff_factor, timeout)
+    Raises:
+        FileNotFoundError: If ``source_dir`` is set and holds no copy of the file.
+        ValueError: If ``expected_sha256`` is set and the file's bytes do not match it.
+    '''
+
+    if source_dir is None:
+        data = _download_with_retry(url, max_retries, initial_delay, backoff_factor, timeout)
+    else:
+        path = _local_source(url, source_dir)
+        if not path.is_file():
+            raise FileNotFoundError(f'no local copy of {url} at {path}')
+        data = path.read_bytes()
 
     if data is None:
         return None
+
+    if expected_sha256 is not None:
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != expected_sha256:
+            raise ValueError(
+                f'{url} has sha256 {digest}, not the pinned {expected_sha256}: the index-entry '
+                'role table is keyed to row positions in the pinned file'
+            )
 
     return _read_xlsx_bytes(data, sheet, schema, cols)
 
@@ -72,7 +113,11 @@ def _download_files(cfg: DownloadConfig,
 
     # NAICS titles
     titles_df = _read_xlsx(
-        url=cfg.url_codes, sheet=cfg.sheet_codes, schema=schema_codes, cols=cfg.rename_codes
+        url=cfg.url_codes,
+        sheet=cfg.sheet_codes,
+        schema=schema_codes,
+        cols=cfg.rename_codes,
+        source_dir=cfg.source_dir,
     )
 
     # NAICS descriptions
@@ -81,11 +126,17 @@ def _download_files(cfg: DownloadConfig,
         sheet=cfg.sheet_descriptions,
         schema=schema_descriptions,
         cols=cfg.rename_descriptions,
+        source_dir=cfg.source_dir,
     )
 
-    # NAICS index file for examples
+    # NAICS index file for examples, pinned: entry IDs are its row positions
     examples_df = _read_xlsx(
-        url=cfg.url_index, sheet=cfg.sheet_index, schema=schema_index, cols=cfg.rename_index
+        url=cfg.url_index,
+        sheet=cfg.sheet_index,
+        schema=schema_index,
+        cols=cfg.rename_index,
+        source_dir=cfg.source_dir,
+        expected_sha256=cfg.index_sha256,
     )
 
     # NAICS cross reference file for exclusions
@@ -94,6 +145,7 @@ def _download_files(cfg: DownloadConfig,
         sheet=cfg.sheet_exclusions,
         schema=schema_exclusions,
         cols=cfg.rename_exclusions,
+        source_dir=cfg.source_dir,
     )
 
     df_list = [
@@ -340,24 +392,56 @@ def _get_exclusions(exclusions_df: pl.DataFrame, descriptions_3: pl.DataFrame,
 # NAICS examples
 # -------------------------------------------------------------------------------------------------
 
+def _get_index_entries(index_df: pl.DataFrame, codes: Set[str]) -> pl.DataFrame:
+    '''
+    The index file's entries for six-digit codes (``entry_id``, ``code``, ``text``).
+
+    ``entry_id`` is the row's 0-based position in the index sheet, stable for the pinned file.
+    Rows naming no six-digit code (the "see" cross-reference rows, coded ``******``) are dropped,
+    and entry text is stripped of surrounding whitespace.
+    '''
+
+    six_digit = sorted(code for code in codes if len(code) == 6)
+    # yapf: disable
+    return (
+        index_df
+        .with_row_index('entry_id')
+        .filter(pl.col('code').is_in(six_digit))
+        .select(
+            entry_id=pl.col('entry_id').cast(pl.Int64),
+            code=pl.col('code'),
+            text=pl.col('examples').str.strip_chars(),
+        )
+    )
+    # yapf: enable
+
 def _get_examples(
-    examples_df: pl.DataFrame,
-    codes: Set[str],
+    index_codes: Set[str],
+    examples_entries: pl.DataFrame,
     descriptions_2: pl.DataFrame,
     descriptions_3: pl.DataFrame,
 ) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    '''
+    Each code's examples channel, and where each description's examples section starts.
 
-    # Example spreadsheet
+    A code with index entries takes its examples-role entries only (``examples_entries``, in
+    index-file order): its other entries are queries and stay out of the channel (Req 3). A code
+    without index entries falls back to the bullets after its description's "Illustrative
+    Examples:" marker. Either way the marker and its bullets leave the description.
+    '''
+
+    outside = sorted(set(examples_entries.get_column('code').to_list()) - index_codes)
+    if outside:
+        raise ValueError(f'examples entries name codes without index entries: {outside[:5]}')
+
+    # Examples-role index entries, in index-file order
     # yapf: disable
     examples_1 = (
-        examples_df
-        .filter(
-            pl.col('code').is_in(codes)
-        )
-        .sort('code')
+        examples_entries
+        .sort('entry_id')
         .group_by('code', maintain_order=True)
         .agg(
-            examples_1=pl.col('examples')
+            examples_1=pl.col('text')
         )
     )
     # yapf: enable
@@ -389,8 +473,9 @@ def _get_examples(
     # Description IDs to exclude in description dataframe, starting at the marker itself
     descriptions_examples = examples_3.select('code', 'description_id_min')
 
-    # Merge examples, preferring spreadsheet example
-    examples_4 = examples_1.join(examples_3, how='full', on='code', coalesce=True).select(
+    # Codes without index entries fall back to their description's illustrative examples
+    fallback = examples_3.filter(~pl.col('code').is_in(sorted(index_codes)))
+    examples_4 = examples_1.join(fallback, how='full', on='code', coalesce=True).select(
         code=pl.col('code'), examples=pl.coalesce('examples_1', 'examples_2')
     )
 
@@ -406,8 +491,8 @@ def _get_examples(
 
     logger.info('Examples:')
     logger.info('  Reference codes:')
-    logger.info(f'    Cross-references: {examples_1.height: ,}')
-    logger.info(f'    Extracted from descriptions: {examples_3.height: ,}')
+    logger.info(f'    Index entries (examples role): {examples_1.height: ,}')
+    logger.info(f'    Extracted from descriptions: {fallback.height: ,}')
     logger.info(f'    Final: {examples.height: ,}')
     logger.info(f'  Number of examples: {examples_cnt: ,}\n')
 
@@ -558,39 +643,60 @@ def _get_descriptions_2(
     return descriptions
 
 # -------------------------------------------------------------------------------------------------
-# Combine all and write final output
+# Sources and the combined descriptions
 # -------------------------------------------------------------------------------------------------
 
-def download_preprocess_data() -> pl.DataFrame:
-    # Create directories
-    make_directories()
+@dataclass(frozen=True)
+class NaicsSources:
+    '''The four Census NAICS files as read, combined sector codes normalized.'''
 
-    # Load configuration from YAML
-    cfg = load_config(DownloadConfig, './data/download.yaml')
+    titles: pl.DataFrame
+    descriptions: pl.DataFrame
+    index: pl.DataFrame
+    exclusions: pl.DataFrame
 
-    logger.info('Configuration:')
-    logger.info(cfg.model_dump_json(indent=2))
-    logger.info('')
+def load_naics_sources(cfg: DownloadConfig) -> NaicsSources:
+    '''Read the four files, from ``cfg.source_dir`` when set; the index file must match its pin.'''
 
-    titles_df, descriptions_df, examples_df, exclusions_df = _download_files(cfg)
+    return NaicsSources(*_download_files(cfg))
 
-    titles, codes = _get_titles(titles_df)
+def naics_index_entries(sources: NaicsSources) -> pl.DataFrame:
+    '''The index file's entries for six-digit codes (``entry_id``, ``code``, ``text``).'''
 
-    descriptions_2, descriptions_3 = _get_descriptions_1(descriptions_df)
+    entries = _get_index_entries(sources.index, set(sources.titles.get_column('code').to_list()))
+    logger.info('Index entries:')
+    logger.info(f'  Sheet rows: {sources.index.height: ,}')
+    logger.info(f'  Entries for six-digit codes: {entries.height: ,}')
+    logger.info(f'  Codes with entries: {entries.get_column("code").n_unique(): ,}\n')
+    return entries
 
-    exclusions, descriptions_exclusions = _get_exclusions(exclusions_df, descriptions_3, codes)
+def build_descriptions(sources: NaicsSources, examples_entries: pl.DataFrame) -> pl.DataFrame:
+    '''
+    One row per code: title, description, examples channel and exclusions.
 
+    Args:
+        sources: The four Census files.
+        examples_entries: The index entries that form examples channels (``entry_id``,
+            ``code``, ``text``); every other entry of a code with index entries is a query.
+    '''
+
+    titles, codes = _get_titles(sources.titles)
+
+    descriptions_2, descriptions_3 = _get_descriptions_1(sources.descriptions)
+
+    exclusions, descriptions_exclusions = _get_exclusions(sources.exclusions, descriptions_3, codes)
+
+    index_codes = set(_get_index_entries(sources.index, codes).get_column('code').to_list())
     examples, descriptions_examples = _get_examples(
-        examples_df, codes, descriptions_2, descriptions_3
+        index_codes, examples_entries, descriptions_2, descriptions_3
     )
 
     descriptions = _get_descriptions_2(
         descriptions_3, descriptions_exclusions, descriptions_examples
     )
 
-    # Join all components and write final output
     # yapf: disable
-    naics_final = (
+    return (
         titles.join(descriptions, how='inner', on='code')
         .join(exclusions, how='left', on='code')
         .join(examples, how='left', on='code')
@@ -608,12 +714,143 @@ def download_preprocess_data() -> pl.DataFrame:
     )
     # yapf: enable
 
+# -------------------------------------------------------------------------------------------------
+# Guard the descriptions file a supervision bundle pins
+# -------------------------------------------------------------------------------------------------
+
+# Where shipped configs name a supervision bundle: (config file, key path)
+PINNING_CONFIGS: Tuple[Tuple[Path, Tuple[str, ...]], ...] = (
+    (Path('conf/config.yaml'), ('supervision', 'manifest_path')),
+    (Path('conf/graph.yaml'), ('supervision_manifest_path', )),
+)
+
+def pinned_description_fingerprints(
+    pinning_configs: Sequence[Tuple[Path, Tuple[str, ...]]] = PINNING_CONFIGS,
+) -> Dict[str, str]:
+    '''
+    The ``description_fingerprint`` of each bundle a config names, by manifest path.
+
+    Configs, keys and manifests that do not exist are skipped: they pin nothing.
+    '''
+
+    fingerprints: Dict[str, str] = {}
+    for config_path, keys in pinning_configs:
+        if not Path(config_path).is_file():
+            continue
+        value = yaml.safe_load(Path(config_path).read_text())
+        for key in keys:
+            value = value.get(key) if isinstance(value, dict) else None
+        if not value:
+            continue
+        manifest_path = Path(value)
+        if not manifest_path.is_file():
+            logger.warning(f'{config_path} names a missing supervision manifest: {manifest_path}')
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        fingerprints[str(manifest_path)] = manifest['description_fingerprint']
+    return fingerprints
+
+def refuse_pinned_overwrite(
+    output: Path,
+    *,
+    force: bool,
+    pinning_configs: Sequence[Tuple[Path, Tuple[str, ...]]] = PINNING_CONFIGS,
+) -> None:
+    '''
+    Refuse to overwrite the descriptions file a configured supervision bundle pins.
+
+    Training fails closed once the descriptions file no longer matches its bundle's
+    ``description_fingerprint``, so rewriting it would break every run against that bundle.
+
+    Raises:
+        FileExistsError: If ``output`` is pinned and ``force`` is False.
+    '''
+
+    if force or not Path(output).is_file():
+        return
+    digest = sha256_file(Path(output))
+    pinned = sorted(
+        path for path, fingerprint in pinned_description_fingerprints(pinning_configs).items()
+        if fingerprint == digest
+    )
+    if pinned:
+        raise FileExistsError(
+            f'{output} is the descriptions file supervision bundle {pinned[0]} pins; rebuilding '
+            'it would break training against that bundle. Write another output_parquet, or '
+            'pass --force to overwrite it.'
+        )
+
+# -------------------------------------------------------------------------------------------------
+# Combine all and write final output
+# -------------------------------------------------------------------------------------------------
+
+def download_preprocess_data(
+    cfg: Optional[DownloadConfig] = None,
+    *,
+    force: bool = False,
+) -> pl.DataFrame:
+    '''
+    Build the descriptions parquet and the index-roles parquet from the Census files.
+
+    Every index entry takes its role from the frozen role table (``cfg.index_roles_csv``). A
+    code's examples channel holds its examples-role entries only, and no validation or test query
+    may match any training text (Req 3); both are checked before anything is written.
+
+    Args:
+        cfg: Download configuration; ``conf/data/download.yaml`` when omitted.
+        force: Overwrite a descriptions file that a configured supervision bundle pins.
+    '''
+
+    # Create directories
+    make_directories()
+
+    # Load configuration from YAML
+    if cfg is None:
+        cfg = load_config(DownloadConfig, './data/download.yaml')
+
+    logger.info('Configuration:')
+    logger.info(cfg.model_dump_json(indent=2))
+    logger.info('')
+
+    refuse_pinned_overwrite(Path(cfg.output_parquet), force=force)
+
+    roles_csv = Path(cfg.index_roles_csv)
+    if not roles_csv.is_file():
+        raise FileNotFoundError(
+            f'index-entry role table not found: {roles_csv}; generate it once with '
+            '`naics-embedder data roles`'
+        )
+
+    sources = load_naics_sources(cfg)
+
+    role_rows = attach_role_text(read_role_table(roles_csv), naics_index_entries(sources))
+
+    naics_final = build_descriptions(
+        sources, role_rows.filter(pl.col('role') == IndexRole.EXAMPLES.value)
+    )
+
+    six_digit_codes = naics_final.filter(pl.col('level') == 6).get_column('code').to_list()
+    validate_index_role_table(role_rows, six_digit_codes)
+    verify_examples_channel(naics_final, role_rows)
+    leakage = verify_role_leakage(naics_final, role_rows)
+    logger.info(f'Held-out queries matching training text: {leakage}\n')
+
     (naics_final.write_parquet(cfg.output_parquet))
 
     _parquet_stats(
         parquet_df=naics_final,
         message='NAICS codes (text + hierarchy) written to:',
         output_parquet=cfg.output_parquet,
+        logger=logger,
+    )
+
+    Path(cfg.index_roles_parquet).parent.mkdir(parents=True, exist_ok=True)
+    role_rows.write_parquet(cfg.index_roles_parquet)
+
+    _parquet_stats(
+        parquet_df=role_rows,
+        message='NAICS index entries and their roles written to',
+        output_parquet=cfg.index_roles_parquet,
         logger=logger,
     )
 

@@ -99,6 +99,23 @@ class DownloadConfig(BaseModel):
         default='./data/naics_descriptions.parquet',
         description='Output path for processed descriptions',
     )
+    index_roles_parquet: str = Field(
+        default='./data/naics_index_roles.parquet',
+        description='Output path for every index entry with its text and role',
+    )
+    index_roles_csv: str = Field(
+        default='./conf/data/index_roles.csv',
+        description='The frozen index-entry role table (entry_id, code, role) to apply',
+    )
+    index_sha256: str = Field(
+        default='6506b37b9546dd9cec1f8b79e0b38b68e547a5cce5fd6f8332d35024dbd6cd63',
+        pattern=r'^[0-9a-f]{64}$',
+        description='SHA-256 of the index file whose row positions the role table is keyed to',
+    )
+    source_dir: Optional[str] = Field(
+        default=None,
+        description='Read the source files from this directory, by URL file name, not the web',
+    )
 
     # URLs for data sources
     url_codes: str = Field(
@@ -192,12 +209,12 @@ class DownloadConfig(BaseModel):
         description='Column renames for exclusions',
     )
 
-    @field_validator('output_parquet')
+    @field_validator('output_parquet', 'index_roles_parquet')
     @classmethod
     def validate_output_parquet(cls, value: str) -> str:
         path = Path(value)
         if path.suffix.lower() != '.parquet':
-            raise ValueError('output_parquet must point to a .parquet file')
+            raise ValueError('output paths must point to a .parquet file')
         return value
 
     @classmethod
