@@ -23,7 +23,8 @@ project's "Stage 3" (the text stage) and its S3 is the project's "Stage 4" (the 
 spec uses the description's labels.
 
 - **Staleness.** Since e96eb3f, only implementation fixes touched the method's code: 3497231,
-  5c2c994, d2bd22a, and PR #98 (merged on origin/main as 8a3fb86). 33145c2 points the text
+  5c2c994, d2bd22a, PR #98 (merged on origin/main as 8a3fb86), and PR #99 (0339775, merged
+  during synthesis; bitwise-identical results). 33145c2 points the text
   stage's configuration at the supervision bundle the description was measured on. The graph
   stage's configuration still names no bundle. The description is therefore current.
 - **Adjudication.** All three reviews are first passes. ChatGPT says so, and Claude records no
@@ -149,18 +150,23 @@ Agreement with the taxonomy becomes an intrinsic diagnostic and never a selectio
 - Gemini's compromise of keeping reconstruction as a gate (Gemini ledger C8) survives only as the
   diagnostics of Req 6.
 
-**Req 2 — Regressor panel.** The panel has one row per code. The embedding's coordinates enter
-a downstream model as regressors: tangent coordinates at $o$ for a hyperbolic arm (methodology S4
-procedure), raw coordinates otherwise. The panel redesigns the defined economic benchmark
-(methodology S4 procedure; methodology S4 limitation 6).
+**Req 2 — Regressor panel.** The embedding's coordinates enter a downstream model as regressors:
+tangent coordinates at $o$ for a hyperbolic arm (methodology S4 procedure), raw coordinates
+otherwise. The panel redesigns the defined economic benchmark (methodology S4 procedure;
+methodology S4 limitation 6).
 
-- **Outcomes** come from public employment statistics for NAICS 2022 codes. Which series and
-  years are usable is (open — resolved by verification, not argument): which reference years are
-  published on NAICS 2022 codes at six digits, and how much disclosure suppression removes. Both
-  branches are specified in advance:
+- **Rows sit below the code.** A row is a code in a given year, or in a given area (ChatGPT C15;
+  Claude C28). The description's one row per code (methodology S4 procedure) cannot hold a code
+  out of some rows but not others, so it cannot support the seen-code regime below.
+- **Outcomes** come from public employment statistics for NAICS 2022 codes. Which series, years
+  and grains are usable is (open — resolved by verification, not argument): which reference
+  years are published on NAICS 2022 codes at six digits, at which grains (by year, by area), and
+  how much disclosure suppression removes at each. The branches are specified in advance:
   - If the verified window supports a time-respecting outcome (the outcome dated after the
     features, with splits by time), the panel includes one (ChatGPT C15; Claude C28).
   - If it does not, the panel is cross-sectional and records why.
+  - If no grain below the code survives suppression, the panel is held-out-codes only and
+    records that the one-hot comparison could not run.
   - Training on changes coded on an earlier NAICS vintage (Claude C28) is not used without a
     concordance (rejected here; cross-vintage work is Out of scope).
 - **Comparators** share the downstream model and a tuned penalty (ChatGPT C15; Claude C28):
@@ -172,10 +178,14 @@ procedure), raw coordinates otherwise. The panel redesigns the defined economic 
 - **Fitting.** Features are standardized and the penalty is tuned by nested cross-validation
   (Claude C28). A fixed penalty of 1 on unscaled features (methodology S4 procedure) (rejected).
 - **Two regimes, reported separately.**
-  - Seen codes: every code appears in the training folds. This is where one-hot is a real
-    competitor.
-  - Held-out codes: repeated grouped folds, with four-digit parents as groups. Here one-hot can
-    predict only the intercept (Claude C28; methodology S4 limitation 6).
+  - Seen codes: rows are split by year or area, so every code appears in training. This is
+    where one-hot is a real competitor.
+  - Held-out codes: every row of a held-out code group leaves training, with four-digit parents
+    as groups. Here one-hot can predict only the intercept (Claude C28; methodology S4
+    limitation 6).
+  - The sealed test (Req 4) is an outer set: held-out four-digit groups for the held-out regime,
+    and held-out years or areas for the seen regime. Repeated grouped folds run inside the
+    remainder, for penalty tuning and selection.
 - The multi-level variant (levels 2–6) is kept (methodology S4 procedure).
 - Running the benchmark as defined (Gemini remediation 10) (rejected: its comparators cannot
   isolate the embedding's contribution (methodology S4 limitation 6)).
@@ -233,10 +243,17 @@ follows one rule.
   - Non-inferior: the lower bound of the 95% interval on Δ exceeds −δ.
   - Superior: the 97.5% interval excludes zero. Two panels give two chances to adopt, so each
     gets half the error rate.
-- **Ties.** Otherwise the simpler configuration stands. Simpler means fewer components (stages
-  or post-processing steps), then lower dimension, then non-hyperbolic geometry. Any tie left
-  after that goes to the higher regressor-panel estimate, because that is the designed purpose
-  (user adjudication Q1).
+- **Several arms.** Some decisions have more than two arms: the nine geometry × dimension cells,
+  the backbones, and the graph-stage arms A–D. The survivors are the arms no other arm dominates,
+  and the tie order below picks among them. If dominance cycles and every arm is dominated, the
+  tie order picks among all the arms of the decision.
+  - The extra pairwise comparisons within a decision are not corrected for multiplicity. That is
+    a stated choice, not an oversight: the tie order toward the simpler arm is the guard against
+    a spurious win.
+- **Ties.** When A is not adopted over B, the simpler configuration stands. Simpler means fewer
+  components (stages or post-processing steps), then lower dimension, then non-hyperbolic
+  geometry. Any tie left after that goes to the higher regressor-panel estimate, because that is
+  the designed purpose (user adjudication Q1).
   - Lower dimension ahead of geometry (chosen): the purpose is low dimension, and a hyperbolic
     embedding that matches a larger flat one is the geometric result worth keeping (ChatGPT on
     top-level Q2).
@@ -494,9 +511,11 @@ its curriculum system leave the method.
 
 - [ ] **Employment-statistics coverage (discharges Req 2's (open)).** Record:
   - the reference years published on NAICS 2022 codes at six digits;
-  - for each year and series, the share of six-digit codes suppressed;
-  - the resulting regressor-panel population, and whether it includes a time-respecting outcome
-    or records why not.
+  - the grains (by year, by area) at which six-digit series are published;
+  - for each year, grain and series, the share of six-digit codes suppressed;
+  - the resulting regressor-panel population and row grain, whether the panel includes a
+    time-respecting outcome, and whether the seen-code regime can run, with reasons for any
+    "no".
 - [ ] **Backbone input window (discharges Req 9's (open)).** Record the chosen backbone's trained
       input window from its own documentation. After de-duplication, report the share of each
       channel's texts that exceed it; the channel policy leaves no input beyond it.
@@ -508,8 +527,9 @@ its curriculum system leave the method.
 - [ ] **Selection hygiene.** A run log shows that every selection read validation splits only,
       and that the test splits were opened once, for the final configuration.
 - [ ] **Decision records.** Every adopted change has a record with: its arms, at least 5 seeds
-      each, the δ per panel fixed before the runs, and the 95% non-inferiority and 97.5%
-      superiority intervals (Req 5).
+      each, the δ per panel fixed before the runs, the 95% non-inferiority and 97.5%
+      superiority intervals, and, for decisions with more than two arms, the non-dominated set
+      (Req 5).
 - [ ] **Target.** $D^{\ast}$ satisfies the triangle inequality over all triples (checked through
       lowest common ancestors) and contains no 99. Cross-sector values equal
       $\lambda(i) + \lambda(j) - 2$.
