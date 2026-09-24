@@ -1,5 +1,7 @@
 # Employment-Statistics Coverage (Roadmap Stage 1) Implementation Plan
 
+**Status: COMPLETE (2026-09-24)** — executed via executing-plans; deferred items in specs/deferred_items.md (one entry, the national-total rounding allowance in `check_invariants`, handed to the project owner to add because parallel sessions may be active)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via subagent-driven-development (the default) — or executing-plans when your human partner chose inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > Roadmap: specs/naics-embedding-roadmap.md, Stage 1 — on plan completion, tick the stage and re-validate later stages against what shipped.
@@ -246,7 +248,9 @@ work around it.
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
+
+> Deviation: `git log --oneline origin/main..HEAD` printed nothing, because the plan commit (e04231e) was already on origin/main.
 
 Run: `git status --short --branch`
 Expected: `## claude/employment-statistics-coverage-447c9d1f` and nothing else.
@@ -259,23 +263,23 @@ Run: `git fetch origin`, then `git log --oneline HEAD..origin/main -- scripts te
 Expected: no output. If anything landed there, read it. When it touches this plan's files, the
 roadmap or `specs/findings/`, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number. `.python-version` pins 3.12.
 
-- [ ] **Step 3: Check the codebook**
+- [x] **Step 3: Check the codebook**
 
 Run: `shasum -a 256 /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/naics_codebook.parquet`
 Expected: `5c485aa96fc9d016c8aa7f95e269f4222b85e8ee395e529facc7a9f8adcaab7b`
 
-- [ ] **Step 4: Ask for download permission**
+- [x] **Step 4: Ask for download permission**
 
 Show your human partner Task 5's table: 13 files, 302,173,870 bytes (about 302 MB), from
 `data.bls.gov` to `~/Downloads/Data/QCEW/`. Wait for an explicit yes. Without it, stop: the plan
 cannot run without the files.
 
-- [ ] **Step 5: Route the tasks**
+- [x] **Step 5: Route the tasks**
 
 Under executing-plans, run every task inline, in order. Under subagent-driven-development, run
 Tasks 1–4 with a fresh implementer and task-reviewer each, and run Tasks 5–8 inline in the
@@ -318,7 +322,7 @@ judgment and your human partner.
   - fixtures `universe` and `frames`
   - `_cells(frames, universe, grain)`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_employment_statistics_coverage.py` with exactly this content:
 
@@ -517,13 +521,13 @@ def test_grain_cells_drop_unknown_counties(universe, frames):
     assert set(cells.get_column('area_fips').to_list()) == {'01001', '01003', '09110'}
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_employment_statistics_coverage.py -q`
 Expected: a collection ERROR ending in `FileNotFoundError`, because the script does not exist
 yet.
 
-- [ ] **Step 3: Write the script's core**
+- [x] **Step 3: Write the script's core**
 
 Create `scripts/employment_statistics_coverage.py` with exactly this content:
 
@@ -802,19 +806,19 @@ def grain_cells(
     return labelled.select(CELL_COLUMNS)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_employment_statistics_coverage.py -q`
 Expected: `9 passed`.
 
-- [ ] **Step 5: Lint and format both files**
+- [x] **Step 5: Lint and format both files**
 
 Run: `./scripts/format_code.sh --check scripts/employment_statistics_coverage.py tests/unit/test_employment_statistics_coverage.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` The code above is
 already yapf-clean. On a failure, run the same command without `--check`, re-run Step 4, and
 record the change as a deviation.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/employment_statistics_coverage.py tests/unit/test_employment_statistics_coverage.py
@@ -851,7 +855,7 @@ git commit -m "feat(scripts): add QCEW coverage reader and cell classification"
   - `file_conventions(frame, year) -> dict[str, object]`
   - `compare_national_slices(frame, national_slice, year) -> list[str]`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append this block to the end of `tests/unit/test_employment_statistics_coverage.py`, one blank
 line after the existing last line:
@@ -967,13 +971,13 @@ def test_compare_national_slices_finds_differences(frames):
     ]
 ```
 
-- [ ] **Step 2: Run the tests to verify the new ones fail**
+- [x] **Step 2: Run the tests to verify the new ones fail**
 
 Run: `uv run pytest tests/unit/test_employment_statistics_coverage.py -q`
 Expected: `11 failed, 9 passed`, with each failure an `AttributeError` naming a function this
 task adds, such as `code_status_counts`.
 
-- [ ] **Step 3: Implement the tables and checks**
+- [x] **Step 3: Implement the tables and checks**
 
 In `scripts/employment_statistics_coverage.py`, replace the line
 `from typing import Collection, Sequence` with:
@@ -1258,17 +1262,17 @@ def compare_national_slices(frame: pl.DataFrame, national_slice: pl.DataFrame,
     return []
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_employment_statistics_coverage.py -q`
 Expected: `20 passed`.
 
-- [ ] **Step 5: Lint and format both files**
+- [x] **Step 5: Lint and format both files**
 
 Run: `./scripts/format_code.sh --check scripts/employment_statistics_coverage.py tests/unit/test_employment_statistics_coverage.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/employment_statistics_coverage.py tests/unit/test_employment_statistics_coverage.py
@@ -1296,7 +1300,7 @@ git commit -m "feat(scripts): add QCEW coverage tables and reconciliation checks
   - `render_decision(decision, summaries, window) -> str`, the finding's decision block between
     `<!-- decision:begin -->` and `<!-- decision:end -->`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append this block to the end of `tests/unit/test_employment_statistics_coverage.py`, one blank
 line after the existing last line:
@@ -1360,13 +1364,13 @@ def test_render_decision_uses_fixed_wording():
     assert text.rstrip().endswith('<!-- decision:end -->')
 ```
 
-- [ ] **Step 2: Run the tests to verify the new ones fail**
+- [x] **Step 2: Run the tests to verify the new ones fail**
 
 Run: `uv run pytest tests/unit/test_employment_statistics_coverage.py -q`
 Expected: `6 failed, 20 passed`, with each failure an `AttributeError` naming `GrainSummary`
 (the tests build summaries through it) or `summarize_grain`.
 
-- [ ] **Step 3: Implement the decision rule**
+- [x] **Step 3: Implement the decision rule**
 
 Append this block to the end of `scripts/employment_statistics_coverage.py`, one blank line after
 the existing last line:
@@ -1558,17 +1562,17 @@ def render_decision(
     return '\n'.join(lines) + '\n'
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_employment_statistics_coverage.py -q`
 Expected: `26 passed`.
 
-- [ ] **Step 5: Lint and format both files**
+- [x] **Step 5: Lint and format both files**
 
 Run: `./scripts/format_code.sh --check scripts/employment_statistics_coverage.py tests/unit/test_employment_statistics_coverage.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/employment_statistics_coverage.py tests/unit/test_employment_statistics_coverage.py
@@ -1597,7 +1601,7 @@ git commit -m "feat(scripts): add the pre-registered Req 2 decision rule"
     `run --qcew-dir DIR --codebook PATH --final-years YEAR... --out-dir DIR`. `main` exits 0, or
     2 when an invariant failed or `needs_user` is set.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_employment_statistics_coverage.py`, replace the import block (everything
 above `_SCRIPT = …`) with:
@@ -1709,13 +1713,13 @@ def test_main_exit_code_signals_stop_and_ask(tmp_path, monkeypatch):
     assert esc.main(argv) == 2
 ```
 
-- [ ] **Step 2: Run the tests to verify the new ones fail**
+- [x] **Step 2: Run the tests to verify the new ones fail**
 
 Run: `uv run pytest tests/unit/test_employment_statistics_coverage.py -q`
 Expected: `4 failed, 26 passed`, with each failure an `AttributeError` naming `parse_headers`,
 `build_manifest` or `run`.
 
-- [ ] **Step 3: Implement provenance, the report and the CLI**
+- [x] **Step 3: Implement provenance, the report and the CLI**
 
 In `scripts/employment_statistics_coverage.py`, replace the import block (everything between
 the module docstring and `logger = logging.getLogger(__name__)`) with:
@@ -1926,7 +1930,7 @@ if __name__ == '__main__':
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass, on both CI Python versions**
+- [x] **Step 4: Run the tests to verify they pass, on both CI Python versions**
 
 Run: `uv run pytest tests/unit/test_employment_statistics_coverage.py -q`
 Expected: `30 passed`.
@@ -1938,7 +1942,9 @@ Run: `uv run --no-project --python 3.10 --with polars==1.35.1 --with pytest pyth
 Expected: `30 passed`. `--noconftest` skips `tests/conftest.py`, which imports torch. `uv` may
 fetch a 3.10 interpreter first.
 
-- [ ] **Step 5: Run the full suite, then lint and format**
+- [x] **Step 5: Run the full suite, then lint and format**
+
+> Deviation: the first format check failed on a transcription slip in the test file (`_SCRIPT =Path`); restoring the plan's text made it clean, with the 30 tests still passing.
 
 Run: `uv run pytest -n auto -q`
 Expected: every test passes; the count is the pre-existing suite plus 30. This plan touches
@@ -1948,7 +1954,7 @@ doing. Record that failure with its output and ask your human partner before con
 Run: `./scripts/format_code.sh --check scripts/employment_statistics_coverage.py tests/unit/test_employment_statistics_coverage.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/employment_statistics_coverage.py tests/unit/test_employment_statistics_coverage.py
@@ -1987,11 +1993,11 @@ The files, as HEAD requests saw them on 2026-09-24:
 | `area_titles.csv` | `https://data.bls.gov/cew/doc/titles/area/area_titles.csv` | 343,559 | Fri, 06 Sep 2024 17:10:14 GMT |
 | `ownership_titles.csv` | `https://data.bls.gov/cew/doc/titles/ownership/ownership_titles.csv` | 230 | Fri, 15 Oct 2010 05:00:00 GMT |
 
-- [ ] **Step 1: Create the directories**
+- [x] **Step 1: Create the directories**
 
 Run: `mkdir -p ~/Downloads/Data/QCEW/headers ~/Downloads/Data/QCEW/coverage`
 
-- [ ] **Step 2: Download the 13 files**
+- [x] **Step 2: Download the 13 files**
 
 Run each line below as its own Bash call. `-f` makes curl fail on an HTTP error, and `-D` keeps
 the response headers for the manifest.
@@ -2014,7 +2020,7 @@ curl -sS -f -A 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) naics-embedder-r
 
 Expected: every call exits 0, and each file's size matches the table.
 
-- [ ] **Step 3: Build the provenance manifest**
+- [x] **Step 3: Build the provenance manifest**
 
 Run: `uv run python scripts/employment_statistics_coverage.py manifest --qcew-dir ~/Downloads/Data/QCEW`
 Expected: `INFO wrote …/QCEW/MANIFEST.json`. The command raises if a status is not 200 or a size
@@ -2023,7 +2029,9 @@ disagrees with its Content-Length.
 Compare each entry's `bytes` and `last_modified` with the table. Any difference is stop-and-ask
 condition 7.
 
-- [ ] **Step 4: Confirm the lookup files**
+- [x] **Step 4: Confirm the lookup files**
+
+> Deviation: `industry_titles.csv` lists 38 BLS 238 codes and no plain 238 code (not 34 and two), so the codebook has 19 split codes, run under the project owner's ruling of 2026-09-24; the 47/48 titles read "by ownership sector", and an added single-file scan shows MSA rows carry only `own_code` 5.
 
 Run each command below as its own call, and keep the output for the finding's section 6:
 
@@ -2042,7 +2050,9 @@ Run each command below as its own call, and keep the output for the finding's se
 - `cat ~/Downloads/Data/QCEW/ownership_titles.csv`. Expected: code 5 is private ownership, and
   codes 1–3 are federal, state and local government.
 
-- [ ] **Step 5: Read the BLS pages and quote them**
+- [x] **Step 5: Read the BLS pages and quote them**
+
+> Deviation: added the "BLS and QCEW NAICS Differences" page (the 238 codes, and the codes not used in the US or by BLS) and extra release-note rows (NAICS 2022, Colorado); OEWS was quoted from its handbook chapter only, and `oes/tables.htm` was not read.
 
 For each page below, open it in the built-in browser (`preview_start` with its URL) and read it
 with `get_page_text`. Record the URL, the read date (UTC) and one verbatim quote establishing the
@@ -2069,7 +2079,7 @@ fact.
 If a page's text contradicts the facts table, the page read during execution wins. Stop and ask
 before the run when it changes the window, the finality of any year, or the grain list.
 
-- [ ] **Step 6: Write the finding skeleton**
+- [x] **Step 6: Write the finding skeleton**
 
 Create `specs/findings/employment-statistics-coverage.md` with the content below. Fill both
 Sources tables with exact values: `MANIFEST.json` for the files, and Step 5 for the pages. Leave
@@ -2139,7 +2149,7 @@ Read from `~/Downloads/Data/QCEW/`. Download times are the header dumps' modific
 <!-- Task 6: paste coverage/tables.md here verbatim. -->
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add specs/findings/employment-statistics-coverage.md
@@ -2161,7 +2171,9 @@ git commit -m "docs(findings): record the QCEW sources for the coverage finding"
 - Consumes: the files and manifest from Task 5, and the `run` subcommand from Task 4.
 - Produces the decision block and tables that Task 7 cites.
 
-- [ ] **Step 1: Run the analysis**
+- [x] **Step 1: Run the analysis**
+
+> Deviation: the run exited 2 on two national-total employment invariant failures (+46 in 2022, +27 in 2023), which are annual-average rounding; under the project owner's ruling of 2026-09-24 the run stands, with no re-run and no code change.
 
 Run: `uv run python scripts/employment_statistics_coverage.py run --qcew-dir ~/Downloads/Data/QCEW --codebook /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/naics_codebook.parquet --final-years 2022 2023 2024 2025 --out-dir ~/Downloads/Data/QCEW/coverage`
 
@@ -2171,7 +2183,9 @@ line reading `branch <A|B|C> at grain <grain>`.
 Exit 2 means an invariant failed or `needs_user` is set: stop, show your human partner
 `coverage/decision.md` and the failures, and wait. Never re-run with changed parameters.
 
-- [ ] **Step 2: Check the stop-and-ask conditions against `coverage/tables.md`**
+- [x] **Step 2: Check the stop-and-ask conditions against `coverage/tables.md`**
+
+> Deviation: "Invariant failures" holds those two rounding rows, not `_none_`, and "Split codes" lists 19 codes, not 17; both stand under the rulings of 2026-09-24.
 
 Read `~/Downloads/Data/QCEW/coverage/tables.md` and confirm each item. Any miss is a stop.
 
@@ -2190,7 +2204,7 @@ Read `~/Downloads/Data/QCEW/coverage/tables.md` and confirm each item. Any miss 
   show 0 and 9 (condition 6).
 - **MSA six-digit rows per year:** more than 0 for 2022–2024, and 0 for 2025 (condition 6).
 
-- [ ] **Step 3: Recount the national grain independently**
+- [x] **Step 3: Recount the national grain independently**
 
 This recount uses the stdlib `csv` parser and none of the script's logic, so it catches a
 reading or status bug in the script. Create `/tmp/esc-recount.py` with this content:
@@ -2229,7 +2243,7 @@ Expected: one line per window year. Each line's `disclosed`, `suppressed`, `othe
 equal the `employment` row for that year and `own_code` 5 in "National grain: codebook codes by
 status". Any difference is a stop.
 
-- [ ] **Step 4: Paste the outputs into the finding**
+- [x] **Step 4: Paste the outputs into the finding**
 
 In `specs/findings/employment-statistics-coverage.md`:
 
@@ -2240,7 +2254,7 @@ In `specs/findings/employment-statistics-coverage.md`:
 
 Change nothing inside either paste.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add specs/findings/employment-statistics-coverage.md
@@ -2264,7 +2278,7 @@ table, and the prose cites the table's title. Markdown rules:
 - one blank line around headings, two-space list indents, at most one consecutive blank line;
 - prose lines at 100 characters or fewer (tables are exempt).
 
-- [ ] **Step 1: Section 1, reference years**
+- [x] **Step 1: Section 1, reference years**
 
 State the NAICS 2022 reference years with six-digit annual files (the window) and their
 finality, with the two dates. Then give the evidence for the boundary:
@@ -2276,7 +2290,7 @@ finality, with the two dates. Then give the evidence for the boundary:
 Note that 2026 has only a first-quarter file, so the window ends at 2025. Cite the Req 2 line
 that bars earlier-vintage training without a concordance.
 
-- [ ] **Step 2: Section 2, grains**
+- [x] **Step 2: Section 2, grains**
 
 List each grain with its aggregation levels, its area count per year (the `areas` column of
 "Private cells by grain and year") and its breaks:
@@ -2290,7 +2304,7 @@ List each grain with its aggregation levels, its area count per year (the `areas
 Record that CSA and MicroSA carry no industry detail, citing `agglevel_titles.csv`. Also record
 that six-digit cells are published by ownership, with no total-covered row.
 
-- [ ] **Step 3: Section 3, suppressed shares**
+- [x] **Step 3: Section 3, suppressed shares**
 
 Write one table with these columns, from "Private cells by grain and year":
 
@@ -2306,7 +2320,7 @@ employment and wages share one disclosure flag, so their rows are identical, and
 establishments survive suppression when positive. Close with what "Establishments of disclosed
 and suppressed private cells" shows about which cells suppression removes: compare the medians.
 
-- [ ] **Step 4: Section 4, population, row grain, time-respecting outcome, seen-code regime**
+- [x] **Step 4: Section 4, population, row grain, time-respecting outcome, seen-code regime**
 
 Restate the decision block's branch, row grain and populations in prose, with the reasons from
 its **Reasons** list. Then add:
@@ -2320,7 +2334,7 @@ its **Reasons** list. Then add:
 - For any "no", the Req 2 branch sentence the panel therefore follows, quoted from the Global
   Constraints.
 
-- [ ] **Step 5: Section 5, other series screened**
+- [x] **Step 5: Section 5, other series screened**
 
 Write one short paragraph each for CES, OEWS and BED. Each gives the quote from Task 5 Step 5
 item 6, with its URL and read date, and says why the program cannot serve as the panel's source.
@@ -2330,7 +2344,9 @@ item 6, with its URL and read date, and says why the program cannot serve as the
 - Close with D1: the covariates come from the same QCEW rows, so QCEW is the panel's source.
 - No downloads and no tables here.
 
-- [ ] **Step 6: Section 6, file conventions**
+- [x] **Step 6: Section 6, file conventions**
+
+> Deviation: section 6 reports no direct 238 codes and 38 BLS codes (not two and 34), adds the rounding evidence, and cites a new "Appendix: checks outside the script" (lookup files, single-file scan, national reconciliation, recount).
 
 Cover:
 
@@ -2344,7 +2360,9 @@ Cover:
   slices agree;
 - the Task 6 Step 3 recount.
 
-- [ ] **Step 7: Section 7, consequences for later stages**
+- [x] **Step 7: Section 7, consequences for later stages**
+
+> Deviation: the D1 bullet adds that no national private cell is suppressed, the `metrics/qcew.py` bullet adds that it pools every grain and reads zero-filled suppressed cells as zeros, and an extra bullet notes that suppression truncates area-grain outcomes from below.
 
 Write these bullets, filled from the results:
 
@@ -2359,7 +2377,9 @@ Write these bullets, filled from the results:
 - derive-roadmap's resume step re-validates later stages against this finding; no other stage
   entry is edited here.
 
-- [ ] **Step 8: Reproduction, and the status line**
+- [x] **Step 8: Reproduction, and the status line**
+
+> Deviation: Reproduction also gives the commands behind "Appendix: checks outside the script" and notes that the run exits 2.
 
 Under Reproduction:
 
@@ -2369,7 +2389,7 @@ Under Reproduction:
 
 Change the status line to `**Status: FINAL (YYYY-MM-DD).**`, using today's date.
 
-- [ ] **Step 9: Check the finding**
+- [x] **Step 9: Check the finding**
 
 Run: `grep -n -F '<!-- Task' specs/findings/employment-statistics-coverage.md`
 Expected: no output, meaning no instruction comment is left.
@@ -2378,7 +2398,9 @@ Read the finding once, top to bottom, against the Verification item's four bulle
 must be answered in sections 1–4, with a number traceable to a table or the decision block, and
 every "no" must carry its reason.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
+
+> Deviation: a review after this commit caught two errors; follow-up commit 77ccf60 qualifies section 1's vintage counts (expected extras excluded) and gives the recount's positional command.
 
 ```bash
 git add specs/findings/employment-statistics-coverage.md
@@ -2398,7 +2420,7 @@ git commit -m "docs(findings): write the employment-statistics coverage finding"
 - Consumes: the finished finding.
 - Produces the Stage 1 stamp that derive-roadmap's resume step reads.
 
-- [ ] **Step 1: Tick Stage 1 and fix its Produces path**
+- [x] **Step 1: Tick Stage 1 and fix its Produces path**
 
 In `specs/naics-embedding-roadmap.md`, replace `- [ ] Stage 1: Employment-statistics coverage`
 with `- [x] Stage 1: Employment-statistics coverage`.
@@ -2423,7 +2445,7 @@ with:
       reads it verbatim.
 ```
 
-- [ ] **Step 2: Add the completion stamp under Stage 1's entry**
+- [x] **Step 2: Add the completion stamp under Stage 1's entry**
 
 Replace:
 
@@ -2446,14 +2468,14 @@ with this, using today's date for `YYYY-MM-DD`:
 Edit no other stage entry: re-validating later stages is derive-roadmap's resume step, which
 your human partner starts.
 
-- [ ] **Step 3: Commit the roadmap**
+- [x] **Step 3: Commit the roadmap**
 
 ```bash
 git add specs/naics-embedding-roadmap.md
 git commit -m "docs(roadmap): tick Stage 1 and stamp its completion"
 ```
 
-- [ ] **Step 4: Run the Plan Completion Protocol (writing-plans)**
+- [x] **Step 4: Run the Plan Completion Protocol (writing-plans)**
 
 Follow its steps in order, with these specifics:
 
@@ -2480,7 +2502,9 @@ Follow its steps in order, with these specifics:
 
    Plain backtick paths, not relative links, keep this plan correct at its new depth.
 
-- [ ] **Step 5: Final checks, clean-up, integration**
+- [x] **Step 5: Final checks, clean-up, integration**
+
+> Deviation: these checks ran before Step 4's retirement commit, which moves only this file; `/tmp/esc-area-scan.py`, the single-file scan's scratch copy, was trashed with `/tmp/esc-recount.py`.
 
 Run: `uv run pytest -n auto -q`
 Expected: all pass, the same count as Task 4 Step 5.
