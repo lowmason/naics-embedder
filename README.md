@@ -170,9 +170,13 @@ To ensure the refinement step preserves global structure while improving local p
 uv run naics-embedder tools verify-stage4 \
   --pre ./output/hyperbolic_projection/encodings.parquet \
   --post ./output/hgcn/encodings.parquet \
-  --distance-matrix ./data/naics_distance_matrix.parquet \
-  --relations ./data/naics_relations.parquet
+  --supervision-manifest data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json
 ```
+
+`--supervision-manifest` reads the distance matrix and relations from the validated bundle.
+Without it, `--distance-matrix` and `--relations` default to the legacy
+`./data/naics_distance_matrix.parquet` and `./data/naics_relations.parquet`, which
+`data all` no longer writes.
 
 The verifier reports cophenetic correlation, NDCG\@K, parent-retrieval accuracy, and
 `structural_spearman_v1` pre/post/delta values at fixed curvature `1.0`. Only cophenetic, NDCG,

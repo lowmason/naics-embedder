@@ -160,9 +160,10 @@ Stage 4 (HGCN) verification:
 uv run naics-embedder tools verify-stage4 \
   --pre ./output/hyperbolic_projection/encodings.parquet \
   --post ./output/hgcn/encodings.parquet \
-  --distance-matrix ./data/naics_distance_matrix.parquet \
-  --relations ./data/naics_relations.parquet
+  --supervision-manifest data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json
 ```
+
+`--supervision-manifest` reads the distance matrix and relations from the bundle; without it they default to the legacy `./data` files.
 
 This command runs hierarchy-aware metrics pre/post HGCN (cophenetic correlation, NDCG@K, parent retrieval) and enforces degradation thresholds (`--max-cophenetic-drop`, `--max-ndcg-drop`, `--min-local-improvement`, `--parent-top-k`). It is the canonical way to gate Stage 4 changes.
 

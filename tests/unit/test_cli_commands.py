@@ -1,9 +1,12 @@
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
 from naics_embedder.metrics import StructuralMetricInputError
+from naics_embedder.supervision.artifacts import load_validated_bundle
 
 @pytest.fixture
 def runner():
@@ -194,3 +197,60 @@ def test_verify_stage4_has_no_spearman_threshold_option(runner):
     assert result.exit_code == 0
     assert '--max-spearman-drop' not in result.output
     assert '--min-spearman' not in result.output
+
+@pytest.fixture
+def verify_inputs(monkeypatch):
+    '''The structural input paths verify-stage4 hands to verify_stage4.'''
+    seen = {}
+
+    def fake_verify(_stage3, _stage4, distance_matrix, relations, _cfg):
+        seen.update(distance_matrix=distance_matrix, relations=relations)
+        return {'pre': {}, 'post': {}, 'delta': {}, 'checks': {}, 'passed': True}
+
+    monkeypatch.setattr(tools_cli, 'verify_stage4', fake_verify)
+    return seen
+
+@pytest.mark.unit
+def test_verify_stage4_defaults_to_the_legacy_structural_files(runner, verify_inputs):
+    result = runner.invoke(tools_cli.app, ['verify-stage4'])
+
+    assert result.exit_code == 0, result.output
+    assert verify_inputs == {
+        'distance_matrix': Path('./data/naics_distance_matrix.parquet'),
+        'relations': Path('./data/naics_relations.parquet'),
+    }
+
+@pytest.mark.unit
+def test_verify_stage4_reads_structure_from_its_supervision_bundle(
+    runner, verify_inputs, generated_bundle
+):
+    result = runner.invoke(
+        tools_cli.app, ['verify-stage4', '--supervision-manifest',
+                        str(generated_bundle)]
+    )
+
+    bundle = load_validated_bundle(generated_bundle)
+    assert result.exit_code == 0, result.output
+    assert verify_inputs == {
+        'distance_matrix': bundle.artifact_path('distance_matrix'),
+        'relations': bundle.artifact_path('relations'),
+    }
+
+@pytest.mark.unit
+def test_verify_stage4_rejects_relations_from_outside_its_bundle(
+    runner, verify_inputs, generated_bundle, tmp_path
+):
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'verify-stage4',
+            '--supervision-manifest',
+            str(generated_bundle),
+            '--relations',
+            str(tmp_path / 'naics_relations.parquet'),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert 'relations path does not belong' in result.output
+    assert verify_inputs == {}

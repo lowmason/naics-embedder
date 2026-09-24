@@ -117,13 +117,16 @@ After both Stage 3 and Stage 4 finish, run the automated comparison from [Issue 
 ```bash
 uv run naics-embedder tools verify-stage4 \
   --pre ./output/hyperbolic_projection/encodings.parquet \
-  --post ./output/hgcn/encodings.parquet
+  --post ./output/hgcn/encodings.parquet \
+  --supervision-manifest data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json
 ```
 
 Additional options let you override the distance matrix, relations parquet, or the acceptable degradation thresholds:
 
 | Option | Purpose |
 | --- | --- |
+| `--supervision-manifest` | Read the distance matrix and relations from this validated bundle; an explicit `--distance-matrix` or `--relations` from another source is rejected. |
+| `--distance-matrix`, `--relations` | Without a manifest, default to the legacy `./data/naics_distance_matrix.parquet` and `./data/naics_relations.parquet`. |
 | `--max-cophenetic-drop` | Maximum allowable decrease in cophenetic correlation (default `0.02`). |
 | `--max-ndcg-drop` | Maximum allowable decrease in NDCG@K (default `0.01`). |
 | `--min-local-improvement` | Required increase in parent retrieval accuracy (default `0.05`). |
