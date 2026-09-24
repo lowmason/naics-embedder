@@ -29,7 +29,8 @@ one test, and PR #108 added `scripts/employment_statistics_coverage.py`, its tes
 finding. Stage 1 shipped more than its Produces named: the script came with the finding, and
 Stage 3 now lists it under Consumes as prior art. Stage 3 takes the finding's grain (years, not
 areas) and D7; Stages 4, 7, 8 and 10 take D8. Stages 2, 5, 6, 9 and 11 needed no edit: none
-consumes Stage 1, and D8 reaches Stages 9 and 11 only through Stage 4's tooling.
+consumes Stage 1, and D8 reaches Stages 9 and 11 only through Stage 4's tooling. D4 now says
+where Stage 2, which has no stage spec, records its fractions.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -52,7 +53,8 @@ checkpoint. Each fixes the named stage; the stage entries cite them.
   stratified test entries, not the split among examples-channel text, training, validation and
   test queries, nor a floor for a code's examples channel. Decision: Stage 2's plan sets them, per
   code and stratified, with a floor of one examples-channel entry where a code has enough
-  entries; the fractions are recorded in the stage's Rollout note.
+  entries; the fractions are recorded in the stage's Rollout note. Stage 2 has no stage spec, so
+  that note is a line under its roadmap entry, beside the stamp (resume, 2026-09-24).
 - **D5 — Kinship relation taxonomy (Stages 5 and 7).** The bundle's 14 named relations plus
   `cross_sector` and their margin axis (`data/compute_relations.py:107-158`,
   `data/create_triplets.py:142-153`) carry no requirement. Decision: relation names survive only
@@ -79,8 +81,10 @@ at the resume checkpoint.
   The finding runs both regimes. Decision: each regime counts as a panel under Req 5, which then
   has three: the outcome panel and the two regressor regimes. Adoption needs non-inferiority on
   all three (the 95 % interval, unchanged) and superiority on at least one; each panel gets its
-  own δ and a third of the error rate, so superiority reads the 98⅓ % interval. The final
-  tie-break stays open (Open questions).
+  own δ and a third of the error rate, so superiority reads the 98⅓ % interval. This supersedes
+  the 97.5 % that Req 5 and Verification "Decision records" name; the Completion audit reads it
+  as this recorded deviation, not an unmet requirement. The final tie-break stays open (Open
+  questions).
 
 ## Gap analysis
 
