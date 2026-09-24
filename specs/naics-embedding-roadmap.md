@@ -4,9 +4,10 @@
 > reconcile step; route each unticked stage per its ROUTING line; never plan
 > this document wholesale.
 
-**Status: PROVISIONAL (2026-09-23).** Derived in a session that could not ask questions. The
-open questions below carry the assumptions the partition rests on; the human checkpoint gates
-before Stage 1 starts.
+**Status: APPROVED (2026-09-23).** Derived in a session that could not ask questions, then the
+six open questions were answered interactively and the eleven-stage partition approved at the
+human checkpoint (decisions D1–D6 below). Stage 1 is next, per its ROUTING line, in a fresh
+session.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at local main 0892c69, which is origin/main 620bee2 plus the two
@@ -20,40 +21,37 @@ config key a stage adds must be declared in the Pydantic models. The separate
 `specs/lambda-remote-workflow.md` (APPROVED) is not a stage here; Stages 7–10 are multi-seed
 campaigns that benefit from it but do not require it.
 
-## Open questions
+**Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
+checkpoint. Each fixes the named stage; the stage entries cite them.
 
-Each question states the assumption the roadmap proceeds on. A different answer changes the
-named stage, not the partition.
-
-- **Q1 — Regressor panel's inherited definitions (Req 2; Stage 3).** The spec names neither the
-  downstream model nor the covariates. The methodology's definition, `metrics/qcew.py`, used
-  ridge with QCEW's own log establishment counts and log wages. Assumption: ridge with a
-  nested-cross-validated penalty; covariates are those two, from the same QCEW rows.
-- **Q2 — Legacy containment mode (Stage 7).** `supervision.mode: legacy_containment`, its second
+- **D1 — Regressor panel's inherited definitions (Req 2; Stage 3).** The spec names neither the
+  downstream model nor the covariates. Decision: ridge with a nested-cross-validated penalty;
+  covariates are log establishment counts and log wages from the same QCEW rows, as in the
+  methodology's definition (`metrics/qcew.py`).
+- **D2 — Legacy containment mode (Stage 7).** `supervision.mode: legacy_containment`, its second
   `training_step` (`text_model/naics_model.py:618-693`) and the checkpoint-contract migration
-  appear nowhere in the spec. Assumption: Stage 7 deletes them with the old objective, per the
-  core principle; legacy checkpoints cannot load into a 16-dimensional shared encoder anyway.
-- **Q3 — Arm D's level-radius term (Stage 10).** `losses/level_radius.py:26-29` via
-  `graph_model/hgcn.py:744-749` pulls sectors to the origin (E3). Req 17 does not list it, Req 13
-  wants one radial coordinate in every loss with no level target at the origin, and Req 15 says
-  arm D is repaired only to run. (a) In a non-hyperbolic selected geometry the term cannot run as
-  written: drop it there, mirroring Req 11(iii)? (b) In the hyperbolic case, keep the origin
-  target per the ruling and record the handicap in the decision record, or align it to Req 13's
-  radii? Assumption: (a) drop where undefined; (b) keep as-is.
-- **Q4 — Index-entry role proportions (Req 3; Stage 2).** The spec fixes one role per entry and
-  stratified test entries, not the split among examples-channel text, training queries,
-  validation queries and test queries, nor a floor for a code's examples channel. Assumption:
-  Stage 2's plan sets them (a per-code stratified split with a floor of one examples-channel
-  entry where a code has enough entries).
-- **Q5 — Kinship relation taxonomy (Stages 5 and 7).** The bundle's 14 named relations plus
+  appear nowhere in the spec. Decision: Stage 7 deletes them with the old objective; legacy
+  checkpoints cannot load into a 16-dimensional shared encoder anyway.
+- **D3 — Arm D's level-radius term (Stage 10).** `losses/level_radius.py:26-29` via
+  `graph_model/hgcn.py:744-749` pulls sectors to the origin (E3); Req 17 does not list it and
+  Req 15 says arm D is repaired only to run. Decision: where the selected geometry leaves the
+  term undefined it is omitted, mirroring Req 11(iii); in the hyperbolic case it is kept as-is,
+  origin target included, and the decision record notes the handicap. Arm D gets only the Req 16
+  fix.
+- **D4 — Index-entry role proportions (Req 3; Stage 2).** The spec fixes one role per entry and
+  stratified test entries, not the split among examples-channel text, training, validation and
+  test queries, nor a floor for a code's examples channel. Decision: Stage 2's plan sets them, per
+  code and stratified, with a floor of one examples-channel entry where a code has enough
+  entries; the fractions are recorded in the stage's Rollout note.
+- **D5 — Kinship relation taxonomy (Stages 5 and 7).** The bundle's 14 named relations plus
   `cross_sector` and their margin axis (`data/compute_relations.py:107-158`,
-  `data/create_triplets.py:142-153`) carry no requirement; D* and the listwise term read distance
-  only. Assumption: relation names survive as arm D's edge types and as diagnostic labels; the
-  margin axis leaves with the eligibility rules in Stage 7.
-- **Q6 — The within-run selection statistic (Req 4; Stage 7).** Once the in-sample loss selects
+  `data/create_triplets.py:142-153`) carry no requirement. Decision: relation names survive only
+  as arm D's edge types and as diagnostic labels; the margin axis leaves with the eligibility
+  rules in Stage 7.
+- **D6 — The within-run selection statistic (Req 4; Stage 7).** Once the in-sample loss selects
   nothing, checkpointing, early stopping and learning-rate control need a validation-split
-  statistic, which the spec does not name. Assumption: the validation query split's MRR (Req 3)
-  within a run; both panels only between configurations, under Req 5.
+  statistic the spec does not name. Decision: the validation query split's MRR (Req 3); both
+  panels are used only between configurations, under Req 5.
 
 ## Gap analysis
 
@@ -76,10 +74,10 @@ named stage, not the partition.
 | 15 | missing | `graph_model/hgcn.py:1316`, `conf/graph.yaml:100` (single seed, one arm); no smoothing, shuffle control or matched-compute tooling in `src/`; `conf/graph.yaml:20` (`tangent_dim: 31`) against the 385-wide text export (`cli/commands/training.py:362-372`; by probe `Linear(31, 31)` rejects it; no width check at `hgcn.py:1319-1327`) | Arm D cannot run on the text stage's output as configured (the Req 16 fix); arms B, C and E do not exist; the fixed-threshold gate is the only comparison tooling. `conf/graph.yaml:15` names the bundle only in the unpushed local commit. |
 | 16 | implemented-differently | `graph_model/hgcn.py:82` (`Linear(dim, dim)`: no learned projection, but width 31 ≠ 385); `:303` (node states are a free `nn.Parameter` seeded from the text points; no retention term); `:1246-1253` (graph export of all rows); `cli/commands/training.py:788-800` (text export only behind an interactive `typer.confirm`); `cli/__init__.py:44-48` (no export command) | No projection map, as specified, but no shared space either; per-stage tables exist, no defined final deliverable, no standalone export. |
 | 17 | implemented-differently | `conf/graph.yaml:49-53`, `graph_model/hgcn.py:1206`, `:1211-1218` (child, grandchild, great-grandchild and sibling edges, bidirectional, plus self-loops); `hgcn.py:135`, `:143` (edge weight enters twice), `:1198-1199`; `hgcn.py:84`, `:118-120` (tangent LayerNorm; output radius ≈ 5.4 whatever the input, by probe); no distillation or residual to the text points; `hgcn.py:249`, `conf/graph.yaml:38-39` (hinge temperature); `hgcn.py:673-710`, `graph.yaml:73` (adaptive margin on); `hgcn.py:181-182`, `:205-207`, `graph.yaml:24` (uncertainty weights on); `hgcn.py:521-572`, `:595-629`, `graph.yaml:64` (in-file three-phase curriculum filters on); `graph_model/curriculum/*` (four-phase controller package, unwired: `hgcn.py:23` imports only `resolve_graph_config`) | Every mechanism Req 17 would replace is present and on by default. Untouched until Req 15 decides (user adjudication Q2); not applicable before Stage 10. |
-| (none) | in-code-but-not-in-spec | `text_model/naics_model.py:618-693`, `supervision/mode.py:35-40` | Legacy containment mode with a second `training_step`. See Q2. |
+| (none) | in-code-but-not-in-spec | `text_model/naics_model.py:618-693`, `supervision/mode.py:35-40` | Legacy containment mode with a second `training_step`. Deleted in Stage 7 (D2). |
 | (none) | in-code-but-not-in-spec | `data/supervision_bundle.py`, `supervision/checkpoints.py`, `conf/config.yaml:9-12` | The supervision bundle contract (manifest, contract version, exact-resume checkpoint contract). The spec's Staleness note assumes it without naming it; Stages 2 and 5 version it. Unrecorded decision to fold back: the bundle stays the single authority for structure and text. |
-| (none) | in-code-but-not-in-spec | `data/compute_relations.py:107-158`, `conf/data/supervision.yaml:7-22`, `data/create_triplets.py:142-153` | Fourteen named kinship relations plus `cross_sector` as a second structural axis with its own margin. See Q5. |
-| (none) | in-code-but-not-in-spec | `losses/level_radius.py:26-29` via `graph_model/hgcn.py:744-749` | The graph stage's level-radius term (sectors at the origin). Req 17 does not list it. See Q3. |
+| (none) | in-code-but-not-in-spec | `data/compute_relations.py:107-158`, `conf/data/supervision.yaml:7-22`, `data/create_triplets.py:142-153` | Fourteen named kinship relations plus `cross_sector` as a second structural axis with its own margin. Names survive as edge types and labels only; the margin axis leaves in Stage 7 (D5). |
+| (none) | in-code-but-not-in-spec | `losses/level_radius.py:26-29` via `graph_model/hgcn.py:744-749` | The graph stage's level-radius term (sectors at the origin). Req 17 does not list it. Handled in Stage 10 per D3. |
 | (none) | in-code-but-not-in-spec | `tools/embeddings_verification.py:33-35`, `cli/commands/tools.py:247` | The `verify-stage4` gate with fixed thresholds; Req 5 replaces them (Stage 4). |
 | (none) | in-code-but-not-in-spec | `metrics/graph.py:236-439` | Unwired "taxonomy tasks" suite (parent identification, k-means ARI and NMI, sector logistic regression): the methodology's other never-run benchmark. No requirement keeps it; retire with Stage 4's diagnostics. |
 | (none) | in-code-but-not-in-spec | `graph_model/curriculum/*` (about 2,400 lines), `tests/unit/test_graph_curriculum.py` | Unwired four-phase controller, event bus, MACL, samplers and analyzer. Held until Req 15 (user adjudication Q2); leaves in Stage 11 either way. |
@@ -131,7 +129,7 @@ by the stage that discharges it.
       that it and every later selection read.
       Spec: Req 3; Req 4 (text-stage rows: splits, selection log); Req 1 (outcome estimand);
       Verification "Leakage", "Index-entry roles", "Selection hygiene", "Panels" (outcome half);
-      Q4.
+      D4.
       Gap closed: Req 3; Req 4 (text-stage rows except the monitors, which need Stage 6's query
       path and land in Stage 7); Req 1 (outcome half).
       Consumes: Nothing from Stage 1. The bundle codebook and the index-file ingestion as they
@@ -139,9 +137,10 @@ by the stage that discharges it.
       embeddings, which the current model cannot satisfy (`text_model/encoder.py:122-123`):
       tests run on stubs, live numbers wait for Stage 6.
       Produces: An index-entry role table (examples-channel text, training query, validation
-      query, test query; stratified by code; 112130 and 541120 candidates only) as a bundle
-      member; the examples channel rebuilt from examples-role entries only; a leakage checker
-      (exact and near-duplicate at a stated similarity) with its removal count; a decoding
+      query, test query; stratified by code, fractions per D4; 112130 and 541120 candidates
+      only) as a bundle member; the examples channel rebuilt from examples-role entries only; a
+      leakage checker (exact and near-duplicate at a stated similarity) with its removal count;
+      a decoding
       scorer (top-1, MRR, Hit@{1, 5, 10}, lowest-common-ancestor partial credit) over the 1,012
       candidates under a pluggable distance; a selection log recording which split each
       selection read; a sealed test split behind a logged open call.
@@ -157,7 +156,7 @@ by the stage that discharges it.
       Req 2's comparators, fitting and two regimes.
       Spec: Req 2 (all bullets except the open item); Req 4 (regressor splits: sealed outer set,
       repeated grouped inner folds); Req 1 (regressor estimand); Verification "Panels"
-      (regressor half); Q1.
+      (regressor half); D1.
       Gap closed: Req 2 (remainder); Req 1 (regressor half).
       Consumes: Stage 1's finding (branch, population, row grain, outcome). A 2,125-code
       coordinate table in the arm's export form (tangent coordinates at the origin for a
@@ -166,8 +165,9 @@ by the stage that discharges it.
       Stage 2's selection log.
       Produces: The panel as a command that takes a coordinate table and returns per-unit
       scores (four-digit-parent groups; years or areas) for every comparator in each regime,
-      with standardized features and a nested-cross-validated penalty; the sealed outer sets;
-      the multi-level variant; the branch record Stage 1 dictated.
+      fitted by ridge on standardized features with a nested-cross-validated penalty, with log
+      establishment counts and log wages as the covariates (D1); the sealed outer sets; the
+      multi-level variant; the branch record Stage 1 dictated.
       Exit: The panel reports the seen-code and held-out-code regimes separately, with one-hot
       only in the seen regime; a test shows the penalty is tuned inside the remainder and the
       outer set is read once; the branch taken (time-respecting outcome or not; seen regime run
@@ -205,7 +205,7 @@ by the stage that discharges it.
       Spec: Req 7 (D*; the IC ablation waits for Stage 9); Req 8(a), 8(c) generation side,
       lineal references, reserved slot removed; Req 9 (masking data side, inheritance, unary
       pairs, input window for the current backbone); Verification "Target", "Exclusions"
-      (generation half), "Text" (data half), "Backbone input window" (current checkpoint); Q5.
+      (generation half), "Text" (data half), "Backbone input window" (current checkpoint); D5.
       Gap closed: Req 7 (except the IC ablation); Req 8 (a, lineal, generation side of c);
       Req 9 (except the model-side mask and the channel-presence ablation).
       Consumes: Stage 2's index-entry roles (the examples channel holds examples-role entries
@@ -217,8 +217,9 @@ by the stage that discharges it.
       destination code, lineal flag) with each cross-reference once; exclusion text
       de-duplicated; descriptions with a provenance column and a documented deterministic
       inheritance rule; a unary-pair flag on the 522 five-digit codes; absent channels as nulls
-      with the window policy applied; the 43-versus-68 non-redirection count reconciled. The
-      training-pairs member keeps generating, on D* and without exclusion negatives, until Stage
+      with the window policy applied; the 43-versus-68 non-redirection count reconciled;
+      relation names kept only as edge-type and diagnostic labels (D5). The training-pairs
+      member keeps generating, on D* and without exclusion negatives, until Stage
       7 removes it. Consumers (losses, metrics, graph loader, curriculum thresholds) read the
       new values. The two unpushed config commits are superseded by the new manifest path.
       Exit: A bundle validator asserts that D* satisfies the triangle inequality over all
@@ -266,7 +267,7 @@ by the stage that discharges it.
       selects nothing; monitors read validation splits); Req 5 (reference configuration, δ);
       Req 6 (no structural monitor); Verification "No inert terms", "Coverage", "Radius",
       "Exclusions" (training half), "Text" (unary pairs absent from positive supervision),
-      "Selection hygiene"; Q2, Q5, Q6.
+      "Selection hygiene"; D2, D5, D6.
       Gap closed: Req 11; Req 10; Req 13; Req 8 (b, training side of c); Req 4 (monitors);
       Req 5 (reference configuration and δ).
       Consumes: Stage 6's encoder and query path; Stage 5's D*, redirection table and unary
@@ -280,9 +281,10 @@ by the stage that discharges it.
       place of the cap, one radial coordinate, curvature fixed at 1 with no parameter; deleted:
       radius penalty, distance matching, pairwise preference, curriculum and mining rules,
       false-negative clustering, the logged margin, pre-drawn tuples, eligibility rules,
-      inverse-distance draws, the exclusion quota, and (per Q2) legacy containment; monitors
-      for checkpointing, early stopping and learning rate reading the validation query split
-      (per Q6); a decision record fixing δ for both panels from at least 5 seeds.
+      inverse-distance draws, the exclusion quota, the relation margin axis (D5), and legacy
+      containment (D2); monitors for checkpointing, early stopping and learning rate reading
+      the validation query split's MRR (D6); a decision record fixing δ for both panels from at
+      least 5 seeds.
       Exit: On a real batch every objective term has a nonzero gradient (test); on a trained
       run the gradient with respect to radius is nonzero, radii vary within each level, the 20
       sectors sit at distinct positive radii, and manifold validity and distance resolution
@@ -333,16 +335,16 @@ by the stage that discharges it.
       stays, with arm D repaired only to run in the text stage's space.
       Spec: Req 15; Req 16; Req 4 (graph-stage rows: no private validation tail, no last-epoch
       export, selected like every other arm); Verification "Decision experiment",
-      "Deliverable"; Q3.
+      "Deliverable"; D3.
       Gap closed: Req 15; Req 16 (composition and deliverable); Req 4 (graph-stage rows).
       Consumes: Stage 9's selected text stage; Stage 4's tooling and seed-sweep driver; Stage
       6's export command; Stage 5's bundle as the graph stage's structural input.
       Produces: Arm B (matched-compute continuation of the text stage); arm C (parameter-free
       smoothing toward the parent-and-children mean, α tuned on validation); arm D (the graph
       stage at the text stage's dimension, exponential and logarithmic maps per the selected
-      geometry, checkpoint selected on validation, no private tail, no last-epoch export); arm
-      E (text-shuffle control, run only if D wins); the keep-or-drop record; the deliverable,
-      a 2,125-code table from the selected arm.
+      geometry, its level-radius term per D3, checkpoint selected on validation, no private
+      tail, no last-epoch export); arm E (text-shuffle control, run only if D wins); the
+      keep-or-drop record; the deliverable, a 2,125-code table from the selected arm.
       Exit: Arms A–D have at least 5 seeds on both panels under the shared selection protocol;
       E ran if and only if D won, and its result is recorded; the decision record states keep
       or drop under Req 5; the 2,125-code table exists for the selected arm.
