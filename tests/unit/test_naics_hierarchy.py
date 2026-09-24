@@ -416,6 +416,20 @@ class TestOrphanNodes:
         assert hierarchy.get_children('root') == ['child']
         assert hierarchy.get_children('child') == []
 
+    def test_missing_parent_links_join_present_codes_the_hierarchy_leaves_unlinked(self):
+        '''711 and 7113 are both present but unlinked; 111111's parent is absent, so it is a root.'''
+        hierarchy = NaicsHierarchy([('71', '711'), ('711', '7111')])
+
+        missing = hierarchy.missing_parent_links(['71', '711', '7111', '7113', '111111'])
+
+        assert missing == [('711', '7113')]
+
+    def test_missing_parent_links_key_combined_sectors_by_their_first_code(self):
+        '''Subsector 321 sits in sector 31-33, keyed 31, so the 31 -> 321 link is required.'''
+        hierarchy = NaicsHierarchy([('31', '311')])
+
+        assert hierarchy.missing_parent_links(['31', '311', '321']) == [('31', '321')]
+
 # -------------------------------------------------------------------------------------------------
 # Tests for load_naics_hierarchy() with caching
 # -------------------------------------------------------------------------------------------------

@@ -3,9 +3,23 @@ from __future__ import annotations
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import polars as pl
+
+SECTOR_CODE_LENGTH = 2
+# Combined sectors 31-33, 44-45, and 48-49 are keyed by their first code, as in compute_relations
+COMBINED_SECTOR_KEYS = {'32': '31', '33': '31', '45': '44', '49': '48'}
+
+def naics_parent_code(code: str) -> Optional[str]:
+    '''The code's parent in the NAICS tree, or None for a sector.'''
+
+    if len(code) <= SECTOR_CODE_LENGTH:
+        return None
+    if len(code) == SECTOR_CODE_LENGTH + 1:
+        sector = code[:SECTOR_CODE_LENGTH]
+        return COMBINED_SECTOR_KEYS.get(sector, sector)
+    return code[:-1]
 
 class NaicsHierarchy:
     '''In-memory representation of the NAICS hierarchy derived from relations parquet data.'''
@@ -75,6 +89,20 @@ class NaicsHierarchy:
         if parent is None:
             return []
         return [sibling for sibling in self.children_by_parent.get(parent, []) if sibling != code]
+
+    def missing_parent_links(self, codes: Iterable[str]) -> List[Tuple[str, str]]:
+        '''
+        NAICS (parent, child) links between two of ``codes`` that this hierarchy lacks, sorted.
+
+        A code whose parent is absent from ``codes`` is a root of a partial tree, not a gap.
+        '''
+        present = set(codes)
+        missing = set()
+        for code in present:
+            parent = naics_parent_code(code)
+            if parent in present and self.parent_by_child.get(code) != parent:
+                missing.add((parent, code))
+        return sorted(missing)
 
     @property
     def parent_child_pairs(self) -> List[Tuple[str, str]]:
