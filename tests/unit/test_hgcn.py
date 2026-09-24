@@ -2,16 +2,19 @@ import json
 from types import SimpleNamespace
 from typing import Callable, Tuple
 
+import numpy as np
 import polars as pl
 import pytest
 import torch
 from torch import nn
 
 from naics_embedder.graph_model.hgcn import (
+    HGCN,
     CurriculumState,
     HGCNLightningModule,
     HyperbolicConvolution,
     load_embeddings,
+    save_outputs,
 )
 from naics_embedder.text_model.hyperbolic import LorentzOps, check_lorentz_manifold_validity
 from naics_embedder.utils.config import GraphConfig
@@ -308,3 +311,28 @@ def test_load_embeddings_selects_prefix_in_numeric_order(tmp_path):
 
     assert embeddings.tolist() == [[float(i) for i in range(12)]]
     assert levels.tolist() == [2]
+
+@pytest.mark.unit
+def test_save_outputs_writes_square_column_major_embeddings_row_for_row(tmp_path):
+    rows = [(1.0, 0.0, 0.0), (1.25, 0.75, 0.0), (1.25, 0.0, 0.75)]
+    # Column-major, as DataFrame.to_torch() returns; N == D hides which axis holds the rows
+    embeddings = torch.from_numpy(np.asfortranarray(rows, dtype=np.float32))
+    frame = pl.DataFrame({'index': [0, 1, 2], 'level': [2, 3, 3], 'code': ['11', '111', '112']})
+    output = tmp_path / 'hgcn.parquet'
+    model = HGCN(
+        tangent_dim=2,
+        n_layers=1,
+        dropout=0.0,
+        learnable_curvature=False,
+        learnable_loss_weights=False,
+        edge_type_count=1,
+        edge_attention_hidden_dim=4,
+        sibling_type_id=None,
+        sibling_attention_boost=0.0,
+    )
+
+    save_outputs(
+        str(tmp_path), embeddings, frame, GraphConfig(output_parquet=str(output)), model, []
+    )
+
+    assert pl.read_parquet(output).select('hgcn_e0', 'hgcn_e1', 'hgcn_e2').rows() == rows

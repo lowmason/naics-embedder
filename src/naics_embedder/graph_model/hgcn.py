@@ -1249,7 +1249,7 @@ def save_outputs(
     base = orig_df.select('index', 'level', 'code')
 
     emb_schema = {f'{STAGE4_EMBEDDING_PREFIX}{i}': pl.Float64 for i in range(emb_np.shape[1])}
-    emb_df = pl.DataFrame(emb_np, schema=emb_schema)
+    emb_df = pl.DataFrame(emb_np, schema=emb_schema, orient='row')
 
     result_df = base.hstack(emb_df)
 

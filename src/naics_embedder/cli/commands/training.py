@@ -369,7 +369,7 @@ def generate_embeddings_from_checkpoint(
 
     # Create DataFrame with hyp_e* columns
     emb_schema = {f'hyp_e{i}': pl.Float64 for i in range(embedding_dim)}
-    emb_df = pl.DataFrame(embeddings_np, schema=emb_schema)
+    emb_df = pl.DataFrame(embeddings_np, schema=emb_schema, orient='row')
 
     # Combine with metadata
     base_df = pl.DataFrame({'index': all_indices, 'level': all_levels, 'code': all_codes})
