@@ -18,6 +18,7 @@ from naics_embedder.utils.config import (
     DistancesConfig,
     DownloadConfig,
     GraphConfig,
+    OutcomePanelConfig,
     SamplingConfig,
     SansStaticConfig,
     StructuralPreferenceConfig,
@@ -103,6 +104,24 @@ class TestDownloadConfig:
 
         with pytest.raises(ValidationError):
             DownloadConfig(output_parquet='./data/output.csv')
+        with pytest.raises(ValidationError):
+            DownloadConfig(index_roles_parquet='./data/roles.csv')
+
+    def test_yaml_matches_defaults(self):
+        '''The shipped YAML pins the index file and names the committed role table.'''
+
+        cfg = load_config(DownloadConfig, 'data/download.yaml')
+
+        assert cfg == DownloadConfig()
+        assert cfg.index_sha256 == (
+            '6506b37b9546dd9cec1f8b79e0b38b68e547a5cce5fd6f8332d35024dbd6cd63'
+        )
+        assert cfg.index_roles_csv == './conf/data/index_roles.csv'
+        assert cfg.source_dir is None
+
+    def test_index_sha256_must_be_a_hex_digest(self):
+        with pytest.raises(ValidationError):
+            DownloadConfig(index_sha256='not-a-digest')
 
 # -------------------------------------------------------------------------------------------------
 # DistancesConfig Tests
@@ -476,7 +495,8 @@ class TestSupervisionBuildConfig:
     def test_yaml_matches_defaults(self):
         cfg = load_config(SupervisionBuildConfig, 'data/supervision.yaml')
 
-        assert cfg == SupervisionBuildConfig()
+        # The shipped build carries the index roles; the default (for fixtures) does not
+        assert cfg == SupervisionBuildConfig(index_roles_parquet='./data/naics_index_roles.parquet')
         assert cfg.contract_version == 'stage3-supervision-v1'
         assert cfg.relation_id['cross_sector'] == 99
         assert cfg.output_root == './data/supervision/stage3-supervision-v1'
@@ -488,6 +508,53 @@ class TestSupervisionBuildConfig:
     def test_rejects_unknown_keys(self):
         with pytest.raises(ValidationError):
             SupervisionBuildConfig(rank_order_weight=0.35)
+
+@pytest.mark.unit
+class TestOutcomePanelConfig:
+    '''How index-entry roles are drawn (roadmap D4), and the selection log.'''
+
+    def test_yaml_matches_defaults(self):
+        cfg = load_config(OutcomePanelConfig, 'data/outcome_panel.yaml')
+
+        assert cfg == OutcomePanelConfig()
+        assert cfg.fractions == {
+            'examples': 0.30,
+            'training': 0.35,
+            'validation': 0.20,
+            'test': 0.15,
+        }
+        assert cfg.seed == 20260924
+        assert cfg.selection_log == './logs/selection_log.jsonl'
+
+    @pytest.mark.parametrize(
+        'fractions',
+        [
+            {
+                'examples': 0.30,
+                'training': 0.35,
+                'validation': 0.35
+            },
+            {
+                'examples': 0.30,
+                'training': 0.35,
+                'validation': 0.20,
+                'test': 0.10
+            },
+            {
+                'examples': 0.60,
+                'training': 0.35,
+                'validation': 0.20,
+                'test': -0.15
+            },
+        ],
+    )
+    def test_fractions_name_every_role_and_sum_to_one(self, fractions):
+        with pytest.raises(ValidationError):
+            OutcomePanelConfig(fractions=fractions)
+
+    def test_rejects_unknown_keys(self):
+        with pytest.raises(ValidationError):
+            OutcomePanelConfig(test_fraction=0.15)
 
 # -------------------------------------------------------------------------------------------------
 # Repaired Stage-3 runtime configuration

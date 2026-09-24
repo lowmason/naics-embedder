@@ -1,6 +1,7 @@
 # Configuration for building one immutable Stage-3 supervision bundle
 
 descriptions_parquet: ./data/naics_descriptions.parquet
+index_roles_parquet: ./data/naics_index_roles.parquet
 output_root: ./data/supervision/stage3-supervision-v1
 contract_version: stage3-supervision-v1
 naics_vintage: 2022

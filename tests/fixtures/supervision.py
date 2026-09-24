@@ -174,6 +174,50 @@ def validated_bundle(generated_bundle):
     )
 
 # -------------------------------------------------------------------------------------------------
+# Index-entry roles: the optional bundle member
+# -------------------------------------------------------------------------------------------------
+
+INDEX_ROLE_ROWS = [
+    (0, '111111', 'Soybean farming', 'examples'),
+    (1, '111111', 'Edamame farming', 'validation'),
+    (2, '111112', 'Canola farming', 'examples'),
+    (3, '111112', 'Sunflower farming', 'test'),
+    (4, '222222', 'Coal mining', 'examples'),
+    (5, '222222', 'Lignite mining', 'training'),
+]
+INDEX_ROLE_SCHEMA = {'entry_id': pl.Int64, 'code': pl.Utf8, 'text': pl.Utf8, 'role': pl.Utf8}
+
+@pytest.fixture
+def index_roles_fixture() -> pl.DataFrame:
+    return pl.DataFrame(INDEX_ROLE_ROWS, schema=INDEX_ROLE_SCHEMA, orient='row')
+
+@pytest.fixture
+def text_descriptions_fixture(descriptions_fixture) -> pl.DataFrame:
+    '''The five-code descriptions with text channels; examples hold examples-role entries only.'''
+
+    examples = {'111111': 'Soybean farming', '111112': 'Canola farming', '222222': 'Coal mining'}
+    return descriptions_fixture.with_columns(
+        title=pl.concat_str(pl.lit('Industry '), pl.col('code')),
+        description=pl.lit('This industry comprises establishments.'),
+        examples=pl.col('code').replace_strict(examples, default=None),
+        excluded=pl.lit(None, pl.Utf8),
+    )
+
+@pytest.fixture
+def generated_bundle_with_roles(
+    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture
+):
+    return generate_supervision_bundle_from_frames(
+        output_root=tmp_path,
+        bundle_id='bundle-roles',
+        generator_revision='revision-a',
+        naics_vintage=2022,
+        descriptions=text_descriptions_fixture,
+        pair_facts=pair_facts_fixture,
+        index_roles=index_roles_fixture,
+    )
+
+# -------------------------------------------------------------------------------------------------
 # Candidate batches: every aligned field carries a distinguishable per-slot ordinal (1, 2, 3, ...)
 # -------------------------------------------------------------------------------------------------
 

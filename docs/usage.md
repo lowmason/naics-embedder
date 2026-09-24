@@ -24,13 +24,23 @@ uv run naics-embedder --help
 
 ### `data preprocess`
 
-Download and preprocess all raw NAICS data files.
+Download and preprocess all raw NAICS data files. Each code's examples channel holds only its
+examples-role index entries, per the committed role table (see `data roles`); the code's other
+entries are outcome-panel queries. Preprocessing fails if any validation or test query matches
+training text.
 
-**Generates:** `data/naics_descriptions.parquet`
+**Requires:** `conf/data/index_roles.csv`  
+**Generates:** `data/naics_descriptions.parquet`, `data/naics_index_roles.parquet`
 
 ```bash
 uv run naics-embedder data preprocess
 ```
+
+**Options:**
+- `--source-dir PATH` - Read the four Census files from this directory, by file name, instead of
+  downloading them
+- `--force` - Overwrite a descriptions file that a configured supervision bundle pins. Refused by
+  default: training against that bundle fails closed once the file changes
 
 ### `data supervision`
 
@@ -39,7 +49,8 @@ distance and relation plus directional explicit exclusions), legacy-compatible d
 relation views and matrices, training pairs, and curriculum difficulty thresholds. The manifest is
 written last and the bundle directory is published atomically.
 
-**Requires:** `data/naics_descriptions.parquet`  
+**Requires:** `data/naics_descriptions.parquet`, `data/naics_index_roles.parquet` (carried as the
+bundle's optional `index_roles` member)  
 **Generates:** `data/supervision/stage3-supervision-v1/<bundle-id>/` (prints
 `Supervision manifest: <path>`; set `supervision.manifest_path` to it before training)
 
@@ -59,6 +70,21 @@ Run the full data generation pipeline: preprocess, then build the supervision bu
 
 ```bash
 uv run naics-embedder data all
+```
+
+### `data roles`
+
+Draw the frozen index-entry role table, once. Every Census index entry gets exactly one role, per
+code and stratified: examples-channel text, or a training, validation or test query for the
+outcome panel. No validation or test query matches any training text, exactly or as a
+near-duplicate (character-trigram Jaccard of at least 0.9). The table is committed and `data
+preprocess` applies it. Redrawing it unseals the validation and test splits, so an existing table
+is replaced only with `--force`.
+
+**Generates:** `conf/data/index_roles.csv`, `conf/data/index_roles_provenance.json`
+
+```bash
+uv run naics-embedder data roles --source-dir ~/Downloads/Data
 ```
 
 ---
@@ -129,6 +155,27 @@ uv run naics-embedder tools investigate
 **Options:**
 - `--distance-matrix PATH` - Path to ground truth distance matrix (default: `data/naics_distance_matrix.parquet`)
 - `--config PATH` - Path to config file (default: `conf/config.yaml`)
+
+### `tools outcome-baseline`
+
+Score the training-free lexical encoder (hashed character trigrams under cosine distance) on the
+outcome panel's validation split: top-1 accuracy, MRR, Hit@1/5/10 and the level of the lowest
+common ancestor of the top-1 code and the truth. The read is appended to the selection log; the
+test split stays sealed.
+
+**Requires:** `data/naics_descriptions.parquet`, `data/naics_index_roles.parquet`
+
+```bash
+uv run naics-embedder tools outcome-baseline
+```
+
+**Options:**
+- `--purpose TEXT` - Why this read happens; recorded in the selection log
+- `--index-roles PATH`, `--descriptions PATH` - Preprocessing outputs (default: the paths in
+  `conf/data/download.yaml`)
+- `--log PATH` - Selection log (default: `logs/selection_log.jsonl`, from
+  `conf/data/outcome_panel.yaml`)
+- `--output PATH` - Also write the summary as JSON
 
 ---
 

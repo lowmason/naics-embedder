@@ -48,6 +48,7 @@ RELATIONS_SCHEMA_VERSION = 'relations-v1'
 RELATION_MATRIX_SCHEMA_VERSION = 'relation-matrix-v1'
 TRAINING_PAIRS_SCHEMA_VERSION = 'training-pairs-v1'
 DIFFICULTY_THRESHOLDS_SCHEMA_VERSION = 'difficulty-thresholds-v1'
+INDEX_ROLES_SCHEMA_VERSION = 'index-roles-v1'
 
 # -------------------------------------------------------------------------------------------------
 # Supervision vocabulary
@@ -95,6 +96,18 @@ class SelectionReason(IntEnum):
     ROUTER = 3
     DIFFICULTY = 4
     BACKFILL = 5
+
+# -------------------------------------------------------------------------------------------------
+# Index-entry roles (outcome panel)
+# -------------------------------------------------------------------------------------------------
+
+class IndexRole(str, Enum):
+    '''The one role an index entry holds: examples-channel text, or a query in one split.'''
+
+    EXAMPLES = 'examples'
+    TRAINING = 'training'
+    VALIDATION = 'validation'
+    TEST = 'test'
 
 # -------------------------------------------------------------------------------------------------
 # Manifest models

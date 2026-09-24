@@ -1,11 +1,14 @@
+import json
 from pathlib import Path
 
+import polars as pl
 import pytest
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
 from naics_embedder.metrics import StructuralMetricInputError
+from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.supervision.artifacts import load_validated_bundle
 
 @pytest.fixture
@@ -18,20 +21,48 @@ def no_logging(monkeypatch):
     monkeypatch.setattr(tools_cli, 'configure_logging', lambda *_, **__: None)
 
 def test_data_preprocess_invokes_download(monkeypatch, runner):
-    called = {}
+    calls = []
     monkeypatch.setattr(
-        data_cli, 'download_preprocess_data', lambda: called.setdefault('preprocess', True)
+        data_cli, 'download_preprocess_data', lambda cfg, force: calls.append((cfg, force))
     )
 
     result = runner.invoke(data_cli.app, ['preprocess'])
 
     assert result.exit_code == 0
-    assert called['preprocess']
+    [(cfg, force)] = calls
+    assert cfg.source_dir is None
+    assert cfg.index_roles_csv == './conf/data/index_roles.csv'
+    assert force is False
+
+def test_data_preprocess_passes_source_dir_and_force(monkeypatch, runner):
+    calls = []
+    monkeypatch.setattr(
+        data_cli, 'download_preprocess_data', lambda cfg, force: calls.append((cfg, force))
+    )
+
+    result = runner.invoke(data_cli.app, ['preprocess', '--source-dir', '/sources', '--force'])
+
+    assert result.exit_code == 0
+    assert [(cfg.source_dir, force) for cfg, force in calls] == [('/sources', True)]
+
+def test_data_preprocess_reports_a_refused_overwrite(monkeypatch, runner):
+
+    def refuse(cfg, force):
+        raise FileExistsError('pinned; pass --force to overwrite it')
+
+    monkeypatch.setattr(data_cli, 'download_preprocess_data', refuse)
+
+    result = runner.invoke(data_cli.app, ['preprocess'])
+
+    assert result.exit_code == 1
+    assert '--force' in result.output
 
 def test_data_all_runs_preprocess_then_one_supervision_build(monkeypatch, runner, tmp_path):
     order = []
     manifest = tmp_path / 'bundle' / 'manifest.json'
-    monkeypatch.setattr(data_cli, 'download_preprocess_data', lambda: order.append('preprocess'))
+    monkeypatch.setattr(
+        data_cli, 'download_preprocess_data', lambda cfg, force: order.append('preprocess')
+    )
 
     def fake_generate(cfg):
         order.append('supervision')
@@ -79,6 +110,36 @@ def test_legacy_stage_commands_build_the_complete_bundle(monkeypatch, runner, tm
     assert 'data supervision' in result.output
     assert len(calls) == 1
     assert str(manifest) in result.output
+
+def test_data_roles_draws_the_table_with_both_configs(monkeypatch, runner, tmp_path):
+    calls = []
+
+    def fake_generate(download_cfg, panel_cfg, force):
+        calls.append((download_cfg, panel_cfg, force))
+        return tmp_path / 'index_roles.csv'
+
+    monkeypatch.setattr(data_cli, 'generate_index_role_table', fake_generate)
+
+    result = runner.invoke(data_cli.app, ['roles', '--source-dir', '/sources'])
+
+    assert result.exit_code == 0
+    [(download_cfg, panel_cfg, force)] = calls
+    assert download_cfg.source_dir == '/sources'
+    assert panel_cfg.seed == 20260924
+    assert force is False
+    assert 'index_roles.csv' in result.output
+
+def test_data_roles_refuses_to_redraw_without_force(monkeypatch, runner):
+
+    def refuse(download_cfg, panel_cfg, force):
+        raise FileExistsError('the role table exists; pass --force to redraw it')
+
+    monkeypatch.setattr(data_cli, 'generate_index_role_table', refuse)
+
+    result = runner.invoke(data_cli.app, ['roles'])
+
+    assert result.exit_code == 1
+    assert '--force' in result.output
 
 def test_tools_config_passes_config_path(monkeypatch, runner, tmp_path):
     captured = {}
@@ -254,3 +315,79 @@ def test_verify_stage4_rejects_relations_from_outside_its_bundle(
     assert result.exit_code == 1
     assert 'relations path does not belong' in result.output
     assert verify_inputs == {}
+
+# -------------------------------------------------------------------------------------------------
+# Outcome panel: lexical baseline
+# -------------------------------------------------------------------------------------------------
+
+BASELINE_ROLES = [
+    (0, '111110', 'Soybean farming', 'examples'),
+    (1, '111110', 'Edamame farming', 'validation'),
+    (2, '111120', 'Canola farming', 'examples'),
+    (3, '111120', 'Sunflower farming', 'validation'),
+    (4, '111120', 'Rapeseed farming', 'test'),
+]
+
+def _baseline_inputs(tmp_path, examples):
+    roles = tmp_path / 'naics_index_roles.parquet'
+    descriptions = tmp_path / 'naics_descriptions.parquet'
+    pl.DataFrame(
+        BASELINE_ROLES,
+        schema={
+            'entry_id': pl.Int64,
+            'code': pl.Utf8,
+            'text': pl.Utf8,
+            'role': pl.Utf8
+        },
+        orient='row',
+    ).write_parquet(roles)
+    pl.DataFrame(
+        {
+            'code': ['111110', '111120', '112130'],
+            'title': ['Soybean Farming', 'Oilseed Farming', 'Dual-Purpose Cattle Ranching'],
+            'description': ['Grows soybeans.', 'Grows oilseeds.', 'Raises cattle.'],
+            'examples': examples,
+            'excluded': [None, None, None],
+        },
+        schema_overrides={
+            'excluded': pl.Utf8
+        },
+    ).write_parquet(descriptions)
+    return [
+        '--index-roles',
+        str(roles),
+        '--descriptions',
+        str(descriptions),
+        '--log',
+        str(tmp_path / 'selection_log.jsonl'),
+    ]
+
+@pytest.mark.unit
+def test_outcome_baseline_scores_validation_and_logs_one_read(runner, tmp_path):
+    arguments = _baseline_inputs(tmp_path, ['Soybean farming', 'Canola farming', None])
+    output = tmp_path / 'baseline.json'
+
+    result = runner.invoke(tools_cli.app, ['outcome-baseline', *arguments, '--output', str(output)])
+
+    assert result.exit_code == 0, result.output
+    assert 'mrr' in result.output
+    records = SelectionLog(tmp_path / 'selection_log.jsonl').records()
+    assert [(r['event'], r['split'], r['n_queries'])
+            for r in records] == [('read', 'validation', 2)]
+    summary = json.loads(output.read_text())['summary']
+    assert summary['n_queries'] == 2
+    assert summary['n_candidates'] == 3
+
+@pytest.mark.unit
+def test_outcome_baseline_refuses_descriptions_that_hold_every_entry(runner, tmp_path):
+    stale = [
+        'Soybean farming; Edamame farming',
+        'Canola farming; Sunflower farming; Rapeseed farming',
+        None,
+    ]
+
+    result = runner.invoke(tools_cli.app, ['outcome-baseline', *_baseline_inputs(tmp_path, stale)])
+
+    assert result.exit_code == 1
+    assert 'Outcome baseline failed' in result.output
+    assert SelectionLog(tmp_path / 'selection_log.jsonl').records() == []

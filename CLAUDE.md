@@ -61,6 +61,7 @@ naics-embedder/
 │   │   └── __init__.py       # Top-level Typer app
 │   ├── data/                 # Data preprocessing and generation
 │   │   ├── download_data.py  # Download and preprocess NAICS data
+│   │   ├── index_role_table.py    # Draw the frozen index-entry role table (data roles)
 │   │   ├── compute_relations.py   # Compute relationship measures
 │   │   ├── compute_distances.py   # Compute graph distance measures
 │   │   └── create_triplets.py     # Create contrastive training triplets
@@ -86,6 +87,13 @@ naics-embedder/
 │   │       ├── streaming_dataset.py   # Streaming Polars datasets
 │   │       ├── datamodule.py          # PyTorch Lightning DataModule
 │   │       └── tokenization_cache.py  # Disk-based tokenization cache
+│   ├── panels/               # Sealed evaluation panels (roadmap Stage 2 onward)
+│   │   ├── leakage.py        # Exact and near-duplicate matching against training text
+│   │   ├── index_roles.py    # Index-entry roles: quotas, eligibility, the frozen table
+│   │   ├── decoding.py       # Text-to-code decoding scores (top-1, MRR, Hit@k, LCA level)
+│   │   ├── selection_log.py  # Append-only log of split reads and test-split openings
+│   │   ├── outcome.py        # OutcomePanel: sealed validation and test query splits
+│   │   └── lexical_encoder.py  # Training-free trigram stub encoder
 │   ├── graph_model/          # Stage 4: HGCN refinement
 │   │   ├── hgcn.py           # Hyperbolic graph convolutional network
 │   │   ├── evaluation.py     # HGCN evaluation metrics
@@ -137,6 +145,8 @@ naics-embedder/
 │   ├── config.yaml           # Base training configuration
 │   ├── data/                 # Data generation configs
 │   │   ├── download.yaml
+│   │   ├── outcome_panel.yaml     # Role fractions, seed, near-duplicate threshold, selection log
+│   │   ├── index_roles.csv        # The frozen index-entry role table (committed)
 │   │   ├── relations.yaml
 │   │   ├── distances.yaml
 │   │   └── triplets.yaml
@@ -402,6 +412,7 @@ uv run naics-embedder data preprocess  # Download and preprocess NAICS data
 uv run naics-embedder data supervision # Build the immutable Stage-3 supervision bundle
 uv run naics-embedder data all         # Run all data preparation steps
 # (data relations / distances / triplets are deprecated and build the same bundle)
+# (data roles drew conf/data/index_roles.csv once; it is committed, and preprocess applies it)
 
 # Training commands
 uv run naics-embedder train            # Train model
@@ -411,6 +422,7 @@ uv run naics-embedder train --config conf/my_config.yaml  # Custom config
 uv run naics-embedder tools config     # Show current configuration
 uv run naics-embedder tools visualize  # Visualize training metrics
 uv run naics-embedder tools investigate  # Investigate hierarchy correlation
+uv run naics-embedder tools outcome-baseline  # Lexical stub on the outcome validation split
 ```
 
 ### Running Tests

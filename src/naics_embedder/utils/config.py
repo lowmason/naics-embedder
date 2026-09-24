@@ -4,6 +4,7 @@
 
 import logging
 from enum import Enum
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union
 
@@ -99,6 +100,23 @@ class DownloadConfig(BaseModel):
         default='./data/naics_descriptions.parquet',
         description='Output path for processed descriptions',
     )
+    index_roles_parquet: str = Field(
+        default='./data/naics_index_roles.parquet',
+        description='Output path for every index entry with its text and role',
+    )
+    index_roles_csv: str = Field(
+        default='./conf/data/index_roles.csv',
+        description='The frozen index-entry role table (entry_id, code, role) to apply',
+    )
+    index_sha256: str = Field(
+        default='6506b37b9546dd9cec1f8b79e0b38b68e547a5cce5fd6f8332d35024dbd6cd63',
+        pattern=r'^[0-9a-f]{64}$',
+        description='SHA-256 of the index file whose row positions the role table is keyed to',
+    )
+    source_dir: Optional[str] = Field(
+        default=None,
+        description='Read the source files from this directory, by URL file name, not the web',
+    )
 
     # URLs for data sources
     url_codes: str = Field(
@@ -192,12 +210,12 @@ class DownloadConfig(BaseModel):
         description='Column renames for exclusions',
     )
 
-    @field_validator('output_parquet')
+    @field_validator('output_parquet', 'index_roles_parquet')
     @classmethod
     def validate_output_parquet(cls, value: str) -> str:
         path = Path(value)
         if path.suffix.lower() != '.parquet':
-            raise ValueError('output_parquet must point to a .parquet file')
+            raise ValueError('output paths must point to a .parquet file')
         return value
 
     @classmethod
@@ -362,6 +380,13 @@ class SupervisionBuildConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     descriptions_parquet: str = './data/naics_descriptions.parquet'
+    index_roles_parquet: Optional[str] = Field(
+        default=None,
+        description=(
+            'Index entries with their roles, from `data preprocess`; when set, the bundle carries '
+            'them as its optional index_roles member'
+        ),
+    )
     output_root: str = './data/supervision/stage3-supervision-v1'
     contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
     naics_vintage: int = 2022
@@ -384,6 +409,51 @@ class SupervisionBuildConfig(BaseModel):
             'cross_sector': 99,
         }
     )
+
+class OutcomePanelConfig(BaseModel):
+    '''How the outcome panel's index-entry roles are drawn (roadmap D4), and its selection log.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    provenance_json: str = Field(
+        default='./conf/data/index_roles_provenance.json',
+        description='Where `data roles` records how the role table was drawn',
+    )
+    seed: int = Field(default=20260924, description='Base seed; each code draws with (seed, code)')
+    fractions: Dict[str, float] = Field(
+        default_factory=lambda: {
+            'examples': 0.30,
+            'training': 0.35,
+            'validation': 0.20,
+            'test': 0.15,
+        },
+        description="Target share of each code's index entries per role",
+    )
+    examples_floor: int = Field(
+        default=1, ge=0, description='Minimum examples-channel entries for a code with entries'
+    )
+    near_duplicate_min_jaccard: float = Field(
+        default=0.9,
+        gt=0.0,
+        le=1.0,
+        description='Character-trigram Jaccard similarity at which two texts are near-duplicates',
+    )
+    selection_log: str = Field(
+        default='./logs/selection_log.jsonl',
+        description='Append-only log of every panel read and test-split opening',
+    )
+
+    @field_validator('fractions')
+    @classmethod
+    def validate_fractions(cls, value: Dict[str, float]) -> Dict[str, float]:
+        roles = {'examples', 'training', 'validation', 'test'}
+        if set(value) != roles:
+            raise ValueError(f'fractions must name exactly {sorted(roles)}')
+        if any(share < 0 for share in value.values()):
+            raise ValueError('fractions must be non-negative')
+        if sum(Fraction(str(share)) for share in value.values()) != 1:
+            raise ValueError('fractions must sum to 1')
+        return value
 
 class SupervisionRuntimeConfig(BaseModel):
     '''Which supervision contract training runs under, and the one authoritative bundle.'''

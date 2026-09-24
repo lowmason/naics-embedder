@@ -1,6 +1,14 @@
 # Configuration for downloading and preprocessing NAICS data
 
 output_parquet: ./data/naics_descriptions.parquet
+index_roles_parquet: ./data/naics_index_roles.parquet
+
+# The frozen index-entry role table (data roles writes it once) and the index file it is keyed to
+index_roles_csv: ./conf/data/index_roles.csv
+index_sha256: 6506b37b9546dd9cec1f8b79e0b38b68e547a5cce5fd6f8332d35024dbd6cd63
+
+# Read the four files from this directory instead of downloading them (--source-dir)
+source_dir: null
 
 # URLs for data sources
 url_codes: https://www.census.gov/naics/2022NAICS/2-6%20digit_2022_Codes.xlsx

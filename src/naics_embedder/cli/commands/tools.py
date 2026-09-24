@@ -11,11 +11,14 @@ Commands:
     config: Display current training configuration.
     visualize: Generate visualizations from training log files.
     investigate: Analyze hierarchy preservation metrics.
+    outcome-baseline: Score the lexical stub encoder on the outcome panel's validation split.
 '''
 
+import json
 from pathlib import Path
 from typing import Optional, Tuple
 
+import polars as pl
 import typer
 from rich.console import Console
 from typing_extensions import Annotated
@@ -23,9 +26,16 @@ from typing_extensions import Annotated
 from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
     resolve_graph_supervision_paths,
 )
+from naics_embedder.panels.lexical_encoder import (
+    LexicalTrigramEncoder,
+    code_texts_from_descriptions,
+)
+from naics_embedder.panels.outcome import OutcomePanel
+from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.embeddings_verification import Stage4VerificationConfig, verify_stage4
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
+from naics_embedder.utils.config import DownloadConfig, OutcomePanelConfig, load_config
 from naics_embedder.utils.console import configure_logging
 
 # -------------------------------------------------------------------------------------------------
@@ -366,3 +376,82 @@ def verify_stage4_command(
     else:
         console.print('\n[bold red]✗ Stage 4 verification failed thresholds[/bold red]\n')
         raise typer.Exit(code=1)
+
+# -------------------------------------------------------------------------------------------------
+# Outcome panel: lexical baseline
+# -------------------------------------------------------------------------------------------------
+
+@app.command('outcome-baseline')
+def outcome_baseline(
+    purpose: Annotated[
+        str,
+        typer.Option('--purpose', help='Why this read happens; recorded in the selection log'),
+    ] = 'lexical baseline on the validation split',
+    index_roles: Annotated[
+        Optional[str],
+        typer.Option(
+            '--index-roles',
+            help='Index roles parquet from data preprocess (default: the download config)',
+        ),
+    ] = None,
+    descriptions: Annotated[
+        Optional[str],
+        typer.Option(
+            '--descriptions',
+            help='Descriptions parquet from data preprocess (default: the download config)',
+        ),
+    ] = None,
+    log: Annotated[
+        Optional[str],
+        typer.Option('--log', help='Selection log (default: the outcome-panel config)'),
+    ] = None,
+    output: Annotated[
+        Optional[str],
+        typer.Option('--output', help='Also write the summary as JSON to this path'),
+    ] = None,
+):
+    '''
+    Score the training-free lexical encoder on the outcome panel's validation split.
+
+    Decodes every validation query to the nearest six-digit code by hashed character trigrams
+    under cosine distance, and reports top-1 accuracy, MRR, Hit@1/5/10 and the level of the
+    lowest common ancestor. The read is logged in the selection log. The test split stays sealed:
+    this command never opens it.
+
+    Example:
+        Score the baseline on the preprocessing outputs::
+
+            $ uv run naics-embedder tools outcome-baseline
+    '''
+
+    configure_logging('tools_outcome_baseline.log')
+
+    download_cfg = load_config(DownloadConfig, 'data/download.yaml')
+    panel_cfg = load_config(OutcomePanelConfig, 'data/outcome_panel.yaml')
+    descriptions_path = Path(descriptions or download_cfg.output_parquet)
+
+    try:
+        panel = OutcomePanel.from_files(
+            index_roles or download_cfg.index_roles_parquet,
+            descriptions_path,
+            log or panel_cfg.selection_log,
+        )
+        encoder = LexicalTrigramEncoder(
+            code_texts_from_descriptions(pl.read_parquet(descriptions_path))
+        )
+        result = panel.score(encoder, IndexRole.VALIDATION, purpose)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f'[bold red]Outcome baseline failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print('\n[bold cyan]Outcome panel: lexical baseline, validation split[/bold cyan]\n')
+    for key, value in result.summary.items():
+        formatted = f'{value:.4f}' if isinstance(value, float) else str(value)
+        console.print(f'  • {key}: {formatted}')
+    console.print(f'\nRead logged to {panel.log.path}\n')
+
+    if output:
+        path = Path(output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {'fingerprint': panel.fingerprint, 'summary': result.summary}
+        path.write_text(json.dumps(payload, indent=2) + '\n')
