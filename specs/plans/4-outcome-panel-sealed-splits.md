@@ -1,5 +1,7 @@
 # Outcome Panel and Sealed Splits Implementation Plan
 
+**Status: COMPLETE (2026-09-24)** — executed via executing-plans; deferred items in specs/deferred_items.md (four review Minors, for Stages 5 and 6)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -276,7 +278,7 @@ Stop, report, and wait for your human partner when any of these happens:
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
 
 Run: `git status --short --branch`
 Expected: `## claude/outcome-panel-sealed-splits-522fa329` and nothing else.
@@ -293,7 +295,7 @@ the roadmap or `specs/findings/`, stop and ask.
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number. `.python-version` pins 3.12.
@@ -302,13 +304,13 @@ Run: `uv run python -c "import numpy, polars, sklearn; print(numpy.__version__, 
 Expected: `2.3.4 1.35.1 1.9.1`. These are the locked versions for Python 3.12, and Task 9's
 expected hash was computed with them. If they differ, stop and ask.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1248 passed, 1 skipped`. Each later full-suite count is this baseline plus the tests the
 plan has added by then.
 
-- [ ] **Step 4: Check the cached Census files**
+- [x] **Step 4: Check the cached Census files**
 
 Run: `shasum -a 256 ~/Downloads/Data/2-6\ digit_2022_Codes.xlsx ~/Downloads/Data/2022_NAICS_Descriptions.xlsx ~/Downloads/Data/2022_NAICS_Index_File.xlsx ~/Downloads/Data/2022_NAICS_Cross_References.xlsx`
 Expected:
@@ -324,14 +326,14 @@ The code enforces only the index file's hash (`DownloadConfig.index_sha256`, Tas
 positions are the role table's `entry_id`s. The other three hashes go into Task 9's finding. If
 any hash differs, stop and ask. Never download replacements.
 
-- [ ] **Step 5: Check the pinned descriptions file, read-only**
+- [x] **Step 5: Check the pinned descriptions file, read-only**
 
 Run: `shasum -a 256 /Users/lowell/Projects/naics-embedder/data/naics_descriptions.parquet`
 Expected: `5107fb8349ee8356ffe7670a3cfbbcc49e4b17f4f503bcdf1572c91c5dd39f2d`. This is the file
 bundle 18403d29 pins. Task 9 only reads it, to compare the rebuilt examples channel against it.
 If the hash differs, stop and ask.
 
-- [ ] **Step 6: Route the tasks**
+- [x] **Step 6: Route the tasks**
 
 Under executing-plans, run every task inline, in order.
 
@@ -377,7 +379,7 @@ strings and one polars frame, with no I/O.
   - Both raise `ValueError` for a query with no letters or digits, or a threshold outside
     (0, 1].
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_outcome_leakage.py` with exactly this content:
 
@@ -501,12 +503,12 @@ def test_empty_inputs_flag_nothing():
     assert find_leakage(['soybean farming'], []).leaked.tolist() == [False]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_outcome_leakage.py -q`
 Expected: a collection error, `ModuleNotFoundError: No module named 'naics_embedder.panels'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/naics_embedder/panels/__init__.py` with exactly this content:
 
@@ -728,7 +730,7 @@ def find_leakage_within(
     return LeakageMatches(exact=exact, near_duplicate=near)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_outcome_leakage.py -q`
 Expected: `12 passed`.
@@ -736,14 +738,14 @@ Expected: `12 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1260 passed, 1 skipped`.
 
-- [ ] **Step 5: Lint and format**
+- [x] **Step 5: Lint and format**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels tests/unit/test_outcome_leakage.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` The code above is
 already yapf-clean. On a failure, run the same command without `--check`, re-run Step 4, and
 record the change as a deviation.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/__init__.py src/naics_embedder/panels/leakage.py tests/unit/test_outcome_leakage.py
@@ -817,7 +819,7 @@ lives in `supervision/artifacts.py` beside the other artifact validators.
     It returns `{'validation': {'exact': 0, 'near_duplicate': 0}, 'test': {…}}` and raises
     `ValueError` (`held-out queries match training text: …`) on any match.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_index_roles.py` with exactly this content:
 
@@ -1237,13 +1239,13 @@ def test_role_leakage_fails_on_a_held_out_query_in_training_text(role_rows):
         verify_role_leakage(descriptions, leaky)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_index_roles.py -q`
 Expected: a collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.panels.index_roles'`.
 
-- [ ] **Step 3: Add the role enum and the table validator**
+- [x] **Step 3: Add the role enum and the table validator**
 
 Modify `src/naics_embedder/supervision/schema.py` with these 2 edits, in order. Each replaced text
 occurs exactly once in the file.
@@ -1398,7 +1400,7 @@ def validate_index_role_table(
         )
 ```
 
-- [ ] **Step 4: Write the role assignment**
+- [x] **Step 4: Write the role assignment**
 
 Create `src/naics_embedder/panels/index_roles.py` with exactly this content:
 
@@ -1755,7 +1757,7 @@ def verify_role_leakage(
     return report
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_index_roles.py -q`
 Expected: `34 passed`.
@@ -1763,13 +1765,13 @@ Expected: `34 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1294 passed, 1 skipped`.
 
-- [ ] **Step 6: Lint and format**
+- [x] **Step 6: Lint and format**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/supervision/schema.py src/naics_embedder/supervision/artifacts.py src/naics_embedder/panels/index_roles.py tests/unit/test_index_roles.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` On a failure, run the
 same command without `--check`, re-run Step 5, and record the change as a deviation.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/schema.py src/naics_embedder/supervision/artifacts.py src/naics_embedder/panels/index_roles.py tests/unit/test_index_roles.py
@@ -1812,7 +1814,7 @@ arms with it unchanged.
       `METRIC_NAMES`.
     - Ranks break ties against the truth.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_outcome_decoding.py` with exactly this content:
 
@@ -2038,13 +2040,13 @@ def test_points_on_mps_are_scored_in_float64_on_the_cpu(scored):
     assert result.summary == scored.summary
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_outcome_decoding.py -q`
 Expected: a collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.panels.decoding'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/naics_embedder/panels/decoding.py` with exactly this content:
 
@@ -2299,7 +2301,7 @@ def score_decoding(
     return DecodingResult(per_query=per_query, per_code=per_code, summary=summary)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_outcome_decoding.py -q`
 Expected: `25 passed`. This Mac has MPS, so the MPS test
@@ -2308,13 +2310,13 @@ runs here. CI skips it.
 Run: `uv run pytest -n auto -q`
 Expected: `1319 passed, 1 skipped`.
 
-- [ ] **Step 5: Lint and format**
+- [x] **Step 5: Lint and format**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels/decoding.py tests/unit/test_outcome_decoding.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` On a failure, run the
 same command without `--check`, re-run Step 4, and record the change as a deviation.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/decoding.py tests/unit/test_outcome_decoding.py
@@ -2370,7 +2372,7 @@ test file drives the whole path on a one-hot stub encoder.
       `detail` is `{'encoder': <class name>, 'distance': <name>}`.
     - Query frames have the columns `entry_id`, `code` and `text`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_outcome_panel.py` with exactly this content:
 
@@ -2663,13 +2665,13 @@ def test_from_files_refuses_descriptions_that_hold_every_entry(tmp_path, role_ro
         OutcomePanel.from_files(roles_path, descriptions_path, tmp_path / 'log.jsonl')
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_outcome_panel.py -q`
 Expected: a collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.panels.outcome'`.
 
-- [ ] **Step 3: Write the selection log**
+- [x] **Step 3: Write the selection log**
 
 Create `src/naics_embedder/panels/selection_log.py` with exactly this content:
 
@@ -2767,7 +2769,7 @@ class SelectionLog:
         ]
 ```
 
-- [ ] **Step 4: Write the panel**
+- [x] **Step 4: Write the panel**
 
 Create `src/naics_embedder/panels/outcome.py` with exactly this content:
 
@@ -2977,7 +2979,7 @@ class OutcomePanel:
         return queries
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_outcome_panel.py -q`
 Expected: `16 passed`.
@@ -2985,13 +2987,13 @@ Expected: `16 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1335 passed, 1 skipped`.
 
-- [ ] **Step 6: Lint and format**
+- [x] **Step 6: Lint and format**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels/selection_log.py src/naics_embedder/panels/outcome.py tests/unit/test_outcome_panel.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` On a failure, run the
 same command without `--check`, re-run Step 5, and record the change as a deviation.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/panels/selection_log.py src/naics_embedder/panels/outcome.py tests/unit/test_outcome_panel.py
@@ -3080,7 +3082,7 @@ and eleven index-sheet rows. In it:
   - `naics-embedder data preprocess [--source-dir DIR] [--force]`, which exits 1 on a refused
     overwrite.
 
-- [ ] **Step 1: Add the source fixture**
+- [x] **Step 1: Add the source fixture**
 
 Create `tests/fixtures/naics_sources.py` with exactly this content:
 
@@ -3204,7 +3206,7 @@ pytest_plugins = ('tests.fixtures.naics_sources', 'tests.fixtures.supervision')
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Modify `tests/unit/test_data_download.py` with these 7 edits, in order. Each replaced text occurs
 exactly once in the file.
@@ -3736,7 +3738,7 @@ def test_data_all_runs_preprocess_then_one_supervision_build(monkeypatch, runner
     def fake_generate(cfg):
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_data_download.py tests/unit/test_config.py tests/unit/test_cli_commands.py -q`
 Expected: pytest cannot start. It fails with `ImportError: Error importing plugin
@@ -3744,7 +3746,7 @@ Expected: pytest cannot start. It fails with `ImportError: Error importing plugi
 'naics_embedder.data.download_data'`. The conftest registers the fixture module for the whole
 suite, so every test waits on Step 5.
 
-- [ ] **Step 4: Add the configuration**
+- [x] **Step 4: Add the configuration**
 
 Modify `src/naics_embedder/utils/config.py` with these 2 edits, in order. Each replaced text occurs
 exactly once in the file.
@@ -3838,7 +3840,7 @@ source_dir: null
 # URLs for data sources
 ```
 
-- [ ] **Step 5: Rebuild preprocessing around the role table**
+- [x] **Step 5: Rebuild preprocessing around the role table**
 
 Modify `src/naics_embedder/data/download_data.py` with these 13 edits, in order. Each replaced text
 occurs exactly once in the file.
@@ -4438,7 +4440,7 @@ with:
     )
 ```
 
-- [ ] **Step 6: Add the preprocess options**
+- [x] **Step 6: Add the preprocess options**
 
 Modify `src/naics_embedder/cli/commands/data.py` with these 5 edits, in order. Each replaced text
 occurs exactly once in the file.
@@ -4582,7 +4584,7 @@ with:
     console.print('\n[bold]Preprocessing complete.[/bold]\n')
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_data_download.py tests/unit/test_config.py tests/unit/test_cli_commands.py -q`
 Expected: `94 passed`.
@@ -4590,13 +4592,13 @@ Expected: `94 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1353 passed, 1 skipped`.
 
-- [ ] **Step 8: Lint and format**
+- [x] **Step 8: Lint and format**
 
 Run: `./scripts/format_code.sh --check tests/fixtures/naics_sources.py tests/conftest.py tests/unit/test_data_download.py tests/unit/test_config.py tests/unit/test_cli_commands.py src/naics_embedder/utils/config.py src/naics_embedder/data/download_data.py src/naics_embedder/cli/commands/data.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` On a failure, run the
 same command without `--check`, re-run Step 7, and record the change as a deviation.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add tests/fixtures/naics_sources.py tests/conftest.py tests/unit/test_data_download.py tests/unit/test_config.py tests/unit/test_cli_commands.py src/naics_embedder/utils/config.py conf/data/download.yaml src/naics_embedder/data/download_data.py src/naics_embedder/cli/commands/data.py
@@ -4656,7 +4658,7 @@ no bundle from real data.
   - `text_descriptions_fixture`, the descriptions fixture with text columns
   - `generated_bundle_with_roles`, a bundle with the member
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Modify `tests/fixtures/supervision.py` with one edit. The replaced text occurs exactly once in the
 file.
@@ -4918,7 +4920,7 @@ with:
         assert cfg.relation_id['cross_sector'] == 99
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py tests/unit/test_outcome_panel.py tests/unit/test_config.py -q`
 Expected: `5 failed, 92 passed, 3 errors`. The failures are:
@@ -4927,7 +4929,7 @@ Expected: `5 failed, 92 passed, 3 errors`. The failures are:
 - `AttributeError: type object 'OutcomePanel' has no attribute 'from_bundle'`
 - `TestSupervisionBuildConfig::test_yaml_matches_defaults`
 
-- [ ] **Step 3: Add the configuration**
+- [x] **Step 3: Add the configuration**
 
 Modify `src/naics_embedder/utils/config.py` with one edit. The replaced text occurs exactly once in
 the file.
@@ -4975,7 +4977,7 @@ output_root: ./data/supervision/stage3-supervision-v1
 contract_version: stage3-supervision-v1
 ```
 
-- [ ] **Step 4: Validate the member at load time**
+- [x] **Step 4: Validate the member at load time**
 
 Modify `src/naics_embedder/supervision/artifacts.py` with these 2 edits, in order. Each replaced
 text occurs exactly once in the file.
@@ -5030,7 +5032,7 @@ with:
     Raises:
 ```
 
-- [ ] **Step 5: Write the member at build time**
+- [x] **Step 5: Write the member at build time**
 
 Modify `src/naics_embedder/data/supervision_bundle.py` with these 14 edits, in order. Each replaced
 text occurs exactly once in the file.
@@ -5354,7 +5356,7 @@ with:
     )
 ```
 
-- [ ] **Step 6: Read the panel from a bundle**
+- [x] **Step 6: Read the panel from a bundle**
 
 Modify `src/naics_embedder/panels/outcome.py` with these 2 edits, in order. Each replaced text
 occurs exactly once in the file.
@@ -5418,7 +5420,7 @@ with:
         return cls(roles, candidates.to_list(), SelectionLog(Path(log_path)))
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py tests/unit/test_outcome_panel.py tests/unit/test_config.py -q`
 Expected: `100 passed`.
@@ -5426,13 +5428,13 @@ Expected: `100 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1360 passed, 1 skipped`.
 
-- [ ] **Step 8: Lint and format**
+- [x] **Step 8: Lint and format**
 
 Run: `./scripts/format_code.sh --check tests/fixtures/supervision.py tests/unit/test_supervision_artifacts.py tests/unit/test_outcome_panel.py tests/unit/test_config.py src/naics_embedder/utils/config.py src/naics_embedder/supervision/artifacts.py src/naics_embedder/data/supervision_bundle.py src/naics_embedder/panels/outcome.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` On a failure, run the
 same command without `--check`, re-run Step 7, and record the change as a deviation.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add tests/fixtures/supervision.py tests/unit/test_supervision_artifacts.py tests/unit/test_outcome_panel.py tests/unit/test_config.py src/naics_embedder/utils/config.py conf/data/supervision.yaml src/naics_embedder/supervision/artifacts.py src/naics_embedder/data/supervision_bundle.py src/naics_embedder/panels/outcome.py
@@ -5495,7 +5497,7 @@ An existing table is replaced only with `--force`, because redrawing unseals bot
   'data/outcome_panel.yaml'` and `naics-embedder data roles [--source-dir DIR] [--force]`, which
   exits 1 on a refused redraw.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_index_role_table.py` with exactly this content:
 
@@ -5751,7 +5753,7 @@ def test_data_roles_refuses_to_redraw_without_force(monkeypatch, runner):
 def test_tools_config_passes_config_path(monkeypatch, runner, tmp_path):
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_index_role_table.py tests/unit/test_config.py tests/unit/test_cli_commands.py -q`
 Expected: two collection errors:
@@ -5759,7 +5761,7 @@ Expected: two collection errors:
 - `ImportError: cannot import name 'OutcomePanelConfig' from 'naics_embedder.utils.config'`
 - `ImportError: cannot import name 'index_role_table' from 'naics_embedder.data'`
 
-- [ ] **Step 3: Add the configuration**
+- [x] **Step 3: Add the configuration**
 
 Modify `src/naics_embedder/utils/config.py` with these 2 edits, in order. Each replaced text occurs
 exactly once in the file.
@@ -5873,7 +5875,7 @@ near_duplicate_min_jaccard: 0.9
 selection_log: ./logs/selection_log.jsonl
 ```
 
-- [ ] **Step 4: Write the generator**
+- [x] **Step 4: Write the generator**
 
 Create `src/naics_embedder/data/index_role_table.py` with exactly this content:
 
@@ -6040,7 +6042,7 @@ def _provenance(
     }
 ```
 
-- [ ] **Step 5: Add the command**
+- [x] **Step 5: Add the command**
 
 Modify `src/naics_embedder/cli/commands/data.py` with these 4 edits, in order. Each replaced text
 occurs exactly once in the file.
@@ -6170,7 +6172,7 @@ def roles(
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_index_role_table.py tests/unit/test_config.py tests/unit/test_cli_commands.py -q`
 Expected: `80 passed`.
@@ -6182,13 +6184,13 @@ Run: `git status --short conf/data`
 Expected: only `?? conf/data/outcome_panel.yaml`. The tests draw their tables under `tmp_path`,
 and `conf/data/index_roles.csv` must not exist before Task 9.
 
-- [ ] **Step 7: Lint and format**
+- [x] **Step 7: Lint and format**
 
 Run: `./scripts/format_code.sh --check tests/unit/test_index_role_table.py tests/unit/test_config.py tests/unit/test_cli_commands.py src/naics_embedder/utils/config.py src/naics_embedder/data/index_role_table.py src/naics_embedder/cli/commands/data.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` On a failure, run the
 same command without `--check`, re-run Step 6, and record the change as a deviation.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add tests/unit/test_index_role_table.py tests/unit/test_config.py tests/unit/test_cli_commands.py src/naics_embedder/utils/config.py conf/data/outcome_panel.yaml src/naics_embedder/data/index_role_table.py src/naics_embedder/cli/commands/data.py
@@ -6235,7 +6237,7 @@ the queries into the code texts.
   - It writes `{'fingerprint', 'summary'}` JSON with `--output`.
   - It exits 1 on missing or inconsistent inputs.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_lexical_encoder.py` with exactly this content:
 
@@ -6417,13 +6419,13 @@ def test_outcome_baseline_refuses_descriptions_that_hold_every_entry(runner, tmp
     assert SelectionLog(tmp_path / 'selection_log.jsonl').records() == []
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_lexical_encoder.py tests/unit/test_cli_commands.py -q`
 Expected: a collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.panels.lexical_encoder'`.
 
-- [ ] **Step 3: Write the encoder**
+- [x] **Step 3: Write the encoder**
 
 Create `src/naics_embedder/panels/lexical_encoder.py` with exactly this content:
 
@@ -6502,7 +6504,7 @@ class LexicalTrigramEncoder:
         return self._embed(texts)
 ```
 
-- [ ] **Step 4: Add the command**
+- [x] **Step 4: Add the command**
 
 Modify `src/naics_embedder/cli/commands/tools.py` with these 3 edits, in order. Each replaced text
 occurs exactly once in the file.
@@ -6660,7 +6662,7 @@ def outcome_baseline(
         path.write_text(json.dumps(payload, indent=2) + '\n')
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_lexical_encoder.py tests/unit/test_cli_commands.py -q`
 Expected: `26 passed`.
@@ -6668,13 +6670,13 @@ Expected: `26 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1375 passed, 1 skipped`.
 
-- [ ] **Step 6: Lint and format**
+- [x] **Step 6: Lint and format**
 
 Run: `./scripts/format_code.sh --check tests/unit/test_lexical_encoder.py tests/unit/test_cli_commands.py src/naics_embedder/panels/lexical_encoder.py src/naics_embedder/cli/commands/tools.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.` On a failure, run the
 same command without `--check`, re-run Step 5, and record the change as a deviation.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add tests/unit/test_lexical_encoder.py tests/unit/test_cli_commands.py src/naics_embedder/panels/lexical_encoder.py src/naics_embedder/cli/commands/tools.py
@@ -6712,7 +6714,7 @@ built.
   - The committed-table test runs in CI without the Census files.
   - Its pinned hash fails on any redraw.
 
-- [ ] **Step 1: Write the committed-table test**
+- [x] **Step 1: Write the committed-table test**
 
 Create `tests/unit/test_committed_index_roles.py` with exactly this content:
 
@@ -6788,13 +6790,13 @@ def test_held_out_queries_were_checked_against_training_text(provenance):
     }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `uv run pytest tests/unit/test_committed_index_roles.py -q`
 Expected: `5 errors`, starting with
 `FileNotFoundError: No such file or directory (os error 2): conf/data/index_roles.csv`.
 
-- [ ] **Step 3: Draw the role table, once**
+- [x] **Step 3: Draw the role table, once**
 
 Run: `uv run naics-embedder data roles --source-dir ~/Downloads/Data`
 Expected, in about 20 seconds, the log ends with these lines (Rich wraps them at the terminal
@@ -6812,7 +6814,7 @@ Index-entry role table: conf/data/index_roles.csv
 Do not run `data roles` again on this branch, with or without `--force`. Record today's date
 (YYYY-MM-DD) as the run date for Step 10.
 
-- [ ] **Step 4: Check the table's hash and size**
+- [x] **Step 4: Check the table's hash and size**
 
 Run: `shasum -a 256 conf/data/index_roles.csv`
 Expected: `05099381db725244b54ee263222933568f82fd5b212064697e8c7b2cfa6e8a3a  conf/data/index_roles.csv`
@@ -6823,7 +6825,7 @@ Expected: `433147 conf/data/index_roles.csv`, with leading spaces.
 If the hash differs, stop and ask. Do not commit, and leave both generated files in place for
 your human partner.
 
-- [ ] **Step 5: Check the provenance**
+- [x] **Step 5: Check the provenance**
 
 Run: `uv run python -c "import json; p = json.load(open('conf/data/index_roles_provenance.json')); print(p['roles'], p['codes_with_role'], p['held_out_leakage'], p['eligibility'], p['fractions'], p['library_versions'], sep='\n')"`
 Expected:
@@ -6837,12 +6839,12 @@ Expected:
 {'numpy': '2.3.4', 'polars': '1.35.1', 'scikit-learn': '1.9.1'}
 ```
 
-- [ ] **Step 6: Run the committed-table test**
+- [x] **Step 6: Run the committed-table test**
 
 Run: `uv run pytest tests/unit/test_committed_index_roles.py -q`
 Expected: `5 passed`.
 
-- [ ] **Step 7: Rebuild the descriptions in this worktree**
+- [x] **Step 7: Rebuild the descriptions in this worktree**
 
 Run: `uv run naics-embedder data preprocess --source-dir ~/Downloads/Data`
 Expected, in about 7 seconds:
@@ -6855,7 +6857,7 @@ Expected, in about 7 seconds:
 Both paths are this worktree's ignored `data/`. The guard pins nothing here: both manifest paths
 are `null` on this branch.
 
-- [ ] **Step 8: Compare the rebuilt descriptions with the pinned file**
+- [x] **Step 8: Compare the rebuilt descriptions with the pinned file**
 
 Create `/tmp/stage2-outcome-panel-522fa329/regression_check.py` with the Write tool, with exactly
 this content:
@@ -6919,7 +6921,7 @@ codes with an examples channel (old, new): 1075 1075
 six-digit candidates: 1012 True True
 ```
 
-- [ ] **Step 9: Score the stub encoder on the validation split**
+- [x] **Step 9: Score the stub encoder on the validation split**
 
 Run: `uv run naics-embedder tools outcome-baseline --log /tmp/stage2-outcome-panel-522fa329/selection_log.jsonl --output /tmp/stage2-outcome-panel-522fa329/baseline.json`
 Expected, in about 3 seconds:
@@ -6950,7 +6952,9 @@ Expected: exactly one line. Only its `time` differs from this:
 
 The test split stays sealed. Never call `open_test` on the real table in this plan.
 
-- [ ] **Step 10: Write the finding**
+- [x] **Step 10: Write the finding**
+
+> Deviation: after the whole-plan review, 7b5e25d amended the finding: section 2 adds the segment-break limitation with an audit against unsplit texts (no test query in any whole title, description or exclusion text; 1 test and 4 validation queries span a sentence end or two examples-channel entries), and section 5 records that `OutcomePanel` alone enforces the seal.
 
 Create `specs/findings/outcome-panel-splits.md` with exactly this content, with `<run date>`
 replaced by Step 3's date:
@@ -7158,7 +7162,7 @@ uv run naics-embedder tools outcome-baseline --log /tmp/selection_log.jsonl
 ```
 ````
 
-- [ ] **Step 11: Run the full suite and check the tree**
+- [x] **Step 11: Run the full suite and check the tree**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1380 passed, 1 skipped`.
@@ -7177,14 +7181,14 @@ plan file, which shows as modified if you tick its boxes as you go.
 ?? tests/unit/test_committed_index_roles.py
 ```
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add conf/data/index_roles.csv conf/data/index_roles_provenance.json tests/unit/test_committed_index_roles.py specs/findings/outcome-panel-splits.md
 git commit -m "feat(data): commit the outcome panel's frozen index-entry role table and finding"
 ```
 
-- [ ] **Step 13: Remove the scratch files**
+- [x] **Step 13: Remove the scratch files**
 
 Run: `rm -rf /tmp/stage2-outcome-panel-522fa329`
 
@@ -7208,7 +7212,7 @@ This task documents the new commands, adds the API page, and lists the new files
 - Consumes: the commands and modules of Tasks 1–8.
 - Produces: documentation only.
 
-- [ ] **Step 1: Update the usage guide**
+- [x] **Step 1: Update the usage guide**
 
 Modify `docs/usage.md` with these 4 edits, in order. Each replaced text occurs exactly once in the
 file.
@@ -7346,7 +7350,7 @@ uv run naics-embedder tools outcome-baseline
 ---
 ````
 
-- [ ] **Step 2: Add the API page**
+- [x] **Step 2: Add the API page**
 
 Create `docs/api/outcome_panel.md` with exactly this content:
 
@@ -7401,7 +7405,7 @@ with:
           - Runner: api/runner.md
 ```
 
-- [ ] **Step 3: Update CLAUDE.md**
+- [x] **Step 3: Update CLAUDE.md**
 
 Modify `CLAUDE.md` with these 5 edits, in order. Each replaced text occurs exactly once in the file.
 
@@ -7505,7 +7509,7 @@ uv run naics-embedder tools outcome-baseline  # Lexical stub on the outcome vali
 ```
 ````
 
-- [ ] **Step 4: Build the docs strictly**
+- [x] **Step 4: Build the docs strictly**
 
 Run: `uv run mkdocs build --strict --site-dir /tmp/stage2-outcome-panel-docs-522fa329`
 Expected: exit 0 and `Documentation built in`. The output has no `WARNING` line.
@@ -7515,7 +7519,7 @@ Expected: a count of at least 1. It shows the new page rendered its modules.
 
 Run: `rm -rf /tmp/stage2-outcome-panel-docs-522fa329`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/usage.md docs/api/outcome_panel.md docs/.nav.yml CLAUDE.md
@@ -7524,12 +7528,16 @@ git commit -m "docs: document data roles, tools outcome-baseline and the outcome
 
 ## Final verification (controller, inline)
 
-- [ ] **Step 1: Full suite on Python 3.12**
+- [x] **Step 1: Full suite on Python 3.12**
+
+> Deviation: 1382 passed, 1 skipped after review commit ecf748d added two tests (1380 before it).
 
 Run: `uv run pytest -n auto -q`
 Expected: `1380 passed, 1 skipped`.
 
-- [ ] **Step 2: Full suite on Python 3.10, CI's other leg**
+- [x] **Step 2: Full suite on Python 3.10, CI's other leg**
+
+> Deviation: likewise 1382 passed, 1 skipped on Python 3.10 after ecf748d (1380 before it).
 
 Run: `UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310-522fa329 uv run pytest -n auto -q`
 Expected: `1380 passed, 1 skipped`, the same as Step 1. On a machine without MPS, the MPS test in
@@ -7538,12 +7546,12 @@ committed-table test reads the CSV, so it passes without redrawing.
 
 Run: `rm -rf /tmp/naics-py310-522fa329`
 
-- [ ] **Step 3: The CI lint job**
+- [x] **Step 3: The CI lint job**
 
 Run: `./scripts/format_code.sh --check --all`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 4: The branch carries only this plan's commits**
+- [x] **Step 4: The branch carries only this plan's commits**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected, read bottom up, because `git log` prints the newest commit first:
@@ -7558,7 +7566,7 @@ Neither "config" nor "graph config" appears.
 Run: `git diff --stat origin/main..HEAD -- conf/config.yaml conf/graph.yaml`
 Expected: no output.
 
-- [ ] **Step 5: The roadmap's Stage 2 Exit, outcome by outcome**
+- [x] **Step 5: The roadmap's Stage 2 Exit, outcome by outcome**
 
 Check each row against the test that backs it:
 
@@ -7580,7 +7588,7 @@ are the branch's last commits. Before editing `specs/naics-embedding-roadmap.md`
 `specs/deferred_items.md`, check whether another Claude session is active in this repository. If
 one is, hold both edits and hand your human partner the exact text below.
 
-- [ ] **Step 1: Tick the roadmap stage and add the rollout note and the stamp**
+- [x] **Step 1: Tick the roadmap stage and add the rollout note and the stamp**
 
 In `specs/naics-embedding-roadmap.md`, make one edit. Replace:
 
@@ -7619,7 +7627,7 @@ with the lines below, with `YYYY-MM-DD` replaced by the completion date:
 - [ ] Stage 3: Regressor panel
 ```
 
-- [ ] **Step 2: Re-validate the later stages against what shipped**
+- [x] **Step 2: Re-validate the later stages against what shipped**
 
 Two later entries name what Stage 2 left open, so each gets one line.
 
@@ -7664,7 +7672,7 @@ Stages 3, 4 and 6 need no edit:
 
 Commit both roadmap edits with the plan markup in Step 3's commit.
 
-- [ ] **Step 3: Mark up this plan and resolve the gate**
+- [x] **Step 3: Mark up this plan and resolve the gate**
 
 Follow the protocol:
 
@@ -7685,7 +7693,7 @@ git commit -m "docs(roadmap): complete Stage 2 and re-validate Stages 5 and 7"
 
 `git add` of an unchanged `specs/deferred_items.md` is harmless.
 
-- [ ] **Step 4: Retire the plan**
+- [x] **Step 4: Retire the plan**
 
 ```bash
 git mv specs/plans/4-outcome-panel-sealed-splits.md specs/plans/completed/4-outcome-panel-sealed-splits.md
@@ -7695,7 +7703,7 @@ git commit -m "chore(specs): retire plan 4"
 This plan has no relative links to re-point, and no spec file retires with it: Stage 2 has no
 stage spec.
 
-- [ ] **Step 5: Integrate**
+- [x] **Step 5: Integrate**
 
 Hand over to finishing-a-development-branch. Before opening any PR, check two things:
 

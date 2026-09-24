@@ -169,7 +169,7 @@ quick-fix, which Stage 3 inherits only if it reuses that script's checks.
       Stage 1: COMPLETE (2026-09-24) — implemented by plan 3
       (specs/plans/completed/3-employment-statistics-coverage.md). Next: resume the roadmap.
 
-- [ ] Stage 2: Outcome panel and sealed splits
+- [x] Stage 2: Outcome panel and sealed splits
       Objective: Build the text→code decoding panel and the sealed validation and test splits
       that it and every later selection read.
       Spec: Req 3; Req 4 (text-stage rows: splits, selection log); Req 1 (outcome estimand);
@@ -195,6 +195,13 @@ quick-fix, which Stage 3 inherits only if it reuses that script's checks.
       sealed splits; the selection log exists and the test split cannot be read without a
       logged open.
       ROUTING: writing-plans
+      Rollout note (D4): per code, largest-remainder quotas of examples 3/10, training 7/20,
+      validation 1/5 and test 3/20; remainder ties broken by a draw seeded with (20260924,
+      code); at least one examples-channel entry for every code with entries; held-out quotas
+      capped at the code's leak-free entries, the excess to training. Realized: 6,118 / 7,200 /
+      4,042 / 3,013 entries (`conf/data/index_roles.csv`, sha256 05099381…).
+      Stage 2: COMPLETE (2026-09-24) — implemented by plan 4
+      (specs/plans/completed/4-outcome-panel-sealed-splits.md). Next: resume the roadmap.
 
 - [ ] Stage 3: Regressor panel
       Objective: Build the regressor panel on the population and grain Stage 1 verified, with
@@ -261,7 +268,10 @@ quick-fix, which Stage 3 inherits only if it reuses that script's checks.
       Gap closed: Req 7 (except the IC ablation); Req 8 (a, lineal, generation side of c);
       Req 9 (except the model-side mask and the channel-presence ablation).
       Consumes: Stage 2's index-entry roles (the examples channel holds examples-role entries
-      only). The current bundle contract (`data/supervision_bundle.py`,
+      only). Stage 2 shipped them as an optional `index_roles` member under
+      stage3-supervision-v1 and the rebuild in `data preprocess`, but built no bundle: this
+      stage's contract version makes the member required, and its rebuild is the first bundle
+      carrying both. The current bundle contract (`data/supervision_bundle.py`,
       `supervision/artifacts.py`) as the thing to version. The current backbone's own
       documentation for its trained window.
       Produces: A new bundle contract version: pair facts carrying D* (no 99, no half-step, a
@@ -323,8 +333,10 @@ quick-fix, which Stage 3 inherits only if it reuses that script's checks.
       Gap closed: Req 11; Req 10; Req 13; Req 8 (b, training side of c); Req 4 (monitors);
       Req 5 (reference configuration and δ).
       Consumes: Stage 6's encoder and query path; Stage 5's D*, redirection table and unary
-      flags; Stage 2's query splits, scorer and selection log; Stage 3's panel; Stage 4's
-      seed-sweep driver, decision tooling and δ procedure.
+      flags; Stage 2's query splits, scorer and selection log (the log's path is
+      `OutcomePanelConfig.selection_log`, `logs/selection_log.jsonl`: gitignored, so a
+      worktree's log goes with the worktree); Stage 3's panel; Stage 4's seed-sweep driver,
+      decision tooling and δ procedure.
       Produces: The reference configuration (hyperbolic, dimension 16, current backbone, shared
       encoder) with a query→code task term over training queries and activity phrases (the
       referencing code always scored), a listwise code–code term with graded targets from D*

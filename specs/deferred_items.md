@@ -67,3 +67,38 @@
       that `_nested_excess` already applies, plus a fixture test. Size: quick-fix.
       Done when: `run` on the 2022–2025 files reports no invariant failure and a
       test pins the allowance.
+
+## 4-outcome-panel-sealed-splits — 2026-09-24
+- [ ] Review Minor: the index-roles checks outside `data roles` hardcode the near-duplicate
+      threshold (9/10) and the examples floor (1): `download_preprocess_data`
+      (src/naics_embedder/data/download_data.py), the bundle build
+      (src/naics_embedder/data/supervision_bundle.py), `load_validated_bundle`
+      (src/naics_embedder/supervision/artifacts.py) and `OutcomePanel.__init__`
+      (src/naics_embedder/panels/outcome.py). `OutcomePanelConfig.near_duplicate_min_jaccard`
+      and `examples_floor` (conf/data/outcome_panel.yaml) reach only the draw, so a redraw with
+      other values would be checked against the defaults. Deferred because the committed table
+      (conf/data/index_roles.csv) is frozen: the values cannot change without a redraw.
+      Fix: read both from the draw's provenance (conf/data/index_roles_provenance.json), or
+      document the two keys as frozen with the table. Size: quick-fix. Done when: every
+      index-roles check uses the threshold and floor the table was drawn with, or the config
+      documents them as frozen.
+- [ ] Review Minor: when a bundle carries the `index_roles` member, `load_validated_bundle`
+      (src/naics_embedder/supervision/artifacts.py) re-validates the table but does not require
+      the build's `index_roles_one_role_per_entry`, `index_roles_examples_channel` and
+      `index_roles_no_leakage` entries in `validation_results`, and it cannot re-run the leakage
+      check itself. Deferred to roadmap Stage 5, whose contract version makes the member
+      required. Size: quick-fix. Done when: the Stage 5 contract rejects a bundle whose
+      `index_roles` member lacks those three validation results.
+- [ ] Review Minor: nothing pins the index-entry text until a bundle carries `index_roles`.
+      conf/data/index_roles.csv pins (entry_id, code, role) and `DownloadConfig.index_sha256`
+      pins the index file, but `entry_id` and the text come from `pl.read_excel` (calamine via
+      fastexcel) in `_read_xlsx_bytes` (src/naics_embedder/data/download_data.py). A parser
+      change that altered text within a row would pass `attach_role_text`, which catches only
+      entries that move to another code. Stage 5's bundle member carries the text under its
+      artifact hash. Size: quick-fix. Revisit if: polars or fastexcel is upgraded in uv.lock
+      before Stage 5 builds the first bundle with the `index_roles` member.
+- [ ] Review Minor: the scorer's `lorentz` distance (`lorentz_distances` in
+      src/naics_embedder/panels/decoding.py) assumes curvature −1, while the text model's
+      curvature is learnable. Roadmap Stage 6 must pass a curvature-aware callable to
+      `OutcomePanel.score(..., distance=...)` or add a curvature parameter. Size: quick-fix.
+      Done when: Stage 6 scores its arm under the trained curvature.
