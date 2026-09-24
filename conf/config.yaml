@@ -9,7 +9,7 @@ seed: 42
 supervision:
   mode: repaired  # Options: repaired, legacy_containment (explicit, tagged, never exact-resumes)
   contract_version: stage3-supervision-v1
-  manifest_path: data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/manifest.json
+  manifest_path: null  # data supervision prints the exact immutable path to set before training
 
 # Curriculum scheduler configuration (Structure-Aware Dynamic Curriculum)
 curriculum:
