@@ -28,6 +28,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 
+from naics_embedder.metrics.core import lorentz_distance_matrix
 from naics_embedder.text_model.hyperbolic import LorentzOps
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
 from naics_embedder.utils.utilities import (
@@ -42,6 +43,40 @@ logger = logging.getLogger(__name__)
 # Validation Metrics
 # -------------------------------------------------------------------------------------------------
 
+def _anchor_distances(
+    emb: torch.Tensor,
+    anchors: torch.Tensor,
+    candidates: torch.Tensor,
+    c: float,
+) -> torch.Tensor:
+    '''Float64 CPU Lorentz distances from each anchor to each of its candidates.
+
+    As in lorentz_distance_matrix, x0 is re-derived in float64 from the spatial coordinates:
+    float32 rounding of the stored x0 alone puts distances of about 1e-2 on pairs that are close
+    far from the origin.
+
+    Args:
+        emb: Embeddings of shape ``(N, embedding_dim+1)``.
+        anchors: Anchor indices, shape ``(batch_size,)``.
+        candidates: Indices to measure from each anchor, shape ``(batch_size, m)``.
+        c: Curvature parameter.
+
+    Returns:
+        Distances of shape ``(batch_size, m)``.
+    '''
+    # Move before casting, as MPS has no float64. One fixed layout makes the reductions round
+    # identically for C- and Fortran-ordered inputs.
+    points = emb.detach().cpu().to(torch.float64).contiguous()
+    spatial = points[:, 1:]
+    anchors = anchors.cpu()
+    candidates = candidates.cpu()
+    # Squared norms and dot products share one reduction, so copies of a point at different
+    # indices cancel as closely as the point does with itself.
+    time = torch.sqrt(1.0 / c + (spatial * spatial).sum(dim=1))
+    dot = (spatial[candidates] * spatial[anchors].unsqueeze(1)).sum(dim=-1)
+    neg_dot = time[candidates] * time[anchors].unsqueeze(1) - dot
+    return c**0.5 * torch.acosh(torch.clamp(neg_dot, min=1.0))
+
 def compute_validation_metrics(
     emb: torch.Tensor,
     anchors: torch.Tensor,
@@ -54,6 +89,9 @@ def compute_validation_metrics(
 ) -> Union[Dict[str, float], Dict[str, torch.Tensor]]:
     '''Compute validation metrics for hyperbolic embeddings.
 
+    Distances are computed in float64 on the CPU (see ``_anchor_distances``). Like every distance
+    formula here, sqrt(c) * acosh(-<x, y>_L) is only correct for c = 1.
+
     Args:
         emb: Embeddings tensor of shape ``(N, embedding_dim+1)``.
         anchors: Anchor indices, shape ``(batch_size,)``.
@@ -64,23 +102,16 @@ def compute_validation_metrics(
         as_tensors: Return torch scalars instead of Python floats (for Lightning logging).
 
     Returns:
-        Mapping of metric names to values (either tensors or floats).
+        Mapping of metric names to values: float32 tensors on ``emb``'s device, or floats.
     '''
-    batch_size, k_negatives = negatives.shape
+    k_negatives = negatives.size(1)
     effective_top_k = max(1, min(top_k, k_negatives))
 
-    anchor_emb = emb[anchors]
-    positive_emb = emb[positives]
-
-    positive_dist = LorentzOps.lorentz_distance(anchor_emb, positive_emb, c=c)
-
-    negative_emb = emb[negatives.reshape(-1)].view(batch_size, k_negatives, -1)
-    anchor_expanded = anchor_emb.unsqueeze(1).expand(-1, k_negatives, -1)
-    negative_dist = LorentzOps.lorentz_distance(
-        anchor_expanded.reshape(-1, anchor_expanded.size(-1)),
-        negative_emb.reshape(-1, negative_emb.size(-1)),
-        c=c,
-    ).view(batch_size, k_negatives)
+    # Column 0 holds each anchor's distance to its positive, the rest to its negatives.
+    candidates = torch.cat([positives.unsqueeze(1), negatives], dim=1)
+    all_dists_per_anchor = _anchor_distances(emb, anchors, candidates, c)
+    positive_dist = all_dists_per_anchor[:, 0]
+    negative_dist = all_dists_per_anchor[:, 1:]
 
     avg_positive_dist = positive_dist.mean()
     avg_negative_dist = negative_dist.mean()
@@ -94,7 +125,6 @@ def compute_validation_metrics(
     top_k_relation_accuracy = (positive_dist.unsqueeze(1)
                                < closest_negatives).all(dim=1).float().mean()
 
-    all_dists_per_anchor = torch.cat([positive_dist.unsqueeze(1), negative_dist], dim=1)
     order = torch.argsort(all_dists_per_anchor, dim=1)
     positive_rank_tensor = torch.argmax((order == 0).int(), dim=1)
     mean_positive_rank = positive_rank_tensor.float().mean()
@@ -109,9 +139,10 @@ def compute_validation_metrics(
     }
 
     if as_tensors:
-        return metrics
+        # Lightning logs these from the model's device.
+        return {k: v.to(device=emb.device, dtype=torch.float32) for k, v in metrics.items()}
 
-    return {k: float(v.detach().cpu()) for k, v in metrics.items()}
+    return {k: float(v) for k, v in metrics.items()}
 
 # -------------------------------------------------------------------------------------------------
 # Downstream evaluation data structures
@@ -186,30 +217,9 @@ class GraphDownstreamEvaluator:
             self._level_to_indices.setdefault(level, []).append(idx)
 
     def _pairwise_distances(self) -> torch.Tensor:
-        '''Pairwise Lorentz distances in float64, independent of the embeddings' memory layout.
-
-        Far from the origin, -<x, y>_L = x0 * y0 - <xs, ys> cancels catastrophically for nearby
-        points, and acosh near 1 amplifies the error. Float64 arithmetic alone is not enough:
-        float32 rounding of the stored x0 already moves -<x, x>_L off 1/c by up to x0 * ulp(x0),
-        about 5e-5 at radius 4, i.e. distances of about 1e-2. So x0 is re-derived in float64.
-        '''
-        if self._distance_cache is not None:
-            return self._distance_cache
-
-        # One fixed layout makes the reductions round identically for C- and Fortran-ordered
-        # inputs; computing on the CPU also covers devices without float64, such as MPS.
-        emb = self.dataset.embeddings.detach().to(device='cpu', dtype=torch.float64).contiguous()
-        with torch.no_grad():
-            spatial = emb[:, 1:]
-            gram = spatial @ spatial.T
-            time = torch.sqrt(1.0 / self.curvature + gram.diagonal())
-            neg_dot = torch.outer(time, time) - gram
-            # No gradients flow here, so clamp only to acosh's domain: a 1 + eps floor would
-            # also floor every distance at acosh(1 + eps), 1.4e-3 for eps = 1e-6.
-            distances = self.curvature**0.5 * torch.acosh(torch.clamp(neg_dot, min=1.0))
-            distances.fill_diagonal_(0.0)
-
-        self._distance_cache = distances
+        '''Pairwise float64 CPU Lorentz distances (see lorentz_distance_matrix), computed once.'''
+        if self._distance_cache is None:
+            self._distance_cache = lorentz_distance_matrix(self.dataset.embeddings, self.curvature)
         return self._distance_cache
 
     def _tangent_features(self) -> np.ndarray:

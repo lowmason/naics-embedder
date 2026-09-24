@@ -5,6 +5,7 @@
 Core metrics classes for embedding evaluation.
 
 Contains:
+- lorentz_distance_matrix: Float64 pairwise Lorentz distances for evaluation
 - EmbeddingEvaluator: Pairwise distance and similarity computation
 - RetrievalMetrics: Precision@k, Recall@k, MAP, NDCG
 - HierarchyMetrics: Cophenetic/Spearman correlation, NDCG ranking, distortion
@@ -29,6 +30,44 @@ logger = logging.getLogger(__name__)
 # Embedding similarity and distance utilities
 # -------------------------------------------------------------------------------------------------
 
+def lorentz_distance_matrix(embeddings: torch.Tensor, curvature: float = 1.0) -> torch.Tensor:
+    '''
+    Pairwise Lorentz distances in float64 on the CPU, for evaluation (no gradients flow).
+
+    Far from the origin, -<x, y>_L = x0 * y0 - <xs, ys> cancels catastrophically for nearby
+    points, and acosh near 1 amplifies the error. Float64 arithmetic alone is not enough: float32
+    rounding of the stored x0 already moves -<x, x>_L off 1/c by up to x0 * ulp(x0), about 5e-5
+    at radius 4, i.e. distances of about 1e-2. So x0 is re-derived in float64 from the spatial
+    coordinates, which assumes the points lie on the curvature-c hyperboloid.
+
+    Like every distance formula here, sqrt(c) * acosh(-<x, y>_L) is only correct for c = 1;
+    see "One curvature everywhere" in specs/naics-embedding-methodology.md.
+
+    Args:
+        embeddings: Hyperbolic embeddings of shape (N, D+1), on any device
+        curvature: Curvature parameter c
+
+    Returns:
+        Float64 CPU distance matrix of shape (N, N), exactly symmetric with a zero diagonal
+    '''
+    # Move before casting, as MPS has no float64. One fixed layout makes the reductions round
+    # identically for C- and Fortran-ordered inputs.
+    emb = embeddings.detach().cpu().to(torch.float64).contiguous()
+    spatial = emb[:, 1:]
+    gram = spatial @ spatial.T
+    # BLAS need not return A @ A.T bitwise symmetric, and structural Spearman rejects asymmetric
+    # distance matrices. Averaging leaves the diagonal unchanged.
+    gram = (gram + gram.T) / 2
+    # Taking x0 from the same product as the dot products lets copies of a point at different
+    # indices cancel as closely as the point does with itself.
+    time = torch.sqrt(1.0 / curvature + gram.diagonal())
+    neg_dot = torch.outer(time, time) - gram
+    # Clamp only to acosh's domain: a 1 + eps floor would also floor every distance at
+    # acosh(1 + eps), e.g. 4.5e-3 for eps = 1e-5.
+    distances = curvature**0.5 * torch.acosh(torch.clamp(neg_dot, min=1.0))
+    distances.fill_diagonal_(0.0)
+    return distances
+
 class EmbeddingEvaluator:
 
     def __init__(self):
@@ -52,8 +91,13 @@ class EmbeddingEvaluator:
             curvature: Curvature parameter for Lorentz metric (default: 1.0)
 
         Returns:
-            Distance matrix of shape (N, N)
+            Float32 distance matrix of shape (N, N) on self.device
         '''
+
+        if metric == 'lorentz':
+            # Computed in float64 from the embeddings as given, so it skips the float32 cast.
+            distances = lorentz_distance_matrix(embeddings, curvature=curvature)
+            return distances.to(device=self.device, dtype=torch.float32)
 
         embeddings = embeddings.to(self.device)
         embeddings = embeddings.float()
@@ -68,44 +112,8 @@ class EmbeddingEvaluator:
             similarities = torch.mm(normalized, normalized.t())
             distances = 1.0 - similarities
 
-        elif metric == 'lorentz':
-            # Lorentzian distance on hyperboloid
-            distances = self._lorentz_distance_matrix(embeddings, curvature=curvature)
-
         else:
             raise ValueError(f'Unknown metric: {metric}')
-
-        return distances
-
-    def _lorentz_distance_matrix(
-        self, embeddings: torch.Tensor, curvature: float = 1.0
-    ) -> torch.Tensor:
-        '''
-        Compute pairwise Lorentzian distances using fully vectorized operations.
-
-        Args:
-            embeddings: Hyperbolic embeddings of shape (N, D+1)
-            curvature: Curvature parameter c
-
-        Returns:
-            Distance matrix of shape (N, N)
-        '''
-        embeddings.shape[0]
-        embeddings = embeddings.to(self.device)
-
-        # Vectorized Lorentz dot product computation
-        # embeddings: (N, D+1)
-        u = embeddings.unsqueeze(1)  # (N, 1, D+1)
-        v = embeddings.unsqueeze(0)  # (1, N, D+1)
-
-        # Compute Lorentz dot product: sum of spatial - time
-        uv = u * v  # (N, N, D+1)
-        dot_product = torch.sum(uv[:, :, 1:], dim=2) - uv[:, :, 0]  # (N, N)
-
-        # Clamp and compute distance
-        clamped_dot = torch.clamp(dot_product, max=-1.0 - 1e-5)
-        sqrt_c = torch.sqrt(torch.tensor(curvature, device=embeddings.device))
-        distances = sqrt_c * torch.acosh(-clamped_dot)
 
         return distances
 
