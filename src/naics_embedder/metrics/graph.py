@@ -13,7 +13,7 @@ Contains:
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import polars as pl
@@ -30,6 +30,11 @@ from sklearn.model_selection import train_test_split
 
 from naics_embedder.text_model.hyperbolic import LorentzOps
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
+from naics_embedder.utils.utilities import (
+    STAGE3_EMBEDDING_PREFIX,
+    STAGE4_EMBEDDING_PREFIX,
+    sorted_embedding_columns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,19 +117,6 @@ def compute_validation_metrics(
 # Downstream evaluation data structures
 # -------------------------------------------------------------------------------------------------
 
-def _sorted_embedding_columns(columns: Sequence[str], prefix: str) -> List[str]:
-    '''Return embedding columns sorted numerically by suffix.'''
-
-    relevant = [col for col in columns if col.startswith(prefix)]
-    if not relevant:
-        return []
-
-    def _sort_key(name: str) -> Tuple[int, Union[int, str]]:
-        suffix = name[len(prefix):]
-        return (0, int(suffix)) if suffix.isdigit() else (1, suffix)
-
-    return sorted(relevant, key=_sort_key)
-
 @dataclass
 class GraphEmbeddingDataset:
     '''Container for a set of hyperbolic graph embeddings.'''
@@ -152,7 +144,7 @@ class GraphEmbeddingDataset:
         cls,
         frame: pl.DataFrame,
         *,
-        embedding_prefix: str = 'hgcn_e',
+        embedding_prefix: str = STAGE4_EMBEDDING_PREFIX,
         code_column: str = 'code',
         level_column: str = 'level',
     ) -> 'GraphEmbeddingDataset':
@@ -163,11 +155,12 @@ class GraphEmbeddingDataset:
         if level_column not in frame.columns:
             raise ValueError(f'Expected column "{level_column}" in embeddings parquet')
 
-        embed_cols = _sorted_embedding_columns(frame.columns, embedding_prefix)
+        embed_cols = sorted_embedding_columns(frame.columns, embedding_prefix)
         if not embed_cols:
             raise ValueError(
                 f'No embedding columns found with prefix "{embedding_prefix}". '
-                'Set embedding_prefix to match hgcn_e* or hyp_e* columns.'
+                f'Set embedding_prefix to match {STAGE4_EMBEDDING_PREFIX}* or '
+                f'{STAGE3_EMBEDDING_PREFIX}* columns.'
             )
 
         tensor = torch.from_numpy(frame.select(embed_cols).to_numpy()).float()

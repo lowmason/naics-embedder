@@ -10,6 +10,7 @@ from naics_embedder.utils.utilities import (
     make_directories,
     map_relationships,
     setup_directory,
+    sorted_embedding_columns,
 )
 
 @pytest.mark.unit
@@ -84,3 +85,27 @@ def test_setup_directory_creates_path(tmp_path):
     path = setup_directory(str(target))
 
     assert path.exists()
+
+@pytest.mark.unit
+def test_sorted_embedding_columns_orders_numeric_suffixes_as_integers():
+    numeric_order = [f'hyp_e{i}' for i in range(12)]
+    string_order = sorted(numeric_order)  # hyp_e0, hyp_e1, hyp_e10, hyp_e11, hyp_e2, ...
+    assert string_order != numeric_order
+
+    assert sorted_embedding_columns(string_order, 'hyp_e') == numeric_order
+
+@pytest.mark.unit
+def test_sorted_embedding_columns_puts_non_numeric_suffixes_last():
+    # The bare prefix has an empty suffix, which sorts before any digit as a plain string
+    columns = ['hyp_e_norm', 'hyp_e10', 'hyp_e', 'hyp_e2']
+    expected = ['hyp_e2', 'hyp_e10', 'hyp_e', 'hyp_e_norm']
+
+    assert sorted_embedding_columns(columns, 'hyp_e') == expected
+
+@pytest.mark.unit
+def test_sorted_embedding_columns_keeps_only_prefixed_columns():
+    columns = ['index', 'level', 'code', 'hyp_e1', 'hgcn_e0', 'hyp_e0']
+
+    assert sorted_embedding_columns(columns, 'hyp_e') == ['hyp_e0', 'hyp_e1']
+    assert sorted_embedding_columns(columns, 'hgcn_e') == ['hgcn_e0']
+    assert sorted_embedding_columns(['index', 'level', 'code'], 'hyp_e') == []

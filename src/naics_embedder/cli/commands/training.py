@@ -53,7 +53,7 @@ from naics_embedder.utils.training import (
     resolve_checkpoint,
     save_training_summary,
 )
-from naics_embedder.utils.utilities import pick_device
+from naics_embedder.utils.utilities import STAGE3_EMBEDDING_PREFIX, pick_device
 from naics_embedder.utils.validation import (
     require_valid_supervision_bundle,
     validate_training_config,
@@ -368,7 +368,7 @@ def generate_embeddings_from_checkpoint(
     embeddings_np = all_embeddings_tensor.numpy()
 
     # Create DataFrame with hyp_e* columns
-    emb_schema = {f'hyp_e{i}': pl.Float64 for i in range(embedding_dim)}
+    emb_schema = {f'{STAGE3_EMBEDDING_PREFIX}{i}': pl.Float64 for i in range(embedding_dim)}
     emb_df = pl.DataFrame(embeddings_np, schema=emb_schema, orient='row')
 
     # Combine with metadata

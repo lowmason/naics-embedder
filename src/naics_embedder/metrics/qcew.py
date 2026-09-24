@@ -24,25 +24,13 @@ from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import OneHotEncoder
 
 from naics_embedder.text_model.hyperbolic import LorentzOps
+from naics_embedder.utils.utilities import STAGE4_EMBEDDING_PREFIX, sorted_embedding_columns
 
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------------------------------
 # Helper functions
 # -------------------------------------------------------------------------------------------------
-
-def _sorted_embedding_columns(columns: Sequence[str], prefix: str) -> list[str]:
-    '''Return embedding columns sorted numerically by suffix.'''
-
-    relevant = [col for col in columns if col.startswith(prefix)]
-    if not relevant:
-        return []
-
-    def _sort_key(name: str) -> tuple[int, int | str]:
-        suffix = name[len(prefix):]
-        return (0, int(suffix)) if suffix.isdigit() else (1, suffix)
-
-    return sorted(relevant, key=_sort_key)
 
 def _load_qcew_slice(
     config: 'QCEWBenchmarkConfig',
@@ -135,7 +123,7 @@ class QCEWBenchmarkConfig:
 
     qcew_csv_path: Path
     embedding_parquet: Path
-    embedding_prefix: str = 'hgcn_e'
+    embedding_prefix: str = STAGE4_EMBEDDING_PREFIX
     code_column: str = 'code'
     curvature: float = 1.0
     year: int = 2022
@@ -162,7 +150,7 @@ def run_qcew_employment_benchmark(config: QCEWBenchmarkConfig) -> Dict[str, Dict
         raise ValueError('Filtered QCEW dataframe is empty; check year/ownership filters.')
 
     embed_df = pl.read_parquet(str(config.embedding_parquet))
-    embed_cols = _sorted_embedding_columns(embed_df.columns, config.embedding_prefix)
+    embed_cols = sorted_embedding_columns(embed_df.columns, config.embedding_prefix)
     if not embed_cols:
         raise ValueError(
             f'No embedding columns with prefix "{config.embedding_prefix}" found in '
@@ -243,7 +231,7 @@ class QCEWMultilevelConfig:
 
     qcew_csv_path: Path
     embedding_parquet: Path
-    embedding_prefix: str = 'hgcn_e'
+    embedding_prefix: str = STAGE4_EMBEDDING_PREFIX
     code_column: str = 'code'
     curvature: float = 1.0
     year: int = 2022
@@ -375,7 +363,7 @@ def run_qcew_multilevel_benchmark(config: QCEWMultilevelConfig, ) -> Dict[str, A
 
     # Load embeddings once
     embed_df = pl.read_parquet(str(config.embedding_parquet))
-    embed_cols = _sorted_embedding_columns(embed_df.columns, config.embedding_prefix)
+    embed_cols = sorted_embedding_columns(embed_df.columns, config.embedding_prefix)
     if not embed_cols:
         raise ValueError(
             f'No embedding columns with prefix "{config.embedding_prefix}" found in '

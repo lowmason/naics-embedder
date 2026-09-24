@@ -35,7 +35,12 @@ from naics_embedder.text_model.hyperbolic import LorentzOps
 from naics_embedder.utils.config import GraphConfig
 from naics_embedder.utils.distance_matrix import load_distance_submatrix
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy, load_naics_hierarchy
-from naics_embedder.utils.utilities import setup_directory
+from naics_embedder.utils.utilities import (
+    STAGE3_EMBEDDING_PREFIX,
+    STAGE4_EMBEDDING_PREFIX,
+    setup_directory,
+    sorted_embedding_columns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1125,10 +1130,6 @@ class HGCNLightningModule(pyl.LightningModule):
 # IO helpers
 # -------------------------------------------------------------------------------------------------
 
-# Embedding column prefixes: Stage 3 exports write hyp_e{i}; HGCN (Stage 4) writes hgcn_e{i}.
-STAGE3_EMBEDDING_PREFIX = 'hyp_e'
-STAGE4_EMBEDDING_PREFIX = 'hgcn_e'
-
 def load_embeddings(
     parquet_path: str,
     device: torch.device,
@@ -1149,17 +1150,11 @@ def load_embeddings(
     '''
     df = pl.read_parquet(parquet_path)
 
-    embedding_cols = [col for col in df.columns if col.startswith(embedding_prefix)]
+    embedding_cols = sorted_embedding_columns(df.columns, embedding_prefix)
     if not embedding_cols:
         raise ValueError(
             f'No embedding columns found (expected {embedding_prefix}* pattern) in {parquet_path}'
         )
-
-    def _sort_key(name: str) -> Tuple[int, Union[int, str]]:
-        suffix = name[len(embedding_prefix):]
-        return (0, int(suffix)) if suffix.isdigit() else (1, suffix)
-
-    embedding_cols = sorted(embedding_cols, key=_sort_key)
 
     emb = df.select(embedding_cols).to_torch(dtype=pl.Float32).to(device)
 
