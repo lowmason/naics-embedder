@@ -29,8 +29,11 @@ only its legacy negative fields (`negative_idx`, `negative_code`, `relation_marg
 ## 3. Running the Refinement
 
 ```bash
-python train_hgcn.py --config configs/hgcn.yaml
+uv run python -m naics_embedder.graph_model.hgcn
 ```
+
+This reads `conf/graph.yaml`. For another graph config, call
+`naics_embedder.graph_model.hgcn.main('path/to/graph.yaml')` from a script or notebook.
 
 ## 4. HGCN Layer Operation
 

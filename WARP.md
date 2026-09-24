@@ -169,8 +169,8 @@ This command runs hierarchy-aware metrics pre/post HGCN (cophenetic correlation,
 
 ### HGCN refinement (Stage 4)
 
-The HGCN training logic lives in `src/naics_embedder/graph_model/hgcn.py` as a PyTorch Lightning module (`HGCNLightningModule`) plus a `main(config_file: str = 'conf/config.yaml')` entrypoint.  
-Configuration is provided by `GraphConfig` (also backed by `conf/config.yaml`).
+The HGCN training logic lives in `src/naics_embedder/graph_model/hgcn.py` as a PyTorch Lightning module (`HGCNLightningModule`) plus a `main(config_file: str = 'conf/graph.yaml')` entrypoint (`uv run python -m naics_embedder.graph_model.hgcn`).  
+Configuration is provided by `GraphConfig`, backed by `conf/graph.yaml` (set its own `supervision_manifest_path`; HGCN does not read `conf/config.yaml`).
 
 Typical flow:
 

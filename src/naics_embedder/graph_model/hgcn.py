@@ -1302,7 +1302,7 @@ def save_outputs(
 # Main
 # -------------------------------------------------------------------------------------------------
 
-def main(config_file: str = 'conf/config.yaml') -> None:
+def main(config_file: str = 'conf/graph.yaml') -> None:
     '''Main entry point for single-stage HGCN training via PyTorch Lightning.'''
     base_cfg = resolve_graph_config(GraphConfig.from_yaml(config_file))
     outdir = setup_directory(base_cfg.output_dir)
