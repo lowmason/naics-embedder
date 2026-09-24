@@ -84,14 +84,11 @@ data_loader:
   tokenization:
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
     max_length: 512
-    padding: max_length
-    truncation: true
 
   streaming:
     descriptions_parquet: ./data/naics_descriptions.parquet
     triplets_parquet: ./data/naics_training_pairs
     distances_parquet: ./data/naics_distances.parquet
-    relation_matrix_parquet: ./data/naics_relation_matrix.parquet
     distance_matrix_parquet: ./data/naics_distance_matrix.parquet
     relations_parquet: ./data/naics_relations.parquet
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2

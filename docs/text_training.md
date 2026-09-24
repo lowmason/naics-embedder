@@ -176,6 +176,10 @@ uv run naics-embedder train \
   training.trainer.max_epochs=15 training.trainer.accumulate_grad_batches=4
 ```
 
+`Config` and every section under it reject keys they do not define, so a misspelled key in
+`conf/config.yaml` or an override such as `training.learnig_rate=1e-4` raises a validation error
+and stops the run instead of silently training on the default value.
+
 ---
 
 ## Stage-3 Supervision Integrity

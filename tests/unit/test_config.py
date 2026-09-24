@@ -5,10 +5,11 @@ Tests Pydantic config models, YAML loading, and validation.
 '''
 
 from pathlib import Path
+from typing import Any, List, Type, get_args, get_origin
 
 import pytest
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from naics_embedder.utils.config import (
     CheckpointLoadMode,
@@ -248,6 +249,11 @@ class TestLoadConfig:
 # Validation Tests
 # -------------------------------------------------------------------------------------------------
 
+def _error_locs_and_types(excinfo: pytest.ExceptionInfo[ValidationError]) -> list:
+    '''(loc, type) for every error in a raised ValidationError.'''
+
+    return [(error['loc'], error['type']) for error in excinfo.value.errors()]
+
 @pytest.mark.unit
 class TestConfigValidation:
     '''Test suite for configuration validation.'''
@@ -258,16 +264,48 @@ class TestConfigValidation:
         with pytest.raises(ValidationError):
             DirConfig(checkpoint_dir=12345)  # type: ignore[arg-type]  # Should be string
 
-    def test_extra_fields_allowed(self):
-        '''Test behavior with extra fields.'''
+    def test_extra_fields_rejected(self):
+        '''A key a section does not define raises instead of being silently dropped.'''
 
-        # Pydantic should ignore extra fields by default (or raise error if configured)
-        config_dict = {'checkpoint_dir': './checkpoints', 'extra_field': 'value'}
+        with pytest.raises(ValidationError) as excinfo:
+            DirConfig(checkpoint_dir='./checkpoints', extra_field='value')
 
-        # This behavior depends on Pydantic config
-        # By default, extra fields are ignored
-        config = DirConfig(**config_dict)
-        assert config.checkpoint_dir == './checkpoints'
+        assert _error_locs_and_types(excinfo) == [(('extra_field', ), 'extra_forbidden')]
+
+    def test_config_rejects_an_unknown_top_level_key(self):
+        with pytest.raises(ValidationError) as excinfo:
+            Config(bogus_key=1)
+
+        assert _error_locs_and_types(excinfo) == [(('bogus_key', ), 'extra_forbidden')]
+
+    def test_config_rejects_an_unknown_nested_key(self):
+        with pytest.raises(ValidationError) as excinfo:
+            Config.model_validate({'training': {'learnig_rate': 1e-4}})
+
+        assert _error_locs_and_types(excinfo) == [(('training', 'learnig_rate'), 'extra_forbidden')]
+
+    @pytest.mark.parametrize(
+        ('override', 'loc'),
+        [
+            ('trainig.learning_rate', ('trainig', )),
+            ('training.learnig_rate', ('training', 'learnig_rate')),
+        ],
+    )
+    def test_override_rejects_a_misspelled_path(self, override, loc):
+        '''A typo'd CLI override fails instead of training on the default value.'''
+
+        with pytest.raises(ValidationError) as excinfo:
+            Config().override({override: 1e-4})
+
+        assert _error_locs_and_types(excinfo) == [(loc, 'extra_forbidden')]
+
+    def test_from_yaml_rejects_the_graph_config(self):
+        '''conf/graph.yaml loaded by mistake raises instead of keeping only its seed.'''
+
+        with pytest.raises(ValidationError) as excinfo:
+            Config.from_yaml('conf/graph.yaml')
+
+        assert {error['type'] for error in excinfo.value.errors()} == {'extra_forbidden'}
 
     def test_field_validation(self):
         '''Test that field validators work correctly.'''
@@ -277,6 +315,40 @@ class TestConfigValidation:
 
         # Should accept the value (may strip whitespace depending on validators)
         assert isinstance(config.checkpoint_dir, str)
+
+def _models_in(annotation: Any) -> List[Type[BaseModel]]:
+    '''The Pydantic models an annotation names, unwrapping Optional, List, Dict and the like.'''
+
+    # Check get_origin first: on Python 3.10, isinstance(list[Model], type) is True, so an
+    # isinstance-first check stops at the alias and never finds the Model inside it.
+    if get_origin(annotation) is None:
+        is_model = isinstance(annotation, type) and issubclass(annotation, BaseModel)
+        return [annotation] if is_model else []
+    return [model for arg in get_args(annotation) for model in _models_in(arg)]
+
+def _models_reachable_from(root: Type[BaseModel]) -> List[Type[BaseModel]]:
+    '''root plus every Pydantic model nested under its fields, at any depth.'''
+
+    found: List[Type[BaseModel]] = []
+    pending = [root]
+    while pending:
+        model = pending.pop()
+        if model not in found:
+            found.append(model)
+            for field in model.model_fields.values():
+                pending.extend(_models_in(field.annotation))
+    return found
+
+@pytest.mark.unit
+def test_every_section_under_config_forbids_unknown_keys():
+    '''A section added later cannot quietly bring back silent key-dropping.'''
+
+    permissive = [
+        model.__name__ for model in _models_reachable_from(Config)
+        if model.model_config.get('extra') != 'forbid'
+    ]
+
+    assert permissive == []
 
 # -------------------------------------------------------------------------------------------------
 # Integration Tests

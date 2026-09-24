@@ -75,6 +75,8 @@ def load_config(config_class: Type[T], yaml_path: Union[str, Path]) -> T:
 class DirConfig(BaseModel):
     '''File system directory configuration.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     checkpoint_dir: str = Field(
         default='./checkpoints', description='Directory for model checkpoints'
     )
@@ -90,6 +92,8 @@ class DirConfig(BaseModel):
 
 class DownloadConfig(BaseModel):
     '''Configuration for downloading and preprocessing NAICS data.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     output_parquet: str = Field(
         default='./data/naics_descriptions.parquet',
@@ -216,6 +220,8 @@ class DownloadConfig(BaseModel):
 class RelationsConfig(BaseModel):
     '''Configuration for computing pairwise relations.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     input_parquet: str = Field(
         default='./data/naics_descriptions.parquet', description='Input descriptions parquet file'
     )
@@ -267,6 +273,8 @@ class RelationsConfig(BaseModel):
 class DistancesConfig(BaseModel):
     '''Configuration for computing pairwise distances.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     input_parquet: str = Field(
         default='./data/naics_descriptions.parquet', description='Input descriptions parquet file'
     )
@@ -297,6 +305,8 @@ class DistancesConfig(BaseModel):
 
 class TripletsConfig(BaseModel):
     '''Configuration for generating training triplets.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     descriptions_parquet: str = Field(
         default='./data/naics_descriptions.parquet', description='Input descriptions parquet file'
@@ -330,6 +340,8 @@ class TripletsConfig(BaseModel):
 
 class DataConfig(BaseModel):
     '''Data configuration.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     download: DownloadConfig = Field(
         default_factory=DownloadConfig, description='Download configuration'
@@ -401,6 +413,8 @@ class CheckpointLoadMode(str, Enum):
 class TokenizationConfig(BaseModel):
     '''Configuration for tokenization caching.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     descriptions_parquet: str = Field(
         default='./data/naics_descriptions.parquet',
         description='Path to descriptions parquet file'
@@ -434,6 +448,8 @@ class TokenizationConfig(BaseModel):
 
 class StreamingConfig(BaseModel):
     '''Configuration for streaming dataset.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     descriptions_parquet: str = Field(
         default='./data/naics_descriptions.parquet',
@@ -551,6 +567,8 @@ class StreamingConfig(BaseModel):
 class SansStaticConfig(BaseModel):
     '''Configuration for static SANS-style sampling buckets.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     near_distance_threshold: float = Field(
         default=4.0,
         ge=0.0,
@@ -581,6 +599,8 @@ class SansStaticConfig(BaseModel):
 class SamplingConfig(BaseModel):
     '''Top-level sampling configuration (data layer strategies).'''
 
+    model_config = ConfigDict(extra='forbid')
+
     strategy: Literal['sadc', 'sans_static'] = Field(
         default='sadc',
         description='Sampling strategy for dataloader (dynamic SADC vs static SANS)',
@@ -591,6 +611,8 @@ class SamplingConfig(BaseModel):
 
 class DataLoaderConfig(BaseModel):
     '''Data loading and preprocessing configuration.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     tokenization: TokenizationConfig = Field(
         default_factory=TokenizationConfig, description='Tokenization configuration'
@@ -618,12 +640,16 @@ class DataLoaderConfig(BaseModel):
 class LoRAConfig(BaseModel):
     '''LoRA (Low-Rank Adaptation) configuration.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     r: int = Field(default=8, gt=0, le=64, description='LoRA rank (lower = fewer parameters)')
     alpha: int = Field(default=16, gt=0, description='LoRA scaling factor')
     dropout: float = Field(default=0.1, ge=0, le=1, description='LoRA dropout rate')
 
 class MoEConfig(BaseModel):
     '''Mixture of Experts configuration.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     num_experts: int = Field(default=4, gt=0, le=16, description='Number of expert networks')
     top_k: int = Field(default=2, gt=0, description='Number of experts to activate per input')
@@ -642,6 +668,8 @@ class MoEConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     '''Model architecture configuration.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     base_model_name: str = Field(
         default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace base model name'
@@ -685,6 +713,8 @@ class StructuralPreferenceConfig(BaseModel):
 
 class LossConfig(BaseModel):
     '''Loss function configuration.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     temperature: float = Field(
         default=0.07, gt=0, le=1, description='Temperature for contrastive loss'
@@ -737,6 +767,8 @@ class LossConfig(BaseModel):
 class TrainerConfig(BaseModel):
     '''PyTorch Lightning Trainer configuration.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     max_epochs: int = Field(
         default=10, gt=0, le=1000, description='Maximum number of training epochs'
     )
@@ -779,6 +811,8 @@ class TrainerConfig(BaseModel):
 class AnnealConfig(BaseModel):
     '''Configuration for curriculum annealing schedules.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     enabled: bool = Field(default=False, description='Enable continuous annealing schedule')
     alpha_start: float = Field(
         default=1.5, gt=0, description='Starting tree-distance exponent for Phase 1 weighting'
@@ -814,6 +848,8 @@ class AnnealConfig(BaseModel):
 
 class CurriculumConfig(BaseModel):
     '''Structure-Aware Dynamic Curriculum (SADC) scheduler configuration.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     phase1_end: float = Field(
         default=0.3,
@@ -869,6 +905,8 @@ class CurriculumConfig(BaseModel):
 class FalseNegativeConfig(BaseModel):
     '''Configuration for handling false negatives during training.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     strategy: Literal['eliminate', 'attract', 'hybrid'] = Field(
         default='eliminate',
         description='False negative handling strategy (mask, attract, or hybrid)',
@@ -885,6 +923,8 @@ class FalseNegativeConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     '''Optimizer and training configuration.'''
+
+    model_config = ConfigDict(extra='forbid')
 
     learning_rate: float = Field(
         default=2e-4, gt=0, lt=1, description='Learning rate for optimizer'
@@ -1129,6 +1169,8 @@ class GraphConfig(BaseModel):
 class Config(BaseModel):
     '''Main configuration for NAICS training.'''
 
+    model_config = ConfigDict(extra='forbid')
+
     experiment_name: str = Field(
         default='default', description='Experiment name for logging and checkpoints'
     )
@@ -1230,13 +1272,6 @@ class Config(BaseModel):
             yaml.dump(self.model_dump(), f, default_flow_style=False, sort_keys=False)
 
         logger.info(f'Saved config to {path}')
-
-    class ConfigDict:
-        '''Pydantic v2 configuration.'''
-
-        validate_assignment = True
-        extra = 'forbid'
-        str_strip_whitespace = True
 
 # -------------------------------------------------------------------------------------------------
 # Helper Functions
