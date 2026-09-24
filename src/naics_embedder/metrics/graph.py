@@ -164,8 +164,8 @@ class GraphEmbeddingDataset:
             )
 
         # to_numpy() returns a read-only view when the columns happen to sit back-to-back in
-        # memory. torch.tensor copies either way and keeps the Fortran layout, which the float32
-        # distances below are sensitive to; to_numpy(writable=True) would copy views to C order.
+        # memory. torch.tensor copies either way and keeps the Fortran layout for both, whereas
+        # to_numpy(writable=True) would copy only views to C order.
         tensor = torch.tensor(frame.select(embed_cols).to_numpy(), dtype=torch.float32)
         codes = frame.get_column(code_column).to_list()
         levels = frame.get_column(level_column).to_list()
@@ -186,21 +186,30 @@ class GraphDownstreamEvaluator:
             self._level_to_indices.setdefault(level, []).append(idx)
 
     def _pairwise_distances(self) -> torch.Tensor:
+        '''Pairwise Lorentz distances in float64, independent of the embeddings' memory layout.
+
+        Far from the origin, -<x, y>_L = x0 * y0 - <xs, ys> cancels catastrophically for nearby
+        points, and acosh near 1 amplifies the error. Float64 arithmetic alone is not enough:
+        float32 rounding of the stored x0 already moves -<x, x>_L off 1/c by up to x0 * ulp(x0),
+        about 5e-5 at radius 4, i.e. distances of about 1e-2. So x0 is re-derived in float64.
+        '''
         if self._distance_cache is not None:
             return self._distance_cache
 
-        emb = self.dataset.embeddings.detach()
+        # One fixed layout makes the reductions round identically for C- and Fortran-ordered
+        # inputs; computing on the CPU also covers devices without float64, such as MPS.
+        emb = self.dataset.embeddings.detach().to(device='cpu', dtype=torch.float64).contiguous()
         with torch.no_grad():
-            u = emb.unsqueeze(1)
-            v = emb.unsqueeze(0)
-            spatial = torch.sum(u[:, :, 1:] * v[:, :, 1:], dim=-1)
-            time = u[:, :, 0] * v[:, :, 0]
-            dot = spatial - time
-            arccosh_arg = torch.clamp(-dot, min=1.0 + 1e-6)
-            sqrt_c = torch.sqrt(torch.tensor(self.curvature, device=emb.device, dtype=emb.dtype))
-            distances = sqrt_c * torch.acosh(arccosh_arg)
+            spatial = emb[:, 1:]
+            gram = spatial @ spatial.T
+            time = torch.sqrt(1.0 / self.curvature + gram.diagonal())
+            neg_dot = torch.outer(time, time) - gram
+            # No gradients flow here, so clamp only to acosh's domain: a 1 + eps floor would
+            # also floor every distance at acosh(1 + eps), 1.4e-3 for eps = 1e-6.
+            distances = self.curvature**0.5 * torch.acosh(torch.clamp(neg_dot, min=1.0))
+            distances.fill_diagonal_(0.0)
 
-        self._distance_cache = distances.detach().cpu()
+        self._distance_cache = distances
         return self._distance_cache
 
     def _tangent_features(self) -> np.ndarray:
