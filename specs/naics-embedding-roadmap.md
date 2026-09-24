@@ -42,19 +42,24 @@ where Stage 2, which has no stage spec, records its fractions.
 re-pointed in the rows that unticked stages read (Reqs 8, 9, 10 and 13; three in-code rows).
 Every verdict stands, and the Req 3 row stays as the entry-time snapshot. Stage 2's finding
 (`specs/findings/outcome-panel-splits.md`, section 6) names the interfaces later stages read, and
-Stages 3, 4 and 6–8 now cite them. Four gaps surfaced:
+Stages 3, 4 and 6–8 now cite them. Five gaps surfaced; the review of PR #111 sharpened the third
+and added the fifth:
 
 - No stage opened the sealed test splits (Req 4's second bullet). The finding credited Stage 7,
   whose Exit reads validation only. Stage 12 was added with the user's approval, and the
   finding carries an erratum.
 - The selection log is gitignored, so Stage 4's decision records now carry its records to
   Stage 12.
-- A split's seal holds only while its draw is committed under a fingerprint. Stage 3's drawn
-  outer groups inherit that rule.
+- A split's seal holds only while its draw is committed under a fingerprint and it is read only
+  through a logged opening; `SelectionLog` records reads but gates none. Stage 3's outer sets
+  inherit both rules.
 - Stage 5's redirection table must keep Stage 2's leakage guarantee.
+- Stage 12 scores every arm in the final configuration's recorded comparisons on sealed data,
+  which needs each arm's per-seed encoder checkpoint and 2,125-code table. Stage 4's records now
+  reference them, its driver keeps them until Stage 12, and Stage 11's drop path keeps arm D's.
 
 D9 settles Stage 3's text-only comparator, and each panel's decision statistic joins Open
-questions for Stage 4. Stages 10 and 11 needed no edit.
+questions for Stage 4. Stage 10 needed no edit.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -271,15 +276,18 @@ hardcoded outside `data roles`.
       compute whichever statistic Open questions settles. It covers every comparator in each
       regime, the text-only one per D9, on D7's outcome, fitted by ridge on standardized features
       with a nested-cross-validated penalty and with log establishment counts and log wages as the
-      covariates (D1). Also produced: the sealed outer sets, the held-out regime's drawn
-      four-digit groups committed under a fingerprint as Stage 2's role table is (a redraw gets a
+      covariates (D1). Also produced: the sealed outer sets, readable only through a logged
+      opening as Stage 2's test split is (`SelectionLog` records reads but gates none), and every
+      outer-set score goes through that opening; the held-out regime's drawn four-digit groups
+      committed under a fingerprint as Stage 2's role table is (a redraw gets a
       new fingerprint, which `SelectionLog.openings` would not count as a reopening; the seen
       regime's 2024→2025 set is fixed by D7); the multi-level variant; the branch record Stage 1
       dictated.
       Exit: The panel reports the seen-code and held-out-code regimes separately, with one-hot
       only in the seen regime and every Req 2 comparator scored in each; a test shows the penalty
       is tuned inside the remainder and the outer set is read once; a test shows the panel reads
-      the committed outer groups, never a fresh draw; a test shows every row's features are dated
+      the committed outer groups, never a fresh draw; a test shows neither regime's outer set can
+      be read without a logged opening; a test shows every row's features are dated
       before its outcome (D7); the branch record matches the finding's decision block.
       ROUTING: writing-plans
 
@@ -298,9 +306,12 @@ hardcoded outside `data roles`.
       non-inferiority and 98⅓ % superiority intervals, δ as a stated multiple of a reference's
       across-seed standard deviation, the non-dominated set, the tie order (its final tie-break:
       Open questions), and a decision-record schema that carries the selection-log records of the
-      runs it compares (the log is gitignored and dies with its worktree or Lambda instance); a
-      seed-sweep driver that runs a configuration for N seeds and collects every panel's
-      per-unit scores; the diagnostics report over all 2,125 codes
+      runs it compares (the log is gitignored and dies with its worktree or Lambda instance) and,
+      per arm and seed, immutable references (path and content hash) to the encoder checkpoint
+      and the 2,125-code table; a seed-sweep driver that runs a configuration for N seeds,
+      collects every panel's per-unit scores, and keeps the referenced artifacts until Stage 12
+      (a Lambda instance loses them at termination: `specs/lambda-remote-workflow.md`); the
+      diagnostics report over all 2,125 codes
       (sector-separation AUC, within-sector rank correlation averaged over sectors and queries,
       MAP over ancestors, NDCG with integer lowest-common-ancestor grades, the Pearson
       statistic without the cophenetic name, unary pairs excluded from parent retrieval);
@@ -308,7 +319,8 @@ hardcoded outside `data roles`.
       structural statistics off progress bars and headlines.
       Exit: On synthetic arms with known effects on D8's three panels, the tooling adopts and
       rejects per the rule and writes records with every field Verification "Decision records"
-      lists, plus the selection-log records of their runs; the diagnostics report contains only
+      lists, plus the selection-log records of their runs and the artifact references of every
+      arm and seed; the diagnostics report contains only
       Req 6's statistics, stratified as listed, with no threshold and no pass/fail; no monitor,
       gate or headline reads a structural statistic.
       ROUTING: writing-plans
@@ -492,10 +504,12 @@ hardcoded outside `data roles`.
       uncertainty weights; no curriculum filters or four-phase controller; each repair adopted
       under Req 5; the deliverable refreshed. If dropped: `graph_model/`, its curriculum
       package, `conf/graph.yaml`, the graph docs and every graph-stage code path removed, with
-      the deliverable defined by the text stage alone.
+      the deliverable defined by the text stage alone and arm D's referenced artifacts kept for
+      Stage 12 (Req 16 scores its code points against the text stage's queries, so no graph code
+      is needed).
       Exit: If kept: a Req 5 record per repair and a final 2,125-code table from the repaired
-      stage. If dropped: no graph-stage code path remains, the suite passes, and the deliverable
-      is the text stage's table.
+      stage. If dropped: no graph-stage code path remains, the suite passes, the deliverable is
+      the text stage's table, and arm D's referenced artifacts still match their hashes.
       ROUTING: brainstorming if kept (the retention and normalization choices are open);
       writing-plans if dropped
 
@@ -507,15 +521,19 @@ hardcoded outside `data roles`.
       Gap closed: Req 4 (the opening); Req 1 (the sealed estimates).
       Consumes: The final configuration and its 2,125-code table (Stage 11's, or Stage 10's if
       the graph stage was dropped); the decision records of Stages 7–11 with the selection-log
-      records they carry (Stage 4's schema); Stage 2's `OutcomePanel.open_test`; Stage 3's
-      committed outer sets; Stage 4's tooling and seed-sweep driver.
+      records and artifact references they carry (Stage 4's schema); by those references, the
+      per-seed encoder checkpoints and 2,125-code tables of the final configuration and of every
+      arm in its recorded comparisons, since sealed queries were never embedded; Stage 2's
+      `OutcomePanel.open_test`; Stage 3's sealed outer sets and the logged opening that guards
+      them; Stage 4's tooling and seed-sweep driver.
       Produces: One logged opening per sealed set (the outcome test queries and each regressor
       regime's outer set, per D8); sealed estimates with D8's intervals for the final
       configuration and each comparison recorded for it; a written finding.
       Exit: The selection-log records, gathered from the decision records and this stage's own,
       show exactly one opening per sealed set, under the fingerprint Stage 2 or Stage 3
-      committed, after every validation read that selected anything; the finding reports each
-      sealed estimate with its interval.
+      committed, after every validation read that selected anything; every sealed estimate comes
+      from referenced artifacts whose hashes match the records; the finding reports each sealed
+      estimate with its interval.
       ROUTING: writing-plans
 
 ## Stage-spec stamp
