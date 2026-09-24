@@ -498,3 +498,111 @@ def test_loader_rejects_training_exclusions_that_disagree_with_pair_facts(genera
 
     with pytest.raises(ValueError, match='training_pairs.*bundle-a.*pair facts'):
         load_validated_bundle(generated_bundle)
+
+# -------------------------------------------------------------------------------------------------
+# The optional index-roles member
+# -------------------------------------------------------------------------------------------------
+
+def test_bundle_carries_the_index_roles_after_checking_them(
+    generated_bundle_with_roles, index_roles_fixture
+):
+    manifest = json.loads(generated_bundle_with_roles.read_text())
+    record = manifest['artifacts']['index_roles']
+
+    assert record['path'] == 'naics_index_roles.parquet'
+    assert record['schema_version'] == 'index-roles-v1'
+    assert record['row_count'] == 6
+    for check in (
+        'index_roles_one_role_per_entry',
+        'index_roles_examples_channel',
+        'index_roles_no_leakage',
+    ):
+        assert manifest['validation_results'][check] is True
+    bundle = load_validated_bundle(generated_bundle_with_roles)
+    assert pl.read_parquet(bundle.artifact_path('index_roles')).equals(index_roles_fixture)
+
+def test_bundle_refuses_an_examples_channel_holding_queries(
+    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture
+):
+    stale = text_descriptions_fixture.with_columns(
+        examples=pl.when(pl.col('code') == '111111').then(
+            pl.lit('Soybean farming; Edamame farming')
+        ).otherwise('examples')
+    )
+
+    with pytest.raises(ValueError, match='examples channel other than'):
+        generate_supervision_bundle_from_frames(
+            output_root=tmp_path,
+            bundle_id='stale',
+            generator_revision='revision-a',
+            naics_vintage=2022,
+            descriptions=stale,
+            pair_facts=pair_facts_fixture,
+            index_roles=index_roles_fixture,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+def test_bundle_refuses_a_held_out_query_matching_training_text(
+    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture
+):
+    # Entry 1 (validation) becomes another code's title
+    leaky = index_roles_fixture.with_columns(
+        text=pl.when(pl.col('entry_id') == 1).then(pl.lit('Industry 222222')).otherwise('text')
+    )
+
+    with pytest.raises(ValueError, match='held-out queries match training text'):
+        generate_supervision_bundle_from_frames(
+            output_root=tmp_path,
+            bundle_id='leaky',
+            generator_revision='revision-a',
+            naics_vintage=2022,
+            descriptions=text_descriptions_fixture,
+            pair_facts=pair_facts_fixture,
+            index_roles=leaky,
+        )
+
+def test_loader_rejects_an_index_entry_with_two_roles(generated_bundle_with_roles):
+    _rewrite_member(
+        generated_bundle_with_roles,
+        'index_roles',
+        lambda frame: frame.with_columns(entry_id=pl.lit(0, pl.Int64)),
+    )
+
+    with pytest.raises(ValueError, match='index_roles .*more than one role'):
+        load_validated_bundle(generated_bundle_with_roles)
+
+def test_production_bundle_takes_the_index_roles_from_its_config(tmp_path, hierarchy_descriptions):
+    roles = pl.DataFrame(
+        [
+            (0, '311111', 'Dog food manufacturing', 'examples'),
+            (1, '311111', 'Cat food manufacturing', 'validation'),
+            (2, '441111', 'New car dealers', 'examples'),
+        ],
+        schema={
+            'entry_id': pl.Int64,
+            'code': pl.Utf8,
+            'text': pl.Utf8,
+            'role': pl.Utf8
+        },
+        orient='row',
+    )
+    examples = {'311111': 'Dog food manufacturing', '441111': 'New car dealers'}
+    descriptions = hierarchy_descriptions.with_columns(
+        description=pl.lit('This industry comprises establishments.'),
+        examples=pl.col('code').replace_strict(examples, default=None),
+        excluded=pl.lit(None, pl.Utf8),
+    )
+    descriptions_path = tmp_path / 'naics_descriptions.parquet'
+    roles_path = tmp_path / 'naics_index_roles.parquet'
+    descriptions.write_parquet(descriptions_path)
+    roles.write_parquet(roles_path)
+    cfg = SupervisionBuildConfig(
+        descriptions_parquet=str(descriptions_path),
+        index_roles_parquet=str(roles_path),
+        output_root=str(tmp_path / 'bundles'),
+    )
+
+    manifest = json.loads(generate_supervision_bundle(cfg).read_text())
+
+    assert manifest['artifacts']['index_roles']['row_count'] == 3
+    assert manifest['generation_parameters']['index_roles_parquet'] == str(roles_path.resolve())

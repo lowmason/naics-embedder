@@ -25,7 +25,12 @@ from naics_embedder.panels.decoding import (
 )
 from naics_embedder.panels.index_roles import role_table_fingerprint, verify_examples_channel
 from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog
-from naics_embedder.supervision.artifacts import INDEX_ROLE_COLUMNS, validate_index_role_table
+from naics_embedder.supervision.artifacts import (
+    INDEX_ROLE_COLUMNS,
+    INDEX_ROLES_ARTIFACT,
+    ValidatedSupervisionBundle,
+    validate_index_role_table,
+)
 from naics_embedder.supervision.schema import IndexRole
 
 OUTCOME_PANEL = 'outcome'
@@ -95,6 +100,26 @@ class OutcomePanel:
         descriptions = pl.read_parquet(descriptions_parquet)
         verify_examples_channel(descriptions, roles)
         candidates = descriptions.filter(pl.col('code').str.len_chars() == 6).get_column('code')
+        return cls(roles, candidates.to_list(), SelectionLog(Path(log_path)))
+
+    @classmethod
+    def from_bundle(
+        cls,
+        bundle: ValidatedSupervisionBundle,
+        log_path: Union[str, Path],
+    ) -> 'OutcomePanel':
+        '''
+        The panel from a validated supervision bundle's ``index_roles`` member and codebook.
+
+        The bundle checked the roles against its descriptions when it was built.
+
+        Raises:
+            ValueError: If the bundle has no ``index_roles`` member.
+        '''
+
+        roles = pl.read_parquet(bundle.artifact_path(INDEX_ROLES_ARTIFACT))
+        codebook = pl.read_parquet(bundle.artifact_path('codebook'))
+        candidates = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
         return cls(roles, candidates.to_list(), SelectionLog(Path(log_path)))
 
     @property

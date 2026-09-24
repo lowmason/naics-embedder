@@ -494,7 +494,8 @@ class TestSupervisionBuildConfig:
     def test_yaml_matches_defaults(self):
         cfg = load_config(SupervisionBuildConfig, 'data/supervision.yaml')
 
-        assert cfg == SupervisionBuildConfig()
+        # The shipped build carries the index roles; the default (for fixtures) does not
+        assert cfg == SupervisionBuildConfig(index_roles_parquet='./data/naics_index_roles.parquet')
         assert cfg.contract_version == 'stage3-supervision-v1'
         assert cfg.relation_id['cross_sector'] == 99
         assert cfg.output_root == './data/supervision/stage3-supervision-v1'

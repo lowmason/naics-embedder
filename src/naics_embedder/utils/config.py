@@ -379,6 +379,13 @@ class SupervisionBuildConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     descriptions_parquet: str = './data/naics_descriptions.parquet'
+    index_roles_parquet: Optional[str] = Field(
+        default=None,
+        description=(
+            'Index entries with their roles, from `data preprocess`; when set, the bundle carries '
+            'them as its optional index_roles member'
+        ),
+    )
     output_root: str = './data/supervision/stage3-supervision-v1'
     contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
     naics_vintage: int = 2022

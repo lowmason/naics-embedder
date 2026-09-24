@@ -597,6 +597,16 @@ def _validate_relations(root: Path, manifest: SupervisionManifest) -> None:
         lambda: validate_training_pairs_members(training_paths, pair_facts, codebook.height),
     )
 
+    # Optional under stage3-supervision-v1: bundles built before the outcome panel lack it
+    if INDEX_ROLES_ARTIFACT in manifest.artifacts:
+        roles = read(INDEX_ROLES_ARTIFACT)
+        six_digit_codes = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
+        _in_context(
+            INDEX_ROLES_ARTIFACT,
+            bundle_id,
+            lambda: validate_index_role_table(roles, six_digit_codes.to_list()),
+        )
+
 def load_validated_bundle(
     manifest_path: str | Path,
     expected_contract: str = CONTRACT_VERSION,
@@ -607,7 +617,9 @@ def load_validated_bundle(
     Checks the contract version, every member's existence, hash, row count, and Parquet contract
     metadata, the recorded validation results, and then re-runs the relational checks: codebook
     order and fingerprint, pair-fact identity/orientation/coverage/sentinels/exclusion derivation,
-    long-form and matrix reconciliation, and training-pair identity, exclusion, and structure.
+    long-form and matrix reconciliation, training-pair identity, exclusion, and structure, and,
+    when the bundle carries one, the index-entry role table (one known role per entry, six-digit
+    codes only, the examples-channel floor).
 
     Raises:
         FileNotFoundError: If the manifest does not exist.

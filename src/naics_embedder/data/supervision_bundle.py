@@ -32,11 +32,15 @@ from naics_embedder.data.create_triplets import (
     CROSS_SECTOR_NEGATIVE_CAP,
     iter_training_pair_batches,
 )
+from naics_embedder.panels.index_roles import verify_examples_channel, verify_role_leakage
 from naics_embedder.supervision.artifacts import (
+    INDEX_ROLE_COLUMNS,
+    INDEX_ROLES_ARTIFACT,
     STRUCTURAL_PAIR_COLUMNS,
     codebook_fingerprint,
     sha256_file,
     validate_exclusion_derivation,
+    validate_index_role_table,
     validate_matrix,
     validate_structural_pairs,
     write_versioned_dataset_batches,
@@ -48,6 +52,7 @@ from naics_embedder.supervision.schema import (
     DIFFICULTY_THRESHOLDS_SCHEMA_VERSION,
     DISTANCE_MATRIX_SCHEMA_VERSION,
     DISTANCES_SCHEMA_VERSION,
+    INDEX_ROLES_SCHEMA_VERSION,
     PAIR_FACTS_SCHEMA_VERSION,
     RELATION_MATRIX_SCHEMA_VERSION,
     RELATIONS_SCHEMA_VERSION,
@@ -264,6 +269,7 @@ ARTIFACT_FILENAMES = {
     'relation_matrix': 'naics_relation_matrix.parquet',
     'training_pairs': 'naics_training_pairs',
     'difficulty_thresholds': 'curriculum_difficulty_thresholds.json',
+    INDEX_ROLES_ARTIFACT: 'naics_index_roles.parquet',
 }
 
 ARTIFACT_SCHEMA_VERSIONS = {
@@ -275,6 +281,7 @@ ARTIFACT_SCHEMA_VERSIONS = {
     'relation_matrix': RELATION_MATRIX_SCHEMA_VERSION,
     'training_pairs': TRAINING_PAIRS_SCHEMA_VERSION,
     'difficulty_thresholds': DIFFICULTY_THRESHOLDS_SCHEMA_VERSION,
+    INDEX_ROLES_ARTIFACT: INDEX_ROLES_SCHEMA_VERSION,
 }
 
 PAIR_FACT_SCHEMA = {
@@ -313,7 +320,7 @@ def exclusion_input_fingerprint(descriptions: pl.DataFrame) -> str:
     payload = '\n'.join(f'{source}\t{target}' for source, target in published.rows())
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
-def _generator_revision() -> str:
+def generator_revision() -> str:
     '''Git revision of the generating checkout, or the installed package version.'''
 
     repository = Path(__file__).resolve().parents[3]
@@ -394,6 +401,23 @@ def _validate_matrices(
             validate_matrix(matrix, pair_facts, codebook, column)
         except ValueError as exc:
             raise ValueError(f'{name}: {exc}') from exc
+
+def _validate_index_roles(
+    index_roles: pl.DataFrame,
+    descriptions: pl.DataFrame,
+    codebook: pl.DataFrame,
+) -> Dict[str, bool]:
+    '''Check the optional index-roles member against the bundle's own descriptions and codes.'''
+
+    six_digit_codes = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
+    validate_index_role_table(index_roles, six_digit_codes.to_list())
+    verify_examples_channel(descriptions, index_roles)
+    verify_role_leakage(descriptions, index_roles)
+    return {
+        'index_roles_one_role_per_entry': True,
+        'index_roles_examples_channel': True,
+        'index_roles_no_leakage': True,
+    }
 
 def _validate_training_identity(batch: pl.DataFrame, pair_keys: pl.DataFrame) -> None:
     '''Every anchor/positive and anchor/negative identity must join to a canonical pair fact.'''
@@ -491,6 +515,7 @@ def _write_bundle_artifacts(
     relation_matrix: pl.DataFrame,
     cross_sector_cap: int,
     cap_seed: int,
+    index_roles: Optional[pl.DataFrame] = None,
 ) -> Dict[str, ArtifactRecord]:
     exclusions = int(pair_facts.get_column('is_explicit_exclusion').sum())
 
@@ -523,6 +548,12 @@ def _write_bundle_artifacts(
         ),
         'relation_matrix': _record('relation_matrix', parquet('relation_matrix', relation_matrix)),
     }
+    if index_roles is not None:
+        records[INDEX_ROLES_ARTIFACT] = _record(
+            INDEX_ROLES_ARTIFACT,
+            parquet(INDEX_ROLES_ARTIFACT,
+                    index_roles.select(INDEX_ROLE_COLUMNS).sort('entry_id')),
+        )
 
     counts = {'rows': 0, 'exclusions': 0}
     training_files = write_versioned_dataset_batches(
@@ -577,9 +608,15 @@ def generate_supervision_bundle_from_frames(
     generation_parameters: Optional[Mapping[str, Any]] = None,
     cross_sector_cap: int = CROSS_SECTOR_NEGATIVE_CAP,
     cap_seed: int = CROSS_SECTOR_CAP_SEED,
+    index_roles: Optional[pl.DataFrame] = None,
 ) -> Path:
     '''
     Validate canonical frames and publish them as one immutable supervision bundle.
+
+    ``index_roles`` (every index entry with its text and role) becomes the optional
+    ``index_roles`` member after three checks against ``descriptions``: one known role per entry,
+    examples channels built from examples-role entries only, and no held-out query matching any
+    training text.
 
     Artifacts are written to ``<output_root>/.<bundle_id>.staging``; the manifest is written only
     after every artifact validates, and the staging directory is then atomically renamed to
@@ -603,6 +640,8 @@ def generate_supervision_bundle_from_frames(
     relation_matrix = relation_matrix_from_pair_facts(pair_facts, codebook)
     _validate_matrices(pair_facts, codebook, distance_matrix, relation_matrix)
     validation_results['matrix_reconciliation'] = True
+    if index_roles is not None:
+        validation_results.update(_validate_index_roles(index_roles, descriptions, codebook))
 
     output_root.mkdir(parents=True, exist_ok=True)
     try:
@@ -622,6 +661,7 @@ def generate_supervision_bundle_from_frames(
             relation_matrix=relation_matrix,
             cross_sector_cap=cross_sector_cap,
             cap_seed=cap_seed,
+            index_roles=index_roles,
         )
         validation_results.update(
             {
@@ -684,6 +724,15 @@ def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
 
     descriptions_path = Path(cfg.descriptions_parquet)
     descriptions = pl.read_parquet(descriptions_path)
+    parameters = {
+        'descriptions_parquet': str(descriptions_path.resolve()),
+        'output_root': str(Path(cfg.output_root).resolve()),
+    }
+    index_roles = None
+    if cfg.index_roles_parquet is not None:
+        index_roles_path = Path(cfg.index_roles_parquet)
+        index_roles = pl.read_parquet(index_roles_path)
+        parameters['index_roles_parquet'] = str(index_roles_path.resolve())
     codebook = build_codebook(descriptions)
     distances = compute_structural_distances(
         str(descriptions_path), DistancesConfig(input_parquet=str(descriptions_path))
@@ -693,14 +742,12 @@ def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
     return generate_supervision_bundle_from_frames(
         output_root=Path(cfg.output_root),
         bundle_id=str(uuid.uuid4()),
-        generator_revision=_generator_revision(),
+        generator_revision=generator_revision(),
         naics_vintage=cfg.naics_vintage,
         descriptions=descriptions,
         pair_facts=pair_facts,
         description_fingerprint=sha256_file(descriptions_path),
         structural_relation_ids=cfg.relation_id,
-        generation_parameters={
-            'descriptions_parquet': str(descriptions_path.resolve()),
-            'output_root': str(Path(cfg.output_root).resolve()),
-        },
+        generation_parameters=parameters,
+        index_roles=index_roles,
     )
