@@ -37,6 +37,8 @@ def test_hgcn_full_eval_metrics(tmp_path):
 
     cfg = GraphConfig(
         distance_matrix_parquet=str(distance_path),
+        relations_parquet=str(tmp_path / 'absent-relations.parquet'),
+        curriculum_cache_dir=str(tmp_path),
         ndcg_k_values=[2],
         full_eval_frequency=1,
         tangent_dim=3,
