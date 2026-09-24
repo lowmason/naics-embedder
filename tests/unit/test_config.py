@@ -19,6 +19,8 @@ from naics_embedder.utils.config import (
     DownloadConfig,
     GraphConfig,
     OutcomePanelConfig,
+    RegressorBranchRecord,
+    RegressorPanelConfig,
     SamplingConfig,
     SansStaticConfig,
     StructuralPreferenceConfig,
@@ -26,6 +28,7 @@ from naics_embedder.utils.config import (
     SupervisionRuntimeConfig,
     load_config,
 )
+from tests.fixtures.regressor_panel import BRANCH_RECORD
 
 # -------------------------------------------------------------------------------------------------
 # DirConfig Tests
@@ -555,6 +558,47 @@ class TestOutcomePanelConfig:
     def test_rejects_unknown_keys(self):
         with pytest.raises(ValidationError):
             OutcomePanelConfig(test_fraction=0.15)
+
+@pytest.mark.unit
+class TestRegressorPanelConfig:
+    '''The regressor panel (roadmap Stage 3): QCEW pins, the held-out draw, fitting, the record.'''
+
+    def test_yaml_matches_defaults_but_for_the_branch_record(self):
+        cfg = load_config(RegressorPanelConfig, 'data/regressor_panel.yaml')
+
+        assert cfg.model_copy(update={'branch_record': None}) == RegressorPanelConfig()
+        assert cfg.branch_record is not None
+        assert sorted(cfg.qcew_sha256) == [f'{year}_US000_annual.csv' for year in range(2022, 2026)]
+        assert cfg.alphas == sorted(set(cfg.alphas))
+        assert (cfg.seed, cfg.heldout_fraction, cfg.fold_seed) == (20260924, 0.2, 20260924)
+        assert (cfg.folds, cfg.repeats, cfg.inner_folds, cfg.min_groups) == (5, 5, 5, 10)
+        assert cfg.heldout_groups_csv == './conf/data/regressor_heldout_groups.csv'
+        assert cfg.selection_log == './logs/selection_log.jsonl'
+
+    def test_the_text_only_comparator_reads_like_the_arm(self):
+        # D9: the arm's own backbone, at the arm's tokenization length
+        arm = yaml.safe_load(Path('conf/config.yaml').read_text())
+        text_only = RegressorPanelConfig().text_only
+
+        assert text_only.backbone == arm['model']['base_model_name']
+        assert text_only.max_length == arm['data_loader']['tokenization']['max_length']
+
+    @pytest.mark.parametrize('fraction', [0.0, 1.0])
+    def test_the_held_out_fraction_lies_strictly_between_zero_and_one(self, fraction):
+        with pytest.raises(ValidationError):
+            RegressorPanelConfig(heldout_fraction=fraction)
+
+    def test_rejects_unknown_keys(self):
+        with pytest.raises(ValidationError):
+            RegressorPanelConfig(heldout_share=0.2)
+        with pytest.raises(ValidationError):
+            RegressorBranchRecord(**BRANCH_RECORD, rule='plan 3')
+
+    def test_the_branch_record_has_no_defaults(self):
+        with pytest.raises(ValidationError):
+            RegressorBranchRecord(branch='A')
+        with pytest.raises(ValidationError):
+            RegressorBranchRecord(**{**BRANCH_RECORD, 'branch': 'D'})
 
 # -------------------------------------------------------------------------------------------------
 # Repaired Stage-3 runtime configuration
