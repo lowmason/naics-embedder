@@ -14,6 +14,8 @@ Pipeline Stages:
 Commands:
     roles: Draw the frozen index-entry role table, once; it is committed and preprocess applies
         it.
+    regressor-groups: Draw the regressor panel's held-out four-digit groups, once; they are
+        committed and the panel reads them.
     preprocess: Download raw NAICS files and produce descriptions parquet.
     supervision: Build codebook, pair facts, compatibility distance/relation artifacts,
         training pairs, and curriculum thresholds as one versioned bundle.
@@ -31,10 +33,12 @@ from typing_extensions import Annotated
 
 from naics_embedder.data.download_data import download_preprocess_data
 from naics_embedder.data.index_role_table import generate_index_role_table
+from naics_embedder.data.regressor_group_table import generate_regressor_group_table
 from naics_embedder.data.supervision_bundle import generate_supervision_bundle
 from naics_embedder.utils.config import (
     DownloadConfig,
     OutcomePanelConfig,
+    RegressorPanelConfig,
     SupervisionBuildConfig,
     load_config,
 )
@@ -53,6 +57,7 @@ app = typer.Typer(
 SUPERVISION_CONFIG = 'data/supervision.yaml'
 DOWNLOAD_CONFIG = 'data/download.yaml'
 OUTCOME_PANEL_CONFIG = 'data/outcome_panel.yaml'
+REGRESSOR_PANEL_CONFIG = 'data/regressor_panel.yaml'
 
 SourceDirOption = Annotated[
     Optional[str],
@@ -163,6 +168,57 @@ def roles(
         raise typer.Exit(code=1)
 
     typer.echo(f'Index-entry role table: {table_path}')
+
+# -------------------------------------------------------------------------------------------------
+# Draw the regressor panel's held-out groups
+# -------------------------------------------------------------------------------------------------
+
+@app.command('regressor-groups')
+def regressor_groups(
+    codebook: Annotated[
+        str,
+        typer.Option('--codebook', help="A supervision bundle's naics_codebook.parquet"),
+    ],
+    force: Annotated[
+        bool,
+        typer.Option(
+            '--force',
+            help='Redraw an existing table: moves both regressor outer sets',
+        ),
+    ] = False,
+):
+    '''
+    Draw the regressor panel's held-out four-digit groups, once.
+
+    Holds out a fifth of each sector's four-digit groups (largest remainder, seeded) from the
+    six-digit population Stage 1's finding names. The table is committed, and the regressor
+    panel reads it from then on (roadmap Stage 3).
+
+    Output:
+        ``conf/data/regressor_heldout_groups.csv`` and
+        ``conf/data/regressor_heldout_groups_provenance.json``.
+
+    Example:
+        Draw the groups over bundle 18403d29's codebook::
+
+            $ uv run naics-embedder data regressor-groups --codebook PATH/naics_codebook.parquet
+    '''
+
+    configure_logging('data_regressor_groups.log')
+
+    console.rule('[bold green]Drawing Regressor Held-Out Groups[/bold green]')
+
+    try:
+        table_path = generate_regressor_group_table(
+            load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG),
+            Path(codebook),
+            force=force,
+        )
+    except (FileExistsError, FileNotFoundError, ValueError) as exc:
+        console.print(f'[bold red]{exc}[/bold red]')
+        raise typer.Exit(code=1)
+
+    typer.echo(f'Regressor held-out groups: {table_path}')
 
 # -------------------------------------------------------------------------------------------------
 # Build the Stage-3 supervision bundle

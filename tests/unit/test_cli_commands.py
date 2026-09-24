@@ -141,6 +141,39 @@ def test_data_roles_refuses_to_redraw_without_force(monkeypatch, runner):
     assert result.exit_code == 1
     assert '--force' in result.output
 
+def test_data_regressor_groups_draws_with_the_regressor_config(monkeypatch, runner, tmp_path):
+    calls = []
+
+    def fake_generate(cfg, codebook_path, force):
+        calls.append((cfg, codebook_path, force))
+        return tmp_path / 'regressor_heldout_groups.csv'
+
+    monkeypatch.setattr(data_cli, 'generate_regressor_group_table', fake_generate)
+
+    result = runner.invoke(
+        data_cli.app, ['regressor-groups', '--codebook', '/bundle/naics_codebook.parquet']
+    )
+
+    assert result.exit_code == 0, result.output
+    [(cfg, codebook_path, force)] = calls
+    assert cfg.seed == 20260924
+    assert cfg.branch_record is not None
+    assert codebook_path == Path('/bundle/naics_codebook.parquet')
+    assert force is False
+    assert 'regressor_heldout_groups.csv' in result.output
+
+def test_data_regressor_groups_refuses_to_redraw_without_force(monkeypatch, runner):
+
+    def refuse(cfg, codebook_path, force):
+        raise FileExistsError('the table exists; pass --force only to redraw it deliberately')
+
+    monkeypatch.setattr(data_cli, 'generate_regressor_group_table', refuse)
+
+    result = runner.invoke(data_cli.app, ['regressor-groups', '--codebook', 'codebook.parquet'])
+
+    assert result.exit_code == 1
+    assert '--force' in result.output
+
 def test_tools_config_passes_config_path(monkeypatch, runner, tmp_path):
     captured = {}
     monkeypatch.setattr(
