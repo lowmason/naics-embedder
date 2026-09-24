@@ -3,9 +3,7 @@
 # -------------------------------------------------------------------------------------------------
 
 import logging
-import operator
 import time
-from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
@@ -66,52 +64,6 @@ def map_relationships(key: Union[str, int]) -> Union[Dict[str, int], Dict[int, s
         return {rel_id: rel for rel, rel_id in relation_map}
     else:
         raise ValueError('Key must be either str or int.')
-
-# -------------------------------------------------------------------------------------------------
-# Get relationship
-# -------------------------------------------------------------------------------------------------
-
-def get_relationship(idx_code_i: Union[str, int], idx_code_j: Union[str, int]) -> str:
-    filter_list = []
-    if isinstance(idx_code_i, str):
-        filter_list.append(pl.col('code_i').eq(idx_code_i))
-    else:
-        filter_list.append(pl.col('idx_i').eq(idx_code_i))
-
-    if isinstance(idx_code_j, str):
-        filter_list.append(pl.col('code_j').eq(idx_code_j))
-    else:
-        filter_list.append(pl.col('idx_j').eq(idx_code_j))
-
-    filters = reduce(operator.and_, filter_list)
-
-    return (
-        pl.read_parquet('./data/naics_relations.parquet'
-                        ).filter(filters).select('relation').get_column('relation').item()
-    )
-
-# -------------------------------------------------------------------------------------------------
-# Get distance
-# -------------------------------------------------------------------------------------------------
-
-def get_distance(idx_code_i: Union[str, int], idx_code_j: Union[str, int]) -> float:
-    filter_list = []
-    if isinstance(idx_code_i, str):
-        filter_list.append(pl.col('code_i').eq(idx_code_i))
-    else:
-        filter_list.append(pl.col('idx_i').eq(idx_code_i))
-
-    if isinstance(idx_code_j, str):
-        filter_list.append(pl.col('code_j').eq(idx_code_j))
-    else:
-        filter_list.append(pl.col('idx_j').eq(idx_code_j))
-
-    filters = reduce(operator.and_, filter_list)
-
-    return (
-        pl.read_parquet('./data/naics_distances.parquet'
-                        ).filter(filters).select('distance').get_column('distance').item()
-    )
 
 # -------------------------------------------------------------------------------------------------
 # Indices, codes, and mappings
