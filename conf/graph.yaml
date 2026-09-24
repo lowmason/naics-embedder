@@ -2,13 +2,16 @@
 
 # Input/Output paths
 encodings_parquet: ./output/hyperbolic_projection/encodings.parquet
-# Stage-3 supervision bundle: when set, relations, training pairs, and the distance matrix are
-# all read from this one validated bundle. Explicit relations_parquet / training_pairs_path /
-# distance_matrix_parquet values must then point into the same bundle (mixing is rejected).
+# Stage-3 supervision bundle: when set, relations, training pairs, the distance matrix, and the
+# curriculum difficulty thresholds are all read from this one validated bundle. Explicit
+# relations_parquet / training_pairs_path / distance_matrix_parquet / difficulty_thresholds_path
+# values must then point into the same bundle (mixing is rejected). HGCN does not read
+# supervision.manifest_path from conf/config.yaml; set this one too.
 # Without a manifest the legacy defaults apply:
 #   relations_parquet: ./data/naics_relations.parquet
 #   training_pairs_path: ./data/naics_training_pairs.parquet
 #   distance_matrix_parquet: ./data/naics_distance_matrix.parquet
+#   difficulty_thresholds_path: <curriculum_cache_dir>/difficulty_thresholds.json
 supervision_manifest_path: null
 output_dir: ./output/hgcn/
 output_parquet: ./output/hgcn/encodings.parquet

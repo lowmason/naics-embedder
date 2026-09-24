@@ -16,19 +16,24 @@ Integrates NAICS taxonomy directly into embedding geometry.
 - Level metadata
 
 Set `supervision_manifest_path` in `conf/graph.yaml` to the manifest printed by
-`uv run naics-embedder data supervision`. Relations, training pairs, and the distance matrix are
-then read from that one validated bundle, and any explicitly configured path from another source
-is rejected. Without a manifest, HGCN falls back to the legacy
-`./data/naics_relations.parquet`, `./data/naics_training_pairs.parquet`, and
-`./data/naics_distance_matrix.parquet` files, which `data all` no longer writes. HGCN consumes
+`uv run naics-embedder data supervision`. Relations, training pairs, the distance matrix, and the
+curriculum difficulty thresholds are then read from that one validated bundle, and any explicitly
+configured path from another source is rejected. HGCN does not read `supervision.manifest_path`
+from `conf/config.yaml`, so set both. Without a manifest, HGCN falls back to the legacy
+`./data/naics_relations.parquet`, `./data/naics_training_pairs.parquet`,
+`./data/naics_distance_matrix.parquet`, and `<curriculum_cache_dir>/difficulty_thresholds.json`
+files, which `data all` no longer writes. HGCN consumes
 only its legacy negative fields (`negative_idx`, `negative_code`, `relation_margin`,
 `distance_margin`); the repaired Stage-3 semantics and selection policy do not change its training.
 
 ## 3. Running the Refinement
 
 ```bash
-python train_hgcn.py --config configs/hgcn.yaml
+uv run python -m naics_embedder.graph_model.hgcn
 ```
+
+This reads `conf/graph.yaml`. For another graph config, call
+`naics_embedder.graph_model.hgcn.main('path/to/graph.yaml')` from a script or notebook.
 
 ## 4. HGCN Layer Operation
 
@@ -115,13 +120,16 @@ After both Stage 3 and Stage 4 finish, run the automated comparison from [Issue 
 ```bash
 uv run naics-embedder tools verify-stage4 \
   --pre ./output/hyperbolic_projection/encodings.parquet \
-  --post ./output/hgcn/encodings.parquet
+  --post ./output/hgcn/encodings.parquet \
+  --supervision-manifest data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json
 ```
 
 Additional options let you override the distance matrix, relations parquet, or the acceptable degradation thresholds:
 
 | Option | Purpose |
 | --- | --- |
+| `--supervision-manifest` | Read the distance matrix and relations from this validated bundle; an explicit `--distance-matrix` or `--relations` from another source is rejected. |
+| `--distance-matrix`, `--relations` | Without a manifest, default to the legacy `./data/naics_distance_matrix.parquet` and `./data/naics_relations.parquet`. |
 | `--max-cophenetic-drop` | Maximum allowable decrease in cophenetic correlation (default `0.02`). |
 | `--max-ndcg-drop` | Maximum allowable decrease in NDCG@K (default `0.01`). |
 | `--min-local-improvement` | Required increase in parent retrieval accuracy (default `0.05`). |

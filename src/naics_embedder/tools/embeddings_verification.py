@@ -20,6 +20,7 @@ from naics_embedder.metrics.structural_spearman import (
     StructuralSpearmanResult,
 )
 from naics_embedder.utils.distance_matrix import load_distance_submatrix
+from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +37,12 @@ class Stage4VerificationConfig:
     parent_top_k: int = 1
 
 def _load_parent_pairs(relations_path: Path, code_to_idx: Dict[str, int]) -> List[Tuple[int, int]]:
-    df = pl.read_parquet(relations_path).filter(pl.col('relation') == 'child'
-                                                ).select('code_i', 'code_j')
-    pairs: Dict[int, int] = {}
-    for row in df.iter_rows(named=True):
-        parent_code = row['code_i']
-        child_code = row['code_j']
-        if parent_code not in code_to_idx or child_code not in code_to_idx:
-            continue
-        child_idx = code_to_idx[child_code]
-        parent_idx = code_to_idx[parent_code]
-        pairs[child_idx] = parent_idx
-    return list(pairs.items())
+    '''(child, parent) index pairs from a relations file that passes the hierarchy check.'''
+    hierarchy = NaicsHierarchy.from_relations_parquet(relations_path)
+    return [
+        (code_to_idx[child], code_to_idx[parent]) for parent, child in hierarchy.parent_child_pairs
+        if parent in code_to_idx and child in code_to_idx
+    ]
 
 def _parent_retrieval_accuracy(
     dist_matrix: torch.Tensor,

@@ -481,6 +481,7 @@ def test_graph_config_takes_every_structural_input_from_its_bundle(generated_bun
     assert cfg.relations_parquet == str(bundle.artifact_path('relations'))
     assert cfg.training_pairs_path == str(bundle.artifact_path('training_pairs'))
     assert cfg.distance_matrix_parquet == str(bundle.artifact_path('distance_matrix'))
+    assert cfg.difficulty_thresholds_path == str(bundle.artifact_path('difficulty_thresholds'))
     assert resolve_graph_config(cfg) == cfg
 
 def test_graph_config_rejects_an_explicit_path_from_another_source(generated_bundle, tmp_path):
@@ -490,6 +491,15 @@ def test_graph_config_rejects_an_explicit_path_from_another_source(generated_bun
     )
 
     with pytest.raises(ValueError, match='relations path does not belong'):
+        resolve_graph_config(cfg)
+
+def test_graph_config_rejects_curriculum_thresholds_from_another_source(generated_bundle, tmp_path):
+    cfg = GraphConfig(
+        supervision_manifest_path=str(generated_bundle),
+        difficulty_thresholds_path=str(tmp_path / 'difficulty_thresholds.json'),
+    )
+
+    with pytest.raises(ValueError, match='difficulty_thresholds path does not belong'):
         resolve_graph_config(cfg)
 
 def test_graph_config_without_a_manifest_keeps_legacy_paths():

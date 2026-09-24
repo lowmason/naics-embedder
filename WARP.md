@@ -160,16 +160,17 @@ Stage 4 (HGCN) verification:
 uv run naics-embedder tools verify-stage4 \
   --pre ./output/hyperbolic_projection/encodings.parquet \
   --post ./output/hgcn/encodings.parquet \
-  --distance-matrix ./data/naics_distance_matrix.parquet \
-  --relations ./data/naics_relations.parquet
+  --supervision-manifest data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json
 ```
+
+`--supervision-manifest` reads the distance matrix and relations from the bundle; without it they default to the legacy `./data` files.
 
 This command runs hierarchy-aware metrics pre/post HGCN (cophenetic correlation, NDCG@K, parent retrieval) and enforces degradation thresholds (`--max-cophenetic-drop`, `--max-ndcg-drop`, `--min-local-improvement`, `--parent-top-k`). It is the canonical way to gate Stage 4 changes.
 
 ### HGCN refinement (Stage 4)
 
-The HGCN training logic lives in `src/naics_embedder/graph_model/hgcn.py` as a PyTorch Lightning module (`HGCNLightningModule`) plus a `main(config_file: str = 'conf/config.yaml')` entrypoint.  
-Configuration is provided by `GraphConfig` (also backed by `conf/config.yaml`).
+The HGCN training logic lives in `src/naics_embedder/graph_model/hgcn.py` as a PyTorch Lightning module (`HGCNLightningModule`) plus a `main(config_file: str = 'conf/graph.yaml')` entrypoint (`uv run python -m naics_embedder.graph_model.hgcn`).  
+Configuration is provided by `GraphConfig`, backed by `conf/graph.yaml` (set its own `supervision_manifest_path`; HGCN does not read `conf/config.yaml`).
 
 Typical flow:
 

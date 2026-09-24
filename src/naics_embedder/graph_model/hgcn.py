@@ -438,8 +438,10 @@ class HGCNLightningModule(pyl.LightningModule):
         self._full_val_metrics.clear()
 
     def _load_curriculum_thresholds(self, cfg: GraphConfig) -> Dict[str, Any]:
-        cache_dir = Path(cfg.curriculum_cache_dir)
-        thresholds_path = cache_dir / 'difficulty_thresholds.json'
+        if cfg.difficulty_thresholds_path:
+            thresholds_path = Path(cfg.difficulty_thresholds_path)
+        else:
+            thresholds_path = Path(cfg.curriculum_cache_dir) / 'difficulty_thresholds.json'
         if not thresholds_path.exists():
             return {}
 
@@ -1300,7 +1302,7 @@ def save_outputs(
 # Main
 # -------------------------------------------------------------------------------------------------
 
-def main(config_file: str = 'conf/config.yaml') -> None:
+def main(config_file: str = 'conf/graph.yaml') -> None:
     '''Main entry point for single-stage HGCN training via PyTorch Lightning.'''
     base_cfg = resolve_graph_config(GraphConfig.from_yaml(config_file))
     outdir = setup_directory(base_cfg.output_dir)

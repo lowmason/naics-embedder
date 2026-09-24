@@ -11,7 +11,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from naics_embedder.utils.naics_hierarchy import NaicsHierarchy, load_naics_hierarchy
+from naics_embedder.utils.naics_hierarchy import (
+    HierarchyIntegrityError,
+    NaicsHierarchy,
+    load_naics_hierarchy,
+)
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -35,12 +39,12 @@ def simple_hierarchy(simple_parent_child_pairs):
 
 @pytest.fixture
 def relations_parquet_with_relation_id(tmp_path):
-    '''Create relations parquet with relation_id column.'''
+    '''Create relations parquet with relation_id column; its non-child rows come first.'''
     df = pl.DataFrame(
         {
-            'code_i': ['11', '11', '111', '111', '112', '11', '111'],
-            'code_j': ['111', '112', '1111', '1112', '1121', '113', '114'],
-            'relation_id': [1, 1, 1, 1, 1, 2, 3],  # Only 1 = child
+            'code_i': ['111', '11', '11', '11', '111', '111', '112'],
+            'code_j': ['112', '1111', '111', '112', '1111', '1112', '1121'],
+            'relation_id': [2, 3, 1, 1, 1, 1, 1],  # Only 1 = child
         }
     )
     path = tmp_path / 'relations_with_id.parquet'
@@ -58,6 +62,20 @@ def relations_parquet_with_relation_name(tmp_path):
         }
     )
     path = tmp_path / 'relations_with_name.parquet'
+    df.write_parquet(path)
+    return path
+
+@pytest.fixture
+def legacy_relations_parquet(tmp_path):
+    '''Legacy-format relations: the (711, 7113) child pair is labeled excluded (relation_id 0).'''
+    df = pl.DataFrame(
+        {
+            'code_i': ['71', '711', '711', '7111'],
+            'code_j': ['711', '7111', '7113', '7113'],
+            'relation_id': [1, 1, 0, 2],
+        }
+    )
+    path = tmp_path / 'legacy_relations.parquet'
     df.write_parquet(path)
     return path
 
@@ -190,9 +208,10 @@ class TestFromRelationsParquet:
         '''Test that non-child relations are filtered out.'''
         hierarchy = NaicsHierarchy.from_relations_parquet(relations_parquet_with_relation_id)
 
-        # Codes 113 and 114 have relation_id != 1, so should not be in hierarchy
-        assert hierarchy.get_parent('113') is None
-        assert hierarchy.get_parent('114') is None
+        # The sibling (111, 112) and grandchild (11, 1111) rows come first, so reading them as
+        # child links would claim 112 and 1111 before their true parents
+        assert hierarchy.get_parent('112') == '11'
+        assert hierarchy.get_parent('1111') == '111'
 
     def test_from_relations_parquet_schema_validation_missing_code_i(self, tmp_path):
         '''Test error handling for missing code_i column.'''
@@ -236,6 +255,11 @@ class TestFromRelationsParquet:
 
         with pytest.raises(FileNotFoundError, match='not found'):
             NaicsHierarchy.from_relations_parquet(path)
+
+    def test_from_relations_parquet_rejects_a_missing_parent_link(self, legacy_relations_parquet):
+        '''The legacy format labels (711, 7113) excluded, so the child link never loads.'''
+        with pytest.raises(HierarchyIntegrityError, match='711->7113'):
+            NaicsHierarchy.from_relations_parquet(legacy_relations_parquet)
 
 # -------------------------------------------------------------------------------------------------
 # Tests for get_parent()
@@ -415,6 +439,20 @@ class TestOrphanNodes:
         assert hierarchy.get_parent('child') == 'root'
         assert hierarchy.get_children('root') == ['child']
         assert hierarchy.get_children('child') == []
+
+    def test_missing_parent_links_join_present_codes_the_hierarchy_leaves_unlinked(self):
+        '''711 and 7113 are both present but unlinked; 111111's parent is absent, so it is a root.'''
+        hierarchy = NaicsHierarchy([('71', '711'), ('711', '7111')])
+
+        missing = hierarchy.missing_parent_links(['71', '711', '7111', '7113', '111111'])
+
+        assert missing == [('711', '7113')]
+
+    def test_missing_parent_links_key_combined_sectors_by_their_first_code(self):
+        '''Subsector 321 sits in sector 31-33, keyed 31, so the 31 -> 321 link is required.'''
+        hierarchy = NaicsHierarchy([('31', '311')])
+
+        assert hierarchy.missing_parent_links(['31', '311', '321']) == [('31', '321')]
 
 # -------------------------------------------------------------------------------------------------
 # Tests for load_naics_hierarchy() with caching

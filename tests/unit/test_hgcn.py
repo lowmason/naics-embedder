@@ -14,6 +14,7 @@ from naics_embedder.graph_model.hgcn import (
     HGCNLightningModule,
     HyperbolicConvolution,
     load_embeddings,
+    main,
     save_outputs,
 )
 from naics_embedder.text_model.hyperbolic import LorentzOps, check_lorentz_manifold_validity
@@ -181,6 +182,33 @@ def test_curriculum_phase_transitions(graph_inputs):
     discrimination = module._get_curriculum_state(batch_idx=0)
     assert discrimination.name == 'discrimination'
     assert discrimination.use_hard_negatives is True
+
+@pytest.mark.unit
+def test_main_reads_the_graph_config_by_default(monkeypatch):
+    requested = []
+
+    def stop_after_config(path):
+        requested.append(path)
+        raise RuntimeError('config requested')
+
+    monkeypatch.setattr(GraphConfig, 'from_yaml', stop_after_config)
+
+    with pytest.raises(RuntimeError, match='config requested'):
+        main()
+
+    assert requested == ['conf/graph.yaml']
+
+@pytest.mark.unit
+def test_curriculum_reads_the_configured_thresholds_file_over_the_cache_dir(graph_inputs, tmp_path):
+    thresholds = tmp_path / 'bundle_thresholds.json'
+    thresholds.write_text(json.dumps({'phase1_max_relation': 2, 'phase1_max_distance': 0.75}))
+    module, _ = graph_inputs(difficulty_thresholds_path=str(thresholds))
+    module.trainer = SimpleNamespace(current_epoch=0)
+
+    warmup = module._get_curriculum_state(batch_idx=0)
+
+    assert warmup.max_relation == 2
+    assert warmup.max_distance == pytest.approx(0.75)
 
 @pytest.mark.unit
 def test_adaptive_margin_respects_bounds(graph_inputs):

@@ -916,8 +916,9 @@ class GraphConfig(BaseModel):
     supervision_manifest_path: Optional[str] = Field(
         default=None,
         description=(
-            'Stage-3 supervision bundle manifest; when set, relations, training pairs, and the '
-            'distance matrix are all read from that one validated bundle'
+            'Stage-3 supervision bundle manifest; when set, relations, training pairs, the '
+            'distance matrix, and the curriculum difficulty thresholds are all read from that one '
+            'validated bundle'
         ),
     )
     relations_parquet: str = Field(
@@ -1016,6 +1017,13 @@ class GraphConfig(BaseModel):
     curriculum_cache_dir: str = Field(
         default='./data/curriculum_cache',
         description='Directory containing curriculum preprocessing artifacts',
+    )
+    difficulty_thresholds_path: Optional[str] = Field(
+        default=None,
+        description=(
+            'Curriculum difficulty thresholds JSON; taken from the supervision bundle when a '
+            'manifest is set, else read from curriculum_cache_dir'
+        ),
     )
     curriculum_warmup_epochs: int = Field(
         default=2, ge=0, description='Number of epochs using warmup curriculum filters'

@@ -14,12 +14,15 @@ Commands:
 '''
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
+from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
+    resolve_graph_supervision_paths,
+)
 from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.embeddings_verification import Stage4VerificationConfig, verify_stage4
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
@@ -217,6 +220,30 @@ def investigate(
 # Verify Stage 4 against Stage 3
 # -------------------------------------------------------------------------------------------------
 
+def _stage4_structural_inputs(
+    supervision_manifest: Optional[str],
+    distance_matrix: Optional[str],
+    relations_parquet: Optional[str],
+) -> Tuple[Path, Path]:
+    '''
+    The distance matrix and relations parquet that verify-stage4 reads.
+
+    With a supervision manifest both come from that one validated bundle (an explicitly supplied
+    path must be the bundle's own artifact). Without one, unset paths fall back to the legacy
+    ``./data`` files.
+    '''
+    if supervision_manifest:
+        paths = resolve_graph_supervision_paths(
+            supervision_manifest,
+            distance_matrix_path=distance_matrix,
+            relations_path=relations_parquet,
+        )
+        return paths.distance_matrix, paths.relations
+    return (
+        Path(distance_matrix or './data/naics_distance_matrix.parquet'),
+        Path(relations_parquet or './data/naics_relations.parquet'),
+    )
+
 @app.command('verify-stage4')
 def verify_stage4_command(
     stage3_parquet: Annotated[
@@ -234,19 +261,32 @@ def verify_stage4_command(
         ),
     ] = './output/hgcn/encodings.parquet',
     distance_matrix: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             '--distance-matrix',
-            help='Path to ground truth distance matrix parquet',
+            help=(
+                'Path to ground truth distance matrix parquet (default: the bundle artifact with '
+                '--supervision-manifest, else ./data/naics_distance_matrix.parquet)'
+            ),
         ),
-    ] = './data/naics_distance_matrix.parquet',
+    ] = None,
     relations_parquet: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             '--relations',
-            help='Path to relations parquet (used for parent retrieval metric)',
+            help=(
+                'Path to relations parquet, used for the parent retrieval metric (default: the '
+                'bundle artifact with --supervision-manifest, else ./data/naics_relations.parquet)'
+            ),
         ),
-    ] = './data/naics_relations.parquet',
+    ] = None,
+    supervision_manifest: Annotated[
+        Optional[str],
+        typer.Option(
+            '--supervision-manifest',
+            help='Supervision bundle manifest; the distance matrix and relations come from it',
+        ),
+    ] = None,
     max_cophenetic_drop: Annotated[
         float,
         typer.Option('--max-cophenetic-drop', help='Allowed drop in cophenetic correlation'),
@@ -286,11 +326,14 @@ def verify_stage4_command(
     )
 
     try:
+        distance_matrix_path, relations_path = _stage4_structural_inputs(
+            supervision_manifest, distance_matrix, relations_parquet
+        )
         result = verify_stage4(
             Path(stage3_parquet),
             Path(stage4_parquet),
-            Path(distance_matrix),
-            Path(relations_parquet),
+            distance_matrix_path,
+            relations_path,
             cfg,
         )
     except Exception as exc:

@@ -14,6 +14,7 @@ from naics_embedder.tools.embeddings_verification import (
     verify_stage4,
 )
 from naics_embedder.utils.config import GraphConfig
+from naics_embedder.utils.naics_hierarchy import HierarchyIntegrityError
 
 def _write_embeddings(path, codes, spatial_vectors, prefix):
     '''Write Lorentz rows as Stage 3 (``hyp_e``) or Stage 4 (``hgcn_e``) columns.'''
@@ -89,6 +90,31 @@ def test_verify_stage4_pass(tmp_path):
     assert result['passed'] is True
     assert 'cophenetic_correlation' in result['pre']
     assert f'parent_retrieval@{cfg.parent_top_k}' in result['post']
+
+def test_verify_stage4_rejects_relations_missing_a_parent_link(tmp_path):
+    codes = ['11', '111', '112']
+    stage3_path = tmp_path / 'stage3.parquet'
+    stage4_path = tmp_path / 'stage4.parquet'
+    distance_path = tmp_path / 'distance.parquet'
+    relations_path = tmp_path / 'relations.parquet'
+    _write_embeddings(stage3_path, codes, [(0.0, 0.0), (0.2, 0.0), (0.0, 0.2)], 'hyp_e')
+    _write_embeddings(stage4_path, codes, [(0.0, 0.0), (0.15, 0.0), (0.0, 0.15)], 'hgcn_e')
+    _write_distance_matrix(distance_path, codes)
+    pl.DataFrame(
+        {
+            'idx_i': [0, 0],
+            'idx_j': [1, 2],
+            'code_i': ['11', '11'],
+            'code_j': ['111', '112'],
+            'relation_id': [1, 0],
+            'relation': ['child', 'excluded'],  # legacy label in place of 'child'
+        }
+    ).write_parquet(relations_path)
+
+    with pytest.raises(HierarchyIntegrityError, match='11->112'):
+        verify_stage4(
+            stage3_path, stage4_path, distance_path, relations_path, Stage4VerificationConfig()
+        )
 
 def test_verify_stage4_threshold_failure(tmp_path):
     codes = ['11', '111', '112']
