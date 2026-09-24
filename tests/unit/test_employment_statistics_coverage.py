@@ -2,6 +2,7 @@ import csv
 import hashlib
 import importlib.util
 import io
+import json
 import sys
 import zipfile
 from pathlib import Path
@@ -356,3 +357,92 @@ def test_render_decision_uses_fixed_wording():
     assert text.startswith('<!-- decision:begin -->\n- **Branch:** A. The verified window')
     assert '- **Row grain:** a six-digit code in a reference year (national, private' in text
     assert text.rstrip().endswith('<!-- decision:end -->')
+
+# -------------------------------------------------------------------------------------------------
+# Provenance and run
+# -------------------------------------------------------------------------------------------------
+
+def test_parse_headers_keeps_the_last_response():
+    text = (
+        'HTTP/2 301\r\nlocation: https://x\r\n\r\n'
+        'HTTP/2 200\r\ncontent-length: 5\r\nlast-modified: Tue, 02 Sep 2025 11:20:46 GMT\r\n\r\n'
+    )
+    headers = esc.parse_headers(text)
+    assert headers['status'] == '200'
+    assert headers['content-length'] == '5'
+    assert headers['last-modified'] == 'Tue, 02 Sep 2025 11:20:46 GMT'
+
+def test_build_manifest_records_provenance(tmp_path):
+    (tmp_path / 'headers').mkdir()
+    (tmp_path / 'a.csv').write_bytes(b'hello')
+    (tmp_path / 'headers' / 'a.csv.headers').write_text(
+        'HTTP/2 200\r\ncontent-length: 5\r\nlast-modified: Tue, 02 Sep 2025 11:20:46 GMT\r\n\r\n'
+    )
+    [entry] = esc.build_manifest(tmp_path, {'a.csv': 'https://example.test/a.csv'})
+    assert entry['bytes'] == 5
+    assert entry['sha256'] == hashlib.sha256(b'hello').hexdigest()
+    assert entry['last_modified'] == 'Tue, 02 Sep 2025 11:20:46 GMT'
+    (tmp_path / 'a.csv').write_bytes(b'hello!')
+    with pytest.raises(ValueError, match='Content-Length'):
+        esc.build_manifest(tmp_path, {'a.csv': 'https://example.test/a.csv'})
+
+def _vintage_2017_rows():
+    rows = [
+        ('US000', '5', '10', '11', '', 100, 1000, 100000),
+        ('US000', '5', '111110', '18', '', 10, 100, 10000),
+        ('US000', '5', '454110', '18', '', 7, 70, 7000),
+        ('US000', '5', '238111', '18', '', 4, 40, 4000),
+        ('US000', '5', '238112', '18', 'N', 1, 0, 0),
+    ]
+    return [_record(2021, *row) for row in rows]
+
+def _write_qcew_dir(directory):
+    directory.mkdir()
+    for year in WINDOW:
+        rows = _annual_rows(year)
+        with zipfile.ZipFile(directory / f'{year}_annual_singlefile.zip', 'w') as archive:
+            archive.writestr(f'{year}.annual.singlefile.csv', _csv_bytes(rows))
+        national = [row for row in rows if row['area_fips'] == 'US000']
+        (directory / f'{year}_US000_annual.csv').write_bytes(_csv_bytes(national))
+    (directory / '2021_US000_annual.csv').write_bytes(_csv_bytes(_vintage_2017_rows()))
+    return directory
+
+def test_run_writes_tables_and_decision(tmp_path):
+    qcew_dir = _write_qcew_dir(tmp_path / 'qcew')
+    codebook = _write_codebook(tmp_path)
+    out_dir = tmp_path / 'out'
+    decision, failures = esc.run(
+        qcew_dir,
+        codebook,
+        WINDOW,
+        out_dir,
+        codebook_sha256=_digest(codebook),
+        floor=2,
+        band=(0, 0)
+    )
+    assert failures == []
+    assert (decision.branch, decision.grain) == ('A', 'state')
+    report = json.loads((out_dir / 'coverage.json').read_text())
+    assert report['split_codes'] == ['238110', '238120']
+    assert {row['estabs_column'] for row in report['conventions']} == {'annual_avg_estabs'}
+    assert report['msa_rows'][-1] == {'year': 2025, 'rows': 0}
+    vintage = {row['year']: row['outside_codebook'] for row in report['vintage']}
+    assert vintage == {2021: 1, 2022: 0, 2023: 0, 2024: 0, 2025: 0}
+    assert '<!-- decision:begin -->' in (out_dir / 'decision.md').read_text()
+    assert '### Decision inputs' in (out_dir / 'tables.md').read_text()
+
+def test_main_exit_code_signals_stop_and_ask(tmp_path, monkeypatch):
+    argv = [
+        'run', '--qcew-dir',
+        str(tmp_path), '--codebook',
+        str(tmp_path / 'codebook.parquet'), '--final-years', '2022', '--out-dir',
+        str(tmp_path / 'out')
+    ]
+    clean = esc.Decision('A', 'national', True, True, False, ())
+    asking = esc.Decision('A', 'national', True, True, True, ())
+    monkeypatch.setattr(esc, 'run', lambda *args: (clean, []))
+    assert esc.main(argv) == 0
+    monkeypatch.setattr(esc, 'run', lambda *args: (clean, ['2024: an invariant failed']))
+    assert esc.main(argv) == 2
+    monkeypatch.setattr(esc, 'run', lambda *args: (asking, []))
+    assert esc.main(argv) == 2

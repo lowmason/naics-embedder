@@ -13,10 +13,13 @@ specs/findings/employment-statistics-coverage.md records. A suppressed cell is n
         --final-years 2022 2023 2024 2025 --out-dir DIR
 '''
 
+import argparse
 import hashlib
+import json
 import logging
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Collection, Mapping, Sequence
 
@@ -727,3 +730,191 @@ def render_decision(
         '<!-- decision:end -->',
     ]
     return '\n'.join(lines) + '\n'
+
+# -------------------------------------------------------------------------------------------------
+# Provenance
+# -------------------------------------------------------------------------------------------------
+
+def parse_headers(text: str) -> dict[str, str]:
+    '''Parse a `curl -D` header dump; after redirects, the last response wins.'''
+    blocks = [block for block in text.replace('\r\n', '\n').split('\n\n') if block.strip()]
+    status_line, *field_lines = blocks[-1].splitlines()
+    fields = {'status': status_line.split()[1]}
+    for line in field_lines:
+        name, _, value = line.partition(':')
+        fields[name.strip().lower()] = value.strip()
+    return fields
+
+def build_manifest(qcew_dir: Path, sources: Mapping[str, str] = SOURCES) -> list[dict[str, object]]:
+    '''Provenance of each source file: URL, bytes, sha256, Last-Modified and download time.'''
+    entries = []
+    for name, url in sources.items():
+        path = qcew_dir / name
+        headers_path = qcew_dir / 'headers' / f'{name}.headers'
+        headers = parse_headers(headers_path.read_text())
+        size = path.stat().st_size
+        if headers['status'] != '200':
+            raise ValueError(f'{name}: HTTP status {headers["status"]}')
+        if 'content-length' in headers and int(headers['content-length']) != size:
+            raise ValueError(
+                f'{name}: {size} bytes on disk, Content-Length '
+                f'{headers["content-length"]}'
+            )
+        downloaded = datetime.fromtimestamp(headers_path.stat().st_mtime, tz=timezone.utc)
+        entries.append(
+            {
+                'file': name,
+                'url': url,
+                'bytes': size,
+                'sha256': sha256_file(path),
+                'last_modified': headers.get('last-modified'),
+                'downloaded_at': downloaded.isoformat(timespec='seconds'),
+            }
+        )
+    return entries
+
+# -------------------------------------------------------------------------------------------------
+# Report
+# -------------------------------------------------------------------------------------------------
+
+def _cell(value: object) -> str:
+    if isinstance(value, float):
+        return f'{value:.4f}'
+    if isinstance(value, (list, tuple)):
+        return ', '.join(map(str, value)) or '-'
+    return '-' if value is None else str(value)
+
+def markdown_table(rows: Sequence[Mapping[str, object]]) -> str:
+    if not rows:
+        return '_none_\n'
+    columns = list(rows[0])
+    lines = ['| ' + ' | '.join(columns) + ' |', '|' + ' --- |' * len(columns)]
+    lines += ['| ' + ' | '.join(_cell(row[column]) for column in columns) + ' |' for row in rows]
+    return '\n'.join(lines) + '\n'
+
+def render_tables(report: Mapping[str, object]) -> str:
+    failures = [{'failure': failure} for failure in report['failures']]
+    split = [{'code': code} for code in report['split_codes']]
+    sections = [
+        ('Invariant failures', failures),
+        ('File conventions (six-digit rows)', report['conventions']),
+        ('Vintage check (national six-digit codes)', report['vintage']),
+        ('Split codes recovered from their five-digit parent', split),
+        ('National grain: codebook codes by status', report['national_status']),
+        ('Private cells by grain and year', report['area_coverage']),
+        ('Establishments of disclosed and suppressed private cells', report['size_by_status']),
+        ('Codes with no private national cell (last year)', report['private_gaps']),
+        ('Connecticut county-equivalents', report['connecticut']),
+        ('MSA six-digit rows per year', report['msa_rows']),
+        ('Decision inputs', report['summaries']),
+        ('Codes excluded at the chosen grain', report['excluded']),
+    ]
+    return '\n'.join(f'### {title}\n\n{markdown_table(rows)}' for title, rows in sections)
+
+# -------------------------------------------------------------------------------------------------
+# Run
+# -------------------------------------------------------------------------------------------------
+
+def run(
+    qcew_dir: Path,
+    codebook: Path,
+    final_years: Collection[int],
+    out_dir: Path,
+    window: Sequence[int] = WINDOW,
+    codebook_sha256: str = CODEBOOK_SHA256,
+    floor: int = SURVIVAL_FLOOR,
+    band: tuple[int, int] = ASK_BAND,
+) -> tuple[Decision, list[str]]:
+    '''Compute every table and the decision; write coverage.json, tables.md and decision.md.'''
+    universe = load_universe(codebook, codebook_sha256)
+    slices = {
+        year: read_annual_csv((qcew_dir / f'{year}_US000_annual.csv').read_bytes())
+        for year in (VINTAGE_CHECK_YEAR, *window)
+    }
+    published = {year: national_six_digit_codes(frame) for year, frame in slices.items()}
+    split = find_split_codes(published[max(window)], universe)
+    failures = [
+        f'{year}: split codes {codes} differ from {max(window)}' for year in window
+        if (codes := find_split_codes(published[year], universe)) != split
+    ]
+    parts: dict[str, list[pl.DataFrame]] = {grain: [] for grain in GRAINS}
+    conventions = []
+    for year in window:
+        logger.info('reading %s', year)
+        path = qcew_dir / f'{year}_annual_singlefile.zip'
+        frame = read_singlefile_zip(path)
+        estabs_column = resolve_estabs_column(singlefile_header(path))
+        conventions.append({**file_conventions(frame, year), 'estabs_column': estabs_column})
+        failures += check_invariants(frame, year)
+        failures += compare_national_slices(frame, slices[year], year)
+        for grain in GRAINS:
+            parts[grain].append(grain_cells(frame, universe, split, grain))
+    cells = {grain: pl.concat(frames) for grain, frames in parts.items()}
+    summaries = [summarize_grain(cells[grain], grain, window) for grain in GRAINS]
+    decision = decide(summaries, window, final_years, floor, band)
+    chosen = decision.grain or 'national'
+    msa_counts = {year: cells['msa'].filter(pl.col('year') == year).height for year in window}
+    msa_rows = [{'year': year, 'rows': count} for year, count in msa_counts.items()]
+    summary_rows = [{**asdict(summary), 'seen': summary.seen} for summary in summaries]
+    report = {
+        'window': list(window),
+        'final_years': sorted(final_years),
+        'codebook_sha256': codebook_sha256,
+        'failures': failures,
+        'conventions': conventions,
+        'split_codes': list(split),
+        'vintage': vintage_report(published, universe, split),
+        'national_status': [
+            row for year in window for own in OWNERSHIPS
+            for row in code_status_counts(cells['national'], universe, year, own)
+        ],
+        'area_coverage': [
+            area_coverage(cells[grain], universe, grain, year) for grain in GRAINS
+            for year in window
+        ],
+        'size_by_status': [
+            row for grain in GRAINS for year in window
+            for row in size_by_status(cells[grain], grain, year)
+        ],
+        'private_gaps': private_gaps(cells['national'], universe, max(window)),
+        'connecticut': connecticut_areas(cells['county']),
+        'msa_rows': msa_rows,
+        'summaries': summary_rows,
+        'decision': asdict(decision),
+        'excluded': excluded_codes(cells[chosen], universe, window),
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / 'coverage.json').write_text(json.dumps(report, indent=2, default=str) + '\n')
+    (out_dir / 'tables.md').write_text(render_tables(report))
+    (out_dir / 'decision.md').write_text(render_decision(decision, summaries, window))
+    for failure in failures:
+        logger.warning('invariant failed: %s', failure)
+    return decision, failures
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description='QCEW six-digit coverage for roadmap Stage 1.')
+    commands = parser.add_subparsers(dest='command', required=True)
+    manifest = commands.add_parser('manifest', help='record provenance of the downloaded files')
+    manifest.add_argument('--qcew-dir', type=Path, required=True)
+    coverage = commands.add_parser('run', help='compute the tables and the Req 2 decision')
+    coverage.add_argument('--qcew-dir', type=Path, required=True)
+    coverage.add_argument('--codebook', type=Path, required=True)
+    coverage.add_argument('--final-years', type=int, nargs='+', required=True)
+    coverage.add_argument('--out-dir', type=Path, required=True)
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
+    if args.command == 'manifest':
+        path = args.qcew_dir / 'MANIFEST.json'
+        path.write_text(json.dumps(build_manifest(args.qcew_dir), indent=2) + '\n')
+        logger.info('wrote %s', path)
+        return 0
+    decision, failures = run(args.qcew_dir, args.codebook, args.final_years, args.out_dir)
+    logger.info('branch %s at grain %s', decision.branch, decision.grain)
+    if failures or decision.needs_user:
+        review = 'required' if decision.needs_user else 'not required'
+        logger.warning('stop and ask: %d invariant failures; user review %s', len(failures), review)
+        return 2
+    return 0
+
+if __name__ == '__main__':
+    raise SystemExit(main())
