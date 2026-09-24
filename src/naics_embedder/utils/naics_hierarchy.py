@@ -21,6 +21,9 @@ def naics_parent_code(code: str) -> Optional[str]:
         return COMBINED_SECTOR_KEYS.get(sector, sector)
     return code[:-1]
 
+class HierarchyIntegrityError(ValueError):
+    '''A relations file lacks a NAICS parent link between two codes it contains.'''
+
 class NaicsHierarchy:
     '''In-memory representation of the NAICS hierarchy derived from relations parquet data.'''
 
@@ -50,6 +53,9 @@ class NaicsHierarchy:
         Build a hierarchy object from the relations parquet.
 
         Expects columns `code_i`, `code_j`, and either `relation_id` or `relation`/`relationship`.
+
+        Raises:
+            HierarchyIntegrityError: If the file lacks a parent link between two codes it contains.
         '''
         if not relations_path.exists():
             raise FileNotFoundError(f'NAICS relations parquet not found: {relations_path}')
@@ -76,7 +82,17 @@ class NaicsHierarchy:
             child = row['code_j']
             parent_child_pairs.append((parent, child))
 
-        return cls(parent_child_pairs)
+        hierarchy = cls(parent_child_pairs)
+        codes = set(df.get_column('code_i').unique()) | set(df.get_column('code_j').unique())
+        missing = hierarchy.missing_parent_links(codes)
+        if missing:
+            shown = ', '.join(f'{parent}->{child}' for parent, child in missing[:5])
+            raise HierarchyIntegrityError(
+                f'{relations_path} lacks NAICS parent links between codes it contains '
+                f'({len(missing):,} missing, e.g. {shown}). Legacy relations files label some '
+                "parent/child pairs 'excluded'; read relations from a supervision bundle instead."
+            )
+        return hierarchy
 
     def get_parent(self, code: str) -> Optional[str]:
         return self.parent_by_child.get(code)
