@@ -1,5 +1,5 @@
 '''
-A miniature regressor panel: a synthetic NAICS tree and its QCEW national slices.
+A miniature regressor panel: a synthetic NAICS tree, its QCEW national slices and stub arm tables.
 
 Four sectors, one of them combined (31-33), and seventeen four-digit groups. Every group but 2381
 has one five-digit code with two six-digit children. 238110 is its five-digit parent's only child,
@@ -24,6 +24,7 @@ from naics_embedder.panels.qcew_rows import (
     population,
     slice_name,
 )
+from naics_embedder.panels.regressor import ArmTables, FitSettings
 
 GROUPS = (
     '1111',
@@ -73,6 +74,9 @@ BRANCH_RECORD = {
     'seen_regime': True,
     'excluded_codes': [SUPPRESSED_CODE],
 }
+SETTINGS = FitSettings(
+    alphas=(0.01, 0.1, 1.0, 10.0, 100.0), folds=2, repeats=2, inner_folds=2, min_groups=4
+)
 
 # -------------------------------------------------------------------------------------------------
 # QCEW cells and slices
@@ -163,6 +167,26 @@ def synthetic_rows(cells: pl.DataFrame, levels=(2, 3, 4, 5, 6)) -> Dict[int, pl.
     return rows
 
 # -------------------------------------------------------------------------------------------------
+# Stub arm tables
+# -------------------------------------------------------------------------------------------------
+
+def coordinate_table(codes, dimension: int = 3, seed: int = 7) -> pl.DataFrame:
+    '''``code`` plus ``e0`` … ``e{dimension-1}``: a stub arm in the export form.'''
+
+    values = np.random.default_rng(seed).normal(size=(len(codes), dimension))
+    schema = {f'e{index}': pl.Float64 for index in range(dimension)}
+    frame = pl.DataFrame(values, schema=schema, orient='row')
+    return pl.DataFrame({'code': list(codes)}, schema={'code': pl.Utf8}).hstack(frame)
+
+def text_only_table(codes, width: int = 5, seed: int = 11) -> pl.DataFrame:
+    '''``code`` plus ``t0`` … ``t{width-1}``: a stub text-only table.'''
+
+    values = np.random.default_rng(seed).normal(size=(len(codes), width))
+    schema = {f't{index}': pl.Float64 for index in range(width)}
+    frame = pl.DataFrame(values, schema=schema, orient='row')
+    return pl.DataFrame({'code': list(codes)}, schema={'code': pl.Utf8}).hstack(frame)
+
+# -------------------------------------------------------------------------------------------------
 # Fixtures
 # -------------------------------------------------------------------------------------------------
 
@@ -173,3 +197,7 @@ def regressor_cells() -> pl.DataFrame:
 @pytest.fixture(scope='session')
 def regressor_rows(regressor_cells) -> Dict[int, pl.DataFrame]:
     return synthetic_rows(regressor_cells)
+
+@pytest.fixture(scope='session')
+def regressor_arm() -> ArmTables:
+    return ArmTables.from_tables(coordinate_table(CODEBOOK), text_only_table(CODEBOOK))
