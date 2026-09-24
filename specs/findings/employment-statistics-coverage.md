@@ -7,7 +7,21 @@ Verification "Employment-statistics coverage" and the Req 2 (open) item of
 
 ## Decision for Stage 3
 
-<!-- Task 6: paste coverage/decision.md here verbatim. -->
+<!-- decision:begin -->
+- **Branch:** A. The verified window supports a time-respecting outcome (the outcome dated after the features, with splits by time), so the panel includes one.
+- **Source:** QCEW annual averages, reference years 2022, 2023, 2024, 2025, private ownership (own_code 5).
+- **Row grain:** a six-digit code in a reference year (national, private ownership).
+- **Population:** 980 codes for the seen-code regime and 980 for the held-out-code regime, of the 1,012 six-digit codes in the codebook.
+- **Time-respecting outcome:** yes.
+- **Seen-code regime:** yes.
+- **Rule:** plan 3, survival floor 506 codes, ask band 405 to 607; user review not required.
+- **Reasons:**
+  - national: 980 codes can run the seen-code regime (floor 506); mean suppressed share 0.0000
+  - state: 978 codes can run the seen-code regime (floor 506); mean suppressed share 0.2379
+  - county: 948 codes can run the seen-code regime (floor 506); mean suppressed share 0.7384
+  - msa: not a candidate (not a candidate grain, or no six-digit rows in a window year)
+  - national: 980 codes are time-eligible (floor 506)
+<!-- decision:end -->
 
 ## 1. Reference years published on NAICS 2022 at six digits
 
@@ -92,4 +106,258 @@ quote.
 
 ## Appendix: generated tables
 
-<!-- Task 6: paste coverage/tables.md here verbatim. -->
+### Invariant failures
+
+| failure |
+| --- |
+| 2022: disclosed six-digit emp 128718106 exceeds total 128718060 |
+| 2023: disclosed six-digit emp 131289708 exceeds total 131289681 |
+
+### File conventions (six-digit rows)
+
+| year | disclosure_codes | own_code_0_rows | suppressed_rows | suppressed_rows_with_emp_or_wages | suppressed_rows_with_estabs | estabs_column |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2022 | {'blank': 467112, 'N': 852716} | 0 | 852716 | 0 | 837846 | annual_avg_estabs |
+| 2023 | {'blank': 472235, 'N': 862595} | 0 | 862595 | 0 | 846712 | annual_avg_estabs |
+| 2024 | {'blank': 392184, 'N': 949625} | 0 | 949625 | 0 | 921691 | annual_avg_estabs |
+| 2025 | {'blank': 336210, 'N': 761027} | 0 | 761027 | 0 | 737563 | annual_avg_estabs |
+
+### Vintage check (national six-digit codes)
+
+| year | published_six_digit | outside_codebook | outside_examples | codebook_unpublished | unpublished_examples |
+| --- | --- | --- | --- | --- | --- |
+| 2021 | 1075 | 139 | 212111, 212112, 212113, 212221, 212222, 212291, 212299, 212324, 212325, 212391, 212392, 212393 | 96 | 112130, 212114, 212115, 212220, 212290, 212323, 212390, 315120, 315250, 316990, 321215, 322120 |
+| 2022 | 1029 | 0 | - | 3 | 112130, 517122, 541120 |
+| 2023 | 1029 | 0 | - | 3 | 112130, 517122, 541120 |
+| 2024 | 1029 | 0 | - | 3 | 112130, 517122, 541120 |
+| 2025 | 1029 | 0 | - | 3 | 112130, 517122, 541120 |
+
+### Split codes recovered from their five-digit parent
+
+| code |
+| --- |
+| 238110 |
+| 238120 |
+| 238130 |
+| 238140 |
+| 238150 |
+| 238160 |
+| 238170 |
+| 238190 |
+| 238210 |
+| 238220 |
+| 238290 |
+| 238310 |
+| 238320 |
+| 238330 |
+| 238340 |
+| 238350 |
+| 238390 |
+| 238910 |
+| 238990 |
+
+### National grain: codebook codes by status
+
+| year | own_code | series | disclosed | suppressed | other | absent | recovered_via_parent | suppressed_share |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2022 | 1 | employment | 207 | 0 | 0 | 805 | 0 | 0.0000 |
+| 2022 | 1 | wages | 207 | 0 | 0 | 805 | 0 | 0.0000 |
+| 2022 | 1 | establishments | 207 | 0 | 0 | 805 | 0 | 0.0000 |
+| 2022 | 2 | employment | 152 | 80 | 0 | 780 | 1 | 0.0791 |
+| 2022 | 2 | wages | 152 | 80 | 0 | 780 | 1 | 0.0791 |
+| 2022 | 2 | establishments | 231 | 1 | 0 | 780 | 1 | 0.0010 |
+| 2022 | 3 | employment | 271 | 163 | 0 | 578 | 11 | 0.1611 |
+| 2022 | 3 | wages | 271 | 163 | 0 | 578 | 11 | 0.1611 |
+| 2022 | 3 | establishments | 434 | 0 | 0 | 578 | 11 | 0.0000 |
+| 2022 | 5 | employment | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2022 | 5 | wages | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2022 | 5 | establishments | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2023 | 1 | employment | 207 | 0 | 0 | 805 | 0 | 0.0000 |
+| 2023 | 1 | wages | 207 | 0 | 0 | 805 | 0 | 0.0000 |
+| 2023 | 1 | establishments | 207 | 0 | 0 | 805 | 0 | 0.0000 |
+| 2023 | 2 | employment | 153 | 94 | 0 | 765 | 8 | 0.0929 |
+| 2023 | 2 | wages | 153 | 94 | 0 | 765 | 8 | 0.0929 |
+| 2023 | 2 | establishments | 246 | 1 | 0 | 765 | 8 | 0.0010 |
+| 2023 | 3 | employment | 282 | 166 | 0 | 564 | 11 | 0.1640 |
+| 2023 | 3 | wages | 282 | 166 | 0 | 564 | 11 | 0.1640 |
+| 2023 | 3 | establishments | 448 | 0 | 0 | 564 | 11 | 0.0000 |
+| 2023 | 5 | employment | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2023 | 5 | wages | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2023 | 5 | establishments | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2024 | 1 | employment | 210 | 0 | 0 | 802 | 0 | 0.0000 |
+| 2024 | 1 | wages | 210 | 0 | 0 | 802 | 0 | 0.0000 |
+| 2024 | 1 | establishments | 210 | 0 | 0 | 802 | 0 | 0.0000 |
+| 2024 | 2 | employment | 151 | 85 | 0 | 776 | 2 | 0.0840 |
+| 2024 | 2 | wages | 151 | 85 | 0 | 776 | 2 | 0.0840 |
+| 2024 | 2 | establishments | 234 | 2 | 0 | 776 | 2 | 0.0020 |
+| 2024 | 3 | employment | 277 | 175 | 0 | 560 | 11 | 0.1729 |
+| 2024 | 3 | wages | 277 | 175 | 0 | 560 | 11 | 0.1729 |
+| 2024 | 3 | establishments | 446 | 6 | 0 | 560 | 11 | 0.0059 |
+| 2024 | 5 | employment | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2024 | 5 | wages | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2024 | 5 | establishments | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2025 | 1 | employment | 204 | 0 | 0 | 808 | 0 | 0.0000 |
+| 2025 | 1 | wages | 204 | 0 | 0 | 808 | 0 | 0.0000 |
+| 2025 | 1 | establishments | 204 | 0 | 0 | 808 | 0 | 0.0000 |
+| 2025 | 2 | employment | 142 | 95 | 0 | 775 | 2 | 0.0939 |
+| 2025 | 2 | wages | 142 | 95 | 0 | 775 | 2 | 0.0939 |
+| 2025 | 2 | establishments | 237 | 0 | 0 | 775 | 2 | 0.0000 |
+| 2025 | 3 | employment | 270 | 179 | 0 | 563 | 11 | 0.1769 |
+| 2025 | 3 | wages | 270 | 179 | 0 | 563 | 11 | 0.1769 |
+| 2025 | 3 | establishments | 446 | 3 | 0 | 563 | 11 | 0.0030 |
+| 2025 | 5 | employment | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2025 | 5 | wages | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+| 2025 | 5 | establishments | 980 | 0 | 0 | 32 | 19 | 0.0000 |
+
+### Private cells by grain and year
+
+| grain | year | areas | published_cells | suppressed_cells | other_cells | suppressed_share | estabs_suppressed_cells | estabs_suppressed_share | codes_usable | codes_usable_2plus_areas | codes_published_never_usable | codes_absent | codes_without_usable | share_without_usable | median_usable_areas |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| national | 2022 | 1 | 980 | 0 | 0 | 0.0000 | 0 | 0.0000 | 980 | 0 | 0 | 32 | 32 | 0.0316 | 1.0000 |
+| national | 2023 | 1 | 980 | 0 | 0 | 0.0000 | 0 | 0.0000 | 980 | 0 | 0 | 32 | 32 | 0.0316 | 1.0000 |
+| national | 2024 | 1 | 980 | 0 | 0 | 0.0000 | 0 | 0.0000 | 980 | 0 | 0 | 32 | 32 | 0.0316 | 1.0000 |
+| national | 2025 | 1 | 980 | 0 | 0 | 0.0000 | 0 | 0.0000 | 980 | 0 | 0 | 32 | 32 | 0.0316 | 1.0000 |
+| state | 2022 | 53 | 45737 | 10176 | 0 | 0.2225 | 80 | 0.0017 | 977 | 977 | 3 | 32 | 35 | 0.0346 | 40.0000 |
+| state | 2023 | 53 | 45819 | 10006 | 0 | 0.2184 | 57 | 0.0012 | 978 | 978 | 2 | 32 | 34 | 0.0336 | 40.0000 |
+| state | 2024 | 53 | 45848 | 11440 | 0 | 0.2495 | 140 | 0.0031 | 978 | 977 | 2 | 32 | 34 | 0.0336 | 38.5000 |
+| state | 2025 | 53 | 45824 | 11978 | 0 | 0.2614 | 143 | 0.0031 | 978 | 973 | 2 | 32 | 34 | 0.0336 | 39.0000 |
+| county | 2022 | 3223 | 866433 | 619758 | 0 | 0.7153 | 11826 | 0.0136 | 956 | 933 | 24 | 32 | 56 | 0.0553 | 98.0000 |
+| county | 2023 | 3223 | 878426 | 628649 | 0 | 0.7157 | 12869 | 0.0147 | 953 | 939 | 27 | 32 | 59 | 0.0583 | 100.0000 |
+| county | 2024 | 3224 | 880769 | 666537 | 0 | 0.7568 | 22480 | 0.0255 | 950 | 921 | 30 | 32 | 62 | 0.0613 | 78.0000 |
+| county | 2025 | 3224 | 880614 | 674557 | 0 | 0.7660 | 21298 | 0.0242 | 948 | 920 | 32 | 32 | 64 | 0.0632 | 77.0000 |
+| msa | 2022 | 388 | 232153 | 148614 | 0 | 0.6402 | 1791 | 0.0077 | 961 | 943 | 19 | 32 | 51 | 0.0504 | 55.0000 |
+| msa | 2023 | 388 | 234131 | 149406 | 0 | 0.6381 | 1775 | 0.0076 | 959 | 945 | 21 | 32 | 53 | 0.0524 | 56.0000 |
+| msa | 2024 | 393 | 238195 | 192319 | 0 | 0.8074 | 3319 | 0.0139 | 892 | 835 | 88 | 32 | 120 | 0.1186 | 23.0000 |
+| msa | 2025 | 0 | 0 | 0 | 0 | - | 0 | - | 0 | 0 | 0 | 1012 | 1012 | 1.0000 | - |
+
+### Establishments of disclosed and suppressed private cells
+
+| grain | year | status | cells | median_estabs | p90_estabs |
+| --- | --- | --- | --- | --- | --- |
+| national | 2022 | disclosed | 980 | 2100.5000 | 22920.0000 |
+| national | 2023 | disclosed | 980 | 2127.0000 | 23315.0000 |
+| national | 2024 | disclosed | 980 | 2172.0000 | 23356.0000 |
+| national | 2025 | disclosed | 980 | 2171.5000 | 23867.0000 |
+| state | 2022 | disclosed | 35561 | 56.0000 | 586.0000 |
+| state | 2022 | suppressed | 10176 | 3.0000 | 18.0000 |
+| state | 2023 | disclosed | 35813 | 58.0000 | 607.0000 |
+| state | 2023 | suppressed | 10006 | 3.0000 | 19.0000 |
+| state | 2024 | disclosed | 34408 | 63.0000 | 643.0000 |
+| state | 2024 | suppressed | 11440 | 4.0000 | 22.0000 |
+| state | 2025 | disclosed | 33846 | 65.0000 | 653.0000 |
+| state | 2025 | suppressed | 11978 | 4.0000 | 25.0000 |
+| county | 2022 | disclosed | 246675 | 9.0000 | 59.0000 |
+| county | 2022 | suppressed | 619758 | 1.0000 | 4.0000 |
+| county | 2023 | disclosed | 249777 | 10.0000 | 60.0000 |
+| county | 2023 | suppressed | 628649 | 1.0000 | 4.0000 |
+| county | 2024 | disclosed | 214232 | 11.0000 | 70.0000 |
+| county | 2024 | suppressed | 666537 | 1.0000 | 5.0000 |
+| county | 2025 | disclosed | 206057 | 12.0000 | 72.0000 |
+| county | 2025 | suppressed | 674557 | 1.0000 | 5.0000 |
+| msa | 2022 | disclosed | 83539 | 15.0000 | 130.0000 |
+| msa | 2022 | suppressed | 148614 | 2.0000 | 21.0000 |
+| msa | 2023 | disclosed | 84725 | 15.0000 | 135.0000 |
+| msa | 2023 | suppressed | 149406 | 2.0000 | 21.0000 |
+| msa | 2024 | disclosed | 45876 | 14.0000 | 128.0000 |
+| msa | 2024 | suppressed | 192319 | 3.0000 | 42.0000 |
+
+### Codes with no private national cell (last year)
+
+| code | ownerships_with_cells |
+| --- | --- |
+| 112130 | - |
+| 517122 | - |
+| 541120 | - |
+| 921110 | 1, 2, 3 |
+| 921120 | 1, 2, 3 |
+| 921130 | 1, 2, 3 |
+| 921140 | 1, 2, 3 |
+| 921150 | 3 |
+| 921190 | 1, 2, 3 |
+| 922110 | 1, 2, 3 |
+| 922120 | 1, 2, 3 |
+| 922130 | 1, 2, 3 |
+| 922140 | 1, 2, 3 |
+| 922150 | 1, 2, 3 |
+| 922160 | 2, 3 |
+| 922190 | 1, 2, 3 |
+| 923110 | 1, 2, 3 |
+| 923120 | 1, 2, 3 |
+| 923130 | 1, 2, 3 |
+| 923140 | 1, 2, 3 |
+| 924110 | 1, 2, 3 |
+| 924120 | 1, 2, 3 |
+| 925110 | 1, 2, 3 |
+| 925120 | 1, 2, 3 |
+| 926110 | 1, 2, 3 |
+| 926120 | 1, 2, 3 |
+| 926130 | 1, 2, 3 |
+| 926140 | 1, 2, 3 |
+| 926150 | 1, 2, 3 |
+| 927110 | 1, 2, 3 |
+| 928110 | 1, 2, 3 |
+| 928120 | 1, 2, 3 |
+
+### Connecticut county-equivalents
+
+| year | legacy_counties | planning_regions |
+| --- | --- | --- |
+| 2022 | 8 | 0 |
+| 2023 | 8 | 0 |
+| 2024 | 0 | 9 |
+| 2025 | 0 | 9 |
+
+### MSA six-digit rows per year
+
+| year | rows |
+| --- | --- |
+| 2022 | 232153 |
+| 2023 | 234131 |
+| 2024 | 238195 |
+| 2025 | 0 |
+
+### Decision inputs
+
+| grain | complete | mean_suppressed_share | seen_by_year | seen_by_area | time_eligible | heldout_population | seen |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| national | True | 0.0000 | 980 | 0 | 980 | 980 | 980 |
+| state | True | 0.2379 | 978 | 973 | 978 | 978 | 978 |
+| county | True | 0.7384 | 948 | 920 | 935 | 962 | 948 |
+| msa | False | 0.6952 | 0 | 0 | 0 | 967 | 0 |
+
+### Codes excluded at the chosen grain
+
+| code | reason |
+| --- | --- |
+| 112130 | no private cell |
+| 517122 | no private cell |
+| 541120 | no private cell |
+| 921110 | no private cell |
+| 921120 | no private cell |
+| 921130 | no private cell |
+| 921140 | no private cell |
+| 921150 | no private cell |
+| 921190 | no private cell |
+| 922110 | no private cell |
+| 922120 | no private cell |
+| 922130 | no private cell |
+| 922140 | no private cell |
+| 922150 | no private cell |
+| 922160 | no private cell |
+| 922190 | no private cell |
+| 923110 | no private cell |
+| 923120 | no private cell |
+| 923130 | no private cell |
+| 923140 | no private cell |
+| 924110 | no private cell |
+| 924120 | no private cell |
+| 925110 | no private cell |
+| 925120 | no private cell |
+| 926110 | no private cell |
+| 926120 | no private cell |
+| 926130 | no private cell |
+| 926140 | no private cell |
+| 926150 | no private cell |
+| 927110 | no private cell |
+| 928110 | no private cell |
+| 928120 | no private cell |
