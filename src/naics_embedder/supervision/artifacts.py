@@ -13,7 +13,7 @@ and row count.
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Callable, Collection, Iterable, List, Optional, Tuple
 
 import numpy as np
 import polars as pl
@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 from naics_embedder.supervision.schema import (
     CONTRACT_VERSION,
     ArtifactFile,
+    IndexRole,
     SemanticTarget,
     SupervisionManifest,
 )
@@ -253,6 +254,49 @@ def validate_exclusion_derivation(pair_facts: pl.DataFrame) -> None:
         raise ValueError(
             'pair facts exclusion derivation is inconsistent: is_explicit_exclusion must equal '
             'code_i_excludes_code_j OR code_j_excludes_code_i'
+        )
+
+INDEX_ROLES_ARTIFACT = 'index_roles'
+INDEX_ROLE_COLUMNS = ('entry_id', 'code', 'text', 'role')
+
+def validate_index_role_table(
+    roles: pl.DataFrame,
+    six_digit_codes: Collection[str],
+    *,
+    min_examples_per_code: int = 1,
+) -> None:
+    '''
+    Fail closed unless every index entry holds exactly one known role for a six-digit code.
+
+    Also requires non-empty entry text, and the examples-channel floor: every code keeps at least
+    ``min_examples_per_code`` examples-role entries, or all its entries if it has fewer.
+    '''
+
+    missing = [name for name in INDEX_ROLE_COLUMNS if name not in roles.columns]
+    if missing:
+        raise ValueError(f'index roles lack required columns: {missing}')
+    if roles.select(pl.any_horizontal(pl.col(list(INDEX_ROLE_COLUMNS)).is_null()).any()).item():
+        raise ValueError('index roles contain null values')
+    if roles.get_column('entry_id').is_duplicated().any():
+        raise ValueError('an index entry holds more than one role')
+    unknown = sorted(
+        set(roles.get_column('role').unique().to_list()) - {role.value
+                                                            for role in IndexRole}
+    )
+    if unknown:
+        raise ValueError(f'index roles contain unknown roles: {unknown}')
+    outside = sorted(set(roles.get_column('code').unique().to_list()) - set(six_digit_codes))
+    if outside:
+        raise ValueError(f'index roles name codes outside the six-digit codebook: {outside[:5]}')
+    if roles.filter(pl.col('text').str.strip_chars().eq('')).height:
+        raise ValueError('index roles contain an empty entry text')
+    floor = pl.min_horizontal(pl.col('entries'), pl.lit(min_examples_per_code))
+    short = roles.group_by('code').agg(
+        examples=pl.col('role').eq(IndexRole.EXAMPLES.value).sum(), entries=pl.len()
+    ).filter(pl.col('examples') < floor)
+    if short.height:
+        raise ValueError(
+            f'{short.height:,} codes have fewer than {min_examples_per_code} examples-role entries'
         )
 
 def validate_matrix(
