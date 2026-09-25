@@ -1,0 +1,70 @@
+{
+  "codebook_codes_sha256": "9b646af189dbc46870861367e7cd399d2328972754dbf1abb30ca5a864f2481a",
+  "fraction": "1/5",
+  "generated_at": "2026-09-24T23:58:49.582597+00:00",
+  "generator_revision": "c6eea11577067fe2dece38a25406dfb7ce07a60c",
+  "groups_by_sector": {
+    "11": 4,
+    "21": 1,
+    "22": 1,
+    "23": 2,
+    "31": 17,
+    "42": 4,
+    "44": 5,
+    "48": 6,
+    "51": 2,
+    "52": 2,
+    "53": 2,
+    "54": 2,
+    "56": 2,
+    "61": 1,
+    "62": 3,
+    "71": 2,
+    "72": 1,
+    "81": 3
+  },
+  "heldout_groups": {
+    "groups": 60,
+    "path": "conf/data/regressor_heldout_groups.csv",
+    "sha256": "deddfd4c395ca2ea8164e4425a4fdfff4e564360d20467d5a76163504cbb8ac4"
+  },
+  "library_versions": {
+    "numpy": "2.3.4",
+    "polars": "1.35.1"
+  },
+  "qcew_sha256": {
+    "2022_US000_annual.csv": "c45cbb64a1b1eef16bfd743510d9d02792ccad82f60e9df202c5daa3e8c5cc18",
+    "2023_US000_annual.csv": "fe9ffe874f6e657f6bb1558971965ce6acc015ace45d831ed32c90d97097aee9",
+    "2024_US000_annual.csv": "48db086828a01798731242c6d3d4957f80f941afe75463a1ff7d43de774bea46",
+    "2025_US000_annual.csv": "0b5528f70d66a84ff9729691f365c667a09f854f0af3d841bdd660ef3cb01811"
+  },
+  "rows_by_level_and_split": {
+    "2": {
+      "heldout_outer": 54,
+      "remainder": 2,
+      "seen_outer": 1
+    },
+    "3": {
+      "heldout_outer": 126,
+      "remainder": 92,
+      "seen_outer": 46
+    },
+    "4": {
+      "heldout_outer": 180,
+      "remainder": 480,
+      "seen_outer": 240
+    },
+    "5": {
+      "heldout_outer": 405,
+      "remainder": 1046,
+      "seen_outer": 523
+    },
+    "6": {
+      "heldout_outer": 609,
+      "remainder": 1554,
+      "seen_outer": 777
+    }
+  },
+  "seed": 20260924,
+  "six_digit_population": 980
+}
