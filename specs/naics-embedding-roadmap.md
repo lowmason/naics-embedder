@@ -4,12 +4,13 @@
 > reconcile step; route each unticked stage per its ROUTING line; never plan
 > this document wholesale.
 
-**Status: APPROVED (2026-09-23); resumed twice on 2026-09-24.** Derived in a session that could not
-ask questions, then the six open questions were answered interactively and the eleven-stage
-partition approved at the human checkpoint (decisions D1–D6 below). Stages 1 and 2 are complete.
-The first resume re-validated Stages 2–11 against Stage 1 and recorded D7 and D8; the second
-re-validated Stages 3–11 against Stage 2, recorded D9 and added Stage 12 (below). Stage 3 is next,
-per its ROUTING line, in a fresh session.
+**Status: APPROVED (2026-09-23); resumed three times on 2026-09-24.** Derived in a session that
+could not ask questions, then the six open questions were answered interactively and the
+eleven-stage partition approved at the human checkpoint (decisions D1–D6 below). Stages 1–3 are
+complete. The first resume re-validated Stages 2–11 against Stage 1 and recorded D7 and D8; the
+second re-validated Stages 3–11 against Stage 2, recorded D9 and added Stage 12 (below); the third
+re-validated Stages 4–12 against Stage 3 and recorded D10 and D11, which settle the former Open
+questions. Stage 4 is next, per its ROUTING line, in a fresh session.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
@@ -62,6 +63,41 @@ and added the fifth:
 D9 settles Stage 3's text-only comparator, and each panel's decision statistic joins Open
 questions for Stage 4. Stage 10 needed no edit.
 
+**Resume after Stage 3 (2026-09-24).** Stage 3's stamp is authoritative: plan 5, merged as PR #114
+(2e2e226). Stages 4–12 were re-validated at origin/main 2e2e226, where the spec is still
+d9126ce's. Stage 3's completion commit (d05e83f) had already re-validated Stages 4, 7 and 12; the
+PR's later fixes pinned the held-out draw's hash in `conf/data/regressor_panel.yaml` (a53d6e4),
+which Stage 12's one-opening rule relies on, and fixed a test. Under `src/`, Stage 3 added five
+`panels` modules and `data/regressor_group_table.py`, and edited `cli/commands/data.py`,
+`cli/commands/tools.py` and `utils/config.py`. Two Gap analysis citations into those files moved
+and were re-pointed (the Req 13 row and the `verify-stage4` row); every verdict stands, and the
+Req 2 row stays as the entry-time snapshot. Reading the shipped code surfaced five gaps; the
+review of PR #115 sharpened the second and third:
+
+- Stage 12 named `tools regressor-panel --split test` as an alternative to
+  `RegressorPanel.open_outer`, but the command opens the outer sets on every call and scores one
+  table, so a second arm or seed through it would be logged as a reopen, and no command opens the
+  outcome test split. Stage 12 now scores every arm and seed through one panel object per sealed
+  set.
+- The panel reads no arm without its text-only table, which is not pinned across machines, and
+  the selection log names both tables by `matrix_fingerprint`, not by file hash. Stage 4's
+  artifact references now include each arm's text-only table with its provenance file, which
+  records the backbone, the descriptions and the window that D9 and Req 9 constrain, and every
+  table reference carries both identifiers.
+- Loading the panel re-reads the four QCEW slices from `qcew_dir`, outside the repo, so every
+  stage that loads it needs them: Stage 4's driver, Stage 6's check and Stage 12.
+- The text-only builder reads at `max_length: 512`, the window Req 9 rejects, while D9 has the
+  comparator read the same text as the arm. Stage 5's window policy now covers it (user
+  approval), and Stage 9's Exit follows.
+- Stage 3 left `metrics/qcew.py`, the definition Req 2 rejects, beside the new panel (plan 5:
+  "Prior art left alone"). Stage 4 now removes it with the taxonomy-tasks suite (user approval).
+
+Stage 6's export takes the panel's input contract: no Lorentz points and no constant column.
+Stages 7 and 12 cite D10. Stages 8, 10 and 11 needed no edit: every arm exports as many columns
+as its dimension, and arm D's references come through Stage 4's schema. D10 and D11 settle the
+two Open questions that Stage 4's planning session was to ask; they were asked here instead,
+because Stages 7–12 read them too and the roadmap is their only carrier.
+
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
 
@@ -113,8 +149,8 @@ at the resume checkpoint.
   all three (the 95 % interval, unchanged) and superiority on at least one; each panel gets its
   own δ and a third of the error rate, so superiority reads the 98⅓ % interval. This supersedes
   the 97.5 % that Req 5 and Verification "Decision records" name; the Completion audit reads it
-  as this recorded deviation, not an unmet requirement. The final tie-break stays open (Open
-  questions).
+  as this recorded deviation, not an unmet requirement. The final tie-break stayed open; D11
+  settles it.
 
 **Decision (2026-09-24, second resume).** One ambiguity Stage 3 cannot be planned without, answered
 by the user at the second resume checkpoint.
@@ -125,6 +161,27 @@ by the user at the second resume checkpoint.
   dimension. That backbone is the current checkpoint until Stage 9 adopts another, and whichever
   backbone the arm uses after. The comparator measures what taxonomy training adds over the same
   encoder reading the same text.
+
+**Decisions (2026-09-24, third resume).** The two former Open questions, answered by the user at the
+third resume checkpoint. Stage 4 builds both into its tooling, through which Stages 7–12 read them.
+
+- **D10 — Each panel's decision statistic (Req 5; Stage 4; Stages 7–12 read it).** Req 5 fixes a
+  δ and an interval per panel but names no statistic. Decision: the outcome panel's is per-query
+  MRR, resampled by code with its queries, the statistic D6 already selects checkpoints on. Each
+  regressor regime's is the out-of-sample mean squared error of the `covariates+embedding`
+  comparator on log employment at level 6, each row's squared error averaged over its repeats
+  (five on a validation read) before resampling by group; its Δ is oriented so that a positive
+  value favours A (B's error minus A's). The sparse comparators never read the arm, and their
+  folds depend only on the regime, level, repeat and group, so the gain over a sparse encoding
+  (over one-hot in the seen regime, over ancestors in the held-out regime) gives the same paired
+  Δ; that gain is reported for Req 1. The text-only comparator is no baseline, since it changes
+  with each arm's dimension and backbone. Every other Req 2 comparator and Req 3 metric is still
+  reported.
+- **D11 — D8's final tie-break (Req 5; Stage 4).** Req 5's tie order ends on "the higher
+  regressor-panel estimate", and D8 gives two. Decision: the held-out regime's, read as its gain
+  over ancestors, so the higher estimate is the lower error. For a held-out code, one-hot
+  predicts only the intercept and ancestors help only through levels 2–3, so that regime is where
+  the embedding's value over sparse encodings is tested.
 
 ## Gap analysis
 
@@ -142,7 +199,7 @@ by the user at the second resume checkpoint.
 | 10 | implemented-differently | `data/compute_distances.py:230-231`, `data/create_triplets.py:100`, `data/supervision_bundle.py:676` (canonical orientation: 35 six-digit codes are never anchors; no ancestor positives); `text_model/naics_model.py:516-519`, `datamodule.py:656-665`, `conf/config.yaml:98` (pools of 24 pre-drawn negatives per pair; manifest `training_pairs` has 45,373,918 rows); `supervision/margins.py:84` (eligibility rule); `text_model/dataloader/streaming_dataset.py:197-199`, `conf/config.yaml:100-101` (inverse-distance draws); `text_model/mixins/curriculum.py:445-456` (hyperbolic k-means pseudo-labels) | Every removed mechanism is present; the 4,675 sibling-positive, grandchild-negative rows reproduce in the live bundle; no per-epoch cache of all code points. |
 | 11 | implemented-differently | `text_model/mixins/loss.py:485-488` (six-term sum); `text_model/loss.py:47-128` (DCL), `:134-227` (distance matching, batch-normalized at `:221-222`), `:329-400` (pairwise preference); `mixins/loss.py:207-209` (radius penalty, zero by construction since r ≤ 2 < 10), `:318` (load balancing); `losses/level_radius.py:26-29` (level term; gradient ≈ 1e-7 under the cap, by probe); `naics_model.py:560-561` (margin logged only); `loss.py:58` (fixed float temperature); `text_model/mixins/optimizer.py:165-174`, `text_model/curriculum.py:107-115` (scheduler always built; mining active in epochs 6–9 of the shipped 10); no query term in `src/` | No task term; no learned scales; two code–code terms, neither listwise over all codes; every term Req 11 removes is present. Verification "No inert terms" fails today. |
 | 12 | missing | `text_model/encoder.py:42` (dimension is the backbone hidden size, 384), `:81`, `:146` (`moe_projection` 1536→384) then `text_model/hyperbolic.py:102` (384→385): two stacked affine maps; no geometry switch in `src/` or `conf/`; `tests/unit/test_encoder.py:106` pins 384 | Dimension not configurable; Lorentz only. |
-| 13 | missing | `text_model/hyperbolic.py:94` (`max_norm=2.0`), `:138-140` (hard rescale; saturated points pass ≈ 1e-7 gradient, by probe); `losses/level_radius.py:28` (level 2 targets sinh r = 0, the origin); three radial coordinates in use (`level_radius.py:26-27`, `text_model/hyperbolic.py:281`, `text_model/hard_negative_mining.py:60-62`); `utils/config.py:792`, `conf/config.yaml:138` (curvature is a config parameter threaded everywhere); `graph_model/hgcn.py:85-88`, `:106-107` (per-layer parameter detached by `.item()`); `text_model/hyperbolic.py:234-267` (manifold check at tolerance 1e-3; no radius-resolution check) | E1 and E3 premises confirmed by probe. |
+| 13 | missing | `text_model/hyperbolic.py:94` (`max_norm=2.0`), `:138-140` (hard rescale; saturated points pass ≈ 1e-7 gradient, by probe); `losses/level_radius.py:28` (level 2 targets sinh r = 0, the origin); three radial coordinates in use (`level_radius.py:26-27`, `text_model/hyperbolic.py:281`, `text_model/hard_negative_mining.py:60-62`); `utils/config.py:891`, `conf/config.yaml:138` (curvature is a config parameter threaded everywhere); `graph_model/hgcn.py:85-88`, `:106-107` (per-layer parameter detached by `.item()`); `text_model/hyperbolic.py:234-267` (manifold check at tolerance 1e-3; no radius-resolution check) | E1 and E3 premises confirmed by probe. |
 | 14 | missing | `text_model/encoder.py:56-61` (four full backbone loads, each with its own LoRA), `:122-123`, `:140` (concatenation into the MoE); `text_model/moe.py:118-125`, `conf/config.yaml:124-128` (MoE is the only fusion); `conf/config.yaml:117` (one `base_model_name`; no candidate list, no freeze flag) | No shared encoder, field markers, masked fusion, query path or backbone selection. |
 | 15 | missing | `graph_model/hgcn.py:1316`, `conf/graph.yaml:100` (single seed, one arm); no smoothing, shuffle control or matched-compute tooling in `src/`; `conf/graph.yaml:20` (`tangent_dim: 31`) against the 385-wide text export (`cli/commands/training.py:362-372`; by probe `Linear(31, 31)` rejects it; no width check at `hgcn.py:1319-1327`) | Arm D cannot run on the text stage's output as configured (the Req 16 fix); arms B, C and E do not exist; the fixed-threshold gate is the only comparison tooling. `conf/graph.yaml:15` names the bundle only in the unpushed local commit. |
 | 16 | implemented-differently | `graph_model/hgcn.py:82` (`Linear(dim, dim)`: no learned projection, but width 31 ≠ 385); `:303` (node states are a free `nn.Parameter` seeded from the text points; no retention term); `:1246-1253` (graph export of all rows); `cli/commands/training.py:788-800` (text export only behind an interactive `typer.confirm`); `cli/__init__.py:44-48` (no export command) | No projection map, as specified, but no shared space either; per-stage tables exist, no defined final deliverable, no standalone export. |
@@ -151,24 +208,12 @@ by the user at the second resume checkpoint.
 | (none) | in-code-but-not-in-spec | `data/supervision_bundle.py`, `supervision/checkpoints.py`, `conf/config.yaml:9-12` | The supervision bundle contract (manifest, contract version, exact-resume checkpoint contract). The spec's Staleness note assumes it without naming it; Stages 2 and 5 version it. Unrecorded decision to fold back: the bundle stays the single authority for structure and text. |
 | (none) | in-code-but-not-in-spec | `data/compute_relations.py:107-158`, `conf/data/supervision.yaml:8-23`, `data/create_triplets.py:142-153` | Fourteen named kinship relations plus `cross_sector` as a second structural axis with its own margin. Names survive as edge types and labels only; the margin axis leaves in Stage 7 (D5). |
 | (none) | in-code-but-not-in-spec | `losses/level_radius.py:26-29` via `graph_model/hgcn.py:744-749` | The graph stage's level-radius term (sectors at the origin). Req 17 does not list it. Handled in Stage 10 per D3. |
-| (none) | in-code-but-not-in-spec | `tools/embeddings_verification.py:33-35`, `cli/commands/tools.py:257` | The `verify-stage4` gate with fixed thresholds; Req 5 replaces them (Stage 4). |
+| (none) | in-code-but-not-in-spec | `tools/embeddings_verification.py:33-35`, `cli/commands/tools.py:278` | The `verify-stage4` gate with fixed thresholds; Req 5 replaces them (Stage 4). |
 | (none) | in-code-but-not-in-spec | `metrics/graph.py:236-439` | Unwired "taxonomy tasks" suite (parent identification, k-means ARI and NMI, sector logistic regression): the methodology's other never-run benchmark. No requirement keeps it; retire with Stage 4's diagnostics. |
 | (none) | in-code-but-not-in-spec | `graph_model/curriculum/*` (about 2,400 lines), `tests/unit/test_graph_curriculum.py` | Unwired four-phase controller, event bus, MACL, samplers and analyzer. Held until Req 15 (user adjudication Q2); leaves in Stage 11 either way. |
 | (none) | in-code-but-not-in-spec | `text_model/mixins/validation.py:167-170`, `conf/config.yaml:130` | Structural statistics on a 300-code random subsample; Req 6 names no population. Stage 4 computes over all 2,125 codes (methodology S4 limitation 4). |
 | (none) | in-code-but-not-in-spec | `data/download_data.py:291`, `:312-324` | 68 cross-reference rows without a code reference are dropped, and exclusion text is also harvested from "Excluded" description paragraphs; the spec counts 43 non-redirection rows (4,601 − 4,558). Stage 5 reconciles the two counts. |
 | (none) | in-code-but-not-in-spec | `text_model/dataloader/tokenization_cache.py:74` | Title channel fixed at 24 tokens; Req 9's window policy covers it in Stage 5. |
-
-## Open questions
-
-- **D8's final tie-break (Req 5; Stage 4).** Req 5's tie order ends on "the higher
-  regressor-panel estimate", and under D8 the regressor panel has two regime estimates. Which one
-  breaks the tie (seen, held-out or their mean) is unresolved. Stage 4's planning session asks the
-  user before it builds the tie order.
-- **Each panel's decision statistic (Req 5; Stage 4).** Req 5 fixes a δ and an interval per
-  panel but names no statistic. Req 3 lists four outcome metrics, D6 picks validation MRR only
-  for within-run selection, and Req 1's regressor gain names no loss. Stage 4's planning session
-  asks the user alongside the tie-break. Stage 3 keeps its output at row grain so that either
-  answer can be computed (second resume, 2026-09-24).
 
 ## Stages
 
@@ -198,7 +243,14 @@ plan 4's four entries, as that plan handed them over. Stage 5 discharges two: it
 requires the three `index_roles_*` validation results, and its member pins the entry text under an
 artifact hash. Stage 6 discharges one, a curvature-aware distance for the scorer's live reading.
 The fourth is a standalone quick-fix: the near-duplicate threshold and examples floor are
-hardcoded outside `data roles`.
+hardcoded outside `data roles`. The third resume adds plan 5's four entries, as that plan handed
+them over. One is done: plan 5 pinned the held-out draw's hash (a53d6e4). Stage 4 discharges two:
+the note on the decision statistic (D10 averages each row's repeats before resampling, and the
+plan also reports the held-out regime by feature year, or records why not), and the mismatch
+between the log's `matrix_fingerprint` and the text-only provenance's `table_sha256`, since its
+records match logged reads to table files. The fourth, caching the ridge path's SVD per fit row
+set, is a standalone quick-fix, revisited if panel reads slow a seed sweep. Stage 3 did not reuse
+the coverage script's checks, so plan 3's rounding fix stays standalone.
 
 - [x] Stage 1: Employment-statistics coverage
       Objective: Verify which public employment series publish NAICS 2022 six-digit cells, for
@@ -305,38 +357,50 @@ hardcoded outside `data roles`.
 - [ ] Stage 4: Decision rule and diagnostics
       Objective: Implement Req 5's decision procedure and record, and demote the structural
       statistics to stratified diagnostics that nothing selects on.
-      Spec: Req 5; Req 6; Req 1 (taxonomy agreement never a selection criterion); Verification
-      "Decision records", "Diagnostics"; D8.
+      Spec: Req 5; Req 6; Req 1 (taxonomy agreement never a selection criterion); Req 2 (the
+      rejected definition); Verification "Decision records", "Diagnostics"; D8; D10; D11.
       Gap closed: Req 5 (except the reference configuration and δ, which Stage 7 supplies);
-      Req 6; Req 1 (selection-criterion half).
+      Req 6; Req 1 (selection-criterion half); Req 2 (the rejected definition Stage 3 left).
       Consumes: Stage 2's `DecodingResult.per_query`, resampled by code (finding, section 6),
       and Stage 3's per-row predictions, resampled by four-digit group in each regressor regime
       (finding `specs/findings/regressor-panel-splits.md`, section 6): D8's two regressor panels
       are the level-6 cells, a validation read scores each of its rows once per repeat (five),
-      and `group` is the code itself at levels 2–3. No trained arms yet: the tooling is
-      exercised on synthetic scores.
-      Produces: Decision tooling over D8's three panels: each panel's statistic (Open
-      questions), paired resampling over each panel's unit with seeds nested, 95 %
-      non-inferiority and 98⅓ % superiority intervals, δ as a stated multiple of a reference's
-      across-seed standard deviation, the non-dominated set, the tie order (its final tie-break:
-      Open questions), and a decision-record schema that carries the selection-log records of the
-      runs it compares (the log is gitignored and dies with its worktree or Lambda instance) and,
-      per arm and seed, immutable references (path and content hash) to the encoder checkpoint
-      and the 2,125-code table; a seed-sweep driver that runs a configuration for N seeds,
-      collects every panel's per-unit scores, and keeps the referenced artifacts until Stage 12
-      (a Lambda instance loses them at termination: `specs/lambda-remote-workflow.md`); the
-      diagnostics report over all 2,125 codes
+      and `group` is the code itself at levels 2–3. Plan 5's deferred note on those repeats and
+      on the held-out regime's feature years. Stage 3's selection-log reads, which name the arm's
+      table and its text-only table by `matrix_fingerprint`, not by file hash. The four QCEW
+      slices the panel reads from `qcew_dir` under pinned hashes (`conf/data/regressor_panel.yaml`)
+      stay outside the repo, so they must be present wherever the driver scores that panel: a
+      Lambda instance has only what is uploaded. No trained arms yet: the tooling is exercised on
+      synthetic scores.
+      Produces: Decision tooling over D8's three panels: each panel's statistic (D10), paired
+      resampling over each panel's unit with seeds nested, 95 % non-inferiority and 98⅓ %
+      superiority intervals, δ as a stated multiple of a reference's across-seed standard
+      deviation, the non-dominated set, the tie order (its final tie-break: D11), and a
+      decision-record schema that carries the selection-log records of the runs it compares (the
+      log is gitignored and dies with its worktree or Lambda instance) and immutable references
+      (path and content hash) to each arm's text-only table and its provenance file, whose
+      backbone, revision, descriptions hash and window the record checks against the arm's (D9),
+      and, per arm and seed, to the encoder checkpoint and the 2,125-code table, each table's
+      reference also carrying the `matrix_fingerprint` the log names it by; a seed-sweep driver
+      that runs a configuration for N seeds, collects every panel's per-unit scores, and keeps
+      the referenced artifacts until Stage 12 (a Lambda instance loses them at termination:
+      `specs/lambda-remote-workflow.md`); the diagnostics report over all 2,125 codes
       (sector-separation AUC, within-sector rank correlation averaged over sectors and queries,
-      MAP over ancestors, NDCG with integer lowest-common-ancestor grades, the Pearson
-      statistic without the cophenetic name, unary pairs excluded from parent retrieval);
-      `verify-stage4`'s fixed thresholds retired and the unwired taxonomy-tasks suite removed;
-      structural statistics off progress bars and headlines.
+      MAP over ancestors, NDCG with integer lowest-common-ancestor grades, the Pearson statistic
+      without the cophenetic name, unary pairs excluded from parent retrieval);
+      `verify-stage4`'s fixed thresholds retired; the
+      unwired taxonomy-tasks suite removed, and `metrics/qcew.py` with its re-exports in
+      `metrics/__init__.py` and `graph_model/__init__.py`, its API page (`docs/api/qcew_metrics.md`
+      and its `docs/.nav.yml` entry: the docs build runs only on main) and its tests, keeping the
+      `graph_dataset` case that `tests/unit/test_graph_downstream_evaluation.py:190` parametrizes
+      beside it; structural statistics off progress bars and headlines.
       Exit: On synthetic arms with known effects on D8's three panels, the tooling adopts and
       rejects per the rule and writes records with every field Verification "Decision records"
       lists, plus the selection-log records of their runs and the artifact references of every
-      arm and seed; the diagnostics report contains only
-      Req 6's statistics, stratified as listed, with no threshold and no pass/fail; no monitor,
-      gate or headline reads a structural statistic.
+      arm and seed, text-only tables and their provenance included; the diagnostics report
+      contains only Req 6's statistics, stratified as listed, with no threshold and no
+      pass/fail; no monitor, gate or headline reads a structural statistic; neither
+      `metrics/qcew.py` nor the taxonomy-tasks suite remains.
       ROUTING: writing-plans
 
 - [ ] Stage 5: Supervision target and text
@@ -345,7 +409,8 @@ hardcoded outside `data roles`.
       Spec: Req 7 (D*; the IC ablation waits for Stage 9); Req 8(a), 8(c) generation side,
       lineal references, reserved slot removed; Req 9 (masking data side, inheritance, unary
       pairs, input window for the current backbone); Verification "Target", "Exclusions"
-      (generation half), "Text" (data half), "Backbone input window" (current checkpoint); D5.
+      (generation half), "Text" (data half), "Backbone input window" (current checkpoint); D5;
+      D9 (the comparator reads the arm's text).
       Gap closed: Req 7 (except the IC ablation); Req 8 (a, lineal, generation side of c);
       Req 9 (except the model-side mask and the channel-presence ablation).
       Consumes: Stage 2's index-entry roles (the examples channel holds examples-role entries
@@ -355,7 +420,10 @@ hardcoded outside `data roles`.
       carrying both. Stage 2's held-out leakage check (`panels/leakage.py`), which the bundle
       build runs but which reaches activity phrases only by splitting `excluded` at `--`. The
       current bundle contract (`data/supervision_bundle.py`, `supervision/artifacts.py`) as the
-      thing to version. The current backbone's own documentation for its trained window.
+      thing to version. The current backbone's own documentation for its trained window. Stage
+      3's text-only builder (`panels/text_only.py`), which embeds each code's channels for D9's
+      comparator at `text_only.max_length: 512` (`conf/data/regressor_panel.yaml`), the window
+      Req 9 rejects.
       Produces: A new bundle contract version: pair facts carrying D* (no 99, no half-step, a
       virtual root above the sectors); a redirection table (activity phrase, referencing code,
       destination code, lineal flag) with each cross-reference once; exclusion text
@@ -376,7 +444,7 @@ hardcoded outside `data roles`.
       provenance value and the 14 formerly arbitrary choices resolve by the documented rule;
       the 522 unary pairs are flagged and absent from generated positives; the current
       backbone's trained window is recorded with the share of each channel's texts that
-      exceeded it, and no input exceeds it.
+      exceeded it, and no input exceeds it, the text-only builder's included.
       ROUTING: writing-plans
 
 - [ ] Stage 6: Shared encoder and low-dimensional projection
@@ -395,6 +463,12 @@ hardcoded outside `data roles`.
       protocol and `OutcomePanel.score` for a first live validation-split reading (finding,
       section 6). The scorer's `lorentz` distance assumes curvature −1, but the interim harness
       learns its curvature, so Stage 6 passes a curvature-aware distance (plan 4's deferred item).
+      Stage 3's panel as the export's reader (finding `specs/findings/regressor-panel-splits.md`,
+      section 6): it refuses Lorentz points and constant columns, so a hyperbolic export writes
+      the tangent coordinates at the origin without the zero time coordinate a log map keeps. A
+      read needs a text-only table rebuilt from Stage 5's descriptions (`tools text-only-table`)
+      and the four QCEW slices at `qcew_dir`, under the hashes `conf/data/regressor_panel.yaml`
+      pins.
       Produces: One encoder module implementing `QueryCodeEncoder`, with code and query
       embeddings in the same space;
       fusion options masked mean, attention pooling and MoE (MoE ablation-only); a configurable
@@ -404,8 +478,9 @@ hardcoded outside `data roles`.
       Exit: A query embeds through the same encoder as a code (test); masking an absent
       channel's input leaves the output unchanged (test); exactly one affine map sits between
       the encoder and the point; the model trains under the interim objective at dimension 16
-      and the export command writes the 2,125-code table; Stage 2's scorer returns live
-      validation-split numbers under the trained curvature.
+      and the export command writes the 2,125-code table, which `tools regressor-panel` reads on
+      its validation split; Stage 2's scorer returns live validation-split numbers under the
+      trained curvature.
       ROUTING: brainstorming
 
 - [ ] Stage 7: Objective, anchors and live radius (the reference configuration)
@@ -416,7 +491,7 @@ hardcoded outside `data roles`.
       selects nothing; monitors read validation splits); Req 5 (reference configuration, δ);
       Req 6 (no structural monitor); Verification "No inert terms", "Coverage", "Radius",
       "Exclusions" (training half), "Text" (unary pairs absent from positive supervision),
-      "Selection hygiene" (validation half); D2, D5, D6, D8.
+      "Selection hygiene" (validation half); D2, D5, D6, D8, D10.
       Gap closed: Req 11; Req 10; Req 13; Req 8 (b, training side of c); Req 4 (monitors);
       Req 5 (reference configuration and δ).
       Consumes: Stage 6's encoder and query path; Stage 5's D*, redirection table and unary
@@ -485,7 +560,7 @@ hardcoded outside `data roles`.
       adopted, the bundle's target and the diagnostics' relevance grades switched to it.
       Exit: Each factor has a Req 5 record with at least 5 seeds per arm, and the frozen-encoder
       control ran; the adopted backbone's window is recorded from its own documentation with
-      no input beyond it.
+      no input beyond it, the text-only builder's included.
       ROUTING: brainstorming
 
 - [ ] Stage 10: Graph-stage decision experiment
@@ -534,25 +609,35 @@ hardcoded outside `data roles`.
       Objective: Open each sealed test split once, for the final configuration and the
       comparisons recorded for it, and report Req 1's two estimands on sealed held-out data.
       Spec: Req 4 (the test splits opened once); Req 1 (measured on sealed held-out data); Req 5
-      (intervals); Verification "Selection hygiene" (opening half); D8.
+      (intervals); Verification "Selection hygiene" (opening half); D8; D10 (the regressor
+      estimand is reported as the gain over the regime's sparse encoding).
       Gap closed: Req 4 (the opening); Req 1 (the sealed estimates).
       Consumes: The final configuration and its 2,125-code table (Stage 11's, or Stage 10's if
       the graph stage was dropped); the decision records of Stages 7–11 with the selection-log
       records and artifact references they carry (Stage 4's schema); by those references, the
       per-seed encoder checkpoints and 2,125-code tables of the final configuration and of every
-      arm in its recorded comparisons, since sealed queries were never embedded; Stage 2's
+      arm in its recorded comparisons, since sealed queries were never embedded, and each arm's
+      text-only table with its provenance, without which the regressor panel reads no arm; the
+      four QCEW slices under the hashes `conf/data/regressor_panel.yaml` pins, which loading the
+      panel re-reads from `qcew_dir` outside the repo, and a bundle codebook with the pinned
+      2,125 codes; Stage 2's
       `OutcomePanel.open_test`; Stage 3's sealed outer sets and the logged opening that guards
-      them (`RegressorPanel.open_outer`, or `tools regressor-panel --split test` with
-      `--open-purpose`): one opening per regime covers every level the panel has loaded, and
-      the log names the panels `regressor_seen` and `regressor_heldout`, both under the
-      fingerprint `deddfd4c…`; Stage 4's tooling and seed-sweep driver.
+      them (`RegressorPanel.open_outer`): one opening per regime covers every level the panel
+      object has loaded, and the log names the panels `regressor_seen` and `regressor_heldout`,
+      both under the fingerprint `deddfd4c…`. Both openings belong to a panel object, so every
+      arm and seed is scored through one object per sealed set: one `open_test`, one
+      `open_outer` per regime, then a test read per arm and seed. `tools regressor-panel --split
+      test` opens the outer sets on every call and scores one table, so a second arm or seed
+      through it would be logged as a reopen; no command opens the outcome test split. Stage 4's
+      tooling and seed-sweep driver.
       Produces: One logged opening per sealed set (the outcome test queries and each regressor
       regime's outer set, per D8); sealed estimates with D8's intervals for the final
       configuration and each comparison recorded for it; a written finding.
       Exit: The selection-log records, gathered from the decision records and this stage's own,
       show exactly one opening per sealed set, under the fingerprint Stage 2 or Stage 3
       committed, after every validation read that selected anything; every sealed estimate comes
-      from referenced artifacts whose hashes match the records; the finding reports each sealed
+      from referenced artifacts whose hashes match the records, and each text-only table's
+      provenance names its arm's backbone and descriptions; the finding reports each sealed
       estimate with its interval.
       ROUTING: writing-plans
 
