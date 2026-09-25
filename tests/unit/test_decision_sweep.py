@@ -198,6 +198,16 @@ def test_a_text_only_table_from_another_backbone_is_refused_before_any_read(
             text_only,
             backbone='another/backbone',
         )
+    with pytest.raises(ValueError, match='dimension'):
+        run_seed_sweep(
+            spec('mislabelled', dimension=16),
+            SEEDS,
+            SyntheticRunner(tmp_path / 'runs' / 'mislabelled', False, _signal(regressor_rows)),
+            text_only_table=text_only,
+            store=store,
+            purpose=PURPOSE,
+            **panels,
+        )
     assert log.records() == []
 
 def test_a_decision_over_swept_arms_adopts_the_informed_one(

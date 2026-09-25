@@ -95,8 +95,9 @@ def run_seed_sweep(
     Run a configuration for each seed and read each seed once on each panel's validation split.
 
     Raises:
-        ValueError: If a seed repeats, or the text-only table was not built from the arm's
-            backbone, revision, descriptions and window (D9).
+        ValueError: If a seed repeats, the text-only table was not built from the arm's
+            backbone, revision, descriptions and window (D9), or a seed's table width is not
+            the arm spec's dimension.
     '''
 
     if len(set(seeds)) != len(seeds):
@@ -114,6 +115,11 @@ def run_seed_sweep(
         table = store.put_table(artifacts.table)
         detail = {'run': run_id, 'arm_name': spec.name, 'seed': seed}
         arm = ArmTables.from_tables(pl.read_parquet(store.resolve(table)), text_frame)
+        if arm.dimension != spec.dimension:
+            raise ValueError(
+                f'{spec.name} seed {seed}: the table has dimension {arm.dimension}, not the '
+                f"spec's dimension {spec.dimension}"
+            )
         regressor_panel.require_arm(arm)
         decoding = outcome_panel.score(
             artifacts.encoder,
