@@ -109,6 +109,19 @@ def test_a_row_without_every_repeat_is_refused():
     with pytest.raises(ValueError, match='do not have 2 predictions'):
         regressor_scores(predictions, repeats=2)
 
+    # 111111/2023 has both comparators; 222222/2023 has covariates+embedding but is entirely
+    # absent under covariates+one_hot, so no group is ever formed for it to be caught as uneven
+    missing_comparator = _predictions(
+        [
+            _prediction('regressor_seen', 'covariates+embedding', 0, '111111', 2023, 1.0),
+            _prediction('regressor_seen', 'covariates+one_hot', 0, '111111', 2023, 1.0),
+            _prediction('regressor_seen', 'covariates+embedding', 0, '222222', 2023, 1.0),
+        ]
+    )
+
+    with pytest.raises(ValueError, match='missing entirely'):
+        regressor_scores(missing_comparator, repeats=1)
+
 @pytest.mark.parametrize(
     'column, value', [('split', 'test'), ('level', 5), ('panel', 'regressor_other')]
 )

@@ -109,7 +109,7 @@ def regressor_scores(predictions: pl.DataFrame, repeats: int) -> pl.DataFrame:
 
     Raises:
         ValueError: If a row is not a level-6 validation row of a regressor panel, or a row does not
-            have exactly ``repeats`` predictions under a comparator.
+            have exactly ``repeats`` predictions under every comparator of its panel.
     '''
 
     outside = predictions.filter(
@@ -137,6 +137,23 @@ def regressor_scores(predictions: pl.DataFrame, repeats: int) -> pl.DataFrame:
             f'{uneven.height:,} rows do not have {repeats} predictions each, e.g. '
             f'{first["panel"]} {first["comparator"]} {first["code"]}/{first["feature_year"]}: '
             f'{first["n"]}'
+        )
+    # A comparator entirely absent for a row forms no group above, so it would silently vanish
+    # from the output rather than being caught as uneven; every row of a panel must appear under
+    # every comparator that panel has
+    expected = rows.select('panel', 'code', 'feature_year').unique().join(
+        rows.select('panel', 'comparator').unique(), on='panel', how='inner'
+    )
+    missing = expected.join(
+        rows.select('panel', 'comparator', 'code', 'feature_year'),
+        on=['panel', 'comparator', 'code', 'feature_year'],
+        how='anti',
+    )
+    if missing.height:
+        first = missing.row(0, named=True)
+        raise ValueError(
+            f'{missing.height:,} (panel, comparator, row) combinations are missing entirely, e.g. '
+            f'{first["panel"]} {first["comparator"]} {first["code"]}/{first["feature_year"]}'
         )
     return rows.select(
         'panel',
