@@ -48,7 +48,7 @@ The codebase is organized around this pipeline plus a rich config/validation lay
   - `curriculum/` – event-driven 4‑phase curriculum (controller, event bus, adaptive loss, sampling, monitoring, preprocessing).
 
 - `src/naics_embedder/metrics/`  
-  Shared metric implementations for both text and graph models (hierarchy metrics, downstream graph evaluation, QCEW benchmark, etc.).
+  Shared metric implementations for both text and graph models (hierarchy metrics, graph validation metrics, and `diagnostics.py`: Req 6's structural diagnostics).
 
 - `src/naics_embedder/decision/`  
   Req 5's decision rule over the outcome panel and the regressor panel's two regimes: decision statistics, paired resampling, the rule and tie order, decision records, the content-addressed artifact store, and the seed-sweep driver.

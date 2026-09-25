@@ -2,8 +2,7 @@
 
 This module consolidates all metrics-related functionality:
 - Core metrics classes (EmbeddingEvaluator, HierarchyMetrics, etc.)
-- Graph-specific metrics and downstream evaluation
-- QCEW benchmark
+- Graph-specific validation metrics and the graph embedding container
 - Hierarchy structure metrics
 - Req 6's structural diagnostics report
 - Evaluation runner
@@ -22,25 +21,14 @@ from .diagnostics import DiagnosticsReport, diagnostics_report
 
 # Graph-specific metrics
 from .graph import (
-    GraphDownstreamEvaluator,
     GraphEmbeddingDataset,
     compute_validation_metrics,
-    run_graph_downstream_suite,
 )
 
 # Hierarchy structure metrics
 from .hierarchy_structure import (
     compute_hierarchy_retrieval_metrics,
     compute_radius_structure_metrics,
-)
-
-# QCEW benchmark
-from .qcew import (
-    QCEWBenchmarkConfig,
-    QCEWMultilevelConfig,
-    print_multilevel_comparison,
-    run_qcew_employment_benchmark,
-    run_qcew_multilevel_benchmark,
 )
 
 # Evaluation runner
@@ -64,19 +52,11 @@ __all__ = [
     'DiagnosticsReport',
     'diagnostics_report',
     # Graph
-    'GraphDownstreamEvaluator',
     'GraphEmbeddingDataset',
     'compute_validation_metrics',
-    'run_graph_downstream_suite',
     # Hierarchy structure
     'compute_hierarchy_retrieval_metrics',
     'compute_radius_structure_metrics',
-    # QCEW
-    'QCEWBenchmarkConfig',
-    'QCEWMultilevelConfig',
-    'print_multilevel_comparison',
-    'run_qcew_employment_benchmark',
-    'run_qcew_multilevel_benchmark',
     # Runner
     'NAICSEvaluationRunner',
 ]

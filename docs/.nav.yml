@@ -42,7 +42,6 @@ nav:
           - Regressor Panel: api/regressor_panel.md
           - Decision Rule: api/decision.md
           - Diagnostics: api/diagnostics.md
-          - QCEW: api/qcew_metrics.md
           - Runner: api/runner.md
       - Tools:
           - Current Training Configuration: api/config_tools.md

@@ -1,4 +1,4 @@
-'''Precision and memory of GraphDownstreamEvaluator's pairwise Lorentz distances.
+'''Precision and memory of the pairwise Lorentz distances of ``lorentz_distance_matrix``.
 
 The fixtures (tests/fixtures/hyperboloid.py) mimic real exports: points built exactly in float64 at
 hyperbolic radius 2-4 with 384 spatial dimensions, then stored as float32.
@@ -6,7 +6,7 @@ hyperbolic radius 2-4 with 384 spatial dimensions, then stored as float32.
 
 import torch
 
-from naics_embedder.metrics import GraphDownstreamEvaluator, GraphEmbeddingDataset
+from naics_embedder.metrics.core import lorentz_distance_matrix
 from tests.fixtures.hyperboloid import (
     LargestStorage,
     fortran_order,
@@ -14,18 +14,8 @@ from tests.fixtures.hyperboloid import (
     points_at_distance,
 )
 
-# -------------------------------------------------------------------------------------------------
-# Fixtures
-# -------------------------------------------------------------------------------------------------
-
-def _evaluator(embeddings: torch.Tensor) -> GraphDownstreamEvaluator:
-    count = embeddings.size(0)
-    codes = [str(i) for i in range(count)]
-    dataset = GraphEmbeddingDataset(embeddings=embeddings, codes=codes, levels=[6] * count)
-    return GraphDownstreamEvaluator(dataset)
-
 def _pairwise_distances(embeddings: torch.Tensor) -> torch.Tensor:
-    return _evaluator(embeddings)._pairwise_distances()
+    return lorentz_distance_matrix(embeddings)
 
 # -------------------------------------------------------------------------------------------------
 # Precision
@@ -63,10 +53,10 @@ def test_distances_do_not_depend_on_memory_layout():
 def test_distances_never_materialize_an_n_by_n_by_d_tensor():
     # At N of about 2,100 codes and D = 384, an (N, N, D) float32 intermediate is about 6.8 GB.
     count, spatial_dim = 24, 40
-    evaluator = _evaluator(hyperboloid_points(count, seed=4, spatial_dim=spatial_dim).float())
+    points = hyperboloid_points(count, seed=4, spatial_dim=spatial_dim).float()
 
     with LargestStorage() as largest:
-        evaluator._pairwise_distances()
+        _pairwise_distances(points)
 
     # Nothing bigger than a float64 (N, N) matrix or a float64 copy of the (N, D + 1) input.
     assert largest.nbytes <= 8 * max(count * count, count * (spatial_dim + 1))
