@@ -497,6 +497,34 @@ def test_lorentz_points_are_refused_and_the_export_form_is_read():
     assert read_codes == tuple(codes)
     np.testing.assert_array_equal(matrix, tangent)
 
+@pytest.mark.parametrize('curvature', [0.5, 1.0, 2.0])
+def test_a_float32_lorentz_export_is_refused_at_any_radius(curvature):
+    # The train export writes float32 points into Float64 columns. Rounding error in
+    # x0^2 - |x|^2 grows with x0^2, so a tolerance fixed relative to 1/c passes far points
+    rng = np.random.default_rng(0)
+    direction = rng.normal(size=(2125, 16))
+    direction /= np.linalg.norm(direction, axis=1, keepdims=True)
+    root = np.float32(np.sqrt(curvature))
+    scaled = (np.sqrt(curvature) * rng.uniform(0.0, 8.0, size=(2125, 1))).astype(np.float32)
+    points = np.hstack(
+        [np.cosh(scaled) / root,
+         np.sinh(scaled) / root * direction.astype(np.float32)]
+    )
+    exported = pl.DataFrame(
+        {
+            'index': range(2125),
+            'level': [6] * 2125,
+            'code': [f'{index:06d}' for index in range(2125)],
+            **{
+                f'hyp_e{i}': points[:, i].astype(np.float64)
+                for i in range(17)
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match='Lorentz points'):
+        coordinate_matrix(exported)
+
 @pytest.mark.parametrize(
     ('table', 'message'),
     [

@@ -286,15 +286,25 @@ def outer_plan(frame: pl.DataFrame, regime: Regime, level: int, settings: FitSet
 # -------------------------------------------------------------------------------------------------
 
 def looks_lorentz(matrix: np.ndarray, rtol: float = 1e-3) -> bool:
-    '''Whether every row lies on one hyperboloid ``x0^2 - |x|^2 = 1/c`` with ``x0 > 0``.'''
+    '''
+    Whether every row lies on one hyperboloid ``x0^2 - |x|^2 = 1/c`` with ``x0 > 0``.
+
+    Each row's tolerance scales with its ``x0^2``: a float32 export's rounding error in
+    ``x0^2 - |x|^2`` grows with ``x0^2``, so a tolerance fixed relative to ``1/c`` would pass
+    points far from the origin, and rounding can even push a far point's value below zero. The
+    level ``1/c`` is the median over rows.
+    '''
 
     if matrix.shape[1] < 2:
         return False
     time = matrix[:, 0]
-    norm = time**2 - (matrix[:, 1:]**2).sum(axis=1)
-    if (time <= 0).any() or (norm <= 0).any():
+    if (time <= 0).any():
         return False
-    return bool(np.ptp(norm) <= rtol * norm.mean())
+    norm = time**2 - (matrix[:, 1:]**2).sum(axis=1)
+    level = np.median(norm)
+    if level <= 0:
+        return False
+    return bool((np.abs(norm - level) <= rtol * time**2).all())
 
 def coordinate_matrix(table: pl.DataFrame) -> Tuple[Tuple[str, ...], np.ndarray]:
     '''
