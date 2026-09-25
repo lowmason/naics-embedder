@@ -1,5 +1,7 @@
 # Regressor Panel Implementation Plan
 
+**Status: COMPLETE (2026-09-24)** — executed via executing-plans; deferred items in specs/deferred_items.md (four from the whole-plan review: one for Stage 4, one due before Stage 12's opening, two standalone)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -328,7 +330,7 @@ Stop, report, and wait for your human partner when any of these happens:
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
 
 Run: `git status --short --branch`
 Expected: `## claude/plan-5-regressor-panel-635ffd43` and nothing else. The branch has no upstream
@@ -347,7 +349,7 @@ the roadmap or `specs/findings/`, stop and ask.
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number. `.python-version` pins 3.12.
@@ -356,13 +358,15 @@ Run: `uv run python -c "import numpy, polars, sklearn, torch, transformers; prin
 Expected: `2.3.4 1.35.1 1.9.1 2.9.1 4.57.1`. These are the locked versions for Python 3.12, and
 Task 9's expected results were computed with them. If they differ, stop and ask.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
+
+> Deviation: the baseline ran with an extra `-p no:cacheprovider`; the count was the same, 1382 passed, 1 skipped.
 
 Run: `uv run pytest -n auto -q`
 Expected: `1382 passed, 1 skipped`. Each later full-suite count is this baseline plus the tests the
 plan has added by then. The warnings count varies between runs under xdist; ignore it.
 
-- [ ] **Step 4: Check the QCEW slices**
+- [x] **Step 4: Check the QCEW slices**
 
 Run: `shasum -a 256 ~/Downloads/Data/QCEW/2022_US000_annual.csv ~/Downloads/Data/QCEW/2023_US000_annual.csv ~/Downloads/Data/QCEW/2024_US000_annual.csv ~/Downloads/Data/QCEW/2025_US000_annual.csv`
 Expected:
@@ -377,7 +381,7 @@ fe9ffe874f6e657f6bb1558971965ce6acc015ace45d831ed32c90d97097aee9  …/2023_US000
 These are Stage 1's finding's hashes, and Task 5 pins them in `conf/data/regressor_panel.yaml`.
 If any differs, stop and ask. Never download a replacement.
 
-- [ ] **Step 5: Check the bundle's codebook and descriptions, read-only**
+- [x] **Step 5: Check the bundle's codebook and descriptions, read-only**
 
 Run: `shasum -a 256 /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/naics_codebook.parquet /Users/lowell/Projects/naics-embedder/data/naics_descriptions.parquet`
 Expected:
@@ -391,13 +395,13 @@ The descriptions hash is bundle 18403d29's `description_fingerprint`, so the tex
 reads the text the current arm was trained on. Task 9 only reads both files. If a hash differs,
 stop and ask.
 
-- [ ] **Step 6: Check the backbone is cached**
+- [x] **Step 6: Check the backbone is cached**
 
 Run: `cat ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/refs/main`
 Expected: `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`. Task 9 loads the backbone with
 `local_files_only=True`. If the file is missing, stop and ask; do not download the model.
 
-- [ ] **Step 7: Route the tasks**
+- [x] **Step 7: Route the tasks**
 
 Under executing-plans, run every task inline, in order.
 
@@ -444,7 +448,7 @@ This task reads the QCEW national slices into cells, the population and the date
   - `synthetic_rows(cells: pl.DataFrame, levels=(2, 3, 4, 5, 6)) -> Dict[int, pl.DataFrame]`
   - the session fixtures `regressor_cells` and `regressor_rows`
 
-- [ ] **Step 1: Write the fixture module and the failing test**
+- [x] **Step 1: Write the fixture module and the failing test**
 
 Create `tests/fixtures/regressor_panel.py` with exactly this content:
 
@@ -759,14 +763,14 @@ def test_panel_rows_refuse_a_code_without_every_window_year(regressor_cells):
         panel_rows(six, [*POPULATION, SUPPRESSED_CODE])
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_regressor_qcew_rows.py -q`
 Expected: one collection error, `ModuleNotFoundError: No module named
 'naics_embedder.panels.qcew_rows'`. The rest of the suite is unaffected, because
 `tests/conftest.py` does not load the fixture module until Step 3.
 
-- [ ] **Step 3: Write the module and register the fixture module**
+- [x] **Step 3: Write the module and register the fixture module**
 
 Create `src/naics_embedder/panels/qcew_rows.py` with exactly this content:
 
@@ -1014,7 +1018,7 @@ pytest_plugins = (
 )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_regressor_qcew_rows.py -q`
 Expected: `10 passed`.
@@ -1022,12 +1026,12 @@ Expected: `10 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1392 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels/qcew_rows.py tests/fixtures/regressor_panel.py tests/conftest.py tests/unit/test_regressor_qcew_rows.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/qcew_rows.py tests/fixtures/regressor_panel.py tests/conftest.py tests/unit/test_regressor_qcew_rows.py
@@ -1068,7 +1072,7 @@ four-digit groups, and reads and writes their committed table.
   - `split_counts(rows: pl.DataFrame) -> Dict[str, int]` and
     `check_partition(rows: pl.DataFrame, codes: Sequence[str]) -> None`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_regressor_splits.py` with exactly this content:
 
@@ -1274,13 +1278,13 @@ def test_a_missing_or_repeated_code_year_breaks_the_partition(regressor_rows):
         check_partition(rows.with_columns(split=pl.lit(None, dtype=pl.Utf8)), POPULATION)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_regressor_splits.py -q`
 Expected: one collection error, `ModuleNotFoundError: No module named
 'naics_embedder.panels.regressor_splits'`.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `src/naics_embedder/panels/regressor_splits.py` with exactly this content:
 
@@ -1535,7 +1539,7 @@ def check_partition(rows: pl.DataFrame, codes: Sequence[str]) -> None:
         raise ValueError('a row has no split')
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_regressor_splits.py -q`
 Expected: `27 passed`.
@@ -1543,12 +1547,12 @@ Expected: `27 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1419 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels/regressor_splits.py tests/unit/test_regressor_splits.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/regressor_splits.py tests/unit/test_regressor_splits.py
@@ -1574,7 +1578,7 @@ the penalty.
   - `squared_errors(y_true, predictions) -> np.ndarray`: summed squared error per penalty
   - `best_alpha_index(errors) -> int`: the least error, a tie going to the larger penalty
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_regressor_ridge.py` with exactly this content:
 
@@ -1670,13 +1674,13 @@ def test_bad_inputs_are_refused(x_fit, y_fit, x_score, alphas, message):
         standardized_ridge_path(x_fit, y_fit, x_score, alphas)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_regressor_ridge.py -q`
 Expected: one collection error, `ModuleNotFoundError: No module named
 'naics_embedder.panels.ridge'`.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `src/naics_embedder/panels/ridge.py` with exactly this content:
 
@@ -1758,7 +1762,7 @@ def best_alpha_index(errors: np.ndarray) -> int:
     return int(len(errors) - 1 - np.argmin(errors[::-1]))
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_regressor_ridge.py -q`
 Expected: `11 passed`.
@@ -1766,12 +1770,12 @@ Expected: `11 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1430 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels/ridge.py tests/unit/test_regressor_ridge.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/ridge.py tests/unit/test_regressor_ridge.py
@@ -1805,7 +1809,7 @@ run offline.
     batch_size: int = 32, model=None, tokenizer=None, revision=None) -> Path`
   - `pca_reduce(vectors: np.ndarray, dimension: int) -> np.ndarray`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_text_only.py` with exactly this content:
 
@@ -1995,13 +1999,13 @@ def test_pca_reduces_to_the_arms_dimension():
             pca_reduce(vectors, dimension)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_text_only.py -q`
 Expected: one collection error, `ImportError: cannot import name 'text_only' from
 'naics_embedder.panels'`.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `src/naics_embedder/panels/text_only.py` with exactly this content:
 
@@ -2216,7 +2220,7 @@ def pca_reduce(vectors: np.ndarray, dimension: int) -> np.ndarray:
     return PCA(n_components=dimension, svd_solver='full').fit_transform(vectors)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_text_only.py -q`
 Expected: `7 passed`.
@@ -2224,12 +2228,12 @@ Expected: `7 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1437 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels/text_only.py tests/unit/test_text_only.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/text_only.py tests/unit/test_text_only.py
@@ -2265,7 +2269,7 @@ tests the record against the finding's decision block, read from the committed f
 - Produces: `conf/data/regressor_panel.yaml`, read with
   `load_config(RegressorPanelConfig, 'data/regressor_panel.yaml')`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Modify `tests/unit/test_config.py` with these 2 edits, in order. Each replaced text occurs exactly
 once in the file.
@@ -2438,14 +2442,14 @@ def test_the_excluded_codes_are_section_fours(record, finding):
     assert record.excluded_codes == excluded
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_config.py tests/unit/test_regressor_branch_record.py -q`
 Expected: two collection errors, `ImportError: cannot import name 'RegressorBranchRecord' from
 'naics_embedder.utils.config'` and `ImportError: cannot import name 'RegressorPanelConfig' from
 'naics_embedder.utils.config'`.
 
-- [ ] **Step 3: Declare the config and ship it**
+- [x] **Step 3: Declare the config and ship it**
 
 **`src/naics_embedder/utils/config.py`, edit 1 of 1.** Replace:
 
@@ -2614,7 +2618,7 @@ branch_record:
     '926120', '926130', '926140', '926150', '927110', '928110', '928120']
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_config.py tests/unit/test_regressor_branch_record.py -q`
 Expected: `66 passed`.
@@ -2622,12 +2626,12 @@ Expected: `66 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1447 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/utils/config.py tests/unit/test_config.py tests/unit/test_regressor_branch_record.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/utils/config.py conf/data/regressor_panel.yaml tests/unit/test_config.py tests/unit/test_regressor_branch_record.py
@@ -2685,7 +2689,7 @@ verification**, Step 5, for which test backs which outcome.
   `coordinate_table(codes, dimension=3, seed=7)`, `text_only_table(codes, width=5, seed=11)` and
   the session fixture `regressor_arm`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_regressor_panel.py` with exactly this content:
 
@@ -3280,13 +3284,15 @@ def test_the_summary_pools_rows_per_panel_split_level_and_comparator():
     assert (second['rmse'], second['r2'], second['median_alpha']) == (1.0, 0.0, 55.0)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_regressor_panel.py -q`
 Expected: one collection error, `ImportError: cannot import name 'regressor' from
 'naics_embedder.panels'`.
 
-- [ ] **Step 3: Write the panel and extend the fixture module**
+- [x] **Step 3: Write the panel and extend the fixture module**
+
+> Deviation: the whole-plan review changed `panels/regressor.py` after this task. `looks_lorentz` scales each row's tolerance with its x0^2 and reads the level from the row nearest the origin (a50f85b, f640468). A read checks the arm's codes before it is logged, and `require_arm` checks every loaded level (c5ee998). `coordinate_matrix` refuses constant columns (360af12). `require_openable` checks an opening without logging it (b7c21d6). The tests gained behavioural leakage checks and a grouped-fold check for the seen regime (f84e00b).
 
 Create `src/naics_embedder/panels/regressor.py` with exactly this content:
 
@@ -4290,7 +4296,7 @@ def regressor_arm() -> ArmTables:
     return ArmTables.from_tables(coordinate_table(CODEBOOK), text_only_table(CODEBOOK))
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_regressor_panel.py -q`
 Expected: `38 passed`.
@@ -4298,12 +4304,12 @@ Expected: `38 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1485 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels/regressor.py tests/fixtures/regressor_panel.py tests/unit/test_regressor_panel.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/regressor.py tests/fixtures/regressor_panel.py tests/unit/test_regressor_panel.py
@@ -4335,7 +4341,7 @@ and its provenance, and refuses to redraw an existing table without `--force`.
     `cfg.provenance_json`
   - the command `naics-embedder data regressor-groups --codebook PATH [--force]`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_regressor_group_table.py` with exactly this content:
 
@@ -4492,7 +4498,7 @@ def test_data_regressor_groups_refuses_to_redraw_without_force(monkeypatch, runn
 
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_regressor_group_table.py -q`
 Expected: one collection error, `ModuleNotFoundError: No module named
@@ -4502,7 +4508,7 @@ Run: `uv run pytest tests/unit/test_cli_commands.py -q -k regressor_groups`
 Expected: `2 failed`, each with `AttributeError: … has no attribute
 'generate_regressor_group_table'`.
 
-- [ ] **Step 3: Write the generator and the command**
+- [x] **Step 3: Write the generator and the command**
 
 Create `src/naics_embedder/data/regressor_group_table.py` with exactly this content:
 
@@ -4759,7 +4765,7 @@ def regressor_groups(
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_regressor_group_table.py tests/unit/test_cli_commands.py -q`
 Expected: `28 passed`.
@@ -4767,12 +4773,12 @@ Expected: `28 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1490 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/data/regressor_group_table.py src/naics_embedder/cli/commands/data.py tests/unit/test_regressor_group_table.py tests/unit/test_cli_commands.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/data/regressor_group_table.py src/naics_embedder/cli/commands/data.py tests/unit/test_regressor_group_table.py tests/unit/test_cli_commands.py
@@ -4803,7 +4809,7 @@ each regime is opened, and logged, before its first test read.
     [--regime seen|heldout]… [--level N]… [--split validation|test] [--purpose TEXT]
     [--open-purpose TEXT] [--reopen-reason TEXT] [--log PATH] [--output PATH]`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Modify `tests/unit/test_cli_commands.py` with these 2 edits, in order. Each replaced text occurs
 exactly once in the file.
@@ -4959,14 +4965,16 @@ def test_regressor_panel_opens_each_regime_once_before_its_test_read(
     assert 'reopen_reason' in second.output
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py -q`
 Expected: `1 failed, 25 passed, 3 errors`. The text-only test fails, and the three
 regressor-panel tests error in their fixture: `tools` has no attribute `build_text_only_table`
 or `load_regressor_panel` yet.
 
-- [ ] **Step 3: Add the commands**
+- [x] **Step 3: Add the commands**
+
+> Deviation: the whole-plan review changed `tools regressor-panel` after this task. Before opening anything it checks the output path (c5ee998, 099fa12), the arm (c5ee998) and every regime's opening (b7c21d6); it deduplicates `--regime` (b7c21d6) and catches `OSError`; and `--purpose` defaults to `regressor panel <split> read` (1ce40e5).
 
 Modify `src/naics_embedder/cli/commands/tools.py` with these 6 edits, in order. Each replaced
 text occurs exactly once in the file.
@@ -5246,7 +5254,7 @@ def regressor_panel(
         console.print(f'Predictions written to {path}')
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py -q`
 Expected: `29 passed`.
@@ -5254,12 +5262,12 @@ Expected: `29 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1494 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/cli/commands/tools.py tests/unit/test_cli_commands.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/cli/commands/tools.py tests/unit/test_cli_commands.py
@@ -5297,7 +5305,7 @@ It reads the validation split only. Never pass `--split test`, and never call `o
   - The committed-table test runs in CI without the QCEW files.
   - Its pinned hash fails on any redraw.
 
-- [ ] **Step 1: Write the committed-table test**
+- [x] **Step 1: Write the committed-table test**
 
 Create `tests/unit/test_committed_regressor_groups.py` with exactly this content:
 
@@ -5416,7 +5424,7 @@ Run: `uv run pytest tests/unit/test_committed_regressor_groups.py -q`
 Expected: 4 errors, each `FileNotFoundError` for `conf/data/regressor_heldout_groups.csv` or its
 provenance. Step 2 writes both.
 
-- [ ] **Step 2: Draw the held-out groups**
+- [x] **Step 2: Draw the held-out groups**
 
 Run: `pwd`
 Expected: `/Users/lowell/Projects/naics-embedder/.claude/worktrees/plan-5-regressor-panel`.
@@ -5427,7 +5435,7 @@ Expected: exit 0 in a few seconds. The last line is
 wrap at the terminal's width, report the 60 groups with their hash and the rows per level and
 split.
 
-- [ ] **Step 3: Check the draw**
+- [x] **Step 3: Check the draw**
 
 Run: `shasum -a 256 conf/data/regressor_heldout_groups.csv`
 Expected: `deddfd4c395ca2ea8164e4425a4fdfff4e564360d20467d5a76163504cbb8ac4`. If it differs, stop
@@ -5442,7 +5450,7 @@ Run the command of Step 2 again.
 Expected: exit 1, with a message that the table exists and is drawn once. The table's hash is
 unchanged.
 
-- [ ] **Step 4: Build the text-only table**
+- [x] **Step 4: Build the text-only table**
 
 Run: `uv run naics-embedder tools text-only-table --descriptions /Users/lowell/Projects/naics-embedder/data/naics_descriptions.parquet --output /tmp/stage3-regressor-panel-635ffd43/text_only.parquet`
 Expected: exit 0 in about half a minute, ending with
@@ -5455,7 +5463,7 @@ Expected, on one line:
 The table's own hash (the last field) depends on the backbone's float arithmetic. On this Mac it
 reproduces; anywhere else, a different value is not a stop condition.
 
-- [ ] **Step 5: Make the stub arm**
+- [x] **Step 5: Make the stub arm**
 
 With the Write tool, create `/tmp/stage3-regressor-panel-635ffd43/stub_arm.py` with exactly this
 content:
@@ -5489,7 +5497,9 @@ table.select('code').hstack(coordinates).write_parquet(sys.argv[2])
 Run: `uv run python /tmp/stage3-regressor-panel-635ffd43/stub_arm.py /tmp/stage3-regressor-panel-635ffd43/text_only.parquet /tmp/stage3-regressor-panel-635ffd43/stub_arm.parquet`
 Expected: exit 0 with no output.
 
-- [ ] **Step 6: Score the stub arm on the validation split**
+- [x] **Step 6: Score the stub arm on the validation split**
+
+> Deviation: rerun after the whole-plan review, on 4102514 and on the reviewed tip 099fa12, each into a scratch log and output: both logged the seven reads of Step 7 and no opening, and reproduced Step 8's tables character for character.
 
 Run: `pwd`
 Expected: this worktree.
@@ -5501,7 +5511,7 @@ and `heldout, level 3` (`no four-digit parent`). Under `Regressor panel: validat
 57 bullets, one per regime, level and comparator, and it ends with
 `Predictions written to /tmp/stage3-regressor-panel-635ffd43/validation.parquet`.
 
-- [ ] **Step 7: Check the log: seven validation reads and no opening**
+- [x] **Step 7: Check the log: seven validation reads and no opening**
 
 Run: `uv run python -c "import json; [print(r['event'], r['panel'], r['split'], r['n_queries'], r['detail']['level'], r['fingerprint'][:8]) for r in map(json.loads, open('/tmp/stage3-regressor-panel-635ffd43/selection_log.jsonl'))]"`
 Expected: exactly these seven lines.
@@ -5516,7 +5526,7 @@ read regressor_heldout validation 1046 5 deddfd4c
 read regressor_heldout validation 1554 6 deddfd4c
 ```
 
-- [ ] **Step 8: Tabulate the results**
+- [x] **Step 8: Tabulate the results**
 
 With the Write tool, create `/tmp/stage3-regressor-panel-635ffd43/summary.py` with exactly this
 content:
@@ -5557,7 +5567,9 @@ Expected: the two tables of the finding's section 5 (Step 9), character for char
 do not read the arm (covariates, one-hot and ancestors, each alone or with the covariates) must
 match exactly. If an embedding or text-only row differs, check Step 4's table hash first.
 
-- [ ] **Step 9: Write the finding**
+- [x] **Step 9: Write the finding**
+
+> Deviation: after the whole-plan review, 360af12 extended section 6's Stage 6 bullet: the panel also refuses constant columns, such as the zero time coordinate a log map at the origin keeps. The finding's numbers are unchanged.
 
 Create `specs/findings/regressor-panel-splits.md` with exactly this content, with `<run date>`
 replaced by Step 2's date:
@@ -5770,7 +5782,7 @@ uv run naics-embedder tools regressor-panel --coordinates /tmp/stub_arm.parquet 
 ```
 ````
 
-- [ ] **Step 10: Run the full suite and check the tree**
+- [x] **Step 10: Run the full suite and check the tree**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1498 passed, 1 skipped`.
@@ -5788,7 +5800,7 @@ Expected: exactly these four lines. `logs/` is ignored, and nothing was written 
 ?? tests/unit/test_committed_regressor_groups.py
 ```
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add conf/data/regressor_heldout_groups.csv conf/data/regressor_heldout_groups_provenance.json tests/unit/test_committed_regressor_groups.py specs/findings/regressor-panel-splits.md
@@ -5818,7 +5830,9 @@ navigation entry, and CLAUDE.md's tree and command list.
   docstrings the API page renders.
 - Produces: documentation only.
 
-- [ ] **Step 1: Document the commands**
+- [x] **Step 1: Document the commands**
+
+> Deviation: the whole-plan review edited `docs/usage.md` after this task: `--coordinates` names the tables the panel refuses (360af12), `--purpose` gives its default (1ce40e5), and an output row is one per row, comparator and repeat (4102514).
 
 Modify `docs/usage.md` with these 2 edits, in order. Each replaced text occurs exactly once in the
 file.
@@ -5921,7 +5935,7 @@ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
 ---
 ````
 
-- [ ] **Step 2: Add the API page**
+- [x] **Step 2: Add the API page**
 
 Create `docs/api/regressor_panel.md` with exactly this content:
 
@@ -5971,7 +5985,7 @@ with:
           - QCEW: api/qcew_metrics.md
 ```
 
-- [ ] **Step 3: Update CLAUDE.md**
+- [x] **Step 3: Update CLAUDE.md**
 
 Modify `CLAUDE.md` with these 5 edits, in order. Each replaced text occurs exactly once in the
 file.
@@ -6055,7 +6069,7 @@ uv run naics-embedder tools text-only-table  # Frozen-backbone text table for th
 uv run naics-embedder tools regressor-panel  # Score an arm on the regressor panel
 ```
 
-- [ ] **Step 4: Build the docs strictly**
+- [x] **Step 4: Build the docs strictly**
 
 Run: `uv run mkdocs build --strict --site-dir /tmp/stage3-regressor-panel-docs-635ffd43`
 Expected: exit 0 and `Documentation built in`. The output has no `WARNING` line.
@@ -6065,7 +6079,7 @@ Expected: a count of at least 1. It shows the new page rendered its modules.
 
 Run: `rm -rf /tmp/stage3-regressor-panel-docs-635ffd43`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/usage.md docs/api/regressor_panel.md docs/.nav.yml CLAUDE.md
@@ -6074,12 +6088,16 @@ git commit -m "docs: document the regressor panel commands and API"
 
 ## Final verification (controller, inline)
 
-- [ ] **Step 1: Full suite on Python 3.12**
+- [x] **Step 1: Full suite on Python 3.12**
+
+> Deviation: 1533 passed, 1 skipped: the nine review commits, a50f85b through 099fa12, added 35 test cases (1498 before them).
 
 Run: `uv run pytest -n auto -q`
 Expected: `1498 passed, 1 skipped`.
 
-- [ ] **Step 2: Full suite on Python 3.10, CI's other leg**
+- [x] **Step 2: Full suite on Python 3.10, CI's other leg**
+
+> Deviation: likewise 1533 passed, 1 skipped on Python 3.10 after the review commits (1498 before them).
 
 Run: `UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310-635ffd43 uv run pytest -n auto -q`
 Expected: `1498 passed, 1 skipped`, the same as Step 1. This leg locks numpy 2.2.6 and
@@ -6087,12 +6105,12 @@ scikit-learn 1.7.2. The committed-table test reads the CSV, so it passes without
 
 Run: `rm -rf /tmp/naics-py310-635ffd43`
 
-- [ ] **Step 3: The CI lint job**
+- [x] **Step 3: The CI lint job**
 
 Run: `./scripts/format_code.sh --check --all`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 4: The branch carries only this plan's commits**
+- [x] **Step 4: The branch carries only this plan's commits**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected, read bottom up, because `git log` prints the newest commit first:
@@ -6141,7 +6159,9 @@ tests/unit/test_regressor_splits.py
 tests/unit/test_text_only.py
 ```
 
-- [ ] **Step 5: The roadmap's Stage 3 Exit, outcome by outcome**
+- [x] **Step 5: The roadmap's Stage 3 Exit, outcome by outcome**
+
+> Deviation: 150 passed: the review commits added 35 test cases to these files (115 before them). The leakage tests `test_regressor_panel.py::test_no_outcome_outside_the_remainder_reaches_a_test_prediction` and `::test_no_scored_outcome_reaches_its_own_validation_prediction` (f84e00b) also back the second row.
 
 Check each row against the tests that back it. Test names are given as `file::test`, and a
 `::test` alone continues the file before it.
@@ -6165,7 +6185,7 @@ Two Produces items outside the Exit are backed too:
 Run: `uv run pytest tests/unit/test_regressor_panel.py tests/unit/test_regressor_qcew_rows.py tests/unit/test_regressor_splits.py tests/unit/test_regressor_branch_record.py tests/unit/test_committed_regressor_groups.py tests/unit/test_regressor_group_table.py tests/unit/test_cli_commands.py -q`
 Expected: `115 passed`.
 
-- [ ] **Step 6: No outer set was opened**
+- [x] **Step 6: No outer set was opened**
 
 Run: `uv run python -c "import glob, json; paths = sorted(glob.glob('/tmp/stage3-regressor-panel-635ffd43/*.jsonl') + glob.glob('logs/*.jsonl')); records = [json.loads(line) for path in paths for line in open(path) if line.strip()]; print(paths, len(records), sum(r['event'] != 'read' for r in records))"`
 Expected: `['/tmp/stage3-regressor-panel-635ffd43/selection_log.jsonl'] 7 0`. The only selection log
@@ -6174,7 +6194,7 @@ under pytest's temporary directories, and `logs/` holds only `.log` files. If th
 stop and ask: an `open` or `reopen` record for `regressor_seen` or `regressor_heldout` would break
 Stage 12's one-opening rule.
 
-- [ ] **Step 7: Remove the scratch directory**
+- [x] **Step 7: Remove the scratch directory**
 
 Run: `rm -rf /tmp/stage3-regressor-panel-635ffd43`
 
@@ -6187,7 +6207,7 @@ are the branch's last commits. Before editing `specs/naics-embedding-roadmap.md`
 `specs/deferred_items.md`, check whether another Claude session is active in this repository. If
 one is, hold both edits and hand your human partner the exact text below.
 
-- [ ] **Step 1: Tick the roadmap stage and add the rollout note and the stamp**
+- [x] **Step 1: Tick the roadmap stage and add the rollout note and the stamp**
 
 In `specs/naics-embedding-roadmap.md`, make one edit. Replace:
 
@@ -6229,7 +6249,7 @@ with the lines below, with `YYYY-MM-DD` replaced by the completion date:
 - [ ] Stage 4: Decision rule and diagnostics
 ```
 
-- [ ] **Step 2: Re-validate the later stages against what shipped**
+- [x] **Step 2: Re-validate the later stages against what shipped**
 
 Three later entries consume what Stage 3 shipped in ways their text does not yet say, so each
 gets one edit.
@@ -6297,7 +6317,7 @@ Stages 6, 8, 9, 10 and 11 need no edit:
 
 Commit the roadmap edits with the plan markup in Step 3's commit.
 
-- [ ] **Step 3: Mark up this plan and resolve the gate**
+- [x] **Step 3: Mark up this plan and resolve the gate**
 
 Follow the protocol:
 
@@ -6319,7 +6339,7 @@ git commit -m "docs(roadmap): complete Stage 3 and re-validate Stages 4, 7 and 1
 
 `git add` of an unchanged `specs/deferred_items.md` is harmless.
 
-- [ ] **Step 4: Retire the plan**
+- [x] **Step 4: Retire the plan**
 
 ```bash
 git mv specs/plans/5-regressor-panel.md specs/plans/completed/5-regressor-panel.md
@@ -6329,7 +6349,7 @@ git commit -m "chore(specs): retire plan 5"
 This plan has no relative links to re-point, and no spec file retires with it: Stage 3 has no
 stage spec.
 
-- [ ] **Step 5: Integrate**
+- [x] **Step 5: Integrate**
 
 Hand over to finishing-a-development-branch. Before opening any PR, check two things:
 

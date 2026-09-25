@@ -102,3 +102,42 @@
       curvature is learnable. Roadmap Stage 6 must pass a curvature-aware callable to
       `OutcomePanel.score(..., distance=...)` or add a curvature parameter. Size: quick-fix.
       Done when: Stage 6 scores its arm under the trained curvature.
+
+## 5-regressor-panel — 2026-09-24
+- [ ] Review Minor: nothing checks the held-out group table's hash when the regressor panel
+      loads. `load_regressor_panel` and `RegressorPanel.from_sources`
+      (src/naics_embedder/panels/regressor.py) read conf/data/regressor_heldout_groups.csv
+      through `read_group_table` and log every read and opening under whatever hash the file
+      has. Only the CI test (tests/unit/test_committed_regressor_groups.py) pins deddfd4c…, and
+      `data regressor-groups` replaces the file only with `--force`. A hand edit gets a new
+      fingerprint, which `SelectionLog.openings` counts as a first opening. Deferred because
+      Stage 2's role table (conf/data/index_roles.csv) has the same guards and no load-time pin
+      either. Fix: pin the sha256 in conf/data/regressor_panel.yaml and refuse a mismatch in
+      `load_regressor_panel`. Size: quick-fix. Done when: loading the panel refuses a group
+      table whose sha256 differs from the configured pin. It must land before Stage 12 opens
+      either outer set, because the one-opening rule counts openings under this fingerprint.
+- [ ] Review Minor: a regressor read's log record names the text-only table by
+      `ArmTables.text_only_fingerprint`, the `matrix_fingerprint` of the table's codes and
+      values (src/naics_embedder/panels/regressor.py), while `tools text-only-table` records
+      the parquet's file hash as `table_sha256` in `<stem>_provenance.json`
+      (src/naics_embedder/panels/text_only.py). Matching a logged read to its table file means
+      recomputing `matrix_fingerprint` from the parquet. Deferred because nothing matches them
+      yet. Fix: record `table_sha256` in the read's detail too, or record the matrix fingerprint
+      in the provenance. Size: quick-fix. Revisit if: Stage 4's tooling or a later stage has to
+      match logged reads to text-only table files.
+- [ ] Review Minor: `run_plan` (src/naics_embedder/panels/regressor.py) calls
+      `standardized_ridge_path` (src/naics_embedder/panels/ridge.py), one SVD per call, for
+      every tuning split and final fit. In the seen regime every task fits the same 2022 rows,
+      so a validation read repeats one SVD 2 × repeats × folds times per comparator and level.
+      The real stub run took about 30 s for levels 2–6. Deferred as performance only. Fix:
+      cache the SVD per distinct fit row set within a read. Size: quick-fix. Revisit if: a
+      Stage 4 seed sweep or a Stage 8–11 run is slowed by panel reads.
+- [ ] Review note, for Stage 4's decision statistic: a validation read scores each row once
+      per repeat (five), and in the seen regime every repeat's predictions come from the same
+      2022 fit with only the penalty's folds redrawn, so the repeats are not independent draws;
+      group resampling should aggregate the repeats per row first. The held-out outer set also
+      holds 2024 rows, which validation never scores, so the held-out statistic should be
+      reported by feature_year as well. See specs/findings/regressor-panel-splits.md,
+      section 6. Deferred because Open questions leaves the statistic to Stage 4. Size: design.
+      Done when: Stage 4's plan aggregates repeats per row before resampling by group and
+      reports the held-out regime by feature year, or records why not.

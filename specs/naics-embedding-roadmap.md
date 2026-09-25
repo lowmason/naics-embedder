@@ -255,7 +255,7 @@ hardcoded outside `data roles`.
       Stage 2: COMPLETE (2026-09-24) — implemented by plan 4
       (specs/plans/completed/4-outcome-panel-sealed-splits.md). Next: resume the roadmap.
 
-- [ ] Stage 3: Regressor panel
+- [x] Stage 3: Regressor panel
       Objective: Build the regressor panel on the population and grain Stage 1 verified, with
       Req 2's comparators, fitting and two regimes.
       Spec: Req 2 (all bullets except the open item); Req 4 (regressor splits: sealed outer set,
@@ -291,6 +291,16 @@ hardcoded outside `data roles`.
       be read without a logged opening; a test shows every row's features are dated
       before its outcome (D7); the branch record matches the finding's decision block.
       ROUTING: writing-plans
+      Rollout note: one partition serves both regimes. The held-out outer set holds every row
+      of a code containing a held-out four-digit group, the seen outer set the other codes'
+      2024→2025 rows, and validation reads the rest. Levels 2–3 are sealed strictly, so the
+      held-out regime runs at levels 4–6, and D8's regressor panels are the level-6 cells.
+      Realized: 60 of 300 four-digit groups held out, a fifth of each sector's by largest
+      remainder with seed 20260924 (`conf/data/regressor_heldout_groups.csv`, sha256
+      deddfd4c…, both panels' fingerprint); level-6 rows 1,554 / 777 / 609 (remainder / seen
+      outer / held-out outer).
+      Stage 3: COMPLETE (2026-09-24) — implemented by plan 5
+      (specs/plans/completed/5-regressor-panel.md). Next: resume the roadmap.
 
 - [ ] Stage 4: Decision rule and diagnostics
       Objective: Implement Req 5's decision procedure and record, and demote the structural
@@ -300,8 +310,11 @@ hardcoded outside `data roles`.
       Gap closed: Req 5 (except the reference configuration and δ, which Stage 7 supplies);
       Req 6; Req 1 (selection-criterion half).
       Consumes: Stage 2's `DecodingResult.per_query`, resampled by code (finding, section 6),
-      and Stage 3's per-row predictions, resampled by four-digit group in each regressor regime.
-      No trained arms yet: the tooling is exercised on synthetic scores.
+      and Stage 3's per-row predictions, resampled by four-digit group in each regressor regime
+      (finding `specs/findings/regressor-panel-splits.md`, section 6): D8's two regressor panels
+      are the level-6 cells, a validation read scores each of its rows once per repeat (five),
+      and `group` is the code itself at levels 2–3. No trained arms yet: the tooling is
+      exercised on synthetic scores.
       Produces: Decision tooling over D8's three panels: each panel's statistic (Open
       questions), paired resampling over each panel's unit with seeds nested, 95 %
       non-inferiority and 98⅓ % superiority intervals, δ as a stated multiple of a reference's
@@ -411,7 +424,10 @@ hardcoded outside `data roles`.
       `OutcomePanelConfig.selection_log`, `logs/selection_log.jsonl`: gitignored, so a
       worktree's log goes with the worktree, and Stage 4's decision records keep its records).
       The test split stays sealed: Stage 12 opens it, as the finding's section 6 erratum says.
-      Stage 3's panel; Stage 4's seed-sweep driver, decision tooling and δ procedure.
+      Stage 3's panel, on its validation split only; its text-only table is rebuilt from the
+      arm's own descriptions with `tools text-only-table`, because the table Stage 3 built
+      embeds bundle 18403d29's text, which Stage 5 replaces (D9). Stage 4's seed-sweep driver,
+      decision tooling and δ procedure.
       Produces: The reference configuration (hyperbolic, dimension 16, current backbone, shared
       encoder) with a query→code task term over training queries and activity phrases (the
       referencing code always scored), a listwise code–code term with graded targets from D*
@@ -526,7 +542,10 @@ hardcoded outside `data roles`.
       per-seed encoder checkpoints and 2,125-code tables of the final configuration and of every
       arm in its recorded comparisons, since sealed queries were never embedded; Stage 2's
       `OutcomePanel.open_test`; Stage 3's sealed outer sets and the logged opening that guards
-      them; Stage 4's tooling and seed-sweep driver.
+      them (`RegressorPanel.open_outer`, or `tools regressor-panel --split test` with
+      `--open-purpose`): one opening per regime covers every level the panel has loaded, and
+      the log names the panels `regressor_seen` and `regressor_heldout`, both under the
+      fingerprint `deddfd4c…`; Stage 4's tooling and seed-sweep driver.
       Produces: One logged opening per sealed set (the outcome test queries and each regressor
       regime's outer set, per D8); sealed estimates with D8's intervals for the final
       configuration and each comparison recorded for it; a written finding.
