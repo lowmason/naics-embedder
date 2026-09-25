@@ -560,9 +560,13 @@ def regressor_panel(
         typer.Option('--split', help='validation, or test (sealed: needs --open-purpose)'),
     ] = VALIDATION,
     purpose: Annotated[
-        str,
-        typer.Option('--purpose', help='Why this read happens; recorded in the selection log'),
-    ] = 'regressor panel validation read',
+        Optional[str],
+        typer.Option(
+            '--purpose',
+            help='Why this read happens; recorded in the selection log '
+            '(default: regressor panel <split> read)',
+        ),
+    ] = None,
     open_purpose: Annotated[
         Optional[str],
         typer.Option('--open-purpose', help='Why the outer sets are opened (test split only)'),
@@ -609,6 +613,7 @@ def regressor_panel(
     cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
     regimes = regime or list(Regime)
     levels = sorted(set(level or [DECISION_LEVEL]))
+    read_purpose = (purpose or '').strip() or f'regressor panel {split} read'
     output_path = Path(output) if output else None
     try:
         # The output directory and the arm are checked before any opening: a test read that
@@ -631,7 +636,7 @@ def regressor_panel(
                 panel.open_outer(chosen, open_purpose or '', reopen_reason=reopen_reason)
             for number in defined:
                 read = panel.validation if split == VALIDATION else panel.test
-                results.append(read(chosen, number, arm, purpose))
+                results.append(read(chosen, number, arm, read_purpose))
     except (OSError, ValueError, SealedSplitError, SplitAlreadyOpenedError) as exc:
         console.print(f'[bold red]Regressor panel failed:[/bold red] {exc}')
         raise typer.Exit(code=1)

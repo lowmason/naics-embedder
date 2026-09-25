@@ -523,6 +523,7 @@ def test_regressor_panel_scores_validation_and_reports_undefined_cells(
         ('read', 'regressor_seen', 'validation', 6),
         ('read', 'regressor_heldout', 'validation', 6),
     ]
+    assert {r['purpose'] for r in log.records()} == {'regressor panel validation read'}
     assert set(pl.read_parquet(output).get_column('split')) == {'validation'}
 
 @pytest.mark.unit
@@ -544,6 +545,9 @@ def test_regressor_panel_opens_each_regime_once_before_its_test_read(
         ('open', 'regressor_heldout', 'test'),
         ('read', 'regressor_heldout', 'test'),
     ]
+    # Without --purpose, a test read is not recorded as a validation read
+    purposes = [r['purpose'] for r in log.records()]
+    assert purposes == ['fixture opening', 'regressor panel test read'] * 2
     assert second.exit_code == 1
     assert 'reopen_reason' in second.output
 

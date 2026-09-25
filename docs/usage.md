@@ -237,7 +237,8 @@ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
 - `--regime seen|heldout` - Regime to score (repeatable; default: both)
 - `--level INT` - NAICS level 2-6 (repeatable; default: 6)
 - `--split validation|test` - The test split needs `--open-purpose`, which is logged
-- `--purpose TEXT` - Why this read happens; recorded in the selection log
+- `--purpose TEXT` - Why this read happens; recorded in the selection log (default:
+  `regressor panel <split> read`)
 - `--open-purpose TEXT`, `--reopen-reason TEXT` - Why the outer sets are opened, and why again
 - `--log PATH` - Selection log (default: `logs/selection_log.jsonl`)
 - `--output PATH` - Write the per-row predictions as parquet
