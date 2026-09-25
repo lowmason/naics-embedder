@@ -39,6 +39,7 @@ nav:
           - Graph: api/graph_metrics.md
           - Hierarchy Structure: api/hierarchy_structure_metrics.md
           - Outcome Panel: api/outcome_panel.md
+          - Regressor Panel: api/regressor_panel.md
           - QCEW: api/qcew_metrics.md
           - Runner: api/runner.md
       - Tools:

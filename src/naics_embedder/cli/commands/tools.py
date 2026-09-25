@@ -12,11 +12,14 @@ Commands:
     visualize: Generate visualizations from training log files.
     investigate: Analyze hierarchy preservation metrics.
     outcome-baseline: Score the lexical stub encoder on the outcome panel's validation split.
+    text-only-table: Embed every code's text with the arm's backbone, frozen (roadmap D9).
+    regressor-panel: Score an arm on the regressor panel's validation or sealed test split.
 '''
 
 import json
+import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import polars as pl
 import typer
@@ -30,12 +33,28 @@ from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
     code_texts_from_descriptions,
 )
-from naics_embedder.panels.outcome import OutcomePanel
+from naics_embedder.panels.outcome import OutcomePanel, SealedSplitError, SplitAlreadyOpenedError
+from naics_embedder.panels.regressor import (
+    DECISION_LEVEL,
+    TEST,
+    VALIDATION,
+    ArmTables,
+    Regime,
+    load_regressor_panel,
+    summarize,
+)
+from naics_embedder.panels.text_only import build_text_only_table
+from naics_embedder.panels.text_only import provenance_path as text_only_provenance_path
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.embeddings_verification import Stage4VerificationConfig, verify_stage4
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
-from naics_embedder.utils.config import DownloadConfig, OutcomePanelConfig, load_config
+from naics_embedder.utils.config import (
+    DownloadConfig,
+    OutcomePanelConfig,
+    RegressorPanelConfig,
+    load_config,
+)
 from naics_embedder.utils.console import configure_logging
 
 # -------------------------------------------------------------------------------------------------
@@ -47,6 +66,8 @@ console = Console()
 app = typer.Typer(
     help='Utility tools for configuration, metrics analysis, and debugging.', no_args_is_help=True
 )
+
+REGRESSOR_PANEL_CONFIG = 'data/regressor_panel.yaml'
 
 # -------------------------------------------------------------------------------------------------
 # View configuration
@@ -455,3 +476,211 @@ def outcome_baseline(
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {'fingerprint': panel.fingerprint, 'summary': result.summary}
         path.write_text(json.dumps(payload, indent=2) + '\n')
+
+# -------------------------------------------------------------------------------------------------
+# Regressor panel
+# -------------------------------------------------------------------------------------------------
+
+@app.command('text-only-table')
+def text_only_table(
+    descriptions: Annotated[
+        str,
+        typer.Option('--descriptions', help="The arm's descriptions parquet: the text it reads"),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where to write the table (parquet)'),
+    ],
+    backbone: Annotated[
+        Optional[str],
+        typer.Option('--backbone', help="The arm's backbone (default: the regressor config)"),
+    ] = None,
+):
+    '''
+    Embed every code's text with the arm's backbone, frozen (roadmap D9).
+
+    Each of the four channels is mean-pooled over its tokens, and a code's vector is the mean of
+    its present channels. The backbone is read from the local Hugging Face cache. The regressor
+    panel reduces the table to the arm's dimension by PCA.
+
+    Output:
+        The table, and ``<stem>_provenance.json`` beside it.
+
+    Example:
+        Embed the text bundle 18403d29 was built from::
+
+            $ uv run naics-embedder tools text-only-table \\
+                --descriptions data/naics_descriptions.parquet --output /tmp/text_only.parquet
+    '''
+
+    configure_logging('tools_text_only_table.log')
+
+    cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
+    try:
+        path = build_text_only_table(
+            Path(descriptions),
+            Path(output),
+            backbone=backbone or cfg.text_only.backbone,
+            max_length=cfg.text_only.max_length,
+            batch_size=cfg.text_only.batch_size,
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        console.print(f'[bold red]Text-only table failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(f'Text-only table: {path}')
+    console.print(f'Provenance: {text_only_provenance_path(path)}')
+
+def _require_writable(path: Path) -> None:
+    '''
+    Create the file's directory and require that the file can be written there.
+
+    Raises:
+        OSError: If the path is a directory, or neither it nor its new directory is writable.
+    '''
+
+    if path.is_dir():
+        raise IsADirectoryError(f'{path} is a directory, not a file')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    target = path if path.exists() else path.parent
+    if not os.access(target, os.W_OK):
+        raise PermissionError(f'{target} is not writable')
+
+@app.command('regressor-panel')
+def regressor_panel(
+    coordinates: Annotated[
+        str,
+        typer.Option(
+            '--coordinates',
+            help="The arm's code table in the export form (tangent coordinates if hyperbolic)",
+        ),
+    ],
+    text_only: Annotated[
+        str,
+        typer.Option('--text-only', help='The text-only table (tools text-only-table)'),
+    ],
+    codebook: Annotated[
+        str,
+        typer.Option('--codebook', help="A supervision bundle's naics_codebook.parquet"),
+    ],
+    regime: Annotated[
+        Optional[List[Regime]],
+        typer.Option('--regime', help='Regime to score (repeatable; default: both)'),
+    ] = None,
+    level: Annotated[
+        Optional[List[int]],
+        typer.Option('--level', help='NAICS level 2-6 (repeatable; default: 6)'),
+    ] = None,
+    split: Annotated[
+        str,
+        typer.Option('--split', help='validation, or test (sealed: needs --open-purpose)'),
+    ] = VALIDATION,
+    purpose: Annotated[
+        Optional[str],
+        typer.Option(
+            '--purpose',
+            help='Why this read happens; recorded in the selection log '
+            '(default: regressor panel <split> read)',
+        ),
+    ] = None,
+    open_purpose: Annotated[
+        Optional[str],
+        typer.Option('--open-purpose', help='Why the outer sets are opened (test split only)'),
+    ] = None,
+    reopen_reason: Annotated[
+        Optional[str],
+        typer.Option('--reopen-reason', help='Required to open an outer set a second time'),
+    ] = None,
+    log: Annotated[
+        Optional[str],
+        typer.Option('--log', help='Selection log (default: the regressor config)'),
+    ] = None,
+    output: Annotated[
+        Optional[str],
+        typer.Option('--output', help='Write the per-row predictions to this parquet'),
+    ] = None,
+):
+    '''
+    Score an arm on the regressor panel: out-of-sample predictions per row (roadmap Stage 3).
+
+    Every Req 2 comparator is fitted by ridge on standardized features, the penalty tuned inside
+    the remainder. The validation split reads only the remainder; the test split opens each
+    regime's sealed outer set first, and both the opening and the read are logged.
+
+    Example:
+        Score an arm's table on the validation split of both regimes at six digits::
+
+            $ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \\
+                --text-only text_only.parquet --codebook PATH/naics_codebook.parquet
+    '''
+
+    configure_logging('tools_regressor_panel.log')
+
+    if split not in (VALIDATION, TEST):
+        console.print(f'[bold red]--split must be {VALIDATION} or {TEST}, not {split!r}[/bold red]')
+        raise typer.Exit(code=1)
+    if split == TEST and not (open_purpose or '').strip():
+        console.print(
+            '[bold red]The outer sets are sealed: --split test needs --open-purpose, which is '
+            'logged.[/bold red]'
+        )
+        raise typer.Exit(code=1)
+
+    cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
+    # A repeated regime is scored once: opening it twice would be refused after the first read
+    regimes = list(dict.fromkeys(regime or list(Regime)))
+    levels = sorted(set(level or [DECISION_LEVEL]))
+    read_purpose = (purpose or '').strip() or f'regressor panel {split} read'
+    output_path = Path(output) if output else None
+    try:
+        # The output path, the arm and every opening are checked before any opening: a test
+        # read that failed after its opening would use the opening up
+        if output_path is not None:
+            _require_writable(output_path)
+        panel = load_regressor_panel(cfg, codebook, log_path=log, levels=levels)
+        arm = ArmTables.from_tables(pl.read_parquet(coordinates), pl.read_parquet(text_only))
+        panel.require_arm(arm)
+        defined, undefined = {}, []
+        for chosen in regimes:
+            defined[chosen] = []
+            for number in levels:
+                reason = panel.cell_status(chosen, number)
+                if reason is None:
+                    defined[chosen].append(number)
+                else:
+                    undefined.append((chosen.value, number, reason))
+        to_open = [chosen for chosen, numbers in defined.items() if split == TEST and numbers]
+        for chosen in to_open:
+            panel.require_openable(chosen, reopen_reason)
+        results = []
+        for chosen, numbers in defined.items():
+            if chosen in to_open:
+                panel.open_outer(chosen, open_purpose or '', reopen_reason=reopen_reason)
+            read = panel.validation if split == VALIDATION else panel.test
+            results.extend(read(chosen, number, arm, read_purpose) for number in numbers)
+    except (OSError, ValueError, SealedSplitError, SplitAlreadyOpenedError) as exc:
+        console.print(f'[bold red]Regressor panel failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    for name, number, reason in undefined:
+        console.print(f'  • {name}, level {number}: undefined ({reason})')
+    if not results:
+        console.print('[bold yellow]No regime was defined at the requested levels.[/bold yellow]')
+        raise typer.Exit(code=1)
+
+    predictions = pl.concat(results)
+    console.print(f'\n[bold cyan]Regressor panel: {split} split[/bold cyan]\n')
+    for row in summarize(predictions).iter_rows(named=True):
+        console.print(
+            f'  • {row["panel"]}, level {row["level"]}, {row["comparator"]}: rows {row["rows"]:,}, '
+            f'RMSE {row["rmse"]:.4f}, R² {row["r2"]:.4f}, median alpha {row["median_alpha"]:g}'
+        )
+    console.print(f'\nReads logged to {panel.log.path} (fingerprint {panel.fingerprint})\n')
+
+    if output_path is not None:
+        try:
+            predictions.write_parquet(output_path)
+        except OSError as exc:
+            console.print(f'[bold red]Predictions not written:[/bold red] {exc}')
+            raise typer.Exit(code=1)
+        console.print(f'Predictions written to {output_path}')

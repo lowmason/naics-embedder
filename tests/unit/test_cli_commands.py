@@ -8,8 +8,17 @@ from typer.testing import CliRunner
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
 from naics_embedder.metrics import StructuralMetricInputError
+from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.supervision.artifacts import load_validated_bundle
+from tests.fixtures.regressor_panel import (
+    CODEBOOK,
+    HELDOUT_GROUPS,
+    POPULATION,
+    SETTINGS,
+    coordinate_table,
+    text_only_table,
+)
 
 @pytest.fixture
 def runner():
@@ -137,6 +146,39 @@ def test_data_roles_refuses_to_redraw_without_force(monkeypatch, runner):
     monkeypatch.setattr(data_cli, 'generate_index_role_table', refuse)
 
     result = runner.invoke(data_cli.app, ['roles'])
+
+    assert result.exit_code == 1
+    assert '--force' in result.output
+
+def test_data_regressor_groups_draws_with_the_regressor_config(monkeypatch, runner, tmp_path):
+    calls = []
+
+    def fake_generate(cfg, codebook_path, force):
+        calls.append((cfg, codebook_path, force))
+        return tmp_path / 'regressor_heldout_groups.csv'
+
+    monkeypatch.setattr(data_cli, 'generate_regressor_group_table', fake_generate)
+
+    result = runner.invoke(
+        data_cli.app, ['regressor-groups', '--codebook', '/bundle/naics_codebook.parquet']
+    )
+
+    assert result.exit_code == 0, result.output
+    [(cfg, codebook_path, force)] = calls
+    assert cfg.seed == 20260924
+    assert cfg.branch_record is not None
+    assert codebook_path == Path('/bundle/naics_codebook.parquet')
+    assert force is False
+    assert 'regressor_heldout_groups.csv' in result.output
+
+def test_data_regressor_groups_refuses_to_redraw_without_force(monkeypatch, runner):
+
+    def refuse(cfg, codebook_path, force):
+        raise FileExistsError('the table exists; pass --force only to redraw it deliberately')
+
+    monkeypatch.setattr(data_cli, 'generate_regressor_group_table', refuse)
+
+    result = runner.invoke(data_cli.app, ['regressor-groups', '--codebook', 'codebook.parquet'])
 
     assert result.exit_code == 1
     assert '--force' in result.output
@@ -391,3 +433,182 @@ def test_outcome_baseline_refuses_descriptions_that_hold_every_entry(runner, tmp
     assert result.exit_code == 1
     assert 'Outcome baseline failed' in result.output
     assert SelectionLog(tmp_path / 'selection_log.jsonl').records() == []
+
+# -------------------------------------------------------------------------------------------------
+# Regressor panel
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_text_only_table_embeds_with_the_regressor_configs_backbone(monkeypatch, runner, tmp_path):
+    calls = []
+
+    def fake_build(descriptions, output, *, backbone, max_length, batch_size):
+        calls.append((descriptions, output, backbone, max_length, batch_size))
+        return output
+
+    monkeypatch.setattr(tools_cli, 'build_text_only_table', fake_build)
+    output = tmp_path / 'text_only.parquet'
+
+    result = runner.invoke(
+        tools_cli.app,
+        ['text-only-table', '--descriptions', 'descriptions.parquet', '--output',
+         str(output)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (Path('descriptions.parquet'), output, 'sentence-transformers/all-MiniLM-L6-v2', 512, 32)
+    ]
+    # Rich folds long paths at the terminal's width (80 columns on CI), wherever it falls
+    assert 'text_only_provenance.json' in result.output.replace('\n', '')
+
+def _regressor_arguments(tmp_path, codes=CODEBOOK):
+    coordinates = tmp_path / 'arm.parquet'
+    text_only = tmp_path / 'text_only.parquet'
+    coordinate_table(codes).write_parquet(coordinates)
+    text_only_table(codes).write_parquet(text_only)
+    return [
+        'regressor-panel',
+        '--coordinates',
+        str(coordinates),
+        '--text-only',
+        str(text_only),
+        '--codebook',
+        'naics_codebook.parquet',
+    ]
+
+@pytest.fixture
+def fixture_panel(monkeypatch, tmp_path, regressor_rows):
+    '''The fixture panel in place of the real one: every opening below is a fixture's.'''
+
+    log = SelectionLog(tmp_path / 'selection_log.jsonl')
+    loaded = []
+
+    def fake_load(cfg, codebook, *, log_path, levels):
+        loaded.append((codebook, log_path, tuple(levels)))
+        return RegressorPanel(regressor_rows, HELDOUT_GROUPS, log, SETTINGS)
+
+    monkeypatch.setattr(tools_cli, 'load_regressor_panel', fake_load)
+    return log, loaded
+
+@pytest.mark.unit
+def test_regressor_panel_needs_an_open_purpose_for_the_test_split(runner, tmp_path, fixture_panel):
+    log, loaded = fixture_panel
+
+    result = runner.invoke(tools_cli.app, [*_regressor_arguments(tmp_path), '--split', 'test'])
+
+    assert result.exit_code == 1
+    assert '--open-purpose' in result.output
+    assert loaded == []
+    assert log.records() == []
+
+@pytest.mark.unit
+def test_regressor_panel_scores_validation_and_reports_undefined_cells(
+    runner, tmp_path, fixture_panel
+):
+    log, loaded = fixture_panel
+    output = tmp_path / 'predictions.parquet'
+    levels = ['--level', '6', '--level', '3', '--level', '2']
+
+    result = runner.invoke(
+        tools_cli.app, [*_regressor_arguments(tmp_path), *levels, '--output',
+                        str(output)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert loaded == [('naics_codebook.parquet', None, (2, 3, 6))]
+    assert 'seen, level 2: undefined' in result.output
+    assert 'heldout, level 3: undefined' in result.output
+    assert [(r['event'], r['panel'], r['split'], r['detail']['level']) for r in log.records()] == [
+        ('read', 'regressor_seen', 'validation', 3),
+        ('read', 'regressor_seen', 'validation', 6),
+        ('read', 'regressor_heldout', 'validation', 6),
+    ]
+    assert {r['purpose'] for r in log.records()} == {'regressor panel validation read'}
+    assert set(pl.read_parquet(output).get_column('split')) == {'validation'}
+
+@pytest.mark.unit
+def test_regressor_panel_opens_each_regime_once_before_its_test_read(
+    runner, tmp_path, fixture_panel
+):
+    log, _ = fixture_panel
+    arguments = [
+        *_regressor_arguments(tmp_path), '--split', 'test', '--open-purpose', 'fixture opening'
+    ]
+
+    first = runner.invoke(tools_cli.app, arguments)
+    second = runner.invoke(tools_cli.app, arguments)
+
+    assert first.exit_code == 0, first.output
+    assert [(r['event'], r['panel'], r['split']) for r in log.records()] == [
+        ('open', 'regressor_seen', 'test'),
+        ('read', 'regressor_seen', 'test'),
+        ('open', 'regressor_heldout', 'test'),
+        ('read', 'regressor_heldout', 'test'),
+    ]
+    # Without --purpose, a test read is not recorded as a validation read
+    purposes = [r['purpose'] for r in log.records()]
+    assert purposes == ['fixture opening', 'regressor panel test read'] * 2
+    assert second.exit_code == 1
+    assert 'reopen_reason' in second.output
+
+@pytest.mark.unit
+def test_regressor_panel_checks_every_opening_before_opening_any(runner, tmp_path, fixture_panel):
+    # Opening the seen regime and then being refused the held-out one would use the first up
+    log, _ = fixture_panel
+    arguments = [
+        *_regressor_arguments(tmp_path), '--split', 'test', '--open-purpose', 'fixture opening'
+    ]
+
+    earlier = runner.invoke(tools_cli.app, [*arguments, '--regime', 'heldout'])
+    both = runner.invoke(tools_cli.app, arguments)
+
+    assert earlier.exit_code == 0, earlier.output
+    assert both.exit_code == 1
+    assert 'reopen_reason' in both.output
+    assert [(r['event'], r['panel']) for r in log.records()] == [
+        ('open', 'regressor_heldout'),
+        ('read', 'regressor_heldout'),
+    ]
+
+@pytest.mark.unit
+def test_regressor_panel_reads_a_repeated_regime_once(runner, tmp_path, fixture_panel):
+    log, _ = fixture_panel
+    arguments = [
+        *_regressor_arguments(tmp_path), '--split', 'test', '--open-purpose', 'fixture opening'
+    ]
+
+    result = runner.invoke(tools_cli.app, [*arguments, '--regime', 'seen', '--regime', 'seen'])
+
+    assert result.exit_code == 0, result.output
+    assert [(r['event'], r['panel']) for r in log.records()] == [
+        ('open', 'regressor_seen'),
+        ('read', 'regressor_seen'),
+    ]
+
+@pytest.mark.unit
+def test_regressor_panel_checks_the_arm_and_the_output_before_opening(
+    runner, tmp_path, fixture_panel
+):
+    # A test read that failed after its opening would use the opening up
+    log, _ = fixture_panel
+    test_split = ['--split', 'test', '--open-purpose', 'fixture opening']
+    codes = [code for code in CODEBOOK if code != POPULATION[0]]
+    (tmp_path / 'file').write_text('')
+    unwritable = str(tmp_path / 'file' / 'predictions.parquet')
+
+    missing = runner.invoke(tools_cli.app, [*_regressor_arguments(tmp_path, codes), *test_split])
+    blocked = runner.invoke(
+        tools_cli.app, [*_regressor_arguments(tmp_path), *test_split, '--output', unwritable]
+    )
+    directory = runner.invoke(
+        tools_cli.app, [*_regressor_arguments(tmp_path), *test_split, '--output',
+                        str(tmp_path)]
+    )
+
+    assert missing.exit_code == 1
+    assert 'no coordinates' in missing.output
+    for result in (blocked, directory):
+        assert result.exit_code == 1
+        assert 'Regressor panel failed' in result.output
+    assert log.records() == []

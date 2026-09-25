@@ -1,0 +1,58 @@
+# The regressor panel (roadmap Stage 3): QCEW inputs, the held-out draw, fitting and the log
+
+# QCEW national slices, read only under the sha256 values of Stage 1's finding
+# (specs/findings/employment-statistics-coverage.md, Sources); they stay outside the repo
+qcew_dir: ~/Downloads/Data/QCEW
+qcew_sha256:
+  2022_US000_annual.csv: c45cbb64a1b1eef16bfd743510d9d02792ccad82f60e9df202c5daa3e8c5cc18
+  2023_US000_annual.csv: fe9ffe874f6e657f6bb1558971965ce6acc015ace45d831ed32c90d97097aee9
+  2024_US000_annual.csv: 48db086828a01798731242c6d3d4957f80f941afe75463a1ff7d43de774bea46
+  2025_US000_annual.csv: 0b5528f70d66a84ff9729691f365c667a09f854f0af3d841bdd660ef3cb01811
+
+# SHA-256 of the codebook's 2,125 codes, sorted, one per line (bundle 18403d29's codebook)
+codebook_codes_sha256: 9b646af189dbc46870861367e7cd399d2328972754dbf1abb30ca5a864f2481a
+
+# data regressor-groups draws the held-out four-digit groups once: a fifth of each sector's
+# groups (largest remainder), seeded; the table is committed and never redrawn
+heldout_groups_csv: ./conf/data/regressor_heldout_groups.csv
+# The panel reads only this draw: the log counts openings under its fingerprint, so a redraw
+# takes a reviewed change of this pin
+heldout_groups_sha256: deddfd4c395ca2ea8164e4425a4fdfff4e564360d20467d5a76163504cbb8ac4
+provenance_json: ./conf/data/regressor_heldout_groups_provenance.json
+seed: 20260924
+heldout_fraction: 0.2
+
+# Ridge on standardized features; the penalty is tuned by nested grouped folds in the remainder
+alphas: [0.001, 0.0032, 0.01, 0.032, 0.1, 0.32, 1.0, 3.2, 10.0, 32.0, 100.0, 320.0, 1000.0,
+  3200.0, 10000.0, 32000.0, 100000.0]
+folds: 5
+repeats: 5
+inner_folds: 5
+fold_seed: 20260924
+min_groups: 10
+
+# The text-only comparator (roadmap D9): the arm's backbone, frozen, reading the arm's text
+text_only:
+  backbone: sentence-transformers/all-MiniLM-L6-v2
+  max_length: 512
+  batch_size: 32
+
+# Every validation read, outer-set opening and outer read is appended here (Req 4). logs/ is
+# gitignored: a log inside a worktree goes when the worktree is removed.
+selection_log: ./logs/selection_log.jsonl
+
+# The Req 2 branch Stage 1's finding dictates: its decision block and section 4's excluded codes
+branch_record:
+  branch: A
+  source: QCEW annual averages
+  reference_years: [2022, 2023, 2024, 2025]
+  ownership: '5'
+  grain: national
+  population_seen: 980
+  population_heldout: 980
+  time_respecting_outcome: true
+  seen_regime: true
+  excluded_codes: ['112130', '517122', '541120', '921110', '921120', '921130', '921140',
+    '921150', '921190', '922110', '922120', '922130', '922140', '922150', '922160', '922190',
+    '923110', '923120', '923130', '923140', '924110', '924120', '925110', '925120', '926110',
+    '926120', '926130', '926140', '926150', '927110', '928110', '928120']

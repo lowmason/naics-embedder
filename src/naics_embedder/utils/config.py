@@ -455,6 +455,105 @@ class OutcomePanelConfig(BaseModel):
             raise ValueError('fractions must sum to 1')
         return value
 
+# Stage 1's finding (specs/findings/employment-statistics-coverage.md, Sources)
+QCEW_SLICE_SHA256 = {
+    '2022_US000_annual.csv': 'c45cbb64a1b1eef16bfd743510d9d02792ccad82f60e9df202c5daa3e8c5cc18',
+    '2023_US000_annual.csv': 'fe9ffe874f6e657f6bb1558971965ce6acc015ace45d831ed32c90d97097aee9',
+    '2024_US000_annual.csv': '48db086828a01798731242c6d3d4957f80f941afe75463a1ff7d43de774bea46',
+    '2025_US000_annual.csv': '0b5528f70d66a84ff9729691f365c667a09f854f0af3d841bdd660ef3cb01811',
+}
+RIDGE_ALPHAS = [
+    0.001, 0.0032, 0.01, 0.032, 0.1, 0.32, 1.0, 3.2, 10.0, 32.0, 100.0, 320.0, 1000.0, 3200.0,
+    10000.0, 32000.0, 100000.0
+]
+
+class TextOnlyConfig(BaseModel):
+    '''The regressor panel's text-only comparator (roadmap D9): the arm's backbone, frozen.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    backbone: str = Field(
+        default='sentence-transformers/all-MiniLM-L6-v2',
+        description="The arm's backbone (model.base_model_name), read from the local cache",
+    )
+    max_length: int = Field(
+        default=512,
+        ge=1,
+        description="Tokens kept per channel text: the arm's data_loader max_length",
+    )
+    batch_size: int = Field(default=32, ge=1, description='Texts per forward pass')
+
+class RegressorBranchRecord(BaseModel):
+    '''
+    The Req 2 branch Stage 1's finding dictates: its decision block and section 4's excluded
+    codes (specs/findings/employment-statistics-coverage.md).
+    '''
+
+    model_config = ConfigDict(extra='forbid')
+
+    branch: Literal['A', 'B', 'C']
+    source: str
+    reference_years: List[int]
+    ownership: str
+    grain: str
+    population_seen: int
+    population_heldout: int
+    time_respecting_outcome: bool
+    seen_regime: bool
+    excluded_codes: List[str]
+
+class RegressorPanelConfig(BaseModel):
+    '''The regressor panel (roadmap Stage 3): QCEW inputs, held-out draw, fitting and the log.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    qcew_dir: str = Field(
+        default='~/Downloads/Data/QCEW',
+        description='Directory holding the QCEW national slices (outside the repo)',
+    )
+    qcew_sha256: Dict[str, str] = Field(
+        default_factory=lambda: dict(QCEW_SLICE_SHA256),
+        description="Each national slice's sha256, from Stage 1's finding",
+    )
+    codebook_codes_sha256: str = Field(
+        default='9b646af189dbc46870861367e7cd399d2328972754dbf1abb30ca5a864f2481a',
+        description="SHA-256 of the codebook's codes, sorted, one per line",
+    )
+    heldout_groups_csv: str = Field(
+        default='./conf/data/regressor_heldout_groups.csv',
+        description='The committed held-out four-digit groups (data regressor-groups)',
+    )
+    heldout_groups_sha256: str = Field(
+        default='deddfd4c395ca2ea8164e4425a4fdfff4e564360d20467d5a76163504cbb8ac4',
+        description="The committed draw's fingerprint; the panel reads no other held-out groups",
+    )
+    provenance_json: str = Field(
+        default='./conf/data/regressor_heldout_groups_provenance.json',
+        description='Where data regressor-groups records how the groups were drawn',
+    )
+    seed: int = Field(default=20260924, description='Base seed of the held-out draw')
+    heldout_fraction: float = Field(
+        default=0.2, gt=0.0, lt=1.0, description="Share of each sector's groups held out"
+    )
+    alphas: List[float] = Field(
+        default_factory=lambda: list(RIDGE_ALPHAS), description='Ridge penalties, ascending'
+    )
+    folds: int = Field(default=5, ge=2, description='Grouped validation folds per repeat')
+    repeats: int = Field(default=5, ge=1, description='Validation repeats')
+    inner_folds: int = Field(default=5, ge=2, description='Grouped tuning folds (held-out regime)')
+    fold_seed: int = Field(default=20260924, description='Base seed of every fold assignment')
+    min_groups: int = Field(
+        default=10, ge=2, description='Fewest remainder groups a regime needs at a level'
+    )
+    text_only: TextOnlyConfig = Field(default_factory=TextOnlyConfig)
+    selection_log: str = Field(
+        default='./logs/selection_log.jsonl',
+        description='Append-only log of every panel read and outer-set opening',
+    )
+    branch_record: Optional[RegressorBranchRecord] = Field(
+        default=None, description="The Req 2 branch of Stage 1's finding; required to run"
+    )
+
 class SupervisionRuntimeConfig(BaseModel):
     '''Which supervision contract training runs under, and the one authoritative bundle.'''
 
