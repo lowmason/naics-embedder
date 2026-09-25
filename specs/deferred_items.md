@@ -118,7 +118,7 @@
       either outer set, because the one-opening rule counts openings under this fingerprint.
       → done in plan 5 (a53d6e4, `heldout_groups_sha256`), on PR #114 after Codex's review
       raised it as P1.
-- [ ] Review Minor: a regressor read's log record names the text-only table by
+- [x] Review Minor: a regressor read's log record names the text-only table by
       `ArmTables.text_only_fingerprint`, the `matrix_fingerprint` of the table's codes and
       values (src/naics_embedder/panels/regressor.py), while `tools text-only-table` records
       the parquet's file hash as `table_sha256` in `<stem>_provenance.json`
@@ -127,6 +127,8 @@
       yet. Fix: record `table_sha256` in the read's detail too, or record the matrix fingerprint
       in the provenance. Size: quick-fix. Revisit if: Stage 4's tooling or a later stage has to
       match logged reads to text-only table files.
+      → done in plan 6 (Task 1 records `matrix_fingerprint` in the provenance beside
+      `table_sha256`; Task 5's store refuses a provenance naming another).
 - [ ] Review Minor: `run_plan` (src/naics_embedder/panels/regressor.py) calls
       `standardized_ridge_path` (src/naics_embedder/panels/ridge.py), one SVD per call, for
       every tuning split and final fit. In the seen regime every task fits the same 2022 rows,
@@ -134,7 +136,7 @@
       The real stub run took about 30 s for levels 2–6. Deferred as performance only. Fix:
       cache the SVD per distinct fit row set within a read. Size: quick-fix. Revisit if: a
       Stage 4 seed sweep or a Stage 8–11 run is slowed by panel reads.
-- [ ] Review note, for Stage 4's decision statistic: a validation read scores each row once
+- [x] Review note, for Stage 4's decision statistic: a validation read scores each row once
       per repeat (five), and in the seen regime every repeat's predictions come from the same
       2022 fit with only the penalty's folds redrawn, so the repeats are not independent draws;
       group resampling should aggregate the repeats per row first. The held-out outer set also
@@ -143,3 +145,85 @@
       section 6. Deferred because Open questions leaves the statistic to Stage 4. Size: design.
       Done when: Stage 4's plan aggregates repeats per row before resampling by group and
       reports the held-out regime by feature year, or records why not.
+      → done in plan 6 (Task 2 averages each row's repeats, requiring every repeat, before Task
+      3's group resampling; Task 6's record reports the held-out regime by feature year).
+
+## 6-decision-rule-and-diagnostics — 2026-09-25
+- [ ] Review Important (final review, group A; deferred by the user): guards and statistic
+      wrappers that no test exercises, each correct by reading. In
+      src/naics_embedder/decision/decide.py: the repeated seed or run id refusal, the margin
+      reference's pairing entry, the regressor `fingerprint` and `arm` log keys, the repeated
+      arm names refusal and the two-arm minimum. In src/naics_embedder/decision/sweep.py: the
+      repeated-seed refusal, and `detail.seed`, which no test asserts. `PanelItems.values`
+      (decision/resampling.py) has no success-path test (a shuffled frame's item order and
+      sums). tests/unit/test_diagnostics.py cannot tell `mean_over_sectors` from
+      `mean_over_queries`, and does not check the MAP and NDCG wrappers' values. Deferred
+      because nothing depends on them before real arms exist. Fix: one `pytest.raises` or
+      assert per guard in tests/unit/test_decision.py, test_decision_sweep.py,
+      test_decision_resampling.py and test_diagnostics.py. Size: quick-fix. Done when:
+      deleting any listed guard fails a test, before Stage 7's first real `tools decide`.
+- [ ] Review Minor (final review, group B): the decision records and the artifact store trust
+      their inputs more than a Lambda run can. (1) `decide` never checks that the margins
+      record covers every panel with its `DECISION_STATISTIC`, and `MarginRecord.margin` raises
+      a bare StopIteration for a missing panel (src/naics_embedder/decision/decide.py,
+      records.py). (2) `write_record` checks that the path is free and then writes, so a racing
+      writer overwrites and a crash leaves truncated JSON that blocks the path (records.py).
+      (3) `ArtifactStore.put` verifies the copy only after `os.replace`, so a source changed
+      mid-copy leaves a bad object that no later `put` replaces, and a failed copy leaves its
+      staging file (decision/store.py). (4) `put_text_only` stores the table before it
+      validates the provenance, and `decide`'s D9 check compares the record's copied fields
+      instead of parsing the stored provenance (store.py, decide.py). (5) `resolve` and
+      `put_frame` join paths unchecked, and the root is never made absolute, so
+      `ArmRecord.store` is relative to the caller's working directory (store.py). (6) `tools
+      margins` and `tools decide` refuse an existing `--output` only after every replicate
+      (src/naics_embedder/cli/commands/tools.py). Every object's hash is checked again on
+      `resolve`, so none of these corrupts a decision silently. Deferred as hardening. Fix: a
+      margins check beside `check_pairing`; `path.open('x')`; hash the staging file before the
+      rename and unlink it on failure; parse the stored provenance; resolve the root and refuse
+      references that leave it; check `--output` first. Size: quick-fix. Done when: each is
+      fixed or recorded as accepted, before Stage 7's reference sweep on Lambda.
+- [ ] Review Minor, for Stage 6: (1) `regressor_scores` (src/naics_embedder/decision/scores.py)
+      counts each row's predictions with `pl.len()`, not its distinct `repeat` values, so a
+      duplicated repeat beside a missing one passes; the panel's own `_predict` is the only
+      producer today. (2) `coordinate_matrix`'s refusal of Lorentz points
+      (src/naics_embedder/panels/regressor.py) says "the regressor panel takes the export
+      form", which misleads when `tools diagnostics` raises it. Deferred because Stage 6 owns
+      the export form and next touches both. Fix: count `pl.col('repeat').n_unique()`; word the
+      refusal around the export form alone. Size: quick-fix. Done when: Stage 6's export lands
+      with both changed.
+- [ ] Review Minor, for Stage 10: the diagnostics report's interfaces
+      (src/naics_embedder/metrics/diagnostics.py). (1) A codebook mismatch gives counts only,
+      which confuses when the counts match, and `tools diagnostics` does not cast the
+      codebook's `code` column to Utf8 (src/naics_embedder/cli/commands/tools.py). (2) The JSON
+      keys differ in style: parent retrieval uses `1` and `5`, NDCG `@5`, `@10` and `@20`.
+      (3) `codebook_codes` is optional, so only the CLI enforces "exactly the codebook's
+      codes". Deferred because plan 6's Task 13 verified the current JSON and only the CLI
+      calls the report today. Fix: name the first missing or extra code and cast; settle one
+      key style; make `codebook_codes` required. Size: quick-fix. Done when: settled before
+      Stage 10's keep-or-drop record reads the report.
+- [ ] Review Minor: the table-reading `tools` commands (src/naics_embedder/cli/commands/tools.py)
+      catch `OSError` and `ValueError` but not polars' errors, so a parquet without a `code`
+      column ends in a `ColumnNotFoundError` traceback rather than a formatted refusal.
+      Deferred because the command still refuses. Fix: add `pl.exceptions.PolarsError` to each
+      such `except`. Size: quick-fix. Revisit if: a `tools` command shows a traceback on a
+      malformed table.
+- [ ] Review Minor (plan-mandated; deferred by the user): `tie_order`'s `TieUnresolvedError`
+      (src/naics_embedder/decision/rule.py) fires on a tie anywhere among the surviving arms,
+      even when first place is clear, so two identical arms entered under different names block
+      a decision whose simpler third arm is obvious. Kept strict so a recorded order is never
+      arbitrary. Fix: raise only when the first two survivors tie. Size: quick-fix. Revisit if:
+      a tie below first place blocks a decision (Stage 8's nine cells are the first multi-arm
+      decision).
+- [ ] Pre-existing, found during plan 6: every Lorentz distance in
+      src/naics_embedder/text_model/hyperbolic.py (`_lorentz_distance_compiled`,
+      `LorentzDistance.batched_forward` and `_lorentz_distance_ops_compiled`, behind
+      `LorentzOps.lorentz_distance`) computes √c·acosh(−⟨u,v⟩) on points the module's exp maps
+      place on the hyperboloid ⟨x,x⟩ = −1/c; the geodesic there is acosh(−c⟨u,v⟩)/√c, so the
+      distance is right only at c = 1 (at c = 4, a point at distance 1 from the origin reads
+      0). Latent today: the text model runs at curvature 1.0 (conf/config.yaml), and HGCN,
+      which calls these ops (src/naics_embedder/graph_model/hgcn.py,
+      graph_model/curriculum/adaptive_loss.py) and makes its layer curvature a parameter by
+      default, reads it through `.item()`, so it gets no gradient and stays at 1.0. Stage 7
+      fixes the text stage's curvature at 1 with no parameter. Fix: acosh(clamp(−c⟨u,v⟩, 1))/√c,
+      with a test at c ≠ 1. Size: quick-fix. Revisit if: any run sets curvature ≠ 1, or HGCN's
+      layer curvature starts receiving gradient (Stages 10–11).

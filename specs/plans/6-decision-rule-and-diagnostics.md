@@ -1,5 +1,7 @@
 # Decision Rule and Diagnostics Implementation Plan
 
+**Status: COMPLETE (2026-09-25)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md (seven: the final review's coverage and hardening groups, due before Stage 7's first real decision and its Lambda sweep; small items for Stages 6 and 10; a CLI-wide polars catch; the tie rule; and a pre-existing curvature bug in `text_model/hyperbolic.py`)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -477,7 +479,7 @@ Stop, report, and wait for your human partner when any of these happens:
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
 
 Run: `git status --short --branch`
 Expected: `## claude/plan-6-decision-rule-and-diagnostics-ec267a03` and nothing else. The branch
@@ -496,7 +498,7 @@ the roadmap or `specs/deferred_items.md`, stop and ask.
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number. `.python-version` pins 3.12.
@@ -505,13 +507,13 @@ Run: `uv run python -c "import numpy, polars, scipy, torch, transformers; print(
 Expected: `2.3.4 1.35.1 1.16.3 2.9.1 4.57.1`. These are the locked versions for Python 3.12, and
 Task 13's expected results were computed with them. If they differ, stop and ask.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1535 passed, 1 skipped`. Each later full-suite count is this baseline plus the tests
 the plan has added by then. The warnings count varies between runs under xdist; ignore it.
 
-- [ ] **Step 4: Check the real inputs, read-only**
+- [x] **Step 4: Check the real inputs, read-only**
 
 Run: `shasum -a 256 /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/naics_codebook.parquet /Users/lowell/Projects/naics-embedder/data/naics_descriptions.parquet`
 Expected:
@@ -539,7 +541,9 @@ because the seed-sweep driver scores fixture panels only. The check records that
 place for the stages whose sweeps read the real regressor panel. A Lambda instance has them only
 if they are uploaded. If a hash differs, stop and ask.
 
-- [ ] **Step 5: Route the tasks**
+- [x] **Step 5: Route the tasks**
+
+> Deviation: the pre-flight scan raised five findings, which the user ruled on before Task 1: F1 extract `merge_read_detail` (Task 1), F2 reuse the regressor-panel fixture's `text_only_table` (Task 5), F3 enforce the 5-seed floor in `check_arm` (Task 6), F4 keep `provenance.get('matrix_fingerprint', fingerprint)` as written, and F5 `assert metrics` (Task 12). Implementers ran on Sonnet and reviews on Sonnet or Opus; implementer commits carry `Co-Authored-By: Claude Sonnet 5`, the controller's `Claude Opus 5.5`.
 
 Under executing-plans, run every task inline, in order.
 
@@ -601,7 +605,7 @@ the run read. This task makes that possible in three ways:
     Optional[Mapping[str, Any]] = None) -> DecodingResult`. The panel still logs `encoder` and
     `distance`, with the same `ValueError` on a clash.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Modify `tests/unit/test_outcome_panel.py` with one edit. Replace:
 
@@ -738,7 +742,7 @@ with:
     assert provenance['matrix_fingerprint'] == text_only_fingerprint(table)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_outcome_panel.py -q`
 Expected: `2 failed, 18 passed`. Both failures,
@@ -752,7 +756,9 @@ Expected: two collection errors:
 and
 `ImportError: cannot import name 'text_only_fingerprint' from 'naics_embedder.panels.text_only'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
+
+> Deviation: F1 (user ruling at pre-flight): after the plan's edits, `merge_read_detail(logged, extra)` was extracted into `panels/selection_log.py`, and `OutcomePanel.score` and `regressor.py`'s `_read_detail` call it, with the same message and no new tests (f2796a2). Final verification Step 5's path list gains `src/naics_embedder/panels/selection_log.py`.
 
 Modify `src/naics_embedder/panels/outcome.py` with these 2 edits, in order.
 
@@ -1114,7 +1120,7 @@ with:
         'matrix_fingerprint': text_only_fingerprint(table),
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_outcome_panel.py tests/unit/test_regressor_panel.py tests/unit/test_text_only.py -q`
 Expected: `105 passed`.
@@ -1122,12 +1128,12 @@ Expected: `105 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1544 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/panels/outcome.py src/naics_embedder/panels/regressor.py src/naics_embedder/panels/text_only.py tests/unit/test_outcome_panel.py tests/unit/test_regressor_panel.py tests/unit/test_text_only.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/outcome.py \
@@ -1185,7 +1191,7 @@ A seed's scores are one long frame over the three panels, keyed by each panel's 
   - `panel_statistic(scores: pl.DataFrame, panel: str, statistic: str) -> float`;
   - `statistic_means(scores: pl.DataFrame) -> Dict[str, Dict[str, float]]`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_decision_scores.py` with exactly this content:
 
@@ -1323,12 +1329,14 @@ def test_a_seed_is_scored_on_all_three_panels():
         seed_scores(_per_query(), _predictions(rows[:1]), repeats=1)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_decision_scores.py -q`
 Expected: one collection error, `ModuleNotFoundError: No module named 'naics_embedder.decision'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
+
+> Deviation: the task review found that a row missing under one comparator dropped silently; by user ruling, `regressor_scores` also refuses a panel whose rows do not all appear under every comparator it has, with one more `pytest.raises` inside `test_a_row_without_every_repeat_is_refused` (35301c7; counts unchanged).
 
 Create `src/naics_embedder/decision/__init__.py` with exactly this content:
 
@@ -1541,7 +1549,7 @@ def statistic_means(scores: pl.DataFrame) -> Dict[str, Dict[str, float]]:
     return means
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_scores.py -q`
 Expected: `7 passed`.
@@ -1549,12 +1557,12 @@ Expected: `7 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1551 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/decision/__init__.py src/naics_embedder/decision/scores.py tests/unit/test_decision_scores.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision/__init__.py \
@@ -1596,7 +1604,7 @@ drawn seed's unit sums by the unit counts.
   - `point_statistic(sums: np.ndarray, sizes: np.ndarray) -> float`;
   - `percentile_interval(replicates: Sequence[float], level: float) -> Tuple[float, float]`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_decision_resampling.py` with exactly this content:
 
@@ -1699,13 +1707,13 @@ def test_the_interval_is_two_sided_percentiles():
     assert (lower, upper) == pytest.approx((100 * 0.05 / 6, 100 - 100 * 0.05 / 6))
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_decision_resampling.py -q`
 Expected: one collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.decision.resampling'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/naics_embedder/decision/resampling.py` with exactly this content:
 
@@ -1857,7 +1865,7 @@ def percentile_interval(replicates: Sequence[float], level: float) -> Tuple[floa
     return float(lower), float(upper)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_resampling.py -q`
 Expected: `6 passed`.
@@ -1865,12 +1873,12 @@ Expected: `6 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1557 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/decision/resampling.py tests/unit/test_decision_resampling.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision/resampling.py \
@@ -1952,7 +1960,7 @@ The records are frozen Pydantic models that forbid unknown keys, and are written
     bool]`, returning the survivors and whether dominance cycled;
   - `tie_order(specs: Sequence[ArmSpec], heldout_gain: Mapping[str, float]) -> List[str]`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_decision_rule.py` with exactly this content:
 
@@ -2060,13 +2068,15 @@ def test_the_last_tie_goes_to_the_higher_held_out_gain():
         tie_order(specs, {'euclidean': 0.02, 'spherical': 0.02})
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_decision_rule.py -q`
 Expected: one collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.decision.records'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
+
+> Deviation: the task review found that a NaN or infinite float was written as null and then failed to read back from a write-once path; by user ruling, `_Record`'s config gained `allow_inf_nan=False`, with one `pytest.raises(ValidationError)` inside `test_non_inferiority_reads_the_95_interval_and_superiority_the_98_one_third_interval` (c1a728d; counts unchanged).
 
 Create `src/naics_embedder/decision/records.py` with exactly this content:
 
@@ -2433,7 +2443,7 @@ def tie_order(specs: Sequence[ArmSpec], heldout_gain: Mapping[str, float]) -> Li
     return [spec.name for spec in ordered]
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_rule.py -q`
 Expected: `7 passed`.
@@ -2441,12 +2451,12 @@ Expected: `7 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1564 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/decision/records.py src/naics_embedder/decision/rule.py tests/unit/test_decision_rule.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision/records.py \
@@ -2507,7 +2517,9 @@ five seeds with fixed offsets, stored artifacts and a validation-read log record
   - `synthetic_arm(store, directory, arm_spec, effects, *, offsets=SEED_OFFSETS,
     text_only_table=None) -> ArmRecord`.
 
-- [ ] **Step 1: Write the fixture module and the failing test**
+- [x] **Step 1: Write the fixture module and the failing test**
+
+> Deviation: F2 (user ruling at pre-flight): `write_text_only` builds its table with the regressor-panel fixture's `text_only_table`, imported as `stub_text_only_table` because `synthetic_arm` takes a `text_only_table=` keyword (5b895d4).
 
 Create `tests/fixtures/decision.py` with exactly this content:
 
@@ -2861,13 +2873,13 @@ def test_a_record_is_written_once_and_reads_back_whole(store, tmp_path):
         write_record(arm, path)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_decision_store.py -q`
 Expected: one collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.decision.store'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/naics_embedder/decision/store.py` with exactly this content:
 
@@ -3003,7 +3015,7 @@ class ArtifactStore:
         return pl.read_parquet(self.resolve(reference))
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_store.py -q`
 Expected: `5 passed`.
@@ -3011,12 +3023,12 @@ Expected: `5 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1569 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/decision/store.py tests/fixtures/decision.py tests/unit/test_decision_store.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision/store.py \
@@ -3076,7 +3088,7 @@ rule says.
   store's `FileNotFoundError`. `decide` raises `TieUnresolvedError` when the tie order cannot
   choose.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_decision.py` with exactly this content:
 
@@ -3379,13 +3391,15 @@ def test_a_changed_artifact_is_refused(store, tmp_path, reference, margins):
         _decide([arm, reference], margins, store)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_decision.py -q`
 Expected: one collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.decision.decide'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
+
+> Deviation: F3 (user ruling at pre-flight): `decide.py` gained `MIN_SEEDS = 5`, and `check_arm` refuses `min_seeds < MIN_SEEDS`, with one `pytest.raises` inside `test_a_margin_needs_a_positive_multiple_and_a_reference_that_varies` (8c81ab4; counts unchanged).
 
 Create `src/naics_embedder/decision/decide.py` with exactly this content:
 
@@ -3799,7 +3813,7 @@ def _report(
     )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision.py -q`
 Expected: `21 passed`.
@@ -3807,12 +3821,12 @@ Expected: `21 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1590 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/decision/decide.py tests/unit/test_decision.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision/decide.py \
@@ -3866,7 +3880,7 @@ panels of plans 4 and 5, then decide between two swept arms.
     OutcomePanel, regressor_panel: RegressorPanel, text_only_table, store: ArtifactStore,
     purpose: str) -> ArmRecord`. Run ids are `<arm>/seed-<seed>/<uuid4 hex>`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_decision_sweep.py` with exactly this content:
 
@@ -4102,13 +4116,15 @@ def test_a_decision_over_swept_arms_adopts_the_informed_one(
     assert report.gain['regressor_heldout'].point > 0
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/unit/test_decision_sweep.py -q`
 Expected: one collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.decision.sweep'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
+
+> Deviation: the task review found that nothing compared a table's width with the spec's dimension, which the tie order ranks by; by user ruling, `run_seed_sweep` refuses `arm.dimension != spec.dimension` after `ArmTables.from_tables`, with one `pytest.raises` inside `test_a_text_only_table_from_another_backbone_is_refused_before_any_read` (bb970d5; counts unchanged).
 
 Create `src/naics_embedder/decision/sweep.py` with exactly this content:
 
@@ -4278,7 +4294,7 @@ def run_seed_sweep(
     )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_sweep.py -q`
 Expected: `4 passed`.
@@ -4286,12 +4302,12 @@ Expected: `4 passed`.
 Run: `uv run pytest -n auto -q`
 Expected: `1594 passed, 1 skipped`.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/decision/sweep.py tests/unit/test_decision_sweep.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision/sweep.py \
@@ -4341,7 +4357,9 @@ The docs gain the `decision` API page and both commands.
 
   Each exits 1 with `Margins failed:` or `Decision failed:` and the reason.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
+
+> Deviation: by user ruling after the task review, `test_decide_reports_a_tie_it_cannot_break` asserts `'tie on components' in ' '.join(result.output.split())`: the plan's `'tie'` also matched pytest's tmp_path name (74348d5).
 
 Modify `tests/unit/test_cli_commands.py` with these 2 edits, in order.
 
@@ -4534,7 +4552,7 @@ class TestDecisionConfig:
 
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_config.py::TestDecisionConfig -q`
 Expected: one collection error, `ImportError: cannot import name 'DecisionConfig' from
@@ -4547,7 +4565,7 @@ Expected: `4 failed, 32 passed`. The four failures are `test_margins_writes_each
 `test_decide_reports_a_tie_it_cannot_break`, each with `No such command 'margins'` or
 `No such command 'decide'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Modify `src/naics_embedder/cli/commands/tools.py` with these 5 edits, in order.
 
@@ -4986,7 +5004,7 @@ with:
 - `src/naics_embedder/utils/`  
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass, and build the docs**
+- [x] **Step 4: Run the tests to verify they pass, and build the docs**
 
 Run: `uv run pytest tests/unit/test_config.py::TestDecisionConfig tests/unit/test_cli_commands.py -q`
 Expected: `39 passed`.
@@ -4999,12 +5017,12 @@ Run: `uv run mkdocs build --strict -q -d /tmp/stage4-docs-ec267a03`, then
 Expected: no output and exit 0. The docs workflow runs only on pushes to `main`, so a PR's CI
 never builds the API pages. This build is their only check before merge.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/cli/commands/tools.py src/naics_embedder/utils/config.py tests/unit/test_cli_commands.py tests/unit/test_config.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/cli/commands/tools.py \
@@ -5081,7 +5099,7 @@ before-and-after comparisons (user decision 2).
   - `naics-embedder tools diagnostics --table TABLE --geometry G --codebook CODEBOOK
     [--curvature C] [--output REPORT.json]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Modify `tests/unit/test_cli_commands.py` with these 3 edits, in order.
 
@@ -5357,13 +5375,13 @@ def test_the_report_refuses_a_table_that_is_not_the_codebook():
         diagnostics_report(lorentz, 'hyperbolic')
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_diagnostics.py tests/unit/test_cli_commands.py -q`
 Expected: two collection errors, each
 `ModuleNotFoundError: No module named 'naics_embedder.metrics.diagnostics'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Modify `src/naics_embedder/cli/commands/tools.py` with these 3 edits, in order.
 
@@ -6018,7 +6036,7 @@ uv run naics-embedder tools decide    # Decide among arms under Req 5's rule
 uv run naics-embedder tools diagnostics  # Req 6's structural diagnostics for a table
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass, and build the docs**
+- [x] **Step 4: Run the tests to verify they pass, and build the docs**
 
 Run: `uv run pytest tests/unit/test_diagnostics.py tests/unit/test_cli_commands.py -q`
 Expected: `50 passed`.
@@ -6030,12 +6048,12 @@ Run: `uv run mkdocs build --strict -q -d /tmp/stage4-docs-ec267a03`, then
 `rm -rf /tmp/stage4-docs-ec267a03`
 Expected: no output and exit 0.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/cli/commands/tools.py src/naics_embedder/metrics/__init__.py src/naics_embedder/metrics/diagnostics.py tests/unit/test_cli_commands.py tests/unit/test_diagnostics.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/cli/commands/tools.py \
@@ -6090,7 +6108,7 @@ What stays:
   `QCEWBenchmarkConfig`, `run_qcew_employment_benchmark`, `GraphDownstreamEvaluator` or
   `run_graph_downstream_suite`, and `naics_embedder.metrics.qcew` does not exist.
 
-- [ ] **Step 1: Write the failing test and remove the benchmark's tests**
+- [x] **Step 1: Write the failing test and remove the benchmark's tests**
 
 Replace the whole of `tests/unit/test_graph_downstream_evaluation.py` with exactly this content:
 
@@ -6287,14 +6305,14 @@ Delete this file with `git rm`:
 git rm tests/unit/test_qcew_multilevel.py
 ```
 
-- [ ] **Step 2: Run the tests to verify the removal test fails**
+- [x] **Step 2: Run the tests to verify the removal test fails**
 
 Run: `uv run pytest tests/unit/test_graph_downstream_evaluation.py tests/unit/test_graph_pairwise_distances.py -q`
 Expected: `1 failed, 6 passed`. The failure is
 `test_the_qcew_benchmark_and_the_downstream_suite_are_gone`, with
 `Failed: DID NOT RAISE <class 'ModuleNotFoundError'>`.
 
-- [ ] **Step 3: Remove the benchmark and the suite**
+- [x] **Step 3: Remove the benchmark and the suite**
 
 Modify `src/naics_embedder/graph_model/__init__.py` with these 2 edits, in order.
 
@@ -6648,7 +6666,7 @@ git rm src/naics_embedder/metrics/qcew.py
 git rm docs/api/qcew_metrics.md
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass, and build the docs**
+- [x] **Step 4: Run the tests to verify they pass, and build the docs**
 
 Run: `uv run pytest tests/unit/test_graph_downstream_evaluation.py tests/unit/test_graph_pairwise_distances.py -q`
 Expected: `7 passed`.
@@ -6665,12 +6683,12 @@ Run: `uv run mkdocs build --strict -q -d /tmp/stage4-docs-ec267a03`, then
 `rm -rf /tmp/stage4-docs-ec267a03`
 Expected: no output and exit 0. A stale `docs/.nav.yml` entry would fail this build.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/graph_model/__init__.py src/naics_embedder/metrics/__init__.py src/naics_embedder/metrics/graph.py tests/unit/test_graph_downstream_evaluation.py tests/unit/test_graph_pairwise_distances.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 `git rm` in Steps 1 and 3 already staged the deletions.
 
@@ -6714,7 +6732,7 @@ them. Its module, tests, API page and doc sections go with it.
 - Produces: `naics-embedder tools verify-stage4` is gone, and so is
   `naics_embedder.tools.embeddings_verification`.
 
-- [ ] **Step 1: Write the failing test and remove the verifier's tests**
+- [x] **Step 1: Write the failing test and remove the verifier's tests**
 
 Modify `tests/unit/test_cli_commands.py` with these 3 edits, in order.
 
@@ -6912,13 +6930,15 @@ Delete this file with `git rm`:
 git rm tests/unit/test_embeddings_verification.py
 ```
 
-- [ ] **Step 2: Run the tests to verify the removal test fails**
+- [x] **Step 2: Run the tests to verify the removal test fails**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py -q`
 Expected: `1 failed, 30 passed`. The failure is `test_verify_stage4_is_gone`, with
 `AssertionError: assert 'No such command' in 'Verification failed: Stage 3 embeddings not found: …'`.
 
-- [ ] **Step 3: Remove the command and rewrite its doc sections**
+- [x] **Step 3: Remove the command and rewrite its doc sections**
+
+> Deviation: the task review found that `WARP.md:27` still said `tools` included "Stage 4 verification"; it now reads "(including Req 6 diagnostics and Req 5 decisions)" (d31c8e5).
 
 Modify `src/naics_embedder/cli/commands/tools.py` with these 4 edits, in order.
 
@@ -7384,7 +7404,7 @@ git rm src/naics_embedder/tools/embeddings_verification.py
 git rm docs/api/embeddings_verification.md
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass, and build the docs**
+- [x] **Step 4: Run the tests to verify they pass, and build the docs**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py -q`
 Expected: `31 passed`.
@@ -7400,12 +7420,12 @@ Run: `uv run mkdocs build --strict -q -d /tmp/stage4-docs-ec267a03`, then
 `rm -rf /tmp/stage4-docs-ec267a03`
 Expected: no output and exit 0.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/cli/commands/tools.py tests/unit/test_cli_commands.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 `git rm` in Steps 1 and 3 already staged the deletions.
 
@@ -7466,7 +7486,9 @@ controller is not wired into training.
 - Produces: no progress bar, visualize table, grade, advice line or `train` banner line names a
   structural statistic. The logged keys are unchanged.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
+
+> Deviation: F5 (user ruling at pre-flight): `test_parse_leaves_out_the_structural_statistic` asserts `metrics` before its `all(...)`, so an empty parse cannot pass (5db2e49).
 
 Modify `tests/unit/test_cli_training.py` with one edit. Replace:
 
@@ -7670,7 +7692,7 @@ with:
         assert metrics[0]['radius_mean'] == pytest.approx(999999.999)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_hgcn_metrics.py tests/unit/test_text_validation_metrics.py tests/unit/test_visualize_metrics.py tests/unit/test_metrics_tools_api.py tests/unit/test_cli_training.py -q`
 Expected: `6 failed, 71 passed`. The six failures are:
@@ -7682,7 +7704,9 @@ Expected: `6 failed, 71 passed`. The six failures are:
 - `test_metrics_tools_api.py::TestVisualizeMetrics::test_visualize_metrics_tables_no_structural_statistic`
 - `test_cli_training.py::test_the_train_banner_headlines_no_structural_statistic`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
+
+> Deviation: by user ruling after the final whole-branch review, `docs/overview.md`'s structural-statistics table lost its Ideal Value column, whose targets the new paragraph disowns (26cf9a9).
 
 Modify `src/naics_embedder/cli/commands/training.py` with one edit. Replace:
 
@@ -8250,7 +8274,7 @@ them. Req 6's stratified diagnostics come from `tools diagnostics` (section 5.5)
 `structural-spearman-v1` validates square symmetric distance matrices, averages each mirrored
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass, and build the docs**
+- [x] **Step 4: Run the tests to verify they pass, and build the docs**
 
 Run: `uv run pytest tests/unit/test_hgcn_metrics.py tests/unit/test_text_validation_metrics.py tests/unit/test_visualize_metrics.py tests/unit/test_metrics_tools_api.py tests/unit/test_cli_training.py -q`
 Expected: `77 passed`.
@@ -8262,12 +8286,12 @@ Run: `uv run mkdocs build --strict -q -d /tmp/stage4-docs-ec267a03`, then
 `rm -rf /tmp/stage4-docs-ec267a03`
 Expected: no output and exit 0.
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/cli/commands/training.py src/naics_embedder/graph_model/hgcn.py src/naics_embedder/text_model/mixins/validation.py src/naics_embedder/tools/_visualize_metrics.py src/naics_embedder/tools/metrics_tools.py tests/unit/test_cli_training.py tests/unit/test_hgcn_metrics.py tests/unit/test_metrics_tools_api.py tests/unit/test_text_validation_metrics.py tests/unit/test_visualize_metrics.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/cli/commands/training.py \
@@ -8300,7 +8324,7 @@ four things:
 
 The task commits nothing. If a number differs from **Expected real-data results**, stop and ask.
 
-- [ ] **Step 1: Make the scratch directory**
+- [x] **Step 1: Make the scratch directory**
 
 Run: `pwd`
 Expected:
@@ -8309,7 +8333,7 @@ If it prints anything else, `cd` there first.
 
 Run: `mkdir -p /tmp/stage4-diagnostics-ec267a03`
 
-- [ ] **Step 2: Build the text-only table**
+- [x] **Step 2: Build the text-only table**
 
 Run: `COLUMNS=120 uv run naics-embedder tools text-only-table --descriptions /Users/lowell/Projects/naics-embedder/data/naics_descriptions.parquet --output /tmp/stage4-diagnostics-ec267a03/text_only.parquet`
 Expected: about 34 s. The output ends with:
@@ -8335,14 +8359,14 @@ The provenance carries both names:
 - `table_sha256`, the file's hash;
 - `matrix_fingerprint`, the name a regressor read logs the table by (Task 1).
 
-- [ ] **Step 3: Store the table with its provenance**
+- [x] **Step 3: Store the table with its provenance**
 
 Run: `uv run python -c "from naics_embedder.decision.store import ArtifactStore; ref = ArtifactStore('/tmp/stage4-diagnostics-ec267a03/store').put_text_only('/tmp/stage4-diagnostics-ec267a03/text_only.parquet'); print(ref.table.matrix_fingerprint, ref.backbone, ref.revision, ref.max_length, ref.descriptions_sha256[:8])"`
 Expected:
 `6838c0adf0573821b139183a11db7d232f3965c99d3715202239f9463ba13384 sentence-transformers/all-MiniLM-L6-v2 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 512 5107fb83`.
 These are the fields `check_text_only` compares with an arm's spec (D9).
 
-- [ ] **Step 4: Report on the text-only table**
+- [x] **Step 4: Report on the text-only table**
 
 Run: `COLUMNS=120 uv run naics-embedder tools diagnostics --table /tmp/stage4-diagnostics-ec267a03/text_only.parquet --geometry spherical --codebook /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/naics_codebook.parquet --output /tmp/stage4-diagnostics-ec267a03/text_only_diagnostics.json`
 Expected, in about 4 s:
@@ -8374,7 +8398,7 @@ spherical 2125 2125 {'2': 0.7948, '3': 0.8645, '4': 0.82, '5': 0.7676, '6': 0.75
 
 The report's keys are Req 6's statistics and nothing else: no threshold, no verdict.
 
-- [ ] **Step 5: Report on a random table in two geometries**
+- [x] **Step 5: Report on a random table in two geometries**
 
 Run: `uv run python -c "import numpy as np, polars as pl; codes = pl.read_parquet('/Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v1/18403d29-3b23-444e-9e81-371d0ca8b7ea/naics_codebook.parquet').get_column('code').to_list(); rng = np.random.default_rng(20260924); coords = pl.DataFrame(rng.normal(size=(len(codes), 16)), schema={f'e{i}': pl.Float64 for i in range(16)}, orient='row'); pl.DataFrame({'code': codes}).hstack(coords).write_parquet('/tmp/stage4-diagnostics-ec267a03/random.parquet')"`
 
@@ -8409,7 +8433,7 @@ The random table sits at chance on every statistic: AUCs near 0.5 and correlatio
 text-only table sits well above it. The hyperbolic run reads the same coordinates as tangent
 vectors at the origin, so its distances differ from the Euclidean run's, as its numbers show.
 
-- [ ] **Step 6: Compare**
+- [x] **Step 6: Compare**
 
 Compare every number in Steps 2–5 with **Expected real-data results**, to 4 decimals. They must
 match exactly: the computation is deterministic under the pinned versions. If any differs, stop
@@ -8417,31 +8441,37 @@ and ask. Keep the scratch directory until Final verification Step 8.
 
 ## Final verification (controller, inline)
 
-- [ ] **Step 1: Full suite on Python 3.12**
+- [x] **Step 1: Full suite on Python 3.12**
+
+> Deviation: run after the final review's fix, at 26cf9a9. 43 warnings against about 41 before: the final review asked for their sources, and every one comes from site-packages or the untouched `tests/unit/test_hgcn.py:108`, through pre-existing tests; the swing is Lightning's warn-once warnings landing in one more xdist worker.
 
 Run: `uv run pytest -n auto -q`
 Expected: `1590 passed, 1 skipped`.
 
-- [ ] **Step 2: Full suite on Python 3.10, CI's other leg**
+- [x] **Step 2: Full suite on Python 3.10, CI's other leg**
+
+> Deviation: the environment was pre-built with `uv sync --locked` while Task 12 ran. The run warned 346 times against 43 on 3.12: numpy 2.2.6, which the lock pins for Python 3.10, raises spurious "divide by zero", "overflow" and "invalid value encountered in matmul" RuntimeWarnings with Accelerate on this Mac (reproduced on plain finite inputs; numpy 2.3.4 raises none), at `decision/resampling.py:131-132` and the older `panels/ridge.py:60-63`. CI's Linux wheels are unaffected.
 
 Run: `UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310-ec267a03 uv run pytest -n auto -q`
 Expected: `1590 passed, 1 skipped`, the same as Step 1.
 
 Run: `rm -rf /tmp/naics-py310-ec267a03`
 
-- [ ] **Step 3: The CI lint job**
+- [x] **Step 3: The CI lint job**
 
 Run: `./scripts/format_code.sh --check --all`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 4: The docs build**
+- [x] **Step 4: The docs build**
 
 Run: `uv run mkdocs build --strict -q -d /tmp/stage4-docs-ec267a03`, then
 `rm -rf /tmp/stage4-docs-ec267a03`
 Expected: no output and exit 0. PR CI never runs the docs workflow, so this build stands in for
 it. After the merge, check the first docs run on `main`.
 
-- [ ] **Step 5: The branch carries only this plan's commits**
+- [x] **Step 5: The branch carries only this plan's commits**
+
+> Deviation: 60 paths: F1 adds `src/naics_embedder/panels/selection_log.py` (checked mechanically against this list). The log held 19 commits: the plan's, the 12 task commits, five task-review fixes and the final review's docs fix.
 
 Run: `git log --oneline origin/main..HEAD`
 Expected, read bottom up, because `git log` prints the newest commit first:
@@ -8519,7 +8549,7 @@ tests/unit/test_text_validation_metrics.py
 tests/unit/test_visualize_metrics.py
 ```
 
-- [ ] **Step 6: The roadmap's Stage 4 Exit, outcome by outcome**
+- [x] **Step 6: The roadmap's Stage 4 Exit, outcome by outcome**
 
 Check each row against the evidence that backs it. Test names are given as `file::test`, and a
 `::test` alone continues the file before it.
@@ -8547,13 +8577,13 @@ Run: `git grep -n -E "CurriculumController\(" -- src`
 Expected: no output. The graph curriculum controller, which gates phases on validation metrics,
 is never built in training.
 
-- [ ] **Step 7: No panel was read and no selection log was written**
+- [x] **Step 7: No panel was read and no selection log was written**
 
 Run: `uv run python -c "import glob; print(sorted(glob.glob('logs/*.jsonl') + glob.glob('/tmp/stage4-diagnostics-ec267a03/*.jsonl')))"`
 Expected: `[]`. Tests write their selection logs under pytest's temporary directories, Task 13
 reads no panel, and `logs/` holds only `.log` files. If a `.jsonl` file appears, stop and ask.
 
-- [ ] **Step 8: Remove the scratch directory**
+- [x] **Step 8: Remove the scratch directory**
 
 Run: `rm -rf /tmp/stage4-diagnostics-ec267a03`
 
@@ -8566,7 +8596,9 @@ are the branch's last commits. Before editing `specs/naics-embedding-roadmap.md`
 `specs/deferred_items.md`, check whether another Claude session is active in this repository. If
 one is, hold both edits and hand your human partner the exact text below.
 
-- [ ] **Step 1: Tick the roadmap stage and add the rollout note and the stamp**
+- [x] **Step 1: Tick the roadmap stage and add the rollout note and the stamp**
+
+> Deviation: by user ruling at the gate, the rollout note also says that `decide` compares log timestamps with the margins' `fixed_at` across machines, so their clocks must agree.
 
 In `specs/naics-embedding-roadmap.md`, make one edit. Replace:
 
@@ -8610,7 +8642,9 @@ with the lines below, with `YYYY-MM-DD` replaced by the completion date:
 - [ ] Stage 5: Supervision target and text
 ```
 
-- [ ] **Step 2: Re-validate the later stages against what shipped**
+- [x] **Step 2: Re-validate the later stages against what shipped**
+
+> Deviation: by user ruling at the gate, Stages 6 and 8 gained edits too: Stage 6's Produces, an outcome read whose logged `table` names the code vectors the encoder decodes against; Stage 8's Produces, guards on the geometry and dimension tie-order keys. The commit says Stages 5–12.
 
 Six later entries consume what Stage 4 shipped in ways their text does not yet say. Each edit's
 Replace text occurs exactly once in the roadmap.
@@ -8757,7 +8791,9 @@ Stages 6 and 8 need no edit:
 
 Commit the roadmap edits with the plan markup in Step 3's commit.
 
-- [ ] **Step 3: Mark up this plan and resolve the gate**
+- [x] **Step 3: Mark up this plan and resolve the gate**
+
+> Deviation: the gate asked one batched question: the user chose to drop overview.md's target column (done before Final verification), defer the review's other findings as grouped entries, add the Stage 4, 6 and 8 roadmap text, and defer the tie rule. Seven items were appended; the backlog stands at 19 open, under the triage threshold.
 
 Follow the protocol:
 
@@ -8835,7 +8871,7 @@ git add specs/naics-embedding-roadmap.md specs/plans/6-decision-rule-and-diagnos
 git commit -m "docs(roadmap): complete Stage 4 and re-validate Stages 5, 7 and 9–12"
 ```
 
-- [ ] **Step 4: Retire the plan**
+- [x] **Step 4: Retire the plan**
 
 ```bash
 git mv specs/plans/6-decision-rule-and-diagnostics.md specs/plans/completed/6-decision-rule-and-diagnostics.md
@@ -8845,7 +8881,7 @@ git commit -m "chore(specs): retire plan 6"
 This plan has no relative links to re-point, and no spec file retires with it: Stage 4 has no
 stage spec.
 
-- [ ] **Step 5: Integrate**
+- [x] **Step 5: Integrate**
 
 Hand over to finishing-a-development-branch. Before opening any PR, check two things:
 

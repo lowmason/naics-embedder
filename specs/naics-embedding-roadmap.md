@@ -354,7 +354,7 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       Stage 3: COMPLETE (2026-09-24) — implemented by plan 5
       (specs/plans/completed/5-regressor-panel.md). Next: resume the roadmap.
 
-- [ ] Stage 4: Decision rule and diagnostics
+- [x] Stage 4: Decision rule and diagnostics
       Objective: Implement Req 5's decision procedure and record, and demote the structural
       statistics to stratified diagnostics that nothing selects on.
       Spec: Req 5; Req 6; Req 1 (taxonomy agreement never a selection criterion); Req 2 (the
@@ -402,6 +402,21 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       pass/fail; no monitor, gate or headline reads a structural statistic; neither
       `metrics/qcew.py` nor the taxonomy-tasks suite remains.
       ROUTING: writing-plans
+      Rollout note: the decision tooling ran on synthetic arms and fixture panels only, so
+      Stage 7's reference sweep is its first real use; its artifact store sits outside any
+      worktree and is copied off a Lambda instance before termination. `decide` admits a run
+      only if its reads are logged after the margins' `fixed_at`, comparing clocks across
+      machines, so the machine that fixes the margins and those that train must agree on the
+      time. `tools diagnostics` replaced `verify-stage4`. Text and HGCN validation still log the
+      old structural statistics, off every progress bar and headline, for Stages 7 and 11 to
+      remove.
+      Realized: on the text-only table (all-MiniLM-L6-v2 at revision 1110a243, 384 dimensions,
+      spherical), sector-separation AUC 0.8538, within-sector rank correlation 0.2974 over queries
+      and 0.3857 over sectors, MAP over ancestors 0.3262, NDCG@10 0.7742, distance Pearson
+      0.2378, parent retrieval@1 0.2855 over 1,583 queries; a random table reads at chance
+      (AUC 0.4940).
+      Stage 4: COMPLETE (2026-09-25) — implemented by plan 6
+      (specs/plans/completed/6-decision-rule-and-diagnostics.md). Next: resume the roadmap.
 
 - [ ] Stage 5: Supervision target and text
       Objective: Rebuild the supervision bundle around the tree metric D*, directed
@@ -423,7 +438,9 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       thing to version. The current backbone's own documentation for its trained window. Stage
       3's text-only builder (`panels/text_only.py`), which embeds each code's channels for D9's
       comparator at `text_only.max_length: 512` (`conf/data/regressor_panel.yaml`), the window
-      Req 9 rejects.
+      Req 9 rejects. Stage 4's diagnostics report (`metrics/diagnostics.py`), which computes D*
+      from the codes' own lineage rather than reading the bundle, so the bundle's new D* must
+      equal it on every pair.
       Produces: A new bundle contract version: pair facts carrying D* (no 99, no half-step, a
       virtual root above the sectors); a redirection table (activity phrase, referencing code,
       destination code, lineal flag) with each cross-reference once; exclusion text
@@ -474,7 +491,9 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       fusion options masked mean, attention pooling and MoE (MoE ablation-only); a configurable
       embedding dimension in {8, 16, 32}; a standalone export command writing the 2,125-code
       table in Req 2's form; the per-channel adapter copies and the load-balancing term deleted
-      with the default fusion.
+      with the default fusion; an outcome read whose logged `table` names the code vectors the
+      encoder decodes against (Stage 4's sweep logs the runner's table as that label, which
+      `decide` checks but cannot tie to the decoding).
       Exit: A query embeds through the same encoder as a code (test); masking an absent
       channel's input leaves the output unchanged (test); exactly one affine map sits between
       the encoder and the point; the model trains under the interim objective at dimension 16
@@ -501,8 +520,13 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       The test split stays sealed: Stage 12 opens it, as the finding's section 6 erratum says.
       Stage 3's panel, on its validation split only; its text-only table is rebuilt from the
       arm's own descriptions with `tools text-only-table`, because the table Stage 3 built
-      embeds bundle 18403d29's text, which Stage 5 replaces (D9). Stage 4's seed-sweep driver,
-      decision tooling and δ procedure.
+      embeds bundle 18403d29's text, which Stage 5 replaces (D9). Stage 4's seed-sweep driver
+      (`decision.sweep.run_seed_sweep`, whose `ArmRunner` returns each seed's `SeedArtifacts`:
+      the checkpoint, the 2,125-code table in the export form, the `QueryCodeEncoder` and its
+      distance), decision tooling (`tools margins`, `tools decide`) and δ procedure. The margins
+      are fixed from the reference arm's record before any other arm of a decision reads a
+      panel, since a decision refuses a run that read first, and the artifact store's root must
+      outlive the Lambda instance that trains.
       Produces: The reference configuration (hyperbolic, dimension 16, current backbone, shared
       encoder) with a query→code task term over training queries and activity phrases (the
       referencing code always scored), a listwise code–code term with graded targets from D*
@@ -514,7 +538,10 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       inverse-distance draws, the exclusion quota, the relation margin axis (D5), and legacy
       containment (D2); monitors for checkpointing, early stopping and learning rate reading
       the validation query split's MRR (D6); a decision record fixing δ for each of D8's three
-      panels from at least 5 seeds.
+      panels from at least 5 seeds; the legacy structural statistics removed from the text
+      stage's validation (`text_model/evaluation.py`, `text_model/mixins/validation.py`,
+      `text_model/mixins/logging.py`), which Stage 4 took off the progress bar only, and
+      `tools investigate` retired, so Req 6's statistics come only from `tools diagnostics`.
       Exit: On a real batch every objective term has a nonzero gradient (test); on a trained
       run the gradient with respect to radius is nonzero, radii vary within each level, the 20
       sectors sit at distinct positive radii, and manifold validity and distance resolution
@@ -523,7 +550,7 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       acts as a code–code negative and each cross-reference query scores its referencing code
       (test); unary pairs are absent from positive supervision; the selection log shows only
       validation splits read; a decision record fixes δ for each of D8's three panels from at
-      least 5 seeds.
+      least 5 seeds; the text stage's validation computes no structural statistic.
       ROUTING: brainstorming
 
 - [ ] Stage 8: Geometry × dimension
@@ -536,8 +563,11 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       driver; Stage 6's configurable dimension; Stage 2's scorer, whose registered distances are
       `euclidean`, `cosine` and `lorentz` at curvature −1 (`panels/decoding.py`).
       Produces: Geometry as a configuration factor with per-arm distance, decoding and export
-      (the radial term only in the hyperbolic arm); the nine-cell decision record; the selected
-      cell as the reference for Stage 9.
+      (the radial term only in the hyperbolic arm); guards on the two tie-order keys Stage 4
+      leaves open: `run_seed_sweep` refuses an arm whose `SeedArtifacts.distance` does not fit
+      its `ArmSpec.geometry`, and `decide` compares each read's logged `dimension` with the
+      arm's (the decision fixture's reads hard-code 16); the nine-cell decision record; the
+      selected cell as the reference for Stage 9.
       Exit: All nine cells have at least 5 seeds scored on D8's three panels; the decision
       record names the non-dominated set and the chosen cell under the tie order; each arm's
       export uses tangent coordinates for hyperbolic and raw coordinates otherwise.
@@ -557,7 +587,8 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       Consumes: Stage 8's selected cell; Stage 6's fusion options; Stage 4's tooling.
       Produces: A decision record per factor; the selected text stage (arm A for Stage 10); the
       trained window recorded per candidate with each channel's overflow share; if IC is
-      adopted, the bundle's target and the diagnostics' relevance grades switched to it.
+      adopted, the bundle's target and the diagnostics' relevance grades (lowest-common-ancestor
+      depths in `metrics/diagnostics.py`, Stage 4) switched to it.
       Exit: Each factor has a Req 5 record with at least 5 seeds per arm, and the frozen-encoder
       control ran; the adopted backbone's window is recorded from its own documentation with
       no input beyond it, the text-only builder's included.
@@ -575,9 +606,11 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       Produces: Arm B (matched-compute continuation of the text stage); arm C (parameter-free
       smoothing toward the parent-and-children mean, α tuned on validation); arm D (the graph
       stage at the text stage's dimension, exponential and logarithmic maps per the selected
-      geometry, its level-radius term per D3, checkpoint selected on validation, no private
-      tail, no last-epoch export); arm E (text-shuffle control, run only if D wins); the
-      keep-or-drop record; the deliverable, a 2,125-code table from the selected arm.
+      geometry, its level-radius term per D3, checkpoint selected on the validation query
+      split's MRR (D6), not on the structural statistics HGCN's validation still logs (Stage 4
+      took them off the progress bar only), no private tail, no last-epoch export); arm E
+      (text-shuffle control, run only if D wins); the keep-or-drop record; the deliverable, a
+      2,125-code table from the selected arm.
       Exit: Arms A–D have at least 5 seeds on D8's three panels under the shared selection
       protocol; E ran if and only if D won, and its result is recorded; the decision record
       states keep or drop under Req 5; the 2,125-code table exists for the selected arm.
@@ -599,9 +632,11 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       the deliverable defined by the text stage alone and arm D's referenced artifacts kept for
       Stage 12 (Req 16 scores its code points against the text stage's queries, so no graph code
       is needed).
-      Exit: If kept: a Req 5 record per repair and a final 2,125-code table from the repaired
-      stage. If dropped: no graph-stage code path remains, the suite passes, the deliverable is
-      the text stage's table, and arm D's referenced artifacts still match their hashes.
+      Exit: If kept: a Req 5 record per repair, a final 2,125-code table from the repaired
+      stage, and no structural statistic computed at HGCN validation, which Stage 4 took off the
+      progress bar only. If dropped: no graph-stage code path remains, the suite passes, the
+      deliverable is the text stage's table, and arm D's referenced artifacts still match their
+      hashes.
       ROUTING: brainstorming if kept (the retention and normalization choices are open);
       writing-plans if dropped
 
@@ -629,7 +664,11 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       `open_outer` per regime, then a test read per arm and seed. `tools regressor-panel --split
       test` opens the outer sets on every call and scores one table, so a second arm or seed
       through it would be logged as a reopen; no command opens the outcome test split. Stage 4's
-      tooling and seed-sweep driver.
+      tooling and seed-sweep driver, which score and decide on validation reads only: `decide`
+      refuses a run whose records are not validation reads, and `regressor_scores` takes
+      level-6 validation rows only. A sealed estimate reuses `decision/resampling.py` and
+      `decision/rule.py` on test-split scores, one prediction per outer row, through a path this
+      stage adds.
       Produces: One logged opening per sealed set (the outcome test queries and each regressor
       regime's outer set, per D8); sealed estimates with D8's intervals for the final
       configuration and each comparison recorded for it; a written finding.
