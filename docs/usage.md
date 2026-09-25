@@ -87,6 +87,22 @@ is replaced only with `--force`.
 uv run naics-embedder data roles --source-dir ~/Downloads/Data
 ```
 
+### `data regressor-groups`
+
+Draw the regressor panel's held-out four-digit groups, once: a fifth of each sector's groups
+(largest remainder, seeded) from the 980 six-digit codes Stage 1's finding names. The QCEW
+national slices are read from `qcew_dir` under the sha256 values pinned in
+`conf/data/regressor_panel.yaml`, and the codebook under its codes' fingerprint. The table is
+committed, and the panel reads it. A redraw moves both regressor outer sets, so an existing table
+is replaced only with `--force`.
+
+**Generates:** `conf/data/regressor_heldout_groups.csv`,
+`conf/data/regressor_heldout_groups_provenance.json`
+
+```bash
+uv run naics-embedder data regressor-groups --codebook PATH/naics_codebook.parquet
+```
+
 ---
 
 ## Tools Commands
@@ -176,6 +192,54 @@ uv run naics-embedder tools outcome-baseline
 - `--log PATH` - Selection log (default: `logs/selection_log.jsonl`, from
   `conf/data/outcome_panel.yaml`)
 - `--output PATH` - Also write the summary as JSON
+
+### `tools text-only-table`
+
+Embed every code's text with the arm's backbone, frozen: each of the four channels is mean-pooled
+over its tokens, and a code's vector is the mean of its present channels (roadmap D9). The
+backbone comes from the local Hugging Face cache (default: `text_only.backbone` in
+`conf/data/regressor_panel.yaml`). The regressor panel reduces the table to the arm's dimension
+by PCA.
+
+**Generates:** the table and `<stem>_provenance.json` beside it
+
+```bash
+uv run naics-embedder tools text-only-table --descriptions data/naics_descriptions.parquet \
+  --output /tmp/text_only.parquet
+```
+
+**Options:**
+- `--descriptions PATH` - The arm's descriptions parquet: the text it reads
+- `--output PATH` - Where to write the table
+- `--backbone NAME` - The arm's backbone (default: the regressor config's)
+
+### `tools regressor-panel`
+
+Score an arm on the regressor panel (roadmap Stage 3). Every comparator (covariates alone, and
+the arm's coordinates, one-hot, ancestor indicators and the text-only table, each alone and with
+the covariates) is fitted by ridge on standardized features, with the penalty tuned by nested
+grouped folds inside the remainder. The outcome is log employment in year t + 1 from year-t
+features. The seen and held-out regimes are separate panels. The validation split reads only the
+remainder. The test split opens each regime's sealed outer set first, and both the opening and
+the read are logged. The output holds one prediction per row, keyed by code, year and group.
+
+```bash
+uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
+  --text-only /tmp/text_only.parquet --codebook PATH/naics_codebook.parquet
+```
+
+**Options:**
+- `--coordinates PATH` - The arm's 2,125-code table in the export form (tangent coordinates at
+  the origin for a hyperbolic arm)
+- `--text-only PATH` - The text-only table (`tools text-only-table`)
+- `--codebook PATH` - A supervision bundle's `naics_codebook.parquet`
+- `--regime seen|heldout` - Regime to score (repeatable; default: both)
+- `--level INT` - NAICS level 2-6 (repeatable; default: 6)
+- `--split validation|test` - The test split needs `--open-purpose`, which is logged
+- `--purpose TEXT` - Why this read happens; recorded in the selection log
+- `--open-purpose TEXT`, `--reopen-reason TEXT` - Why the outer sets are opened, and why again
+- `--log PATH` - Selection log (default: `logs/selection_log.jsonl`)
+- `--output PATH` - Write the per-row predictions as parquet
 
 ---
 
