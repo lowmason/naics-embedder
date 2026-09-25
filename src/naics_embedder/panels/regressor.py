@@ -289,10 +289,11 @@ def looks_lorentz(matrix: np.ndarray, rtol: float = 1e-3) -> bool:
     '''
     Whether every row lies on one hyperboloid ``x0^2 - |x|^2 = 1/c`` with ``x0 > 0``.
 
-    Each row's tolerance scales with its ``x0^2``: a float32 export's rounding error in
-    ``x0^2 - |x|^2`` grows with ``x0^2``, so a tolerance fixed relative to ``1/c`` would pass
-    points far from the origin, and rounding can even push a far point's value below zero. The
-    level ``1/c`` is the median over rows.
+    A float32 export's rounding error in ``x0^2 - |x|^2`` grows with ``x0^2``, so each row's
+    tolerance scales with its ``x0^2``, and the level ``1/c`` is read from the row nearest the
+    origin, whose error is least; a level set by far rows (their median, say) would fail the
+    near ones. The level's sign is not checked: when even the nearest row is far out, rounding
+    can push its value below zero.
     '''
 
     if matrix.shape[1] < 2:
@@ -301,9 +302,7 @@ def looks_lorentz(matrix: np.ndarray, rtol: float = 1e-3) -> bool:
     if (time <= 0).any():
         return False
     norm = time**2 - (matrix[:, 1:]**2).sum(axis=1)
-    level = np.median(norm)
-    if level <= 0:
-        return False
+    level = norm[np.argmin(time)]
     return bool((np.abs(norm - level) <= rtol * time**2).all())
 
 def coordinate_matrix(table: pl.DataFrame) -> Tuple[Tuple[str, ...], np.ndarray]:

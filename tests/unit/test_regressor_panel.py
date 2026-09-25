@@ -580,33 +580,51 @@ def test_lorentz_points_are_refused_and_the_export_form_is_read():
     assert read_codes == tuple(codes)
     np.testing.assert_array_equal(matrix, tangent)
 
-@pytest.mark.parametrize('curvature', [0.5, 1.0, 2.0])
-def test_a_float32_lorentz_export_is_refused_at_any_radius(curvature):
-    # The train export writes float32 points into Float64 columns. Rounding error in
-    # x0^2 - |x|^2 grows with x0^2, so a tolerance fixed relative to 1/c passes far points
-    rng = np.random.default_rng(0)
-    direction = rng.normal(size=(2125, 16))
+def _float32_lorentz_export(radius, dimension, curvature, rng):
+    '''Points at these radii, computed in float32 and stored in Float64 columns, as exported.'''
+
+    direction = rng.normal(size=(radius.size, dimension))
     direction /= np.linalg.norm(direction, axis=1, keepdims=True)
     root = np.float32(np.sqrt(curvature))
-    scaled = (np.sqrt(curvature) * rng.uniform(0.0, 8.0, size=(2125, 1))).astype(np.float32)
+    scaled = (np.sqrt(curvature) * radius[:, None]).astype(np.float32)
     points = np.hstack(
         [np.cosh(scaled) / root,
          np.sinh(scaled) / root * direction.astype(np.float32)]
     )
-    exported = pl.DataFrame(
+    return pl.DataFrame(
         {
-            'index': range(2125),
-            'level': [6] * 2125,
-            'code': [f'{index:06d}' for index in range(2125)],
+            'index': range(radius.size),
+            'level': [6] * radius.size,
+            'code': [f'{index:06d}' for index in range(radius.size)],
             **{
                 f'hyp_e{i}': points[:, i].astype(np.float64)
-                for i in range(17)
+                for i in range(dimension + 1)
             },
         }
     )
 
-    with pytest.raises(ValueError, match='Lorentz points'):
-        coordinate_matrix(exported)
+@pytest.mark.parametrize('curvature', [0.5, 1.0, 2.0])
+@pytest.mark.parametrize('dimension', [8, 16, 32])
+@pytest.mark.parametrize(
+    'layout',
+    [
+        [(2125, 0.0, 8.0)],
+        # A few codes near the origin and the rest far out, where a median level would sit
+        [(20, 0.3, 1.0), (2105, 8.0, 11.0)],
+        # Every code far out, where rounding can push x0^2 - |x|^2 below zero
+        [(2125, 9.0, 12.0)],
+    ],
+    ids=['spread', 'near-and-far', 'far'],
+)
+def test_a_float32_lorentz_export_is_refused_at_any_radius(layout, dimension, curvature):
+    # Rounding error in x0^2 - |x|^2 grows with x0^2, so neither a tolerance fixed relative to
+    # 1/c nor a level taken from far rows serves every radius
+    for seed in range(3):
+        rng = np.random.default_rng(seed)
+        radius = np.concatenate([rng.uniform(low, high, size=rows) for rows, low, high in layout])
+
+        with pytest.raises(ValueError, match='Lorentz points'):
+            coordinate_matrix(_float32_lorentz_export(radius, dimension, curvature, rng))
 
 @pytest.mark.parametrize(
     ('table', 'message'),
