@@ -8883,6 +8883,8 @@ stage spec.
 
 - [x] **Step 5: Integrate**
 
+> Deviation: on PR #116, Codex's review raised a P1. Task 4's `PanelSet(outcome, regressor, fit_settings)` held only the split fingerprints and the fit settings, so arms swept over panels with other query text, other candidates or other QCEW outcomes passed `check_pairing`. 00bd4bc adds `outcome_data` and `regressor_data` (`OutcomePanel.data_fingerprint`, `RegressorPanel.data_fingerprint`). The sweep records them for the validation split and the decision level, and `check_pairing` names the fields that differ. `outcome` and `regressor` stay the split fingerprints the selection log uses. After the fix: 1596 passed, 1 skipped on 3.12 and on 3.10.
+
 Hand over to finishing-a-development-branch. Before opening any PR, check two things:
 
 - `git log --oneline origin/main..HEAD` shows only this branch's commits.
