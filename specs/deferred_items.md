@@ -104,7 +104,7 @@
       Done when: Stage 6 scores its arm under the trained curvature.
 
 ## 5-regressor-panel — 2026-09-24
-- [ ] Review Minor: nothing checks the held-out group table's hash when the regressor panel
+- [x] Review Minor: nothing checks the held-out group table's hash when the regressor panel
       loads. `load_regressor_panel` and `RegressorPanel.from_sources`
       (src/naics_embedder/panels/regressor.py) read conf/data/regressor_heldout_groups.csv
       through `read_group_table` and log every read and opening under whatever hash the file
@@ -116,6 +116,8 @@
       `load_regressor_panel`. Size: quick-fix. Done when: loading the panel refuses a group
       table whose sha256 differs from the configured pin. It must land before Stage 12 opens
       either outer set, because the one-opening rule counts openings under this fingerprint.
+      → done in plan 5 (a53d6e4, `heldout_groups_sha256`), on PR #114 after Codex's review
+      raised it as P1.
 - [ ] Review Minor: a regressor read's log record names the text-only table by
       `ArmTables.text_only_fingerprint`, the `matrix_fingerprint` of the table's codes and
       values (src/naics_embedder/panels/regressor.py), while `tools text-only-table` records

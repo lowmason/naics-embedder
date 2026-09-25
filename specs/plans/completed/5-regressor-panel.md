@@ -1,6 +1,6 @@
 # Regressor Panel Implementation Plan
 
-**Status: COMPLETE (2026-09-24)** — executed via executing-plans; deferred items in specs/deferred_items.md (four from the whole-plan review: one for Stage 4, one due before Stage 12's opening, two standalone)
+**Status: COMPLETE (2026-09-24)** — executed via executing-plans; deferred items in specs/deferred_items.md (three from the whole-plan review: one for Stage 4, two standalone; a fourth, the group-table pin, was fixed on PR #114 and is ticked)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
@@ -6350,6 +6350,8 @@ This plan has no relative links to re-point, and no spec file retires with it: S
 stage spec.
 
 - [x] **Step 5: Integrate**
+
+> Deviation: on PR #114, CI's test legs failed one Task 8 test on Linux, where Rich folded the provenance path at 80 columns (f5603c2 joins the folds before matching). Codex's review raised the unpinned group table (the whole-plan review's M5) as P1. a53d6e4 fixed it rather than deferring it: `heldout_groups_sha256` pins the draw, and the finding's section 6 and usage.md say so. Its deferred item is ticked. After both fixes: 1535 passed, 1 skipped on 3.12 and on 3.10; Final verification Step 5's tests, 152 passed.
 
 Hand over to finishing-a-development-branch. Before opening any PR, check two things:
 
