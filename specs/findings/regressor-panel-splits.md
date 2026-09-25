@@ -170,7 +170,8 @@ What the run shows about the panel, not about any arm:
   regressor panels are `regressor_seen` and `regressor_heldout` at level 6. It resamples by
   `group` within a panel and level: the four-digit parent at levels 4–6 (Req 5's unit), the code
   itself at levels 2–3. Every arm's validation rows share folds, so paired differences align row
-  for row. An undefined cell (`RegressorPanel.cell_status`) has no rows.
+  for row. An undefined cell (`RegressorPanel.cell_status`) has no rows. (Update, 2026-09-24:
+  the roadmap's third resume settled the Open questions as D10 and D11.)
 - **Stages 7–11** read the validation split only, with `--log` pointing at the log their decision
   records keep. For these panels `n_queries` counts rows.
 - **The text-only table** follows the arm's backbone and text (D9), so it is rebuilt whenever
@@ -187,6 +188,9 @@ What the run shows about the panel, not about any arm:
   `--reopen-reason` and is logged as `reopen`. The panel reads no held-out groups but the draw
   pinned as `heldout_groups_sha256` in `conf/data/regressor_panel.yaml`, so an edited or
   redrawn table cannot open as a set never opened.
+  (Erratum, 2026-09-24: the command opens the outer sets on every call and scores one table, so
+  Stage 12, which scores several arms and seeds, opens with `RegressorPanel.open_outer` once per
+  regime and reads every arm and seed through that panel object; roadmap, third resume.)
 
 ## Reproduction
 
