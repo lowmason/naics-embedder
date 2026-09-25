@@ -366,6 +366,12 @@ def test_every_panel_object_opens_for_itself_and_a_reopening_needs_a_reason(
         second.test(Regime.SEEN, 6, regressor_arm, PURPOSE)
     with pytest.raises(SplitAlreadyOpenedError, match='reopen_reason'):
         second.open_outer(Regime.SEEN, 'second opening')
+    # The same check, alone, logs nothing
+    with pytest.raises(SplitAlreadyOpenedError, match='reopen_reason'):
+        second.require_openable(Regime.SEEN)
+    second.require_openable(Regime.SEEN, reopen_reason='a fixture rerun')
+    second.require_openable(Regime.HELDOUT)
+    assert len(log.records()) == 1
     second.open_outer(Regime.SEEN, 'second opening', reopen_reason='a fixture rerun')
     second.open_outer(Regime.HELDOUT, 'first held-out opening')
 

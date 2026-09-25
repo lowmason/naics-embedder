@@ -552,6 +552,40 @@ def test_regressor_panel_opens_each_regime_once_before_its_test_read(
     assert 'reopen_reason' in second.output
 
 @pytest.mark.unit
+def test_regressor_panel_checks_every_opening_before_opening_any(runner, tmp_path, fixture_panel):
+    # Opening the seen regime and then being refused the held-out one would use the first up
+    log, _ = fixture_panel
+    arguments = [
+        *_regressor_arguments(tmp_path), '--split', 'test', '--open-purpose', 'fixture opening'
+    ]
+
+    earlier = runner.invoke(tools_cli.app, [*arguments, '--regime', 'heldout'])
+    both = runner.invoke(tools_cli.app, arguments)
+
+    assert earlier.exit_code == 0, earlier.output
+    assert both.exit_code == 1
+    assert 'reopen_reason' in both.output
+    assert [(r['event'], r['panel']) for r in log.records()] == [
+        ('open', 'regressor_heldout'),
+        ('read', 'regressor_heldout'),
+    ]
+
+@pytest.mark.unit
+def test_regressor_panel_reads_a_repeated_regime_once(runner, tmp_path, fixture_panel):
+    log, _ = fixture_panel
+    arguments = [
+        *_regressor_arguments(tmp_path), '--split', 'test', '--open-purpose', 'fixture opening'
+    ]
+
+    result = runner.invoke(tools_cli.app, [*arguments, '--regime', 'seen', '--regime', 'seen'])
+
+    assert result.exit_code == 0, result.output
+    assert [(r['event'], r['panel']) for r in log.records()] == [
+        ('open', 'regressor_seen'),
+        ('read', 'regressor_seen'),
+    ]
+
+@pytest.mark.unit
 def test_regressor_panel_checks_the_arm_and_the_output_before_opening(
     runner, tmp_path, fixture_panel
 ):

@@ -627,6 +627,27 @@ class RegressorPanel:
         self._log_read(regime, VALIDATION, level, arm, purpose, frame.height)
         return self._predict(regime, VALIDATION, level, frame, plan, arm)
 
+    def require_openable(self, regime: Regime, reopen_reason: Optional[str] = None) -> None:
+        '''
+        Require that ``open_outer`` would open the regime's outer set; logs nothing.
+
+        Check every regime before opening any: an opening followed by a refused one would be
+        used up for nothing.
+
+        Raises:
+            SplitAlreadyOpenedError: If the log already records an opening of this split and no
+                ``reopen_reason`` is given.
+        '''
+
+        panel = PANEL_NAMES[Regime(regime)]
+        prior = self.log.openings(panel, self.fingerprint)
+        if prior and not (reopen_reason or '').strip():
+            first = prior[0]
+            raise SplitAlreadyOpenedError(
+                f'the {panel} outer set was opened at {first["time"]} for {first["purpose"]!r}; '
+                'opening it again needs reopen_reason'
+            )
+
     def open_outer(
         self, regime: Regime, purpose: str, *, reopen_reason: Optional[str] = None
     ) -> None:
@@ -635,19 +656,14 @@ class RegressorPanel:
 
         Raises:
             SplitAlreadyOpenedError: If the log already records an opening of this split and no
-                ``reopen_reason`` is given.
+                ``reopen_reason`` is given (``require_openable``).
         '''
 
         regime = Regime(regime)
+        self.require_openable(regime, reopen_reason)
         panel = PANEL_NAMES[regime]
         prior = self.log.openings(panel, self.fingerprint)
         reason = (reopen_reason or '').strip()
-        if prior and not reason:
-            first = prior[0]
-            raise SplitAlreadyOpenedError(
-                f'the {panel} outer set was opened at {first["time"]} for {first["purpose"]!r}; '
-                'opening it again needs reopen_reason'
-            )
         outer = {
             level: frame.filter(pl.col('split') == OUTER_SPLITS[regime].value).height
             for level, frame in sorted(self._rows.items())

@@ -611,32 +611,37 @@ def regressor_panel(
         raise typer.Exit(code=1)
 
     cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
-    regimes = regime or list(Regime)
+    # A repeated regime is scored once: opening it twice would be refused after the first read
+    regimes = list(dict.fromkeys(regime or list(Regime)))
     levels = sorted(set(level or [DECISION_LEVEL]))
     read_purpose = (purpose or '').strip() or f'regressor panel {split} read'
     output_path = Path(output) if output else None
     try:
-        # The output directory and the arm are checked before any opening: a test read that
-        # failed after its opening would use the opening up
+        # The output directory, the arm and every opening are checked before any opening: a
+        # test read that failed after its opening would use the opening up
         if output_path is not None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
         panel = load_regressor_panel(cfg, codebook, log_path=log, levels=levels)
         arm = ArmTables.from_tables(pl.read_parquet(coordinates), pl.read_parquet(text_only))
         panel.require_arm(arm)
-        results, undefined = [], []
+        defined, undefined = {}, []
         for chosen in regimes:
-            defined = []
+            defined[chosen] = []
             for number in levels:
                 reason = panel.cell_status(chosen, number)
                 if reason is None:
-                    defined.append(number)
+                    defined[chosen].append(number)
                 else:
                     undefined.append((chosen.value, number, reason))
-            if split == TEST and defined:
+        to_open = [chosen for chosen, numbers in defined.items() if split == TEST and numbers]
+        for chosen in to_open:
+            panel.require_openable(chosen, reopen_reason)
+        results = []
+        for chosen, numbers in defined.items():
+            if chosen in to_open:
                 panel.open_outer(chosen, open_purpose or '', reopen_reason=reopen_reason)
-            for number in defined:
-                read = panel.validation if split == VALIDATION else panel.test
-                results.append(read(chosen, number, arm, read_purpose))
+            read = panel.validation if split == VALIDATION else panel.test
+            results.extend(read(chosen, number, arm, read_purpose) for number in numbers)
     except (OSError, ValueError, SealedSplitError, SplitAlreadyOpenedError) as exc:
         console.print(f'[bold red]Regressor panel failed:[/bold red] {exc}')
         raise typer.Exit(code=1)
