@@ -460,7 +460,7 @@ def test_decide_reports_a_tie_it_cannot_break(runner, tmp_path, decision_inputs)
 
     assert result.exit_code == 1
     assert 'Decision failed' in result.output
-    assert 'tie' in result.output.replace('\n', '')
+    assert 'tie on components' in ' '.join(result.output.split())
     assert not (tmp_path / 'decision.json').exists()
 
 # -------------------------------------------------------------------------------------------------
