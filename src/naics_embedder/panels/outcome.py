@@ -12,7 +12,7 @@ training data, not a selection, so reading them is not logged.
 # -------------------------------------------------------------------------------------------------
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol, Sequence, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
 import polars as pl
 import torch
@@ -24,7 +24,7 @@ from naics_embedder.panels.decoding import (
     score_decoding,
 )
 from naics_embedder.panels.index_roles import role_table_fingerprint, verify_examples_channel
-from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog
+from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog, merge_read_detail
 from naics_embedder.supervision.artifacts import (
     INDEX_ROLE_COLUMNS,
     INDEX_ROLES_ARTIFACT,
@@ -183,12 +183,18 @@ class OutcomePanel:
         split: Union[IndexRole, str],
         purpose: str,
         distance: Union[str, DistanceFn] = 'cosine',
+        detail: Optional[Mapping[str, Any]] = None,
     ) -> DecodingResult:
-        '''Decode one split's queries over every candidate with the encoder, logging the read.'''
+        '''
+        Decode one split's queries over every candidate with the encoder, logging the read.
+
+        ``detail`` joins the read's logged detail, so a caller can name the run it scores; it
+        cannot replace the encoder or the distance the panel logs.
+        '''
 
         name, _ = resolve_distance(distance)
-        detail = {'encoder': type(encoder).__name__, 'distance': name}
-        queries = self._read(IndexRole(split), purpose, detail)
+        logged = {'encoder': type(encoder).__name__, 'distance': name}
+        queries = self._read(IndexRole(split), purpose, merge_read_detail(logged, detail))
         return score_decoding(
             encoder.encode_queries(queries.get_column('text').to_list()),
             queries.get_column('code').to_list(),

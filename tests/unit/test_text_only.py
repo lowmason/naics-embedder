@@ -21,6 +21,7 @@ from naics_embedder.panels.text_only import (
     encode_code_texts,
     pca_reduce,
     provenance_path,
+    text_only_fingerprint,
 )
 
 pytestmark = pytest.mark.unit
@@ -150,6 +151,8 @@ def test_the_table_and_its_provenance_are_written(tmp_path, model, tokenizer):
     assert provenance['descriptions']['sha256'] == hashlib.sha256(descriptions.read_bytes()
                                                                   ).hexdigest()
     assert set(provenance['library_versions']) == {'torch', 'transformers', 'polars'}
+    # The name a regressor read logs the table by, so a logged read matches this file
+    assert provenance['matrix_fingerprint'] == text_only_fingerprint(table)
 
 def test_the_backbone_is_read_from_the_local_cache_only(monkeypatch, model, tokenizer):
     import transformers

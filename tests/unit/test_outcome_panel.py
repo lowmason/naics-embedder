@@ -238,6 +238,23 @@ def test_a_stub_encoder_scores_every_metric_on_both_splits(panel, log, encoder):
     assert _events(log) == [('read', 'validation'), ('open', 'test'), ('read', 'test')]
     assert log.records()[0]['detail'] == {'encoder': 'OneHotStubEncoder', 'distance': 'cosine'}
 
+def test_a_read_carries_the_callers_detail_beside_the_panels_own(panel, log, encoder):
+    panel.score(encoder, 'validation', 'seed sweep', detail={'run': 'arm-a/seed-0', 'seed': 0})
+
+    [record] = log.records()
+    assert record['detail'] == {
+        'encoder': 'OneHotStubEncoder',
+        'distance': 'cosine',
+        'run': 'arm-a/seed-0',
+        'seed': 0,
+    }
+
+def test_a_read_cannot_replace_what_the_panel_logs(panel, log, encoder):
+    with pytest.raises(ValueError, match='distance'):
+        panel.score(encoder, 'validation', 'seed sweep', detail={'distance': 'euclidean'})
+
+    assert log.records() == []
+
 # -------------------------------------------------------------------------------------------------
 # Loading from preprocessing outputs
 # -------------------------------------------------------------------------------------------------

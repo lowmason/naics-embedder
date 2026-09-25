@@ -89,3 +89,17 @@ class SelectionLog:
             record for record in self.records() if record['event'] in opening
             and record['panel'] == panel and record['fingerprint'] == fingerprint
         ]
+
+def merge_read_detail(logged: Mapping[str, Any], extra: Optional[Mapping[str,
+                                                                         Any]]) -> Dict[str, Any]:
+    '''
+    A read's logged detail joined with a caller's ``extra``, which can name the run it scores.
+
+    Raises:
+        ValueError: If ``extra`` would replace a key the panel logs itself.
+    '''
+
+    clash = sorted(set(extra or {}) & set(logged))
+    if clash:
+        raise ValueError(f'a read cannot replace the logged {clash}')
+    return {**logged, **dict(extra or {})}
