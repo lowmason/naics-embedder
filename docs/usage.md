@@ -221,7 +221,8 @@ the covariates) is fitted by ridge on standardized features, with the penalty tu
 grouped folds inside the remainder. The outcome is log employment in year t + 1 from year-t
 features. The seen and held-out regimes are separate panels. The validation split reads only the
 remainder. The test split opens each regime's sealed outer set first, and both the opening and
-the read are logged. The output holds one prediction per row, keyed by code, year and group.
+the read are logged. The output holds one prediction per row, comparator and repeat (the test
+split has one repeat), with the row's outcome and the chosen penalty.
 
 ```bash
 uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
