@@ -5,6 +5,7 @@ non-dominated set and the tie order (D11 breaks the last tie).
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from naics_embedder.decision.records import ArmSpec
 from naics_embedder.decision.rule import (
@@ -54,6 +55,9 @@ def test_non_inferiority_reads_the_95_interval_and_superiority_the_98_one_third_
     # Above zero at 95 % (0.05) but not at 98⅓ % (-0.0167)
     borderline = _panel('outcome', -0.05, 3.95)
     assert borderline.noninferiority_interval[0] > 0 and not borderline.superior
+    # A non-finite delta must be refused before a record can ever be written (fix round 1)
+    with pytest.raises(ValidationError):
+        compare_panel('outcome', float('nan'), np.linspace(-1.0, 3.0, 12001), 0.95)
 
 def test_adoption_needs_non_inferiority_everywhere_and_superiority_somewhere():
     superior = _panel('outcome', 0.5, 1.5)

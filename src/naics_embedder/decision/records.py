@@ -31,7 +31,7 @@ Geometry = Literal['euclidean', 'spherical', 'hyperbolic']
 RecordType = TypeVar('RecordType', bound=BaseModel)
 
 class _Record(BaseModel):
-    model_config = ConfigDict(extra='forbid', frozen=True)
+    model_config = ConfigDict(extra='forbid', frozen=True, allow_inf_nan=False)
 
 # -------------------------------------------------------------------------------------------------
 # Artifacts
