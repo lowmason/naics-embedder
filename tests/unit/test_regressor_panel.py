@@ -44,6 +44,7 @@ from tests.fixtures.regressor_panel import (
     BRANCH_RECORD,
     CODEBOOK,
     HELDOUT_GROUPS,
+    POPULATION,
     SETTINGS,
     coordinate_table,
     text_only_table,
@@ -324,6 +325,26 @@ def test_openings_are_counted_per_held_out_draw(regressor_rows, log):
     RegressorPanel(regressor_rows, ['1111'], log, SETTINGS).open_outer(Regime.SEEN, 'other draw')
 
     assert [r['event'] for r in log.records()] == ['open', 'open']
+
+def test_an_arm_missing_a_panel_code_is_refused_before_anything_is_logged(
+    panel, regressor_arm, log
+):
+    codes = [code for code in CODEBOOK if code != POPULATION[0]]
+    arm = ArmTables.from_tables(coordinate_table(codes), text_only_table(codes))
+
+    with pytest.raises(ValueError, match='no coordinates'):
+        panel.require_arm(arm)
+    with pytest.raises(ValueError, match='no coordinates'):
+        panel.validation(Regime.SEEN, 6, arm, PURPOSE)
+    assert log.records() == []
+
+    panel.open_outer(Regime.SEEN, PURPOSE)
+    with pytest.raises(ValueError, match='no coordinates'):
+        panel.test(Regime.SEEN, 6, arm, PURPOSE)
+    # A refused read logs nothing, so the opening still serves a complete arm
+    panel.require_arm(regressor_arm)
+    panel.test(Regime.SEEN, 6, regressor_arm, PURPOSE)
+    assert [r['event'] for r in log.records()] == ['open', 'read']
 
 # -------------------------------------------------------------------------------------------------
 # Dating (Exit: every row's features are dated before its outcome, D7)

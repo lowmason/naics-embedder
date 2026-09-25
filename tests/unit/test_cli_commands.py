@@ -14,6 +14,7 @@ from naics_embedder.supervision.artifacts import load_validated_bundle
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
     HELDOUT_GROUPS,
+    POPULATION,
     SETTINGS,
     coordinate_table,
     text_only_table,
@@ -460,11 +461,11 @@ def test_text_only_table_embeds_with_the_regressor_configs_backbone(monkeypatch,
     ]
     assert 'text_only_provenance.json' in result.output
 
-def _regressor_arguments(tmp_path):
+def _regressor_arguments(tmp_path, codes=CODEBOOK):
     coordinates = tmp_path / 'arm.parquet'
     text_only = tmp_path / 'text_only.parquet'
-    coordinate_table(CODEBOOK).write_parquet(coordinates)
-    text_only_table(CODEBOOK).write_parquet(text_only)
+    coordinate_table(codes).write_parquet(coordinates)
+    text_only_table(codes).write_parquet(text_only)
     return [
         'regressor-panel',
         '--coordinates',
@@ -545,3 +546,25 @@ def test_regressor_panel_opens_each_regime_once_before_its_test_read(
     ]
     assert second.exit_code == 1
     assert 'reopen_reason' in second.output
+
+@pytest.mark.unit
+def test_regressor_panel_checks_the_arm_and_the_output_before_opening(
+    runner, tmp_path, fixture_panel
+):
+    # A test read that failed after its opening would use the opening up
+    log, _ = fixture_panel
+    test_split = ['--split', 'test', '--open-purpose', 'fixture opening']
+    codes = [code for code in CODEBOOK if code != POPULATION[0]]
+    (tmp_path / 'file').write_text('')
+    unwritable = str(tmp_path / 'file' / 'predictions.parquet')
+
+    missing = runner.invoke(tools_cli.app, [*_regressor_arguments(tmp_path, codes), *test_split])
+    blocked = runner.invoke(
+        tools_cli.app, [*_regressor_arguments(tmp_path), *test_split, '--output', unwritable]
+    )
+
+    assert missing.exit_code == 1
+    assert 'no coordinates' in missing.output
+    assert blocked.exit_code == 1
+    assert 'Regressor panel failed' in blocked.output
+    assert log.records() == []

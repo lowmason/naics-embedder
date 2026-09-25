@@ -609,9 +609,15 @@ def regressor_panel(
     cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
     regimes = regime or list(Regime)
     levels = sorted(set(level or [DECISION_LEVEL]))
+    output_path = Path(output) if output else None
     try:
+        # The output directory and the arm are checked before any opening: a test read that
+        # failed after its opening would use the opening up
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
         panel = load_regressor_panel(cfg, codebook, log_path=log, levels=levels)
         arm = ArmTables.from_tables(pl.read_parquet(coordinates), pl.read_parquet(text_only))
+        panel.require_arm(arm)
         results, undefined = [], []
         for chosen in regimes:
             defined = []
@@ -626,7 +632,7 @@ def regressor_panel(
             for number in defined:
                 read = panel.validation if split == VALIDATION else panel.test
                 results.append(read(chosen, number, arm, purpose))
-    except (FileNotFoundError, ValueError, SealedSplitError, SplitAlreadyOpenedError) as exc:
+    except (OSError, ValueError, SealedSplitError, SplitAlreadyOpenedError) as exc:
         console.print(f'[bold red]Regressor panel failed:[/bold red] {exc}')
         raise typer.Exit(code=1)
 
@@ -645,8 +651,6 @@ def regressor_panel(
         )
     console.print(f'\nReads logged to {panel.log.path} (fingerprint {panel.fingerprint})\n')
 
-    if output:
-        path = Path(output)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        predictions.write_parquet(path)
-        console.print(f'Predictions written to {path}')
+    if output_path is not None:
+        predictions.write_parquet(output_path)
+        console.print(f'Predictions written to {output_path}')

@@ -394,6 +394,11 @@ class ArmTables:
             raise ValueError(f'the arm has no coordinates for {len(missing)} codes: {missing[:5]}')
         return np.array([position[code] for code in codes], dtype=np.int64)
 
+def _require_codes(arm: ArmTables, frame: pl.DataFrame) -> None:
+    '''Raise before a read is logged if the arm lacks a code of ``frame`` (``ArmTables.lookup``).'''
+
+    arm.lookup(frame.get_column('code').unique().to_list())
+
 def indicators(values: Sequence[str]) -> np.ndarray:
     '''One column per distinct value (sorted), one 1 per row.'''
 
@@ -585,6 +590,20 @@ class RegressorPanel:
             return f'{n_groups} remainder groups, fewer than {self.settings.min_groups}'
         return None
 
+    def require_arm(self, arm: ArmTables) -> None:
+        '''
+        Require the arm to cover every code of every loaded level; logs nothing.
+
+        Check before opening an outer set: a test read that failed after the opening would use
+        the opening up. Codes are not sealed; only rows are.
+
+        Raises:
+            ValueError: If the arm has no coordinates for a panel code.
+        '''
+
+        for level in self.levels:
+            _require_codes(arm, self._frame(level))
+
     def validation(self, regime: Regime, level: int, arm: ArmTables, purpose: str) -> pl.DataFrame:
         '''Out-of-sample predictions for the remainder rows, logging the read.'''
 
@@ -595,6 +614,7 @@ class RegressorPanel:
             plan = seen_validation_plan(frame, level, self.settings)
         else:
             plan = heldout_validation_plan(frame, level, self.settings)
+        _require_codes(arm, frame)
         self._log_read(regime, VALIDATION, level, arm, purpose, frame.height)
         return self._predict(regime, VALIDATION, level, frame, plan, arm)
 
@@ -656,6 +676,7 @@ class RegressorPanel:
         frame = self._frame(level).filter(pl.col('split').is_in(splits))
         plan = outer_plan(frame, regime, level, self.settings)
         n_outer = len(plan[0].score)
+        _require_codes(arm, frame)
         self._log_read(regime, TEST, level, arm, purpose, n_outer)
         return self._predict(regime, TEST, level, frame, plan, arm)
 
