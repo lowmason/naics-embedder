@@ -71,7 +71,8 @@ which Stage 12's one-opening rule relies on, and fixed a test. Under `src/`, Sta
 `panels` modules and `data/regressor_group_table.py`, and edited `cli/commands/data.py`,
 `cli/commands/tools.py` and `utils/config.py`. Two Gap analysis citations into those files moved
 and were re-pointed (the Req 13 row and the `verify-stage4` row); every verdict stands, and the
-Req 2 row stays as the entry-time snapshot. Reading the shipped code surfaced five gaps:
+Req 2 row stays as the entry-time snapshot. Reading the shipped code surfaced five gaps; the
+review of PR #115 sharpened the second and third:
 
 - Stage 12 named `tools regressor-panel --split test` as an alternative to
   `RegressorPanel.open_outer`, but the command opens the outer sets on every call and scores one
@@ -80,9 +81,11 @@ Req 2 row stays as the entry-time snapshot. Reading the shipped code surfaced fi
   set.
 - The panel reads no arm without its text-only table, which is not pinned across machines, and
   the selection log names both tables by `matrix_fingerprint`, not by file hash. Stage 4's
-  artifact references now include each arm's text-only table and carry both.
-- The panel reads the QCEW slices from `qcew_dir`, outside the repo, so Stage 4's driver needs
-  them wherever it scores that panel.
+  artifact references now include each arm's text-only table with its provenance file, which
+  records the backbone, the descriptions and the window that D9 and Req 9 constrain, and every
+  table reference carries both identifiers.
+- Loading the panel re-reads the four QCEW slices from `qcew_dir`, outside the repo, so every
+  stage that loads it needs them: Stage 4's driver, Stage 6's check and Stage 12.
 - The text-only builder reads at `max_length: 512`, the window Req 9 rejects, while D9 has the
   comparator read the same text as the arm. Stage 5's window policy now covers it (user
   approval), and Stage 9's Exit follows.
@@ -375,15 +378,17 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       deviation, the non-dominated set, the tie order (its final tie-break: D11), and a
       decision-record schema that carries the selection-log records of the runs it compares (the
       log is gitignored and dies with its worktree or Lambda instance) and immutable references
-      (path and content hash) to each arm's text-only table and, per arm and seed, to the encoder
-      checkpoint and the 2,125-code table, each table's reference also carrying the
-      `matrix_fingerprint` the log names it by; a seed-sweep driver that runs a configuration for
-      N seeds, collects every panel's per-unit scores, and keeps the referenced artifacts until
-      Stage 12 (a Lambda instance loses them at termination: `specs/lambda-remote-workflow.md`);
-      the diagnostics report over all 2,125 codes (sector-separation AUC, within-sector rank
-      correlation averaged over sectors and queries, MAP over ancestors, NDCG with integer
-      lowest-common-ancestor grades, the Pearson statistic without the cophenetic name, unary
-      pairs excluded from parent retrieval); `verify-stage4`'s fixed thresholds retired; the
+      (path and content hash) to each arm's text-only table and its provenance file, whose
+      backbone, revision, descriptions hash and window the record checks against the arm's (D9),
+      and, per arm and seed, to the encoder checkpoint and the 2,125-code table, each table's
+      reference also carrying the `matrix_fingerprint` the log names it by; a seed-sweep driver
+      that runs a configuration for N seeds, collects every panel's per-unit scores, and keeps
+      the referenced artifacts until Stage 12 (a Lambda instance loses them at termination:
+      `specs/lambda-remote-workflow.md`); the diagnostics report over all 2,125 codes
+      (sector-separation AUC, within-sector rank correlation averaged over sectors and queries,
+      MAP over ancestors, NDCG with integer lowest-common-ancestor grades, the Pearson statistic
+      without the cophenetic name, unary pairs excluded from parent retrieval);
+      `verify-stage4`'s fixed thresholds retired; the
       unwired taxonomy-tasks suite removed, and `metrics/qcew.py` with its re-exports in
       `metrics/__init__.py` and `graph_model/__init__.py`, its API page (`docs/api/qcew_metrics.md`
       and its `docs/.nav.yml` entry: the docs build runs only on main) and its tests, keeping the
@@ -392,10 +397,10 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       Exit: On synthetic arms with known effects on D8's three panels, the tooling adopts and
       rejects per the rule and writes records with every field Verification "Decision records"
       lists, plus the selection-log records of their runs and the artifact references of every
-      arm and seed, text-only tables included; the diagnostics report contains only Req 6's
-      statistics, stratified as listed, with no threshold and no pass/fail; no monitor, gate or
-      headline reads a structural statistic; neither `metrics/qcew.py` nor the taxonomy-tasks
-      suite remains.
+      arm and seed, text-only tables and their provenance included; the diagnostics report
+      contains only Req 6's statistics, stratified as listed, with no threshold and no
+      pass/fail; no monitor, gate or headline reads a structural statistic; neither
+      `metrics/qcew.py` nor the taxonomy-tasks suite remains.
       ROUTING: writing-plans
 
 - [ ] Stage 5: Supervision target and text
@@ -461,7 +466,9 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       Stage 3's panel as the export's reader (finding `specs/findings/regressor-panel-splits.md`,
       section 6): it refuses Lorentz points and constant columns, so a hyperbolic export writes
       the tangent coordinates at the origin without the zero time coordinate a log map keeps. A
-      read needs a text-only table rebuilt from Stage 5's descriptions (`tools text-only-table`).
+      read needs a text-only table rebuilt from Stage 5's descriptions (`tools text-only-table`)
+      and the four QCEW slices at `qcew_dir`, under the hashes `conf/data/regressor_panel.yaml`
+      pins.
       Produces: One encoder module implementing `QueryCodeEncoder`, with code and query
       embeddings in the same space;
       fusion options masked mean, attention pooling and MoE (MoE ablation-only); a configurable
@@ -610,7 +617,10 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       records and artifact references they carry (Stage 4's schema); by those references, the
       per-seed encoder checkpoints and 2,125-code tables of the final configuration and of every
       arm in its recorded comparisons, since sealed queries were never embedded, and each arm's
-      text-only table, without which the regressor panel reads no arm; Stage 2's
+      text-only table with its provenance, without which the regressor panel reads no arm; the
+      four QCEW slices under the hashes `conf/data/regressor_panel.yaml` pins, which loading the
+      panel re-reads from `qcew_dir` outside the repo, and a bundle codebook with the pinned
+      2,125 codes; Stage 2's
       `OutcomePanel.open_test`; Stage 3's sealed outer sets and the logged opening that guards
       them (`RegressorPanel.open_outer`): one opening per regime covers every level the panel
       object has loaded, and the log names the panels `regressor_seen` and `regressor_heldout`,
@@ -626,7 +636,8 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       Exit: The selection-log records, gathered from the decision records and this stage's own,
       show exactly one opening per sealed set, under the fingerprint Stage 2 or Stage 3
       committed, after every validation read that selected anything; every sealed estimate comes
-      from referenced artifacts whose hashes match the records; the finding reports each sealed
+      from referenced artifacts whose hashes match the records, and each text-only table's
+      provenance names its arm's backbone and descriptions; the finding reports each sealed
       estimate with its interval.
       ROUTING: writing-plans
 
