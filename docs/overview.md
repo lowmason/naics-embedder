@@ -495,8 +495,7 @@ An unexpected non-finite SciPy result for otherwise defined inputs raises `Runti
 The general evaluation runner returns the complete result under `structural_spearman_v1`:
 `correlation`, `n_pairs`, `n_total`, `definition`, `status`, and `reason`. Training artifacts
 serialize undefined correlation as JSON `null`; Lightning omits that numeric scalar but logs
-the pair counts. Stage-4 verification reports pre/post/delta values and metadata but does not
-gate acceptance on Spearman.
+the pair counts.
 
 All unversioned historical fields (`spearman`, `spearman_correlation`,
 `val/spearman_correlation`, `val_spearman_correlation`) identify
@@ -505,7 +504,7 @@ and are not directly comparable with v1. Do not rewrite, dual-write, or numerica
 artifacts.
 
 This rank repair does not validate the formula that produced the distance matrices. HGCN full
-evaluation and the Stage-4 verifier remain fixed at curvature `1.0`; text comparison runs retain
+evaluation remains fixed at curvature `1.0`; text comparison runs retain
 `loss.curvature: 1.0`. Non-unit-curvature metric corrections are a separate change.
 
 ### Hyperbolic Geometry Metrics

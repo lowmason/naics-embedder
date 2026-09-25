@@ -22,7 +22,7 @@ Commands:
 import json
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import polars as pl
 import typer
@@ -33,9 +33,6 @@ from naics_embedder.decision.decide import decide, fix_margins
 from naics_embedder.decision.records import ArmRecord, MarginRecord, read_record, write_record
 from naics_embedder.decision.rule import TieUnresolvedError
 from naics_embedder.decision.store import ArtifactStore
-from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
-    resolve_graph_supervision_paths,
-)
 from naics_embedder.metrics.diagnostics import GEOMETRIES, diagnostics_report
 from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
@@ -55,7 +52,6 @@ from naics_embedder.panels.text_only import build_text_only_table
 from naics_embedder.panels.text_only import provenance_path as text_only_provenance_path
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.tools.config_tools import show_current_config
-from naics_embedder.tools.embeddings_verification import Stage4VerificationConfig, verify_stage4
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
 from naics_embedder.utils.config import (
     DecisionConfig,
@@ -255,157 +251,6 @@ def investigate(
 
     except Exception as e:
         console.print(f'[bold red]Error:[/bold red] {e}')
-        raise typer.Exit(code=1)
-
-# -------------------------------------------------------------------------------------------------
-# Verify Stage 4 against Stage 3
-# -------------------------------------------------------------------------------------------------
-
-def _stage4_structural_inputs(
-    supervision_manifest: Optional[str],
-    distance_matrix: Optional[str],
-    relations_parquet: Optional[str],
-) -> Tuple[Path, Path]:
-    '''
-    The distance matrix and relations parquet that verify-stage4 reads.
-
-    With a supervision manifest both come from that one validated bundle (an explicitly supplied
-    path must be the bundle's own artifact). Without one, unset paths fall back to the legacy
-    ``./data`` files.
-    '''
-    if supervision_manifest:
-        paths = resolve_graph_supervision_paths(
-            supervision_manifest,
-            distance_matrix_path=distance_matrix,
-            relations_path=relations_parquet,
-        )
-        return paths.distance_matrix, paths.relations
-    return (
-        Path(distance_matrix or './data/naics_distance_matrix.parquet'),
-        Path(relations_parquet or './data/naics_relations.parquet'),
-    )
-
-@app.command('verify-stage4')
-def verify_stage4_command(
-    stage3_parquet: Annotated[
-        str,
-        typer.Option(
-            '--pre',
-            help='Path to Stage 3 (pre-HGCN) embeddings parquet',
-        ),
-    ] = './output/hyperbolic_projection/encodings.parquet',
-    stage4_parquet: Annotated[
-        str,
-        typer.Option(
-            '--post',
-            help='Path to Stage 4 (HGCN) embeddings parquet',
-        ),
-    ] = './output/hgcn/encodings.parquet',
-    distance_matrix: Annotated[
-        Optional[str],
-        typer.Option(
-            '--distance-matrix',
-            help=(
-                'Path to ground truth distance matrix parquet (default: the bundle artifact with '
-                '--supervision-manifest, else ./data/naics_distance_matrix.parquet)'
-            ),
-        ),
-    ] = None,
-    relations_parquet: Annotated[
-        Optional[str],
-        typer.Option(
-            '--relations',
-            help=(
-                'Path to relations parquet, used for the parent retrieval metric (default: the '
-                'bundle artifact with --supervision-manifest, else ./data/naics_relations.parquet)'
-            ),
-        ),
-    ] = None,
-    supervision_manifest: Annotated[
-        Optional[str],
-        typer.Option(
-            '--supervision-manifest',
-            help='Supervision bundle manifest; the distance matrix and relations come from it',
-        ),
-    ] = None,
-    max_cophenetic_drop: Annotated[
-        float,
-        typer.Option('--max-cophenetic-drop', help='Allowed drop in cophenetic correlation'),
-    ] = 0.02,
-    max_ndcg_drop: Annotated[
-        float,
-        typer.Option('--max-ndcg-drop', help='Allowed drop in NDCG@10'),
-    ] = 0.01,
-    min_local_improvement: Annotated[
-        float,
-        typer.Option('--min-local-improvement', help='Required parent retrieval improvement'),
-    ] = 0.05,
-    ndcg_k: Annotated[
-        int,
-        typer.Option('--ndcg-k', help='NDCG@K to evaluate'),
-    ] = 10,
-    parent_top_k: Annotated[
-        int,
-        typer.Option('--parent-top-k', help='Top-K used for parent retrieval accuracy'),
-    ] = 1,
-):
-    '''
-    Compare Stage 3 and Stage 4 embeddings at curvature 1.0.
-
-    Enforce cophenetic, NDCG, and parent-retrieval thresholds. Report structural
-    Spearman v1 separately; undefined values and deltas display as N/A.
-    '''
-
-    configure_logging('tools_verify_stage4.log')
-
-    cfg = Stage4VerificationConfig(
-        max_cophenetic_degradation=max_cophenetic_drop,
-        max_ndcg_degradation=max_ndcg_drop,
-        min_local_improvement=min_local_improvement,
-        ndcg_k=ndcg_k,
-        parent_top_k=parent_top_k,
-    )
-
-    try:
-        distance_matrix_path, relations_path = _stage4_structural_inputs(
-            supervision_manifest, distance_matrix, relations_parquet
-        )
-        result = verify_stage4(
-            Path(stage3_parquet),
-            Path(stage4_parquet),
-            distance_matrix_path,
-            relations_path,
-            cfg,
-        )
-    except Exception as exc:
-        console.print(f'[bold red]Verification failed:[/bold red] {exc}')
-        raise typer.Exit(code=1)
-
-    console.print('\n[bold cyan]Stage 4 Verification[/bold cyan]\n')
-    console.print('[bold]Pre-HGCN metrics:[/bold]')
-    for key, value in result['pre'].items():
-        formatted = 'N/A' if value is None else f'{value:.4f}'
-        console.print(f'  • {key}: {formatted}')
-
-    console.print('\n[bold]Post-HGCN metrics:[/bold]')
-    for key, value in result['post'].items():
-        formatted = 'N/A' if value is None else f'{value:.4f}'
-        console.print(f'  • {key}: {formatted}')
-
-    console.print('\n[bold]Deltas:[/bold]')
-    for key, value in result['delta'].items():
-        formatted = 'N/A' if value is None else f'{value:+.4f}'
-        console.print(f'  • {key}: {formatted}')
-
-    console.print('\n[bold]Threshold checks:[/bold]')
-    for key, passed in result['checks'].items():
-        status = '[green]PASS[/green]' if passed else '[red]FAIL[/red]'
-        console.print(f'  • {key}: {status}')
-
-    if result['passed']:
-        console.print('\n[bold green]✓ Stage 4 verification passed![/bold green]\n')
-    else:
-        console.print('\n[bold red]✗ Stage 4 verification failed thresholds[/bold red]\n')
         raise typer.Exit(code=1)
 
 # -------------------------------------------------------------------------------------------------

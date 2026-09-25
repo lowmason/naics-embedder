@@ -116,62 +116,21 @@ Add the following keys to your `GraphConfig` (or `configs/hgcn.yaml`) to customi
 
 If `distance_matrix_parquet` is missing, HGCN automatically skips the extra metrics and continues with the lightweight batch metrics (triplet accuracy, etc.).
 
-## 9. Pre/Post Verification Workflow
+## 9. Diagnostics and the Keep-or-Drop Decision
 
-After both Stage 3 and Stage 4 finish, run the automated comparison from [Issue #67](https://github.com/lowmason/naics-embedder/issues/67) to confirm that HGCN preserved the Stage 3 geometry:
+Report Req 6's structural diagnostics on a table before and after refinement:
 
 ```bash
-uv run naics-embedder tools verify-stage4 \
-  --pre ./output/hyperbolic_projection/encodings.parquet \
-  --post ./output/hgcn/encodings.parquet \
-  --supervision-manifest data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json
+uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \
+  --codebook data/supervision/stage3-supervision-v1/<bundle-id>/naics_codebook.parquet
 ```
 
-Additional options let you override the distance matrix, relations parquet, or the acceptable degradation thresholds:
+`--table` takes a 2,125-code table in the export form: tangent coordinates at the origin for a
+hyperbolic arm. Lorentz points are refused. The report covers sector separation, within-sector
+rank correlation, MAP over ancestors, NDCG with integer lowest-common-ancestor grades, the
+Pearson correlation of distance with D*, and parent retrieval without the 522 unary pairs. It
+has no thresholds and no pass/fail.
 
-| Option | Purpose |
-| --- | --- |
-| `--supervision-manifest` | Read the distance matrix and relations from this validated bundle; an explicit `--distance-matrix` or `--relations` from another source is rejected. |
-| `--distance-matrix`, `--relations` | Without a manifest, default to the legacy `./data/naics_distance_matrix.parquet` and `./data/naics_relations.parquet`. |
-| `--max-cophenetic-drop` | Maximum allowable decrease in cophenetic correlation (default `0.02`). |
-| `--max-ndcg-drop` | Maximum allowable decrease in NDCG@K (default `0.01`). |
-| `--min-local-improvement` | Required increase in parent retrieval accuracy (default `0.05`). |
-| `--ndcg-k` | Which `K` to evaluate for NDCG (default `10`). |
-| `--parent-top-k` | Size of the neighborhood used for parent retrieval (default `1`). |
-
-The command prints pre/post metrics, deltas, and PASS/FAIL indicators for each threshold. Integrate it into CI to prevent regressions before shipping updated embeddings.
-
-### Structural Spearman reporting
-
-The verifier adds `structural_spearman_v1` to `pre`, `post`, and `delta`. A delta is computed
-only if both phase values are defined. Otherwise it is `null` in the Python/JSON report and
-`N/A` in the CLI. Definition, statuses, reasons, and pair counts are recorded separately:
-
-```json
-{
-  "pre": {"structural_spearman_v1": 0.8783101},
-  "post": {"structural_spearman_v1": null},
-  "delta": {"structural_spearman_v1": null},
-  "metric_metadata": {
-    "structural_spearman_v1": {
-      "definition": "structural-spearman-v1",
-      "pre": {
-        "status": "defined", "reason": null, "n_pairs": 6, "n_total": 6
-      },
-      "post": {
-        "status": "undefined", "reason": "constant_prediction", "n_pairs": 6, "n_total": 6
-      }
-    }
-  }
-}
-```
-
-This excerpt omits the existing non-Spearman metrics, checks, thresholds, pass/fail flag, and
-code list; those remain in the full report. Structural Spearman does not add a fourth check.
-Only cophenetic degradation, NDCG degradation, and local parent-retrieval improvement govern
-acceptance, using the same options and defaults as before.
-
-Malformed inputs raise `StructuralMetricInputError`; the CLI prints the failure and exits
-nonzero instead of printing a partial success report. Undefined correlation alone is
-non-fatal. Both phase evaluations stay explicitly fixed at curvature `1.0`, regardless of
-training configuration. The rank correction does not fix non-unit-curvature geometry.
+Whether the graph stage is kept is decided under Req 5's rule on the outcome and regressor
+panels (`tools margins`, `tools decide`; see the [usage guide](usage.md#tools-decide)), never on
+structural statistics.

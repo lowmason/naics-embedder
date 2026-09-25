@@ -46,7 +46,6 @@ nav:
       - Tools:
           - Current Training Configuration: api/config_tools.md
           - Training Metrics: api/metrics_tools.md
-          - Embeddings Verification: api/embeddings_verification.md
       - Utilities:
           - Backend: api/backend.md
           - Console: api/console.md
