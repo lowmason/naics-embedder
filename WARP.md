@@ -24,7 +24,7 @@ The codebase is organized around this pipeline plus a rich config/validation lay
 - `src/naics_embedder/cli/`  
   Typer-based CLI. The top-level command is `naics-embedder`, with three groups:
   - `data` – data generation / preprocessing
-  - `tools` – config/metrics utilities (including Stage 4 verification)
+  - `tools` – config/metrics utilities (including Req 6 diagnostics and Req 5 decisions)
   - `train` – text-model training entrypoint
 
 - `conf/config.yaml` + `src/naics_embedder/utils/config.py`  
