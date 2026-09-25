@@ -5,6 +5,7 @@ This module consolidates all metrics-related functionality:
 - Graph-specific metrics and downstream evaluation
 - QCEW benchmark
 - Hierarchy structure metrics
+- Req 6's structural diagnostics report
 - Evaluation runner
 '''
 
@@ -15,6 +16,9 @@ from .core import (
     HierarchyMetrics,
     RetrievalMetrics,
 )
+
+# Req 6's diagnostics
+from .diagnostics import DiagnosticsReport, diagnostics_report
 
 # Graph-specific metrics
 from .graph import (
@@ -56,6 +60,9 @@ __all__ = [
     'STRUCTURAL_SPEARMAN_DEFINITION',
     'STRUCTURAL_SPEARMAN_KEY',
     'StructuralMetricInputError',
+    # Diagnostics
+    'DiagnosticsReport',
+    'diagnostics_report',
     # Graph
     'GraphDownstreamEvaluator',
     'GraphEmbeddingDataset',

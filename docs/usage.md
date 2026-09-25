@@ -298,6 +298,30 @@ uv run naics-embedder tools decide --arm candidate.json --arm reference.json \
 - `--store PATH` - The artifact store the arm records reference
 - `--output PATH` - Where to write the decision record; an existing file is never overwritten
 
+### `tools diagnostics`
+
+Report Req 6's structural diagnostics over every codebook code: sector separation (an AUC),
+within-sector rank correlation (over queries and over sectors), MAP over ancestors,
+NDCG@5/10/20 with integer lowest-common-ancestor grades, the Pearson correlation of distance
+with the tree metric D*, and parent retrieval@1/5 without the 522 unary pairs. The report
+describes an arm: nothing selects on it, and no statistic in it has a threshold. To compare two
+tables, such as one before and one after graph refinement, report on each.
+
+```bash
+uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \
+  --codebook PATH/naics_codebook.parquet
+```
+
+**Options:**
+- `--table PATH` - The arm's code table in the export form (tangent coordinates at the origin
+  for a hyperbolic arm; Lorentz points are refused)
+- `--geometry euclidean|spherical|hyperbolic` - The arm's distance: Euclidean, cosine, or the
+  geodesic distance after the exponential map at the origin
+- `--codebook PATH` - A supervision bundle's `naics_codebook.parquet`; the table must hold
+  exactly its codes
+- `--curvature FLOAT` - A hyperbolic arm's curvature magnitude (default: 1.0)
+- `--output PATH` - Also write the report as JSON
+
 ---
 
 ## Training Commands

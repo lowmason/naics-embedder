@@ -445,6 +445,7 @@ uv run naics-embedder tools text-only-table  # Frozen-backbone text table for th
 uv run naics-embedder tools regressor-panel  # Score an arm on the regressor panel
 uv run naics-embedder tools margins   # Fix each panel's margin from a reference arm (Req 5)
 uv run naics-embedder tools decide    # Decide among arms under Req 5's rule
+uv run naics-embedder tools diagnostics  # Req 6's structural diagnostics for a table
 ```
 
 ### Running Tests

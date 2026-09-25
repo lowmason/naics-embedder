@@ -10,6 +10,7 @@ from naics_embedder.cli.commands import tools as tools_cli
 from naics_embedder.decision.records import DecisionRecord, MarginRecord, read_record, write_record
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.metrics import StructuralMetricInputError
+from naics_embedder.metrics.diagnostics import DiagnosticsReport
 from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.supervision.artifacts import load_validated_bundle
@@ -362,7 +363,7 @@ def test_verify_stage4_rejects_relations_from_outside_its_bundle(
     assert verify_inputs == {}
 
 # -------------------------------------------------------------------------------------------------
-# Decisions (Req 5)
+# Decisions (Req 5) and diagnostics (Req 6)
 # -------------------------------------------------------------------------------------------------
 
 @pytest.fixture
@@ -462,6 +463,51 @@ def test_decide_reports_a_tie_it_cannot_break(runner, tmp_path, decision_inputs)
     assert 'Decision failed' in result.output
     assert 'tie on components' in ' '.join(result.output.split())
     assert not (tmp_path / 'decision.json').exists()
+
+@pytest.mark.unit
+def test_diagnostics_reports_every_statistic_and_writes_json(runner, tmp_path):
+    codebook = tmp_path / 'naics_codebook.parquet'
+    pl.DataFrame({'code': list(CODEBOOK)}).write_parquet(codebook)
+    table = tmp_path / 'arm.parquet'
+    coordinate_table(CODEBOOK, dimension=4).write_parquet(table)
+    arguments = ['diagnostics', '--table', str(table), '--codebook', str(codebook)]
+
+    result = runner.invoke(
+        tools_cli.app,
+        [*arguments, '--geometry', 'hyperbolic', '--output',
+         str(tmp_path / 'report.json')],
+    )
+    unknown = runner.invoke(tools_cli.app, [*arguments, '--geometry', 'poincare'])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace('\n', '')
+    for statistic in (
+        'sector separation AUC', 'within-sector rank correlation', 'MAP over ancestors', 'NDCG',
+        'distance Pearson', 'parent retrieval'
+    ):
+        assert statistic in output
+    report = json.loads((tmp_path / 'report.json').read_text())
+    assert set(report) == set(DiagnosticsReport.model_fields)
+    assert unknown.exit_code == 1
+
+@pytest.mark.unit
+def test_diagnostics_refuses_a_table_that_misses_a_codebook_code(runner, tmp_path):
+    codebook = tmp_path / 'naics_codebook.parquet'
+    pl.DataFrame({'code': list(CODEBOOK)}).write_parquet(codebook)
+    table = tmp_path / 'arm.parquet'
+    coordinate_table(CODEBOOK[1:], dimension=4).write_parquet(table)
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'diagnostics', '--table',
+            str(table), '--codebook',
+            str(codebook), '--geometry', 'euclidean'
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert 'Diagnostics failed' in result.output
 
 # -------------------------------------------------------------------------------------------------
 # Outcome panel: lexical baseline

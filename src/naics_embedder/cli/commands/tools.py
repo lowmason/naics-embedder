@@ -16,6 +16,7 @@ Commands:
     regressor-panel: Score an arm on the regressor panel's validation or sealed test split.
     margins: Fix each panel's non-inferiority margin from a reference arm (Req 5).
     decide: Decide among arms under Req 5's rule over D8's three panels.
+    diagnostics: Report Req 6's structural diagnostics over every codebook code.
 '''
 
 import json
@@ -35,6 +36,7 @@ from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
     resolve_graph_supervision_paths,
 )
+from naics_embedder.metrics.diagnostics import GEOMETRIES, diagnostics_report
 from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
     code_texts_from_descriptions,
@@ -840,3 +842,108 @@ def decide_command(
     console.print(f'Tie order: {", ".join(record.tie_order)}')
     console.print(f'[bold]Chosen: {record.chosen}[/bold]')
     console.print(f'\nDecision record: {path}\n')
+
+# -------------------------------------------------------------------------------------------------
+# Diagnostics (Req 6)
+# -------------------------------------------------------------------------------------------------
+
+@app.command('diagnostics')
+def diagnostics_command(
+    table: Annotated[
+        str,
+        typer.Option(
+            '--table',
+            help="The arm's code table in the export form (tangent coordinates if hyperbolic)",
+        ),
+    ],
+    geometry: Annotated[
+        str,
+        typer.Option('--geometry', help='euclidean, spherical or hyperbolic'),
+    ],
+    codebook: Annotated[
+        str,
+        typer.Option('--codebook', help="A supervision bundle's naics_codebook.parquet"),
+    ],
+    curvature: Annotated[
+        float,
+        typer.Option('--curvature', help="A hyperbolic arm's curvature magnitude"),
+    ] = 1.0,
+    output: Annotated[
+        Optional[str],
+        typer.Option('--output', help='Also write the report as JSON to this path'),
+    ] = None,
+):
+    '''
+    Report Req 6's structural diagnostics over every codebook code.
+
+    Sector separation (an AUC), within-sector rank correlation (over queries and over sectors),
+    MAP over ancestors, NDCG@5/10/20 with integer lowest-common-ancestor grades, the Pearson
+    correlation of distance with D*, and parent retrieval@1/5 without the 522 unary pairs. The
+    report describes an arm: nothing selects on it, and no statistic in it has a threshold.
+
+    Example:
+        Report on a hyperbolic arm's export::
+
+            $ uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \\
+                --codebook PATH/naics_codebook.parquet
+    '''
+
+    configure_logging('tools_diagnostics.log')
+
+    if geometry not in GEOMETRIES:
+        console.print(f'[bold red]--geometry must be one of {list(GEOMETRIES)}[/bold red]')
+        raise typer.Exit(code=1)
+    try:
+        codes = pl.read_parquet(codebook).get_column('code').to_list()
+        report = diagnostics_report(
+            pl.read_parquet(table), geometry, codebook_codes=codes, curvature=curvature
+        )
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]Diagnostics failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    separation = report.sector_separation
+    within = report.within_sector_rank_correlation
+    ancestors = report.map_over_ancestors
+    parents = report.parent_retrieval
+
+    def formatted(value: Optional[float]) -> str:
+        return 'undefined' if value is None else f'{value:.4f}'
+
+    console.print(
+        f'\n[bold cyan]Structural diagnostics (Req 6): {report.codes:,} codes, '
+        f'{report.geometry}[/bold cyan]\n'
+    )
+    console.print(
+        f'  • sector separation AUC: {separation.auc:.4f} ({separation.same_sector_pairs:,} '
+        f'same-sector, {separation.cross_sector_pairs:,} cross-sector pairs)'
+    )
+    console.print(
+        f'  • within-sector rank correlation: {formatted(within.mean_over_queries)} over '
+        f'{within.queries - within.undefined_queries:,} queries, '
+        f'{formatted(within.mean_over_sectors)} over {len(within.by_sector)} sectors '
+        f'({within.undefined_queries:,} undefined)'
+    )
+    levels = ', '.join(f'level {level} {value:.4f}' for level, value in ancestors.by_level.items())
+    console.print(
+        f'  • MAP over ancestors: {ancestors.value:.4f} over {ancestors.queries:,} queries '
+        f'({levels})'
+    )
+    ndcg = ', '.join(f'{k} {value.value:.4f}' for k, value in report.ndcg.items())
+    console.print(f'  • NDCG: {ndcg}')
+    console.print(
+        f'  • distance Pearson with D*: {formatted(report.distance_pearson.value)} over '
+        f'{report.distance_pearson.pairs:,} pairs'
+    )
+    at = ', '.join(f'@{k} {value:.4f}' for k, value in parents.at.items())
+    console.print(
+        f'  • parent retrieval: {at} over {parents.queries:,} queries '
+        f'({parents.unary_pairs_excluded} unary pairs excluded)'
+    )
+    console.print('\nDescriptive only: nothing selects on these, and none has a threshold.\n')
+
+    if output:
+        path = Path(output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(report.model_dump_json(indent=2) + '\n')
+        console.print(f'Report written to {path}')
