@@ -17,6 +17,7 @@ Commands:
 '''
 
 import json
+import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -530,6 +531,21 @@ def text_only_table(
     console.print(f'Text-only table: {path}')
     console.print(f'Provenance: {text_only_provenance_path(path)}')
 
+def _require_writable(path: Path) -> None:
+    '''
+    Create the file's directory and require that the file can be written there.
+
+    Raises:
+        OSError: If the path is a directory, or neither it nor its new directory is writable.
+    '''
+
+    if path.is_dir():
+        raise IsADirectoryError(f'{path} is a directory, not a file')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    target = path if path.exists() else path.parent
+    if not os.access(target, os.W_OK):
+        raise PermissionError(f'{target} is not writable')
+
 @app.command('regressor-panel')
 def regressor_panel(
     coordinates: Annotated[
@@ -617,10 +633,10 @@ def regressor_panel(
     read_purpose = (purpose or '').strip() or f'regressor panel {split} read'
     output_path = Path(output) if output else None
     try:
-        # The output directory, the arm and every opening are checked before any opening: a
-        # test read that failed after its opening would use the opening up
+        # The output path, the arm and every opening are checked before any opening: a test
+        # read that failed after its opening would use the opening up
         if output_path is not None:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            _require_writable(output_path)
         panel = load_regressor_panel(cfg, codebook, log_path=log, levels=levels)
         arm = ArmTables.from_tables(pl.read_parquet(coordinates), pl.read_parquet(text_only))
         panel.require_arm(arm)
@@ -662,5 +678,9 @@ def regressor_panel(
     console.print(f'\nReads logged to {panel.log.path} (fingerprint {panel.fingerprint})\n')
 
     if output_path is not None:
-        predictions.write_parquet(output_path)
+        try:
+            predictions.write_parquet(output_path)
+        except OSError as exc:
+            console.print(f'[bold red]Predictions not written:[/bold red] {exc}')
+            raise typer.Exit(code=1)
         console.print(f'Predictions written to {output_path}')

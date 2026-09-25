@@ -600,9 +600,14 @@ def test_regressor_panel_checks_the_arm_and_the_output_before_opening(
     blocked = runner.invoke(
         tools_cli.app, [*_regressor_arguments(tmp_path), *test_split, '--output', unwritable]
     )
+    directory = runner.invoke(
+        tools_cli.app, [*_regressor_arguments(tmp_path), *test_split, '--output',
+                        str(tmp_path)]
+    )
 
     assert missing.exit_code == 1
     assert 'no coordinates' in missing.output
-    assert blocked.exit_code == 1
-    assert 'Regressor panel failed' in blocked.output
+    for result in (blocked, directory):
+        assert result.exit_code == 1
+        assert 'Regressor panel failed' in result.output
     assert log.records() == []
