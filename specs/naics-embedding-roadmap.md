@@ -407,8 +407,11 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       worktree and is copied off a Lambda instance before termination. `decide` admits a run
       only if its reads are logged after the margins' `fixed_at`, comparing clocks across
       machines, so the machine that fixes the margins and those that train must agree on the
-      time. `tools diagnostics` replaced `verify-stage4`. Text and HGCN validation still log the
-      old structural statistics, off every progress bar and headline, for Stages 7 and 11 to
+      time. It also pairs arms only on panels holding the same data, hashing the regressor
+      rows' log-transformed counts bit for bit, so the reference arm that fixes the margins and
+      every arm compared with it must be swept on one platform under one `uv.lock`.
+      `tools diagnostics` replaced `verify-stage4`. Text and HGCN validation still log the old
+      structural statistics, off every progress bar and headline, for Stages 7 and 11 to
       remove.
       Realized: on the text-only table (all-MiniLM-L6-v2 at revision 1110a243, 384 dimensions,
       spherical), sector-separation AUC 0.8538, within-sector rank correlation 0.2974 over queries
