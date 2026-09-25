@@ -50,6 +50,9 @@ The codebase is organized around this pipeline plus a rich config/validation lay
 - `src/naics_embedder/metrics/`  
   Shared metric implementations for both text and graph models (hierarchy metrics, downstream graph evaluation, QCEW benchmark, etc.).
 
+- `src/naics_embedder/decision/`  
+  Req 5's decision rule over the outcome panel and the regressor panel's two regimes: decision statistics, paired resampling, the rule and tie order, decision records, the content-addressed artifact store, and the seed-sweep driver.
+
 - `src/naics_embedder/utils/`  
   Cross-cutting infrastructure:
   - `config.py` – config models and YAML I/O.

@@ -246,6 +246,58 @@ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
 - `--log PATH` - Selection log (default: `logs/selection_log.jsonl`)
 - `--output PATH` - Write the per-row predictions as parquet
 
+### `tools margins`
+
+Fix each panel's non-inferiority margin δ from a reference arm (Req 5): δ is `--multiple` times
+the reference's across-seed standard deviation of the panel's decision statistic (roadmap D10:
+per-query MRR on the outcome panel, and the `covariates+embedding` comparator's mean squared
+error on each regressor regime at level 6). Fix the margins before any other arm of the decision
+reads a panel: a decision refuses every run that read before its margins were fixed.
+
+**Generates:** the margin record (JSON)
+
+```bash
+uv run naics-embedder tools margins --reference reference.json --multiple 0.5 \
+  --name reference-margins --store ~/naics-artifacts --output margins.json
+```
+
+**Options:**
+- `--reference PATH` - The reference configuration's arm record, written by the seed-sweep
+  driver (`naics_embedder.decision.sweep.run_seed_sweep`)
+- `--multiple FLOAT` - Each δ as a multiple of the reference's across-seed standard deviation
+- `--name TEXT` - Names the margins in the decision records that use them
+- `--store PATH` - The artifact store the arm record references
+- `--output PATH` - Where to write the margin record; an existing file is never overwritten
+
+### `tools decide`
+
+Decide among two or more arms under Req 5's rule over the three panels of roadmap D8: the outcome
+panel and the regressor panel's seen and held-out regimes at level 6. Each comparison reads the
+difference Δ on paired resamples of each panel's units (codes with their queries; four-digit
+groups), with each arm's seeds resampled inside every replicate. A is adopted over B when it is
+non-inferior on all three panels (the 95 % interval's lower bound above −δ) and superior on at
+least one (the 98⅓ % interval above zero). The survivors are the arms no other arm is adopted
+over, and the tie order picks among them: fewer components, then lower dimension, then
+non-hyperbolic geometry, then the higher held-out gain over ancestors (roadmap D11). The number
+of replicates, the bootstrap seed and the seed floor come from `conf/data/decision.yaml`.
+
+**Generates:** the decision record (JSON): the arms with their selection-log records and artifact
+references, the margins, every comparison with both intervals, the non-dominated set, the tie
+order, the chosen arm, and each arm's reported gains over the sparse comparators
+
+```bash
+uv run naics-embedder tools decide --arm candidate.json --arm reference.json \
+  --margins margins.json --name dimension-8 --question "Is dimension 8 enough?" \
+  --store ~/naics-artifacts --output decision.json
+```
+
+**Options:**
+- `--arm PATH` - An arm record; repeat for each arm
+- `--margins PATH` - The margin record (`tools margins`)
+- `--name TEXT`, `--question TEXT` - Name the decision and say what it settles
+- `--store PATH` - The artifact store the arm records reference
+- `--output PATH` - Where to write the decision record; an existing file is never overwritten
+
 ---
 
 ## Training Commands

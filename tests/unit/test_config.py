@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from naics_embedder.utils.config import (
     CheckpointLoadMode,
     Config,
+    DecisionConfig,
     DirConfig,
     DistancesConfig,
     DownloadConfig,
@@ -599,6 +600,27 @@ class TestRegressorPanelConfig:
             RegressorBranchRecord(branch='A')
         with pytest.raises(ValidationError):
             RegressorBranchRecord(**{**BRANCH_RECORD, 'branch': 'D'})
+
+@pytest.mark.unit
+class TestDecisionConfig:
+    '''Req 5's decision procedure (roadmap Stage 4): the paired bootstrap and the seed floor.'''
+
+    def test_yaml_matches_defaults(self):
+        cfg = load_config(DecisionConfig, 'data/decision.yaml')
+
+        assert cfg == DecisionConfig()
+        assert (cfg.replicates, cfg.bootstrap_seed, cfg.min_seeds) == (10000, 20260924, 5)
+
+    def test_the_seed_floor_is_req_5s(self):
+        # Req 5: "Each arm runs at least 5 seeds"
+        with pytest.raises(ValidationError):
+            DecisionConfig(min_seeds=4)
+
+    def test_rejects_too_few_replicates_and_unknown_keys(self):
+        with pytest.raises(ValidationError):
+            DecisionConfig(replicates=999)
+        with pytest.raises(ValidationError):
+            DecisionConfig(seeds=5)
 
 # -------------------------------------------------------------------------------------------------
 # Repaired Stage-3 runtime configuration

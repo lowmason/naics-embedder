@@ -14,6 +14,8 @@ Commands:
     outcome-baseline: Score the lexical stub encoder on the outcome panel's validation split.
     text-only-table: Embed every code's text with the arm's backbone, frozen (roadmap D9).
     regressor-panel: Score an arm on the regressor panel's validation or sealed test split.
+    margins: Fix each panel's non-inferiority margin from a reference arm (Req 5).
+    decide: Decide among arms under Req 5's rule over D8's three panels.
 '''
 
 import json
@@ -26,6 +28,10 @@ import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
+from naics_embedder.decision.decide import decide, fix_margins
+from naics_embedder.decision.records import ArmRecord, MarginRecord, read_record, write_record
+from naics_embedder.decision.rule import TieUnresolvedError
+from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
     resolve_graph_supervision_paths,
 )
@@ -50,6 +56,7 @@ from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.embeddings_verification import Stage4VerificationConfig, verify_stage4
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
 from naics_embedder.utils.config import (
+    DecisionConfig,
     DownloadConfig,
     OutcomePanelConfig,
     RegressorPanelConfig,
@@ -68,6 +75,7 @@ app = typer.Typer(
 )
 
 REGRESSOR_PANEL_CONFIG = 'data/regressor_panel.yaml'
+DECISION_CONFIG = 'data/decision.yaml'
 
 # -------------------------------------------------------------------------------------------------
 # View configuration
@@ -684,3 +692,151 @@ def regressor_panel(
             console.print(f'[bold red]Predictions not written:[/bold red] {exc}')
             raise typer.Exit(code=1)
         console.print(f'Predictions written to {output_path}')
+
+# -------------------------------------------------------------------------------------------------
+# Decisions (Req 5)
+# -------------------------------------------------------------------------------------------------
+
+@app.command('margins')
+def margins_command(
+    reference: Annotated[
+        str,
+        typer.Option('--reference', help="The reference configuration's arm record (JSON)"),
+    ],
+    multiple: Annotated[
+        float,
+        typer.Option('--multiple', help="Each δ as a multiple of the reference's across-seed SD"),
+    ],
+    name: Annotated[
+        str,
+        typer.Option('--name', help='Names the margins in the decision records that use them'),
+    ],
+    store: Annotated[
+        str,
+        typer.Option('--store', help='The artifact store the arm record references'),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where to write the margin record (JSON)'),
+    ],
+):
+    '''
+    Fix each panel's non-inferiority margin δ from a reference arm (Req 5).
+
+    δ is the multiple times the reference arm's across-seed standard deviation of the panel's
+    decision statistic (D10). Fix the margins before any other arm of a decision reads a panel: a
+    decision refuses every run that read before its margins were fixed.
+
+    Example:
+        Fix the margins at half a standard deviation::
+
+            $ uv run naics-embedder tools margins --reference reference.json --multiple 0.5 \\
+                --name reference-margins --store ~/naics-artifacts --output margins.json
+    '''
+
+    configure_logging('tools_margins.log')
+
+    cfg = load_config(DecisionConfig, DECISION_CONFIG)
+    try:
+        record = fix_margins(
+            read_record(reference, ArmRecord),
+            multiple,
+            name,
+            ArtifactStore(store),
+            min_seeds=cfg.min_seeds,
+        )
+        path = write_record(record, output)
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]Margins failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(
+        f'\n[bold cyan]Margins {name!r}, fixed {record.fixed_at.isoformat()}[/bold cyan]\n'
+    )
+    for entry in record.margins:
+        console.print(
+            f'  • {entry.panel}: δ {entry.margin:.6g} = {multiple:g} × SD {entry.sd:.6g} of '
+            f'{entry.statistic} over {len(entry.per_seed)} seeds'
+        )
+    console.print(f'\nMargin record: {path}\n')
+
+@app.command('decide')
+def decide_command(
+    arm: Annotated[
+        List[str],
+        typer.Option('--arm', help='An arm record (JSON); repeat for each arm'),
+    ],
+    margins: Annotated[
+        str,
+        typer.Option('--margins', help='The margin record (tools margins)'),
+    ],
+    name: Annotated[
+        str,
+        typer.Option('--name', help='Names the decision'),
+    ],
+    question: Annotated[
+        str,
+        typer.Option('--question', help='What the decision settles, in a sentence'),
+    ],
+    store: Annotated[
+        str,
+        typer.Option('--store', help='The artifact store the arm records reference'),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where to write the decision record (JSON)'),
+    ],
+):
+    '''
+    Decide among two or more arms under Req 5's rule over D8's three panels.
+
+    Each A-against-B comparison reads Δ on paired resamples of each panel's units, seeds nested.
+    A is adopted over B when it is non-inferior on all three panels (the 95 % interval's lower
+    bound above −δ) and superior on at least one (the 98⅓ % interval above zero). The survivors
+    are the arms no other arm is adopted over, and the tie order picks among them. The record
+    carries the arms with their selection-log records and artifact references, the margins, every
+    comparison, the non-dominated set, the tie order and the chosen arm.
+
+    Example:
+        Decide between a candidate and the reference::
+
+            $ uv run naics-embedder tools decide --arm candidate.json --arm reference.json \\
+                --margins margins.json --name dimension-8 --question "Is dimension 8 enough?" \\
+                --store ~/naics-artifacts --output decision.json
+    '''
+
+    configure_logging('tools_decide.log')
+
+    cfg = load_config(DecisionConfig, DECISION_CONFIG)
+    try:
+        record = decide(
+            name,
+            question,
+            [read_record(path, ArmRecord) for path in arm],
+            read_record(margins, MarginRecord),
+            ArtifactStore(store),
+            replicates=cfg.replicates,
+            bootstrap_seed=cfg.bootstrap_seed,
+            min_seeds=cfg.min_seeds,
+        )
+        path = write_record(record, output)
+    except (OSError, ValueError, TieUnresolvedError) as exc:
+        console.print(f'[bold red]Decision failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(f'\n[bold cyan]Decision {name!r}[/bold cyan]\n')
+    for comparison in record.comparisons:
+        verdict = 'adopted' if comparison.adopted else 'not adopted'
+        console.print(f'  • {comparison.a} over {comparison.b}: {verdict}')
+        for panel in comparison.panels:
+            low, high = panel.noninferiority_interval
+            upper_low, upper_high = panel.superiority_interval
+            console.print(
+                f'      {panel.panel}: Δ {panel.delta:+.4g}; 95 % [{low:+.4g}, {high:+.4g}] '
+                f'against −δ {-panel.margin:.4g}; 98⅓ % [{upper_low:+.4g}, {upper_high:+.4g}]'
+            )
+    cycle = ' (dominance cycled)' if record.cycle else ''
+    console.print(f'\nNon-dominated: {", ".join(record.non_dominated)}{cycle}')
+    console.print(f'Tie order: {", ".join(record.tie_order)}')
+    console.print(f'[bold]Chosen: {record.chosen}[/bold]')
+    console.print(f'\nDecision record: {path}\n')

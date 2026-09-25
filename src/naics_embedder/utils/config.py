@@ -554,6 +554,19 @@ class RegressorPanelConfig(BaseModel):
         default=None, description="The Req 2 branch of Stage 1's finding; required to run"
     )
 
+class DecisionConfig(BaseModel):
+    '''Req 5's decision procedure (roadmap Stage 4): the paired bootstrap and the seed floor.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    replicates: int = Field(
+        default=10000, ge=1000, description='Paired two-stage bootstrap replicates per panel'
+    )
+    bootstrap_seed: int = Field(
+        default=20260924, description='Base seed of every unit and seed draw'
+    )
+    min_seeds: int = Field(default=5, ge=5, description='Req 5: each arm runs at least 5 seeds')
+
 class SupervisionRuntimeConfig(BaseModel):
     '''Which supervision contract training runs under, and the one authoritative bundle.'''
 

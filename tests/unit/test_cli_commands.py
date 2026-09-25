@@ -7,10 +7,13 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
+from naics_embedder.decision.records import DecisionRecord, MarginRecord, read_record, write_record
+from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.metrics import StructuralMetricInputError
 from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.supervision.artifacts import load_validated_bundle
+from tests.fixtures.decision import spec, synthetic_arm
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
     HELDOUT_GROUPS,
@@ -357,6 +360,108 @@ def test_verify_stage4_rejects_relations_from_outside_its_bundle(
     assert result.exit_code == 1
     assert 'relations path does not belong' in result.output
     assert verify_inputs == {}
+
+# -------------------------------------------------------------------------------------------------
+# Decisions (Req 5)
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def decision_inputs(tmp_path):
+    '''A synthetic reference arm's record, written, and the store it references.'''
+
+    store = ArtifactStore(tmp_path / 'store')
+    reference = write_record(
+        synthetic_arm(store, tmp_path, spec('reference'), {}), tmp_path / 'reference.json'
+    )
+    return store, reference
+
+def _margins(runner, tmp_path, store, reference):
+    return runner.invoke(
+        tools_cli.app,
+        [
+            'margins',
+            '--reference',
+            str(reference),
+            '--multiple',
+            '2',
+            '--name',
+            'fixture margins',
+            '--store',
+            str(store.root),
+            '--output',
+            str(tmp_path / 'margins.json'),
+        ],
+    )
+
+def _decide(runner, tmp_path, store, arms):
+    arguments = ['decide']
+    for path in arms:
+        arguments += ['--arm', str(path)]
+    arguments += [
+        '--margins',
+        str(tmp_path / 'margins.json'),
+        '--name',
+        'fixture decision',
+        '--question',
+        'which arm?',
+        '--store',
+        str(store.root),
+        '--output',
+        str(tmp_path / 'decision.json'),
+    ]
+    return runner.invoke(tools_cli.app, arguments)
+
+@pytest.mark.unit
+def test_margins_writes_each_panels_margin(runner, tmp_path, decision_inputs):
+    store, reference = decision_inputs
+
+    result = _margins(runner, tmp_path, store, reference)
+
+    assert result.exit_code == 0, result.output
+    record = read_record(tmp_path / 'margins.json', MarginRecord)
+    panels = [entry.panel for entry in record.margins]
+    assert panels == ['outcome', 'regressor_seen', 'regressor_heldout']
+    assert 'regressor_heldout: δ' in result.output.replace('\n', '')
+
+@pytest.mark.unit
+def test_margins_reports_a_missing_reference(runner, tmp_path, decision_inputs):
+    store, _ = decision_inputs
+
+    result = _margins(runner, tmp_path, store, tmp_path / 'missing.json')
+
+    assert result.exit_code == 1
+    assert 'Margins failed' in result.output
+    assert not (tmp_path / 'margins.json').exists()
+
+@pytest.mark.unit
+def test_decide_adopts_the_better_arm_and_writes_the_record(runner, tmp_path, decision_inputs):
+    store, reference = decision_inputs
+    assert _margins(runner, tmp_path, store, reference).exit_code == 0
+    better = write_record(
+        synthetic_arm(store, tmp_path, spec('better', dimension=32), {'outcome': 5}),
+        tmp_path / 'better.json',
+    )
+
+    result = _decide(runner, tmp_path, store, [better, reference])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace('\n', '')
+    assert 'better over reference: adopted' in output
+    assert 'Chosen: better' in output
+    assert read_record(tmp_path / 'decision.json', DecisionRecord).chosen == 'better'
+
+@pytest.mark.unit
+def test_decide_reports_a_tie_it_cannot_break(runner, tmp_path, decision_inputs):
+    store, reference = decision_inputs
+    assert _margins(runner, tmp_path, store, reference).exit_code == 0
+    twin = write_record(synthetic_arm(store, tmp_path, spec('twin'), {}), tmp_path / 'twin.json')
+
+    result = _decide(runner, tmp_path, store, [twin, reference])
+
+    assert result.exit_code == 1
+    assert 'Decision failed' in result.output
+    assert 'tie' in result.output.replace('\n', '')
+    assert not (tmp_path / 'decision.json').exists()
 
 # -------------------------------------------------------------------------------------------------
 # Outcome panel: lexical baseline

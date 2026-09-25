@@ -100,6 +100,14 @@ naics-embedder/
 │   │   ├── ridge.py          # Ridge on standardized features along a penalty grid
 │   │   ├── text_only.py      # The text-only comparator: a frozen-backbone code table (D9)
 │   │   └── regressor.py      # RegressorPanel: two regimes, sealed outer sets, predictions
+│   ├── decision/             # Req 5's decision rule over D8's three panels (roadmap Stage 4)
+│   │   ├── scores.py         # Each panel's per-unit scores and decision statistic (D10)
+│   │   ├── resampling.py     # Paired two-stage bootstrap: units shared, seeds per arm
+│   │   ├── rule.py           # Non-inferiority, superiority, non-dominated set, tie order
+│   │   ├── records.py        # Arm, margin and decision records (JSON, never overwritten)
+│   │   ├── store.py          # Content-addressed artifact store
+│   │   ├── decide.py         # Guards, margins and decisions
+│   │   └── sweep.py          # Seed-sweep driver: N seeds, every panel read, all stored
 │   ├── graph_model/          # Stage 4: HGCN refinement
 │   │   ├── hgcn.py           # Hyperbolic graph convolutional network
 │   │   ├── evaluation.py     # HGCN evaluation metrics
@@ -155,6 +163,7 @@ naics-embedder/
 │   │   ├── index_roles.csv        # The frozen index-entry role table (committed)
 │   │   ├── regressor_panel.yaml   # QCEW pins, held-out draw, ridge grid, folds, branch record
 │   │   ├── regressor_heldout_groups.csv  # The regressor panel's held-out groups (committed)
+│   │   ├── decision.yaml          # Decision rule: bootstrap replicates and seed, seed floor
 │   │   ├── relations.yaml
 │   │   ├── distances.yaml
 │   │   └── triplets.yaml
@@ -434,6 +443,8 @@ uv run naics-embedder tools investigate  # Investigate hierarchy correlation
 uv run naics-embedder tools outcome-baseline  # Lexical stub on the outcome validation split
 uv run naics-embedder tools text-only-table  # Frozen-backbone text table for the regressor panel
 uv run naics-embedder tools regressor-panel  # Score an arm on the regressor panel
+uv run naics-embedder tools margins   # Fix each panel's margin from a reference arm (Req 5)
+uv run naics-embedder tools decide    # Decide among arms under Req 5's rule
 ```
 
 ### Running Tests
