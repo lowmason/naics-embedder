@@ -402,10 +402,10 @@ class ValidationMixin:
         )
 
         cophenetic_result = self.hierarchy_metrics.cophenetic_correlation(emb_dists, gt_dists)
+        # Req 6: a structural statistic is logged for the record, never shown as a headline
         self.log(
             'val/cophenetic_correlation',
             self._to_python_scalar(cophenetic_result['correlation']),
-            prog_bar=True,
             batch_size=num_samples,
             sync_dist=True,
         )
@@ -448,7 +448,6 @@ class ValidationMixin:
         self.log(
             'val/median_distortion',
             self._to_python_scalar(distortion['median_distortion']),
-            prog_bar=True,
             batch_size=num_samples,
             sync_dist=True,
         )

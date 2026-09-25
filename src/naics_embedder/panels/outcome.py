@@ -11,8 +11,10 @@ training data, not a selection, so reading them is not logged.
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import hashlib
+import json
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol, Sequence, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
 import polars as pl
 import torch
@@ -24,7 +26,7 @@ from naics_embedder.panels.decoding import (
     score_decoding,
 )
 from naics_embedder.panels.index_roles import role_table_fingerprint, verify_examples_channel
-from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog
+from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog, merge_read_detail
 from naics_embedder.supervision.artifacts import (
     INDEX_ROLE_COLUMNS,
     INDEX_ROLES_ARTIFACT,
@@ -129,6 +131,22 @@ class OutcomePanel:
         with_entries = set(self._rows.get_column('code').to_list())
         return tuple(code for code in self.candidates if code not in with_entries)
 
+    def data_fingerprint(self, split: Union[IndexRole, str]) -> str:
+        '''
+        SHA-256 of what a read of the split scores: its queries (``entry_id``, ``code`` and
+        ``text``, in entry order) and the candidates.
+
+        ``fingerprint`` names the role assignment alone, which the log counts openings by, so two
+        panels can share it and still score other text or decode to other candidates. This
+        returns no rows, so it is not a read and logs nothing, even for the sealed test split.
+        '''
+
+        payload = {
+            'queries': self._split(IndexRole(split)).rows(),
+            'candidates': list(self.candidates),
+        }
+        return hashlib.sha256(json.dumps(payload).encode('utf-8')).hexdigest()
+
     def training_queries(self) -> pl.DataFrame:
         '''Training queries (``entry_id``, ``code``, ``text``); training data, so not logged.'''
 
@@ -183,12 +201,18 @@ class OutcomePanel:
         split: Union[IndexRole, str],
         purpose: str,
         distance: Union[str, DistanceFn] = 'cosine',
+        detail: Optional[Mapping[str, Any]] = None,
     ) -> DecodingResult:
-        '''Decode one split's queries over every candidate with the encoder, logging the read.'''
+        '''
+        Decode one split's queries over every candidate with the encoder, logging the read.
+
+        ``detail`` joins the read's logged detail, so a caller can name the run it scores; it
+        cannot replace the encoder or the distance the panel logs.
+        '''
 
         name, _ = resolve_distance(distance)
-        detail = {'encoder': type(encoder).__name__, 'distance': name}
-        queries = self._read(IndexRole(split), purpose, detail)
+        logged = {'encoder': type(encoder).__name__, 'distance': name}
+        queries = self._read(IndexRole(split), purpose, merge_read_detail(logged, detail))
         return score_decoding(
             encoder.encode_queries(queries.get_column('text').to_list()),
             queries.get_column('code').to_list(),

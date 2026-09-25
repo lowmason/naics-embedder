@@ -163,6 +163,19 @@ def test_training_propagates_train_epoch_to_datamodule(training_env):
     assert any(isinstance(cb, TrainDatasetEpochCallback) for cb in callbacks)
 
 @pytest.mark.unit
+def test_the_train_banner_headlines_no_structural_statistic(cli_runner, training_env):
+    '''Req 6: the structural statistics are logged for the record, never announced as the
+    evaluation.'''
+
+    result = cli_runner.invoke(cli_app, ['train'], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    output = result.output.replace('\n', '')
+    for name in ('Cophenetic', 'NDCG', 'Distortion'):
+        assert name not in output
+    assert 'Structural statistics, for the record only' in output
+
+@pytest.mark.unit
 def test_cli_train_applies_overrides(cli_runner, training_env, monkeypatch):
     captured = {}
 

@@ -40,12 +40,12 @@ nav:
           - Hierarchy Structure: api/hierarchy_structure_metrics.md
           - Outcome Panel: api/outcome_panel.md
           - Regressor Panel: api/regressor_panel.md
-          - QCEW: api/qcew_metrics.md
+          - Decision Rule: api/decision.md
+          - Diagnostics: api/diagnostics.md
           - Runner: api/runner.md
       - Tools:
           - Current Training Configuration: api/config_tools.md
           - Training Metrics: api/metrics_tools.md
-          - Embeddings Verification: api/embeddings_verification.md
       - Utilities:
           - Backend: api/backend.md
           - Console: api/console.md

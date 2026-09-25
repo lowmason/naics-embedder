@@ -2,35 +2,20 @@
 # Graph Model Metrics
 # -------------------------------------------------------------------------------------------------
 '''
-Graph-specific metrics and downstream evaluation.
+Graph-specific metrics.
 
 Contains:
 - compute_validation_metrics: Triplet-based validation metrics for hyperbolic embeddings
 - GraphEmbeddingDataset: Container for hyperbolic graph embeddings
-- GraphDownstreamEvaluator: Downstream evaluation (taxonomy, similarity, clustering, classification)
-- run_graph_downstream_suite: Convenience helper to run all evaluations
 '''
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, Sequence, Union
 
-import numpy as np
 import polars as pl
 import torch
-from sklearn.cluster import KMeans
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    accuracy_score,
-    adjusted_rand_score,
-    f1_score,
-    normalized_mutual_info_score,
-)
-from sklearn.model_selection import train_test_split
 
-from naics_embedder.metrics.core import lorentz_distance_matrix
-from naics_embedder.text_model.hyperbolic import LorentzOps
-from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
 from naics_embedder.utils.utilities import (
     STAGE3_EMBEDDING_PREFIX,
     STAGE4_EMBEDDING_PREFIX,
@@ -145,7 +130,7 @@ def compute_validation_metrics(
     return {k: float(v) for k, v in metrics.items()}
 
 # -------------------------------------------------------------------------------------------------
-# Downstream evaluation data structures
+# Graph embeddings
 # -------------------------------------------------------------------------------------------------
 
 @dataclass
@@ -202,239 +187,3 @@ class GraphEmbeddingDataset:
         levels = frame.get_column(level_column).to_list()
 
         return cls(embeddings=tensor, codes=codes, levels=levels)
-
-class GraphDownstreamEvaluator:
-    '''Evaluate downstream metrics for graph-refined NAICS embeddings.'''
-
-    def __init__(self, dataset: GraphEmbeddingDataset, *, curvature: float = 1.0):
-        self.dataset = dataset
-        self.curvature = float(curvature)
-        self._distance_cache: Optional[torch.Tensor] = None
-        self._tangent_cache: Optional[np.ndarray] = None
-        self._code_to_idx = {code: idx for idx, code in enumerate(dataset.codes)}
-        self._level_to_indices: Dict[int, List[int]] = {}
-        for idx, level in enumerate(dataset.levels):
-            self._level_to_indices.setdefault(level, []).append(idx)
-
-    def _pairwise_distances(self) -> torch.Tensor:
-        '''Pairwise float64 CPU Lorentz distances (see lorentz_distance_matrix), computed once.'''
-        if self._distance_cache is None:
-            self._distance_cache = lorentz_distance_matrix(self.dataset.embeddings, self.curvature)
-        return self._distance_cache
-
-    def _tangent_features(self) -> np.ndarray:
-        if self._tangent_cache is not None:
-            return self._tangent_cache
-
-        with torch.no_grad():
-            tangent = LorentzOps.log_map_zero(self.dataset.embeddings, c=self.curvature)
-
-        # Drop the time coordinate (always zero in tangent space)
-        self._tangent_cache = tangent[:, 1:].detach().cpu().numpy()
-        return self._tangent_cache
-
-    def taxonomy_reconstruction(
-        self,
-        hierarchy: NaicsHierarchy,
-        *,
-        k_values: Sequence[int] = (1, 3, 5),
-    ) -> Dict[str, float]:
-        '''Evaluate parent retrieval accuracy from embeddings alone.'''
-
-        k_values = sorted({int(k) for k in k_values if int(k) > 0})
-        if not k_values:
-            raise ValueError('k_values must contain at least one positive integer')
-
-        distances = self._pairwise_distances().numpy()
-        hits = np.zeros(len(k_values), dtype=np.float64)
-        evaluated = 0
-
-        for child_idx, code in enumerate(self.dataset.codes):
-            parent = hierarchy.get_parent(code)
-            if parent is None:
-                continue
-
-            parent_idx = self._code_to_idx.get(parent)
-            if parent_idx is None:
-                continue
-
-            parent_level = self.dataset.levels[child_idx] - 1
-            candidate_indices = [
-                idx for idx in self._level_to_indices.get(parent_level, []) if idx != child_idx
-            ]
-            if not candidate_indices:
-                continue
-
-            ordered = np.argsort(distances[child_idx, candidate_indices])
-            candidates_ranked = [candidate_indices[i] for i in ordered]
-            if not candidates_ranked:
-                continue
-
-            evaluated += 1
-            for idx, k in enumerate(k_values):
-                top = candidates_ranked[:min(k, len(candidates_ranked))]
-                if parent_idx in top:
-                    hits[idx] += 1
-
-        if evaluated == 0:
-            raise ValueError('No eligible nodes found for taxonomy reconstruction.')
-
-        results = {'evaluated_nodes': float(evaluated)}
-        for k, hit in zip(k_values, hits):
-            results[f'top_{k}_parent_accuracy'] = float(hit / evaluated)
-        return results
-
-    def industry_similarity(
-        self,
-        hierarchy: NaicsHierarchy,
-        *,
-        k_values: Sequence[int] = (5, 10),
-    ) -> Dict[str, float]:
-        '''Measure whether nearest neighbours correspond to semantic siblings.'''
-
-        k_values = sorted({int(k) for k in k_values if int(k) > 0})
-        if not k_values:
-            raise ValueError('k_values must contain at least one positive integer')
-
-        distances = self._pairwise_distances().numpy()
-        precision_lists: Dict[int, List[float]] = {k: [] for k in k_values}
-        first_sibling_ranks: List[int] = []
-
-        for code, idx in self._code_to_idx.items():
-            siblings = [
-                sib for sib in hierarchy.get_siblings(code)
-                if sib in self._code_to_idx and sib != code
-            ]
-            if not siblings:
-                continue
-
-            ordered = np.argsort(distances[idx])
-            ordered = [int(o) for o in ordered if o != idx]
-            if not ordered:
-                continue
-
-            sibling_indices = {self._code_to_idx[s] for s in siblings}
-            for k in k_values:
-                top = ordered[:min(k, len(ordered))]
-                denom = max(1, min(k, len(ordered)))
-                hits = len(set(top) & sibling_indices)
-                precision_lists[k].append(hits / denom)
-
-            sibling_positions = [
-                ordered.index(sib_idx) + 1 for sib_idx in sibling_indices if sib_idx in ordered
-            ]
-            if sibling_positions:
-                first_sibling_ranks.append(min(sibling_positions))
-
-        evaluated = first_sibling_ranks.__len__()
-        if evaluated == 0:
-            raise ValueError('No nodes with sibling matches were found for similarity metrics.')
-
-        results = {'evaluated_nodes': float(evaluated)}
-        for k, values in precision_lists.items():
-            if values:
-                results[f'precision@{k}'] = float(np.mean(values))
-        results['mean_first_sibling_rank'] = float(np.mean(first_sibling_ranks))
-        return results
-
-    def clustering_quality(
-        self,
-        *,
-        digits: Sequence[int] = (2, 3),
-        random_state: int = 42,
-    ) -> Dict[str, float]:
-        '''Compute ARI/NMI by clustering embeddings and comparing to NAICS prefixes.'''
-
-        features = self._tangent_features()
-        results: Dict[str, float] = {}
-
-        for length in digits:
-            mask = np.array([len(code) >= length for code in self.dataset.codes], dtype=bool)
-            if mask.sum() < 2:
-                continue
-
-            labels = [code[:length] for code, keep in zip(self.dataset.codes, mask) if keep]
-            unique_labels = set(labels)
-            if len(unique_labels) < 2:
-                continue
-
-            data = features[mask]
-            n_clusters = min(len(unique_labels), len(data))
-            if n_clusters < 2:
-                continue
-
-            model = KMeans(n_clusters=n_clusters, n_init='auto', random_state=random_state)
-            preds = model.fit_predict(data)
-            results[f'ari_{length}digit'] = float(adjusted_rand_score(labels, preds))
-            results[f'nmi_{length}digit'] = float(normalized_mutual_info_score(labels, preds))
-
-        if not results:
-            raise ValueError('Not enough samples to compute clustering metrics.')
-        return results
-
-    def classification_benchmark(
-        self,
-        *,
-        digits: int = 2,
-        test_size: float = 0.2,
-        random_state: int = 42,
-    ) -> Dict[str, float]:
-        '''Train a linear classifier to predict NAICS prefixes.'''
-
-        features = self._tangent_features()
-        mask = np.array([len(code) >= digits for code in self.dataset.codes], dtype=bool)
-        data = features[mask]
-        labels = np.array([code[:digits] for code, keep in zip(self.dataset.codes, mask) if keep])
-
-        unique, counts = np.unique(labels, return_counts=True)
-        if len(unique) < 2:
-            raise ValueError('Classification benchmark requires at least two label classes.')
-        if np.any(counts < 2):
-            raise ValueError('Each class must appear at least twice for a stratified split.')
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            data,
-            labels,
-            test_size=test_size,
-            random_state=random_state,
-            stratify=labels,
-        )
-
-        model = LogisticRegression(max_iter=500)
-        model.fit(X_train, y_train)
-        preds = model.predict(X_test)
-
-        return {
-            'accuracy': float(accuracy_score(y_test, preds)),
-            'macro_f1': float(f1_score(y_test, preds, average='macro')),
-            'n_train': float(len(y_train)),
-            'n_test': float(len(y_test)),
-        }
-
-def run_graph_downstream_suite(
-    dataset: GraphEmbeddingDataset,
-    hierarchy: NaicsHierarchy,
-    *,
-    curvature: float = 1.0,
-    taxonomy_k: Sequence[int] = (1, 3, 5),
-    sibling_k: Sequence[int] = (5, 10),
-    clustering_digits: Sequence[int] = (2, 3),
-    classification_digits: int = 2,
-    random_state: int = 42,
-) -> Dict[str, Dict[str, float]]:
-    '''Convenience helper to run all downstream evaluations sequentially.'''
-
-    evaluator = GraphDownstreamEvaluator(dataset, curvature=curvature)
-    taxonomy = evaluator.taxonomy_reconstruction(hierarchy, k_values=taxonomy_k)
-    similarity = evaluator.industry_similarity(hierarchy, k_values=sibling_k)
-    clustering = evaluator.clustering_quality(digits=clustering_digits, random_state=random_state)
-    classification = evaluator.classification_benchmark(
-        digits=classification_digits, random_state=random_state
-    )
-
-    return {
-        'taxonomy': taxonomy,
-        'similarity': similarity,
-        'clustering': clustering,
-        'classification': classification,
-    }

@@ -47,12 +47,8 @@ from naics_embedder.graph_model.hgcn import (
     main as train_hgcn,
 )
 from naics_embedder.metrics import (
-    GraphDownstreamEvaluator,
     GraphEmbeddingDataset,
-    QCEWBenchmarkConfig,
     compute_validation_metrics,
-    run_graph_downstream_suite,
-    run_qcew_employment_benchmark,
 )
 
 __all__ = [
@@ -66,10 +62,6 @@ __all__ = [
     # Evaluation
     'compute_validation_metrics',
     'GraphEmbeddingDataset',
-    'GraphDownstreamEvaluator',
-    'run_graph_downstream_suite',
-    'QCEWBenchmarkConfig',
-    'run_qcew_employment_benchmark',
     # Curriculum Controller
     'ControllerConfig',
     'CurriculumController',

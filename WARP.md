@@ -24,7 +24,7 @@ The codebase is organized around this pipeline plus a rich config/validation lay
 - `src/naics_embedder/cli/`  
   Typer-based CLI. The top-level command is `naics-embedder`, with three groups:
   - `data` – data generation / preprocessing
-  - `tools` – config/metrics utilities (including Stage 4 verification)
+  - `tools` – config/metrics utilities (including Req 6 diagnostics and Req 5 decisions)
   - `train` – text-model training entrypoint
 
 - `conf/config.yaml` + `src/naics_embedder/utils/config.py`  
@@ -48,7 +48,10 @@ The codebase is organized around this pipeline plus a rich config/validation lay
   - `curriculum/` – event-driven 4‑phase curriculum (controller, event bus, adaptive loss, sampling, monitoring, preprocessing).
 
 - `src/naics_embedder/metrics/`  
-  Shared metric implementations for both text and graph models (hierarchy metrics, downstream graph evaluation, QCEW benchmark, etc.).
+  Shared metric implementations for both text and graph models (hierarchy metrics, graph validation metrics, and `diagnostics.py`: Req 6's structural diagnostics).
+
+- `src/naics_embedder/decision/`  
+  Req 5's decision rule over the outcome panel and the regressor panel's two regimes: decision statistics, paired resampling, the rule and tie order, decision records, the content-addressed artifact store, and the seed-sweep driver.
 
 - `src/naics_embedder/utils/`  
   Cross-cutting infrastructure:
@@ -61,7 +64,6 @@ The codebase is organized around this pipeline plus a rich config/validation lay
   Non-training utilities surfaced via `naics-embedder tools`:
   - `config_tools.py` – config inspection.
   - `metrics_tools.py` – metric visualization and investigation helpers.
-  - `embeddings_verification.py` – logic for comparing Stage 3 vs Stage 4 embeddings.
 
 - `data/` (generated), `checkpoints/`, `logs/`, `outputs/`, `reports/`  
   Runtime artifacts (gitignored) for data, training outputs, and analysis.
@@ -154,18 +156,19 @@ uv run naics-embedder tools visualize --stage 02_text
 uv run naics-embedder tools investigate
 ```
 
-Stage 4 (HGCN) verification:
+Structural diagnostics and decisions:
 
 ```bash path=null start=null
-uv run naics-embedder tools verify-stage4 \
-  --pre ./output/hyperbolic_projection/encodings.parquet \
-  --post ./output/hgcn/encodings.parquet \
-  --supervision-manifest data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json
+uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \
+  --codebook PATH/naics_codebook.parquet
+uv run naics-embedder tools margins --reference reference.json --multiple 0.5 \
+  --name reference-margins --store ~/naics-artifacts --output margins.json
+uv run naics-embedder tools decide --arm candidate.json --arm reference.json \
+  --margins margins.json --name dimension-8 --question "Is dimension 8 enough?" \
+  --store ~/naics-artifacts --output decision.json
 ```
 
-`--supervision-manifest` reads the distance matrix and relations from the bundle; without it they default to the legacy `./data` files.
-
-This command runs hierarchy-aware metrics pre/post HGCN (cophenetic correlation, NDCG@K, parent retrieval) and enforces degradation thresholds (`--max-cophenetic-drop`, `--max-ndcg-drop`, `--min-local-improvement`, `--parent-top-k`). It is the canonical way to gate Stage 4 changes.
+`tools diagnostics` reports Req 6's structural statistics for a table in the export form (tangent coordinates at the origin for a hyperbolic arm), with no thresholds and no pass/fail. `tools margins` fixes each panel's non-inferiority margin from a reference arm, and `tools decide` applies Req 5's rule over the outcome panel and the regressor panel's two regimes. Configurations, the graph stage included, are compared this way, never on structural statistics.
 
 ### HGCN refinement (Stage 4)
 
@@ -177,7 +180,7 @@ Typical flow:
 1. Train or load a Stage 3 checkpoint via `uv run naics-embedder train`.
 2. Use the confirmation prompt at the end of `train` to generate `output/hyperbolic_projection/encodings.parquet` (Stage 3 embeddings) via `generate_embeddings_from_checkpoint(...)` in `cli/commands/training.py`.
 3. Run HGCN training using `naics_embedder.graph_model.hgcn.main` (e.g., from a script or notebook) configured with a `GraphConfig` YAML.
-4. Validate that Stage 4 did not degrade hierarchy metrics using `tools verify-stage4` (above).
+4. Report each table's structural diagnostics with `tools diagnostics` (above). Whether the graph stage is kept is decided under Req 5 with `tools decide`, never on structural statistics.
 
 Refer to `docs/hgcn_training.md` and `src/naics_embedder/graph_model/hgcn.py` for the up-to-date graph config fields and metrics.
 

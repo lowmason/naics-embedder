@@ -29,6 +29,7 @@ statistic it settles on and resample by four-digit group.
 # -------------------------------------------------------------------------------------------------
 
 import hashlib
+import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -64,8 +65,8 @@ from naics_embedder.panels.ridge import (
     squared_errors,
     standardized_ridge_path,
 )
-from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog
-from naics_embedder.panels.text_only import TEXT_ONLY_PREFIX, pca_reduce
+from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog, merge_read_detail
+from naics_embedder.panels.text_only import matrix_fingerprint, pca_reduce, text_only_matrix
 from naics_embedder.utils.config import RegressorBranchRecord, RegressorPanelConfig
 
 class Regime(str, Enum):
@@ -346,13 +347,10 @@ def coordinate_matrix(table: pl.DataFrame) -> Tuple[Tuple[str, ...], np.ndarray]
         )
     return codes, matrix
 
-def matrix_fingerprint(codes: Sequence[str], matrix: np.ndarray) -> str:
-    '''SHA-256 of the codes and their float64 values, in code order.'''
+def table_fingerprint(table: pl.DataFrame) -> str:
+    '''An arm's coordinate table's ``matrix_fingerprint``: the name a regressor read logs it by.'''
 
-    order = np.argsort(np.asarray(codes))
-    digest = hashlib.sha256('\n'.join(codes[index] for index in order).encode('utf-8'))
-    digest.update(np.ascontiguousarray(matrix[order], dtype=np.float64).tobytes())
-    return digest.hexdigest()
+    return matrix_fingerprint(*coordinate_matrix(table))
 
 @dataclass(frozen=True)
 class ArmTables:
@@ -374,11 +372,9 @@ class ArmTables:
         '''
 
         codes, matrix = coordinate_matrix(coordinates)
-        text_columns = [name for name in text_only.columns if name.startswith(TEXT_ONLY_PREFIX)]
-        text_codes = text_only.get_column('code').to_list()
+        text_codes, text_matrix = text_only_matrix(text_only)
         if set(text_codes) != set(codes) or len(text_codes) != len(codes):
             raise ValueError('the coordinate and text-only tables cover different codes')
-        text_matrix = np.array(text_only.select(text_columns).to_numpy(), dtype=np.float64)
         reduced = pca_reduce(text_matrix, matrix.shape[1])
         position = {code: row for row, code in enumerate(text_codes)}
         aligned = reduced[[position[code] for code in codes]]
@@ -590,6 +586,22 @@ class RegressorPanel:
 
         return split_counts(self._frame(level))
 
+    def data_fingerprint(self, level: int) -> str:
+        '''
+        SHA-256 of the rows a read at the level scores from: every row there, its split included,
+        sorted by code and feature year, with the columns in name order.
+
+        ``fingerprint`` names the held-out draw alone, which the log counts openings by, so two
+        panels can share it and still fit other outcomes. This returns no rows, so it is not a
+        read and logs nothing. The values are hashed exactly: rows derived on another platform
+        can differ in a last bit, and then read as other data.
+        '''
+
+        frame = self._frame(level)
+        frame = frame.select(sorted(frame.columns)).sort('code', 'feature_year')
+        payload = {'columns': frame.columns, 'rows': frame.rows()}
+        return hashlib.sha256(json.dumps(payload).encode('utf-8')).hexdigest()
+
     def cell_status(self, regime: Regime, level: int) -> Optional[str]:
         '''None if the regime is defined at the level, otherwise the reason it is not.'''
 
@@ -620,10 +632,23 @@ class RegressorPanel:
         for level in self.levels:
             _require_codes(arm, self._frame(level))
 
-    def validation(self, regime: Regime, level: int, arm: ArmTables, purpose: str) -> pl.DataFrame:
-        '''Out-of-sample predictions for the remainder rows, logging the read.'''
+    def validation(
+        self,
+        regime: Regime,
+        level: int,
+        arm: ArmTables,
+        purpose: str,
+        detail: Optional[Mapping[str, Any]] = None,
+    ) -> pl.DataFrame:
+        '''
+        Out-of-sample predictions for the remainder rows, logging the read.
+
+        ``detail`` joins the read's logged detail, so a caller can name the run it scores; it
+        cannot replace a key the panel logs itself.
+        '''
 
         regime = Regime(regime)
+        logged = self._read_detail(regime, level, arm, detail)
         self._require_defined(regime, level)
         frame = self._remainder(level)
         if regime is Regime.SEEN:
@@ -631,7 +656,7 @@ class RegressorPanel:
         else:
             plan = heldout_validation_plan(frame, level, self.settings)
         _require_codes(arm, frame)
-        self._log_read(regime, VALIDATION, level, arm, purpose, frame.height)
+        self._log_read(regime, VALIDATION, purpose, frame.height, logged)
         return self._predict(regime, VALIDATION, level, frame, plan, arm)
 
     def require_openable(self, regime: Regime, reopen_reason: Optional[str] = None) -> None:
@@ -689,15 +714,25 @@ class RegressorPanel:
         )
         self._open.add(regime)
 
-    def test(self, regime: Regime, level: int, arm: ArmTables, purpose: str) -> pl.DataFrame:
+    def test(
+        self,
+        regime: Regime,
+        level: int,
+        arm: ArmTables,
+        purpose: str,
+        detail: Optional[Mapping[str, Any]] = None,
+    ) -> pl.DataFrame:
         '''
         Predictions for the regime's outer set from a fit on the whole remainder, logging the read.
+
+        ``detail`` joins the read's logged detail, as in ``validation``.
 
         Raises:
             SealedSplitError: If this panel object has not opened the regime's outer set.
         '''
 
         regime = Regime(regime)
+        logged = self._read_detail(regime, level, arm, detail)
         self._require_defined(regime, level)
         if regime not in self._open:
             raise SealedSplitError(
@@ -709,7 +744,7 @@ class RegressorPanel:
         plan = outer_plan(frame, regime, level, self.settings)
         n_outer = len(plan[0].score)
         _require_codes(arm, frame)
-        self._log_read(regime, TEST, level, arm, purpose, n_outer)
+        self._log_read(regime, TEST, purpose, n_outer, logged)
         return self._predict(regime, TEST, level, frame, plan, arm)
 
     def _frame(self, level: int) -> pl.DataFrame:
@@ -725,8 +760,24 @@ class RegressorPanel:
         if reason is not None:
             raise ValueError(f'the {regime.value} regime is undefined at level {level}: {reason}')
 
+    def _read_detail(
+        self,
+        regime: Regime,
+        level: int,
+        arm: ArmTables,
+        extra: Optional[Mapping[str, Any]],
+    ) -> Dict[str, Any]:
+        detail: Dict[str, Any] = {
+            'level': level,
+            'comparators': list(comparators(regime, level)),
+            'arm': arm.fingerprint,
+            'text_only': arm.text_only_fingerprint,
+            'dimension': arm.dimension,
+        }
+        return merge_read_detail(detail, extra)
+
     def _log_read(
-        self, regime: Regime, split: str, level: int, arm: ArmTables, purpose: str, n_rows: int
+        self, regime: Regime, split: str, purpose: str, n_rows: int, detail: Dict[str, Any]
     ) -> None:
         self.log.append(
             SelectionEvent.READ,
@@ -735,13 +786,7 @@ class RegressorPanel:
             purpose=purpose,
             fingerprint=self.fingerprint,
             n_queries=n_rows,
-            detail={
-                'level': level,
-                'comparators': list(comparators(regime, level)),
-                'arm': arm.fingerprint,
-                'text_only': arm.text_only_fingerprint,
-                'dimension': arm.dimension,
-            },
+            detail=detail,
         )
 
     def _predict(

@@ -187,6 +187,24 @@ def test_hgcn_spearman_full_metrics_logs_and_history(tmp_path, spearman_hgcn, un
     assert module._full_val_metrics == {}
 
 @pytest.mark.unit
+def test_hgcn_puts_no_structural_statistic_on_the_progress_bar(spearman_hgcn):
+    # Req 6: structural statistics are reported, never a headline
+    module, _ = spearman_hgcn
+    module.on_validation_epoch_start()
+    module.validation_step(
+        {
+            'anchor_idx': torch.tensor([0]),
+            'positive_idx': torch.tensor([1]),
+            'negative_indices': torch.tensor([[2, 3]])
+        },
+        batch_idx=0,
+    )
+
+    logged = [call.args[0] for call in module.log.call_args_list]
+    assert 'val/cophenetic_correlation' in logged
+    assert [call.args[0] for call in module.log.call_args_list if call.kwargs.get('prog_bar')] == []
+
+@pytest.mark.unit
 @pytest.mark.parametrize('invalid', ['nan_file', 'asymmetric', 'shape'])
 def test_hgcn_malformed_distances_fail_validation(spearman_hgcn, invalid):
     module, _ = spearman_hgcn

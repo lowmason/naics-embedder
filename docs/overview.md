@@ -455,14 +455,19 @@ The system computes comprehensive evaluation metrics during training to monitor 
 
 ### Hierarchy Preservation Metrics
 
-| Metric | Description | Ideal Value |
-|--------|-------------|-------------|
-| Cophenetic Correlation | Correlation between embedding and tree distances | → 1.0 |
-| Structural Spearman v1 (`structural_spearman_v1`) | Average-rank correlation of canonical unordered distance pairs | Defined values approach 1.0 |
-| NDCG@5 | Ranking quality (top 5 neighbors) | → 1.0 |
-| NDCG@10 | Ranking quality (top 10 neighbors) | → 1.0 |
-| NDCG@20 | Ranking quality (top 20 neighbors) | → 1.0 |
-| Mean Distortion | Average distance distortion from tree | → 0.0 |
+These structural statistics are logged for the record only (Req 6): no progress bar shows
+them and nothing selects on them. Configurations are compared under Req 5 on the outcome and
+regressor panels (`tools margins`, `tools decide`), and Req 6's stratified diagnostics come
+from `tools diagnostics` (see the [usage guide](usage.md#tools-diagnostics)).
+
+| Metric | Description |
+|--------|-------------|
+| Cophenetic Correlation | Correlation between embedding and tree distances |
+| Structural Spearman v1 (`structural_spearman_v1`) | Average-rank correlation of canonical unordered distance pairs |
+| NDCG@5 | Ranking quality (top 5 neighbors) |
+| NDCG@10 | Ranking quality (top 10 neighbors) |
+| NDCG@20 | Ranking quality (top 20 neighbors) |
+| Mean Distortion | Average distance distortion from tree |
 
 ### Structural Spearman v1
 
@@ -495,8 +500,7 @@ An unexpected non-finite SciPy result for otherwise defined inputs raises `Runti
 The general evaluation runner returns the complete result under `structural_spearman_v1`:
 `correlation`, `n_pairs`, `n_total`, `definition`, `status`, and `reason`. Training artifacts
 serialize undefined correlation as JSON `null`; Lightning omits that numeric scalar but logs
-the pair counts. Stage-4 verification reports pre/post/delta values and metadata but does not
-gate acceptance on Spearman.
+the pair counts.
 
 All unversioned historical fields (`spearman`, `spearman_correlation`,
 `val/spearman_correlation`, `val_spearman_correlation`) identify
@@ -505,7 +509,7 @@ and are not directly comparable with v1. Do not rewrite, dual-write, or numerica
 artifacts.
 
 This rank repair does not validate the formula that produced the distance matrices. HGCN full
-evaluation and the Stage-4 verifier remain fixed at curvature `1.0`; text comparison runs retain
+evaluation remains fixed at curvature `1.0`; text comparison runs retain
 `loss.curvature: 1.0`. Non-unit-curvature metric corrections are a separate change.
 
 ### Hyperbolic Geometry Metrics

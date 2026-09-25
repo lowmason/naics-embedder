@@ -138,12 +138,15 @@ This aligns global and local geometric structure with the NAICS taxonomy.
 
 ### 5.4 Validation Metrics
 
-To ensure graph refinement does not erode the global structure captured by the text model, the same hierarchy-aware metrics introduced earlier in the pipeline are logged:
+HGCN validation logs the same structural statistics as the text model:
 
 - Cophenetic correlation + pair counts
 - Structural Spearman v1 (`structural_spearman_v1`) and unique-pair counts
 - NDCG\@K (configurable list, default `5/10/20`)
 - Hyperbolic distortion statistics
+
+These are logged for the record only (Req 6): no progress bar shows them and nothing selects on
+them. Req 6's stratified diagnostics come from `tools diagnostics` (section 5.5).
 
 `structural-spearman-v1` validates square symmetric distance matrices, averages each mirrored
 pair in CPU float64, and uses only the strict upper triangle (`i < j`), excluding the diagonal.
@@ -162,29 +165,22 @@ Historical files remain untouched, and new reports do not dual-write legacy keys
 [metric contract](docs/overview.md#structural-spearman-v1) and the
 [text](docs/text_training.md) and [HGCN](docs/hgcn_training.md) artifact documentation.
 
-### 5.5 Pre/Post Verification
+### 5.5 Diagnostics and Decisions
 
-To ensure the refinement step preserves global structure while improving local parent retrieval, use the following command:
+Report Req 6's structural diagnostics on any 2,125-code table in the export form (tangent
+coordinates at the origin for a hyperbolic arm):
 
 ``` bash
-uv run naics-embedder tools verify-stage4 \
-  --pre ./output/hyperbolic_projection/encodings.parquet \
-  --post ./output/hgcn/encodings.parquet \
-  --supervision-manifest data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json
+uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \
+  --codebook data/supervision/stage3-supervision-v1/<bundle-id>/naics_codebook.parquet
 ```
 
-`--supervision-manifest` reads the distance matrix and relations from the validated bundle.
-Without it, `--distance-matrix` and `--relations` default to the legacy
-`./data/naics_distance_matrix.parquet` and `./data/naics_relations.parquet`, which
-`data all` no longer writes.
-
-The verifier reports cophenetic correlation, NDCG\@K, parent-retrieval accuracy, and
-`structural_spearman_v1` pre/post/delta values at fixed curvature `1.0`. Only cophenetic, NDCG,
-and local parent-retrieval checks determine pass/fail; structural Spearman is report-only, with
-no threshold option. Undefined values or deltas display as `N/A` and serialize as JSON `null`.
-Definition, status, reason, and pair counts live under
-`metric_metadata['structural_spearman_v1']`; see the
-[verification output contract](docs/hgcn_training.md#9-prepost-verification-workflow).
+The report covers sector separation, within-sector rank correlation, MAP over ancestors, NDCG
+with integer lowest-common-ancestor grades, the Pearson correlation of distance with D*, and
+parent retrieval without the 522 unary pairs. It has no thresholds and no pass/fail. Whether a
+change is adopted, graph refinement included, is decided under Req 5's rule on the outcome and
+regressor panels: `tools margins` fixes each panel's margin from a reference arm, and
+`tools decide` compares the arms (see the [usage guide](docs/usage.md#tools-decide)).
 
 ------------------------------------------------------------------------
 

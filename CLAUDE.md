@@ -100,6 +100,14 @@ naics-embedder/
 │   │   ├── ridge.py          # Ridge on standardized features along a penalty grid
 │   │   ├── text_only.py      # The text-only comparator: a frozen-backbone code table (D9)
 │   │   └── regressor.py      # RegressorPanel: two regimes, sealed outer sets, predictions
+│   ├── decision/             # Req 5's decision rule over D8's three panels (roadmap Stage 4)
+│   │   ├── scores.py         # Each panel's per-unit scores and decision statistic (D10)
+│   │   ├── resampling.py     # Paired two-stage bootstrap: units shared, seeds per arm
+│   │   ├── rule.py           # Non-inferiority, superiority, non-dominated set, tie order
+│   │   ├── records.py        # Arm, margin and decision records (JSON, never overwritten)
+│   │   ├── store.py          # Content-addressed artifact store
+│   │   ├── decide.py         # Guards, margins and decisions
+│   │   └── sweep.py          # Seed-sweep driver: N seeds, every panel read, all stored
 │   ├── graph_model/          # Stage 4: HGCN refinement
 │   │   ├── hgcn.py           # Hyperbolic graph convolutional network
 │   │   ├── evaluation.py     # HGCN evaluation metrics
@@ -155,6 +163,7 @@ naics-embedder/
 │   │   ├── index_roles.csv        # The frozen index-entry role table (committed)
 │   │   ├── regressor_panel.yaml   # QCEW pins, held-out draw, ridge grid, folds, branch record
 │   │   ├── regressor_heldout_groups.csv  # The regressor panel's held-out groups (committed)
+│   │   ├── decision.yaml          # Decision rule: bootstrap replicates and seed, seed floor
 │   │   ├── relations.yaml
 │   │   ├── distances.yaml
 │   │   └── triplets.yaml
@@ -434,6 +443,9 @@ uv run naics-embedder tools investigate  # Investigate hierarchy correlation
 uv run naics-embedder tools outcome-baseline  # Lexical stub on the outcome validation split
 uv run naics-embedder tools text-only-table  # Frozen-backbone text table for the regressor panel
 uv run naics-embedder tools regressor-panel  # Score an arm on the regressor panel
+uv run naics-embedder tools margins   # Fix each panel's margin from a reference arm (Req 5)
+uv run naics-embedder tools decide    # Decide among arms under Req 5's rule
+uv run naics-embedder tools diagnostics  # Req 6's structural diagnostics for a table
 ```
 
 ### Running Tests
@@ -937,10 +949,13 @@ During training, the model computes validation metrics every epoch:
 - **Mean Average Precision (MAP):** Retrieval quality
 - **Diversity:** Average pairwise distance (should not collapse)
 
+Hierarchy correlation, MAP and the other structural statistics are logged for the record only
+(Req 6): no progress bar shows them, nothing selects on them, and they have no target values.
+Configurations are compared under Req 5 on the outcome and regressor panels (`tools margins`,
+`tools decide`), and Req 6's stratified diagnostics come from `tools diagnostics`.
+
 **Expected values (after convergence):**
 
-- Hierarchy correlation: > 0.7
-- MAP: > 0.6
 - Mean radius: 2.0-4.0 (depends on data and curvature)
 
 ## CI/CD and Documentation
@@ -1036,27 +1051,10 @@ is_valid = validate_hyperbolic_embeddings(embeddings, curvature=1.0, tolerance=1
 
 ### 2. Low Hierarchy Correlation
 
-**Symptom:** `hierarchy_corr` metric remains low (<0.3)
-
-**Causes:**
-
-- Insufficient training
-- Loss weights not balanced
-- Ground truth distances not informative
-- Curriculum not adapting properly
-
-**Solutions:**
-
-```bash
-# Investigate ground truth distances
-uv run naics-embedder tools investigate
-
-# Increase hierarchy loss weight
-uv run naics-embedder train loss.hierarchy_weight=0.5
-
-# Train longer
-uv run naics-embedder train training.trainer.max_epochs=30
-```
+A low `hierarchy_corr` or cophenetic value is not a failure to tune away. Structural statistics
+are diagnostics (Req 6), and raising a loss weight or picking a checkpoint because one improves
+selects on the taxonomy, which Req 1 rules out. Compare configurations under Req 5
+(`tools margins`, `tools decide`), and report Req 6's diagnostics with `tools diagnostics`.
 
 ### 3. OOM (Out of Memory) Errors
 

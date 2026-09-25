@@ -1,0 +1,11 @@
+# Req 5's decision procedure (roadmap Stage 4; D8, D10, D11): the paired bootstrap and the seed floor
+
+# Paired two-stage bootstrap: each replicate draws a panel's units once for every arm (codes for
+# the outcome panel, four-digit groups for the regressor regimes), then each arm's seeds inside
+# that draw. Unit draws are seeded [bootstrap_seed, stream(panel)] and an arm's seed draws
+# [bootstrap_seed, stream(panel), stream(arm)], so a decision is reproducible.
+replicates: 10000
+bootstrap_seed: 20260924
+
+# Req 5: each arm runs at least 5 seeds; the config cannot go lower
+min_seeds: 5

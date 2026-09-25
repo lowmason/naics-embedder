@@ -121,6 +121,23 @@ def test_text_validation_propagates_input_errors_before_hierarchy_logging(
     assert harness.validation_embeddings == {}
     assert harness.validation_codes == []
 
+def test_no_structural_statistic_reaches_the_progress_bar(
+    tmp_path, monkeypatch, structural_distance_matrices, structural_lorentz_embeddings
+):
+    # Req 6: structural statistics are reported, never a headline; the collapse checks stay
+    prediction, target = structural_distance_matrices
+    harness = ValidationHarness(tmp_path, target, structural_lorentz_embeddings)
+    monkeypatch.setattr(
+        harness.embedding_eval, 'compute_pairwise_distances', lambda *_, **__: prediction
+    )
+
+    harness.on_validation_epoch_end()
+
+    logged = [call.args[0] for call in harness.log.call_args_list]
+    assert {'val/cophenetic_correlation', 'val/median_distortion'} <= set(logged)
+    on_bar = [call.args[0] for call in harness.log.call_args_list if call.kwargs.get('prog_bar')]
+    assert on_bar == ['val/norm_cv', 'val/distance_cv']
+
 @pytest.mark.parametrize('is_global_zero', [False, True])
 def test_text_spearman_and_json_are_rank_zero_only(
     tmp_path, monkeypatch, structural_distance_matrices, structural_lorentz_embeddings,

@@ -1,5 +1,8 @@
 '''
 Visualize training metrics from log files.
+
+The structural statistics the training logs still record (the cophenetic correlation among them)
+are not read: Req 6 keeps them out of every headline, and ``tools diagnostics`` reports them.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -90,21 +93,6 @@ def parse_log_file(log_file: Path, stage: Optional[str] = None) -> List[Dict]:
                     }
                 )
             continue
-
-        # Extract cophenetic correlation
-        cophenetic_match = re.search(
-            r'Hierarchy preservation: cophenetic=([\d.-]+) \((\d+) pairs\)', line
-        )
-        if cophenetic_match and current_epoch is not None:
-            for m in metrics:
-                if m.get('epoch') == current_epoch:
-                    m.update(
-                        {
-                            'cophenetic': float(cophenetic_match.group(1)),
-                            'n_pairs': int(cophenetic_match.group(2)),
-                        }
-                    )
-                    break
 
         # Extract Norm CV
         norm_cv_match = re.search(r'Norm CV:\s+([\d.]+)', line)
@@ -220,33 +208,17 @@ def create_visualizations(metrics: List[Dict], output_dir: Path, stage: str):
         ax3.grid(True, alpha=0.3)
         ax3.legend()
 
-    # 4. Hierarchy Preservation (Cophenetic)
+    # 4. Radius Standard Deviation
     ax4 = plt.subplot(3, 2, 4)
-    cophenetic = [m.get('cophenetic', 0) for m in metrics if 'cophenetic' in m]
-    epochs_corr = [m['epoch'] for m in metrics if 'cophenetic' in m]
+    ax4.plot(epochs, radius_stds, 'orange', marker='o', linewidth=2, markersize=6)
+    ax4.set_xlabel('Epoch', fontsize=12)
+    ax4.set_ylabel('Radius Std Dev', fontsize=12)
+    ax4.set_title('Hyperbolic Radius Spread', fontsize=14, fontweight='bold')
+    ax4.grid(True, alpha=0.3)
 
-    if epochs_corr and cophenetic:
-        ax4.plot(epochs_corr, cophenetic, 'g-o', label='Cophenetic', linewidth=2, markersize=6)
-        ax4.axhline(y=0, color='k', linestyle='--', alpha=0.3)
-        ax4.axhline(y=0.7, color='g', linestyle='--', alpha=0.5, label='Target (0.7)')
-        ax4.set_xlabel('Epoch', fontsize=12)
-        ax4.set_ylabel('Cophenetic Correlation', fontsize=12)
-        ax4.set_title('Hierarchy Preservation', fontsize=14, fontweight='bold')
-        ax4.grid(True, alpha=0.3)
-        ax4.legend()
-        ax4.set_ylim((-0.5, 1.0))
-
-    # 5. Radius Standard Deviation
-    ax5 = plt.subplot(3, 2, 5)
-    ax5.plot(epochs, radius_stds, 'orange', marker='o', linewidth=2, markersize=6)
-    ax5.set_xlabel('Epoch', fontsize=12)
-    ax5.set_ylabel('Radius Std Dev', fontsize=12)
-    ax5.set_title('Hyperbolic Radius Spread', fontsize=14, fontweight='bold')
-    ax5.grid(True, alpha=0.3)
-
-    # 6. Summary Statistics Table
-    ax6 = plt.subplot(3, 2, 6)
-    ax6.axis('off')
+    # 5. Summary Statistics Table, across the bottom row
+    ax5 = plt.subplot(3, 1, 3)
+    ax5.axis('off')
 
     if metrics:
         latest = metrics[-1]
@@ -260,15 +232,6 @@ def create_visualizations(metrics: List[Dict], output_dir: Path, stage: str):
         Loss:
           Train: {latest.get('train_loss', 'N/A')}
           Val:   {latest.get('val_loss', 'N/A')}
-        
-        Hierarchy Preservation:
-          Cophenetic: {
-            (
-                f"{latest.get('cophenetic', 0):.4f}"
-                if 'cophenetic' in latest and latest.get('cophenetic') is not None
-                else 'N/A'
-            )
-        }
         
         Diversity:
           Norm CV:     {
@@ -296,19 +259,6 @@ def create_visualizations(metrics: List[Dict], output_dir: Path, stage: str):
         TRENDS (Epoch {first.get('epoch', 'N/A')} → {latest.get('epoch', 'N/A')})
         
         Radius:      {first.get('radius_mean', 0):.4f} → {latest.get('radius_mean', 0):.4f}
-        Cophenetic:  {
-                (
-                    f"{first.get('cophenetic', 0):.4f}"
-                    if 'cophenetic' in first and first.get('cophenetic') is not None
-                    else 'N/A'
-                )
-            } → {
-                (
-                    f"{latest.get('cophenetic', 0):.4f}"
-                    if 'cophenetic' in latest and latest.get('cophenetic') is not None
-                    else 'N/A'
-                )
-            }
         Train Loss:  {first.get('train_loss', 'N/A')} → {latest.get('train_loss', 'N/A')}
         Val Loss:    {first.get('val_loss', 'N/A')} → {latest.get('val_loss', 'N/A')}
         Distance CV: {
@@ -327,7 +277,7 @@ def create_visualizations(metrics: List[Dict], output_dir: Path, stage: str):
         """
             summary_text += trends
 
-        ax6.text(
+        ax5.text(
             0.1,
             0.5,
             summary_text,
@@ -410,28 +360,6 @@ def print_analysis(metrics: List[Dict], stage: str):
         else:
             print('   ⚠️  Validation loss is increasing - may be overfitting')
 
-    # Hierarchy Preservation Analysis
-    cophenetic = [m.get('cophenetic', 0) for m in metrics if 'cophenetic' in m]
-
-    if cophenetic:
-        print('\n📈 HIERARCHY PRESERVATION:')
-        cophenetic_change = cophenetic[-1] - cophenetic[0]
-        print(
-            f'   Cophenetic: {cophenetic[0]:.4f} → {cophenetic[-1]:.4f} ({cophenetic_change:+.4f})'
-        )
-
-        if cophenetic[-1] > 0.7:
-            print('   ✓ Excellent hierarchy preservation!')
-        elif cophenetic[-1] > 0.5:
-            print('   ℹ️  Good hierarchy preservation, but could improve.')
-        elif cophenetic[-1] > 0.3:
-            print('   ⚠️  Moderate hierarchy preservation. Model may need more training.')
-        else:
-            print('   ⚠️  WARNING: Low hierarchy preservation. Consider:')
-            print('      - Checking if ground truth distances are correct')
-            print('      - Verifying training data quality')
-            print('      - Adjusting learning rate or loss function')
-
     # Collapse Detection
     collapse_flags = [m.get('collapse', False) for m in metrics if 'collapse' in m]
     if collapse_flags:
@@ -446,26 +374,12 @@ def print_analysis(metrics: List[Dict], stage: str):
     # Recommendations
     print('\n💡 RECOMMENDATIONS:')
 
-    if cophenetic and cophenetic[-1] < 0.5:
-        print('   1. Hierarchy correlations are low. This could be because:')
-        epoch_count = metrics[-1].get('epoch', 0)
-        print(f'      - Model is still learning (only {epoch_count} epochs completed)')
-        print('      - Hyperbolic space may need more time to organize hierarchy')
-        print('      - Consider checking if evaluation sample size is sufficient')
-
     if radius_means and radius_means[-1] > 15:
-        print('   2. Hyperbolic radius is growing rapidly. Monitor for:')
+        print('   1. Hyperbolic radius is growing rapidly. Monitor for:')
         print('      - Numerical stability issues')
         print('      - Whether this growth correlates with better metrics')
-
-    if cophenetic and len(cophenetic) > 3:
-        recent_trend = cophenetic[-3:]
-        if all(recent_trend[i] <= recent_trend[i + 1] for i in range(len(recent_trend) - 1)):
-            print('   3. Cophenetic correlation is improving! Continue training.')
-        elif all(recent_trend[i] >= recent_trend[i + 1] for i in range(len(recent_trend) - 1)):
-            print('   3. ⚠️  Cophenetic correlation is declining. Consider:')
-            print('      - Early stopping if this continues')
-            print('      - Learning rate reduction')
+    else:
+        print('   None.')
 
     print()
 
@@ -522,7 +436,7 @@ def main():
     print('=' * 90)
     header = (
         f"{'Epoch':<8} {'Radius':<15} {'Train Loss':<12} "
-        f"{'Val Loss':<12} {'Cophenetic':<12} {'Dist CV':<10} {'Collapse':<10}"
+        f"{'Val Loss':<12} {'Dist CV':<10} {'Collapse':<10}"
     )
     print(header)
     print('-' * 90)
@@ -537,12 +451,11 @@ def main():
             f"{m.get('val_loss', 0):.6f}"
             if 'val_loss' in m and m.get('val_loss') is not None else 'N/A'
         )
-        cophenetic = f"{m.get('cophenetic', 0):.4f}" if 'cophenetic' in m else 'N/A'
         dist_cv = f"{m.get('dist_cv', 0):.4f}" if 'dist_cv' in m else 'N/A'
         collapse = 'Yes' if m.get('collapse', False) else 'No'
         print(
             f'{epoch:<8} {radius:<15} {train_loss:<12} {val_loss:<12} '
-            f'{cophenetic:<12} {dist_cv:<10} {collapse:<10}'
+            f'{dist_cv:<10} {collapse:<10}'
         )
     print()
 

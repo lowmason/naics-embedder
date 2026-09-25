@@ -20,6 +20,7 @@ from naics_embedder.panels.outcome import (
 )
 from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog
 from naics_embedder.supervision.artifacts import load_validated_bundle
+from naics_embedder.supervision.schema import IndexRole
 
 pytestmark = pytest.mark.unit
 
@@ -114,6 +115,28 @@ def test_every_entry_holds_one_role_and_entryless_codes_are_never_queries(panel)
 
 def test_the_fingerprint_identifies_the_assignment(panel, role_rows):
     assert panel.fingerprint == role_table_fingerprint(role_rows)
+
+def _retexted(role_rows, entry_id, text):
+    return role_rows.with_columns(
+        text=pl.when(pl.col('entry_id') == entry_id).then(pl.lit(text)).otherwise('text')
+    )
+
+def test_the_data_fingerprint_names_the_queries_and_candidates_a_read_scores(panel, role_rows, log):
+    validation = panel.data_fingerprint(IndexRole.VALIDATION)
+    retexted = OutcomePanel(_retexted(role_rows, 2, 'Edamame growing'), CANDIDATES, log)
+    widened = OutcomePanel(role_rows, CANDIDATES + ['311119'], log)
+
+    # One assignment can hold other text: only the data fingerprint tells the two apart
+    assert retexted.fingerprint == panel.fingerprint
+    assert retexted.data_fingerprint(IndexRole.VALIDATION) != validation
+    assert widened.data_fingerprint(IndexRole.VALIDATION) != validation
+    assert panel.data_fingerprint(IndexRole.TEST) != validation
+    # A validation read scores no training text, and neither row nor candidate order is data
+    trained = OutcomePanel(_retexted(role_rows, 1, 'Soybean growing'), CANDIDATES, log)
+    assert trained.data_fingerprint(IndexRole.VALIDATION) == validation
+    reordered = OutcomePanel(role_rows.reverse(), CANDIDATES[::-1], log)
+    assert reordered.data_fingerprint(IndexRole.VALIDATION) == validation
+    assert log.records() == []
 
 @pytest.mark.parametrize(
     'candidates',
@@ -237,6 +260,23 @@ def test_a_stub_encoder_scores_every_metric_on_both_splits(panel, log, encoder):
     assert test.summary['lca_level'] == pytest.approx(13 / 3)
     assert _events(log) == [('read', 'validation'), ('open', 'test'), ('read', 'test')]
     assert log.records()[0]['detail'] == {'encoder': 'OneHotStubEncoder', 'distance': 'cosine'}
+
+def test_a_read_carries_the_callers_detail_beside_the_panels_own(panel, log, encoder):
+    panel.score(encoder, 'validation', 'seed sweep', detail={'run': 'arm-a/seed-0', 'seed': 0})
+
+    [record] = log.records()
+    assert record['detail'] == {
+        'encoder': 'OneHotStubEncoder',
+        'distance': 'cosine',
+        'run': 'arm-a/seed-0',
+        'seed': 0,
+    }
+
+def test_a_read_cannot_replace_what_the_panel_logs(panel, log, encoder):
+    with pytest.raises(ValueError, match='distance'):
+        panel.score(encoder, 'validation', 'seed sweep', detail={'distance': 'euclidean'})
+
+    assert log.records() == []
 
 # -------------------------------------------------------------------------------------------------
 # Loading from preprocessing outputs

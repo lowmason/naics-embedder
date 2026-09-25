@@ -1,4 +1,9 @@
-import csv
+'''
+``GraphEmbeddingDataset`` reads a Polars embeddings frame into torch without handing torch
+read-only memory, whatever the columns' layout.
+'''
+
+import importlib
 import warnings
 
 import numpy as np
@@ -6,14 +11,7 @@ import polars as pl
 import pytest
 import torch
 
-from naics_embedder.metrics import (
-    GraphDownstreamEvaluator,
-    GraphEmbeddingDataset,
-    QCEWBenchmarkConfig,
-    qcew,
-    run_qcew_employment_benchmark,
-)
-from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
+from naics_embedder.metrics import GraphEmbeddingDataset
 
 def _lorentz_points(spatial):
     tensor = torch.tensor(spatial, dtype=torch.float32)
@@ -32,116 +30,7 @@ def _graph_fixture():
         [1.30, -0.02],
     ]
     embeddings = _lorentz_points(spatial)
-    dataset = GraphEmbeddingDataset(embeddings=embeddings, codes=codes, levels=levels)
-    hierarchy = NaicsHierarchy(
-        [
-            ('11111', '111110'),
-            ('11111', '111111'),
-            ('21111', '211110'),
-            ('21111', '211111'),
-        ]
-    )
-    return dataset, hierarchy
-
-def test_taxonomy_and_similarity_metrics():
-    dataset, hierarchy = _graph_fixture()
-    evaluator = GraphDownstreamEvaluator(dataset)
-
-    taxonomy = evaluator.taxonomy_reconstruction(hierarchy, k_values=(1, 2))
-    assert taxonomy['top_1_parent_accuracy'] == pytest.approx(1.0)
-
-    similarity = evaluator.industry_similarity(hierarchy, k_values=(1, 2))
-    assert similarity['precision@1'] >= 0.5
-    assert similarity['mean_first_sibling_rank'] <= 2.0
-
-def test_clustering_and_classification_metrics():
-    dataset, _ = _graph_fixture()
-    evaluator = GraphDownstreamEvaluator(dataset)
-
-    clustering = evaluator.clustering_quality(digits=(2, ), random_state=0)
-    assert clustering['ari_2digit'] > 0.8
-    assert clustering['nmi_2digit'] > 0.8
-
-    classification = evaluator.classification_benchmark(digits=2, test_size=0.34, random_state=0)
-    assert 0.0 <= classification['accuracy'] <= 1.0
-    assert 0.0 <= classification['macro_f1'] <= 1.0
-    assert classification['n_train'] > 0
-    assert classification['n_test'] > 0
-
-def test_qcew_benchmark_runs(tmp_path):
-    dataset, _ = _graph_fixture()
-    data = {
-        'index': list(range(len(dataset.codes))),
-        'code': dataset.codes,
-        'level': dataset.levels,
-    }
-    for dim in range(dataset.embeddings.size(1)):
-        data[f'hgcn_e{dim}'] = dataset.embeddings[:, dim].tolist()
-    embeddings_df = pl.DataFrame(data)
-    embed_path = tmp_path / 'embeddings.parquet'
-    embeddings_df.write_parquet(embed_path)
-
-    csv_path = tmp_path / 'qcew.csv'
-    rows = [
-        {
-            'year': 2022,
-            'own_code': 5,
-            'industry_code': '111110',
-            'annual_avg_emplvl': 100,
-            'annual_avg_estabs': 10,
-            'tot_wages': 1000,
-        },
-        {
-            'year': 2022,
-            'own_code': 5,
-            'industry_code': '111111',
-            'annual_avg_emplvl': 90,
-            'annual_avg_estabs': 8,
-            'tot_wages': 900,
-        },
-        {
-            'year': 2022,
-            'own_code': 5,
-            'industry_code': '211110',
-            'annual_avg_emplvl': 150,
-            'annual_avg_estabs': 12,
-            'tot_wages': 2000,
-        },
-        {
-            'year': 2022,
-            'own_code': 5,
-            'industry_code': '211111',
-            'annual_avg_emplvl': 160,
-            'annual_avg_estabs': 14,
-            'tot_wages': 2300,
-        },
-    ]
-    with csv_path.open('w', newline='') as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                'year',
-                'own_code',
-                'industry_code',
-                'annual_avg_emplvl',
-                'annual_avg_estabs',
-                'tot_wages',
-            ],
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-
-    config = QCEWBenchmarkConfig(
-        qcew_csv_path=csv_path,
-        embedding_parquet=embed_path,
-        test_size=0.5,
-        random_state=0,
-    )
-    results = run_qcew_employment_benchmark(config)
-
-    assert set(results.keys()) == {'embedding', 'one_hot', 'hybrid', 'metadata'}
-    assert results['embedding']['rmse'] >= 0.0
-    assert results['one_hot']['r2'] <= 1.0
+    return GraphEmbeddingDataset(embeddings=embeddings, codes=codes, levels=levels)
 
 # -------------------------------------------------------------------------------------------------
 # Polars-to-torch embedding conversion
@@ -158,7 +47,7 @@ def _embedding_frame(*, contiguous: bool) -> pl.DataFrame:
     fixed. contiguous=False stores the columns in reverse, so selecting them in numeric order
     always takes the copying path instead.
     '''
-    dataset, _ = _graph_fixture()
+    dataset = _graph_fixture()
     values = dataset.embeddings.double().numpy()
     columns = EMBED_COLS
     if not contiguous:
@@ -183,23 +72,37 @@ def torch_warns_always():
     torch.set_warn_always(previous)
 
 @pytest.mark.usefixtures('torch_warns_always')
-@pytest.mark.parametrize(
-    'convert',
-    [
-        GraphEmbeddingDataset.from_dataframe,
-        lambda frame: qcew._tangent_from_frame(frame, EMBED_COLS, curvature=1.0),
-    ],
-    ids=['graph_dataset', 'qcew_tangent'],
-)
-def test_embedding_conversion_never_hands_torch_read_only_memory(convert):
+def test_embedding_conversion_never_hands_torch_read_only_memory():
     frame = _embedding_frame(contiguous=True)
 
     with warnings.catch_warnings():
         warnings.filterwarnings('error', message=NOT_WRITABLE_WARNING, category=UserWarning)
-        convert(frame)
+        GraphEmbeddingDataset.from_dataframe(frame)
 
 def test_graph_dataset_values_do_not_depend_on_column_contiguity():
     contiguous = GraphEmbeddingDataset.from_dataframe(_embedding_frame(contiguous=True))
     split = GraphEmbeddingDataset.from_dataframe(_embedding_frame(contiguous=False))
 
     assert torch.equal(contiguous.embeddings, split.embeddings)
+
+# -------------------------------------------------------------------------------------------------
+# The removed benchmark and suite
+# -------------------------------------------------------------------------------------------------
+
+def test_the_qcew_benchmark_and_the_downstream_suite_are_gone():
+    '''Roadmap Stage 4: neither ``metrics/qcew.py`` nor the taxonomy-tasks suite remains.'''
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module('naics_embedder.metrics.qcew')
+    modules = [
+        importlib.import_module(name) for name in (
+            'naics_embedder.metrics', 'naics_embedder.metrics.graph', 'naics_embedder.graph_model'
+        )
+    ]
+    for name in (
+        'GraphDownstreamEvaluator',
+        'run_graph_downstream_suite',
+        'QCEWBenchmarkConfig',
+        'run_qcew_employment_benchmark',
+    ):
+        assert not any(hasattr(module, name) for module in modules), name

@@ -30,6 +30,7 @@ from naics_embedder.panels.regressor import (
     outer_plan,
     seen_validation_plan,
     summarize,
+    table_fingerprint,
     verify_branch_record,
 )
 from naics_embedder.panels.regressor_splits import (
@@ -40,6 +41,7 @@ from naics_embedder.panels.regressor_splits import (
     write_group_table,
 )
 from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.panels.text_only import text_only_fingerprint
 from naics_embedder.utils.config import RegressorBranchRecord, RegressorPanelConfig
 from tests.fixtures.regressor_panel import (
     BRANCH_RECORD,
@@ -205,6 +207,41 @@ def test_validation_reads_only_the_remainder_and_logs_each_read(
     assert records[0]['detail']['arm'] == regressor_arm.fingerprint
     assert records[0]['detail']['text_only'] == regressor_arm.text_only_fingerprint
     assert records[0]['detail']['comparators'] == list(SEEN_COMPARATORS)
+
+def test_a_read_carries_the_callers_detail_beside_the_panels_own(panel, regressor_arm, log):
+    run = {'run': 'arm-a/seed-0', 'seed': 0}
+
+    panel.validation(Regime.SEEN, 6, regressor_arm, PURPOSE, detail=run)
+    panel.open_outer(Regime.SEEN, PURPOSE)
+    panel.test(Regime.SEEN, 6, regressor_arm, PURPOSE, detail=run)
+
+    reads = [r for r in log.records() if r['event'] == 'read']
+    assert [r['split'] for r in reads] == ['validation', 'test']
+    for record in reads:
+        assert record['detail']['run'] == 'arm-a/seed-0'
+        assert record['detail']['seed'] == 0
+        assert record['detail']['arm'] == regressor_arm.fingerprint
+        assert record['detail']['text_only'] == regressor_arm.text_only_fingerprint
+
+@pytest.mark.parametrize('key', ['arm', 'text_only', 'level', 'comparators', 'dimension'])
+def test_a_read_cannot_replace_what_the_panel_logs(panel, regressor_arm, log, key):
+    with pytest.raises(ValueError, match=key):
+        panel.validation(Regime.SEEN, 6, regressor_arm, PURPOSE, detail={key: 'other'})
+    panel.open_outer(Regime.SEEN, PURPOSE)
+    with pytest.raises(ValueError, match=key):
+        panel.test(Regime.SEEN, 6, regressor_arm, PURPOSE, detail={key: 'other'})
+
+    assert [r['event'] for r in log.records()] == ['open']
+
+def test_the_logged_table_names_are_their_matrix_fingerprints(regressor_arm):
+    coordinates = coordinate_table(CODEBOOK)
+    text = text_only_table(CODEBOOK)
+
+    assert regressor_arm.fingerprint == table_fingerprint(coordinates)
+    assert regressor_arm.text_only_fingerprint == text_only_fingerprint(text)
+    # Row order does not change a name
+    assert table_fingerprint(coordinates.reverse()) == regressor_arm.fingerprint
+    assert text_only_fingerprint(text.reverse()) == regressor_arm.text_only_fingerprint
 
 def _shift_outcomes(rows, where):
     '''The panel rows, same order, with 10 added to the six-digit outcomes ``where`` picks.'''
@@ -404,6 +441,27 @@ def test_openings_are_counted_per_held_out_draw(regressor_rows, log):
     RegressorPanel(regressor_rows, ['1111'], log, SETTINGS).open_outer(Regime.SEEN, 'other draw')
 
     assert [r['event'] for r in log.records()] == ['open', 'open']
+
+def test_the_data_fingerprint_names_the_rows_a_read_at_a_level_scores(panel, regressor_rows, log):
+    moved = _shift_outcomes(regressor_rows, pl.col('group') == '1111')
+    shifted = RegressorPanel(moved, HELDOUT_GROUPS, log, SETTINGS)
+    reordered = RegressorPanel(
+        {
+            level: rows.reverse().select(rows.columns[::-1])
+            for level, rows in regressor_rows.items()
+        },
+        HELDOUT_GROUPS,
+        log,
+        SETTINGS,
+    )
+
+    # One draw can hold other outcomes: only the data fingerprint tells the two apart
+    assert shifted.fingerprint == panel.fingerprint
+    assert shifted.data_fingerprint(6) != panel.data_fingerprint(6)
+    # A read at level 6 scores no other level's rows, and neither row nor column order is data
+    assert shifted.data_fingerprint(5) == panel.data_fingerprint(5)
+    assert reordered.data_fingerprint(6) == panel.data_fingerprint(6)
+    assert log.records() == []
 
 def test_an_arm_missing_a_panel_code_is_refused_before_anything_is_logged(
     panel, regressor_arm, log

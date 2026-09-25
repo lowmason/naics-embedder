@@ -18,12 +18,13 @@ it to the arm's dimension when it scores the arm.
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import polars as pl
@@ -124,6 +125,31 @@ def text_only_frame(codes: List[str], vectors: np.ndarray) -> pl.DataFrame:
     values = pl.DataFrame(vectors, schema=schema, orient='row')
     return pl.DataFrame({'code': codes}, schema={'code': pl.Utf8}).hstack(values)
 
+def matrix_fingerprint(codes: Sequence[str], matrix: np.ndarray) -> str:
+    '''SHA-256 of the codes and their float64 values, in code order.'''
+
+    order = np.argsort(np.asarray(codes))
+    digest = hashlib.sha256('\n'.join(codes[index] for index in order).encode('utf-8'))
+    digest.update(np.ascontiguousarray(matrix[order], dtype=np.float64).tobytes())
+    return digest.hexdigest()
+
+def text_only_matrix(table: pl.DataFrame) -> Tuple[List[str], np.ndarray]:
+    '''The table's codes and its ``t`` columns (float64).'''
+
+    columns = [name for name in table.columns if name.startswith(TEXT_ONLY_PREFIX)]
+    codes = table.get_column('code').to_list()
+    return codes, np.array(table.select(columns).to_numpy(), dtype=np.float64)
+
+def text_only_fingerprint(table: pl.DataFrame) -> str:
+    '''
+    The table's ``matrix_fingerprint``: the name a regressor read logs it by.
+
+    The provenance records it beside the file's own hash (``table_sha256``), so a logged read
+    matches its table file without re-reading the table.
+    '''
+
+    return matrix_fingerprint(*text_only_matrix(table))
+
 def provenance_path(table_path: Path) -> Path:
     '''The provenance JSON written beside a text-only table.'''
 
@@ -175,6 +201,7 @@ def build_text_only_table(
         'codes': table.height,
         'hidden_size': vectors.shape[1],
         'table_sha256': sha256_file(output_path),
+        'matrix_fingerprint': text_only_fingerprint(table),
         'library_versions': {
             name: version(name)
             for name in ('torch', 'transformers', 'polars')

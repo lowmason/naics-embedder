@@ -7,10 +7,12 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
-from naics_embedder.metrics import StructuralMetricInputError
+from naics_embedder.decision.records import DecisionRecord, MarginRecord, read_record, write_record
+from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.metrics.diagnostics import DiagnosticsReport
 from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
-from naics_embedder.supervision.artifacts import load_validated_bundle
+from tests.fixtures.decision import spec, synthetic_arm
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
     HELDOUT_GROUPS,
@@ -223,140 +225,159 @@ def test_tools_investigate_success(monkeypatch, runner):
     assert result.exit_code == 0
     assert 'Investigation complete' in result.output
 
-def test_verify_stage4_failure_sets_exit_code(monkeypatch, runner):
-
-    def fake_verify(*_args, **_kwargs):
-        return {
-            'pre': {
-                'metric': 0.8
-            },
-            'post': {
-                'metric': 0.7
-            },
-            'delta': {
-                'metric': -0.1
-            },
-            'checks': {
-                'cophenetic': False
-            },
-            'passed': False,
-        }
-
-    monkeypatch.setattr(tools_cli, 'verify_stage4', fake_verify)
-
-    result = runner.invoke(tools_cli.app, ['verify-stage4'])
-
-    assert result.exit_code == 1
-    assert 'Verification failed' in result.output or 'failed thresholds' in result.output
-
-@pytest.mark.unit
-@pytest.mark.parametrize('undefined', [False, True])
-def test_verify_stage4_formats_versioned_spearman(monkeypatch, runner, undefined):
-    key = 'structural_spearman_v1'
-    value = None if undefined else 0.87831006565368
-    delta = None if undefined else 0.125
-    payload = {
-        'pre': {
-            key: value
-        },
-        'post': {
-            key: value
-        },
-        'delta': {
-            key: delta
-        },
-        'checks': {
-            'cophenetic': True,
-            'ndcg': True,
-            'local_improvement': True
-        },
-        'passed': True,
-    }
-    monkeypatch.setattr(tools_cli, 'verify_stage4', lambda *_, **__: payload)
-    result = runner.invoke(tools_cli.app, ['verify-stage4'])
-    assert result.exit_code == 0, result.output
-    if undefined:
-        assert result.output.count(f'{key}: N/A') == 3
-    else:
-        assert result.output.count(f'{key}: 0.8783') == 2
-        assert f'{key}: +0.1250' in result.output
-    assert 'spearman_correlation' not in result.output
-
-@pytest.mark.unit
-def test_verify_stage4_input_error_is_fatal(monkeypatch, runner):
-
-    def invalid(*_args, **_kwargs):
-        raise StructuralMetricInputError('structural-spearman-v1: invalid tree_distances')
-
-    monkeypatch.setattr(tools_cli, 'verify_stage4', invalid)
-    result = runner.invoke(tools_cli.app, ['verify-stage4'])
-    assert result.exit_code == 1
-    assert 'Verification failed' in result.output
-    assert 'invalid tree_distances' in result.output
-
-@pytest.mark.unit
-def test_verify_stage4_has_no_spearman_threshold_option(runner):
-    result = runner.invoke(tools_cli.app, ['verify-stage4', '--help'])
-    assert result.exit_code == 0
-    assert '--max-spearman-drop' not in result.output
-    assert '--min-spearman' not in result.output
+# -------------------------------------------------------------------------------------------------
+# Decisions (Req 5) and diagnostics (Req 6)
+# -------------------------------------------------------------------------------------------------
 
 @pytest.fixture
-def verify_inputs(monkeypatch):
-    '''The structural input paths verify-stage4 hands to verify_stage4.'''
-    seen = {}
+def decision_inputs(tmp_path):
+    '''A synthetic reference arm's record, written, and the store it references.'''
 
-    def fake_verify(_stage3, _stage4, distance_matrix, relations, _cfg):
-        seen.update(distance_matrix=distance_matrix, relations=relations)
-        return {'pre': {}, 'post': {}, 'delta': {}, 'checks': {}, 'passed': True}
+    store = ArtifactStore(tmp_path / 'store')
+    reference = write_record(
+        synthetic_arm(store, tmp_path, spec('reference'), {}), tmp_path / 'reference.json'
+    )
+    return store, reference
 
-    monkeypatch.setattr(tools_cli, 'verify_stage4', fake_verify)
-    return seen
-
-@pytest.mark.unit
-def test_verify_stage4_defaults_to_the_legacy_structural_files(runner, verify_inputs):
-    result = runner.invoke(tools_cli.app, ['verify-stage4'])
-
-    assert result.exit_code == 0, result.output
-    assert verify_inputs == {
-        'distance_matrix': Path('./data/naics_distance_matrix.parquet'),
-        'relations': Path('./data/naics_relations.parquet'),
-    }
-
-@pytest.mark.unit
-def test_verify_stage4_reads_structure_from_its_supervision_bundle(
-    runner, verify_inputs, generated_bundle
-):
-    result = runner.invoke(
-        tools_cli.app, ['verify-stage4', '--supervision-manifest',
-                        str(generated_bundle)]
+def _margins(runner, tmp_path, store, reference):
+    return runner.invoke(
+        tools_cli.app,
+        [
+            'margins',
+            '--reference',
+            str(reference),
+            '--multiple',
+            '2',
+            '--name',
+            'fixture margins',
+            '--store',
+            str(store.root),
+            '--output',
+            str(tmp_path / 'margins.json'),
+        ],
     )
 
-    bundle = load_validated_bundle(generated_bundle)
-    assert result.exit_code == 0, result.output
-    assert verify_inputs == {
-        'distance_matrix': bundle.artifact_path('distance_matrix'),
-        'relations': bundle.artifact_path('relations'),
-    }
+def _decide(runner, tmp_path, store, arms):
+    arguments = ['decide']
+    for path in arms:
+        arguments += ['--arm', str(path)]
+    arguments += [
+        '--margins',
+        str(tmp_path / 'margins.json'),
+        '--name',
+        'fixture decision',
+        '--question',
+        'which arm?',
+        '--store',
+        str(store.root),
+        '--output',
+        str(tmp_path / 'decision.json'),
+    ]
+    return runner.invoke(tools_cli.app, arguments)
 
 @pytest.mark.unit
-def test_verify_stage4_rejects_relations_from_outside_its_bundle(
-    runner, verify_inputs, generated_bundle, tmp_path
-):
+def test_margins_writes_each_panels_margin(runner, tmp_path, decision_inputs):
+    store, reference = decision_inputs
+
+    result = _margins(runner, tmp_path, store, reference)
+
+    assert result.exit_code == 0, result.output
+    record = read_record(tmp_path / 'margins.json', MarginRecord)
+    panels = [entry.panel for entry in record.margins]
+    assert panels == ['outcome', 'regressor_seen', 'regressor_heldout']
+    assert 'regressor_heldout: δ' in result.output.replace('\n', '')
+
+@pytest.mark.unit
+def test_margins_reports_a_missing_reference(runner, tmp_path, decision_inputs):
+    store, _ = decision_inputs
+
+    result = _margins(runner, tmp_path, store, tmp_path / 'missing.json')
+
+    assert result.exit_code == 1
+    assert 'Margins failed' in result.output
+    assert not (tmp_path / 'margins.json').exists()
+
+@pytest.mark.unit
+def test_decide_adopts_the_better_arm_and_writes_the_record(runner, tmp_path, decision_inputs):
+    store, reference = decision_inputs
+    assert _margins(runner, tmp_path, store, reference).exit_code == 0
+    better = write_record(
+        synthetic_arm(store, tmp_path, spec('better', dimension=32), {'outcome': 5}),
+        tmp_path / 'better.json',
+    )
+
+    result = _decide(runner, tmp_path, store, [better, reference])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace('\n', '')
+    assert 'better over reference: adopted' in output
+    assert 'Chosen: better' in output
+    assert read_record(tmp_path / 'decision.json', DecisionRecord).chosen == 'better'
+
+@pytest.mark.unit
+def test_decide_reports_a_tie_it_cannot_break(runner, tmp_path, decision_inputs):
+    store, reference = decision_inputs
+    assert _margins(runner, tmp_path, store, reference).exit_code == 0
+    twin = write_record(synthetic_arm(store, tmp_path, spec('twin'), {}), tmp_path / 'twin.json')
+
+    result = _decide(runner, tmp_path, store, [twin, reference])
+
+    assert result.exit_code == 1
+    assert 'Decision failed' in result.output
+    assert 'tie on components' in ' '.join(result.output.split())
+    assert not (tmp_path / 'decision.json').exists()
+
+@pytest.mark.unit
+def test_diagnostics_reports_every_statistic_and_writes_json(runner, tmp_path):
+    codebook = tmp_path / 'naics_codebook.parquet'
+    pl.DataFrame({'code': list(CODEBOOK)}).write_parquet(codebook)
+    table = tmp_path / 'arm.parquet'
+    coordinate_table(CODEBOOK, dimension=4).write_parquet(table)
+    arguments = ['diagnostics', '--table', str(table), '--codebook', str(codebook)]
+
+    result = runner.invoke(
+        tools_cli.app,
+        [*arguments, '--geometry', 'hyperbolic', '--output',
+         str(tmp_path / 'report.json')],
+    )
+    unknown = runner.invoke(tools_cli.app, [*arguments, '--geometry', 'poincare'])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace('\n', '')
+    for statistic in (
+        'sector separation AUC', 'within-sector rank correlation', 'MAP over ancestors', 'NDCG',
+        'distance Pearson', 'parent retrieval'
+    ):
+        assert statistic in output
+    report = json.loads((tmp_path / 'report.json').read_text())
+    assert set(report) == set(DiagnosticsReport.model_fields)
+    assert unknown.exit_code == 1
+
+@pytest.mark.unit
+def test_diagnostics_refuses_a_table_that_misses_a_codebook_code(runner, tmp_path):
+    codebook = tmp_path / 'naics_codebook.parquet'
+    pl.DataFrame({'code': list(CODEBOOK)}).write_parquet(codebook)
+    table = tmp_path / 'arm.parquet'
+    coordinate_table(CODEBOOK[1:], dimension=4).write_parquet(table)
+
     result = runner.invoke(
         tools_cli.app,
         [
-            'verify-stage4',
-            '--supervision-manifest',
-            str(generated_bundle),
-            '--relations',
-            str(tmp_path / 'naics_relations.parquet'),
+            'diagnostics', '--table',
+            str(table), '--codebook',
+            str(codebook), '--geometry', 'euclidean'
         ],
     )
 
     assert result.exit_code == 1
-    assert 'relations path does not belong' in result.output
-    assert verify_inputs == {}
+    assert 'Diagnostics failed' in result.output
+
+@pytest.mark.unit
+def test_verify_stage4_is_gone(runner):
+    result = runner.invoke(tools_cli.app, ['verify-stage4'])
+
+    assert result.exit_code != 0
+    assert 'No such command' in result.output
 
 # -------------------------------------------------------------------------------------------------
 # Outcome panel: lexical baseline

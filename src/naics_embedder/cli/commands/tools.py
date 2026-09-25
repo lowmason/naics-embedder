@@ -14,21 +14,26 @@ Commands:
     outcome-baseline: Score the lexical stub encoder on the outcome panel's validation split.
     text-only-table: Embed every code's text with the arm's backbone, frozen (roadmap D9).
     regressor-panel: Score an arm on the regressor panel's validation or sealed test split.
+    margins: Fix each panel's non-inferiority margin from a reference arm (Req 5).
+    decide: Decide among arms under Req 5's rule over D8's three panels.
+    diagnostics: Report Req 6's structural diagnostics over every codebook code.
 '''
 
 import json
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import polars as pl
 import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
-from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
-    resolve_graph_supervision_paths,
-)
+from naics_embedder.decision.decide import decide, fix_margins
+from naics_embedder.decision.records import ArmRecord, MarginRecord, read_record, write_record
+from naics_embedder.decision.rule import TieUnresolvedError
+from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.metrics.diagnostics import GEOMETRIES, diagnostics_report
 from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
     code_texts_from_descriptions,
@@ -47,9 +52,9 @@ from naics_embedder.panels.text_only import build_text_only_table
 from naics_embedder.panels.text_only import provenance_path as text_only_provenance_path
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.tools.config_tools import show_current_config
-from naics_embedder.tools.embeddings_verification import Stage4VerificationConfig, verify_stage4
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
 from naics_embedder.utils.config import (
+    DecisionConfig,
     DownloadConfig,
     OutcomePanelConfig,
     RegressorPanelConfig,
@@ -68,6 +73,7 @@ app = typer.Typer(
 )
 
 REGRESSOR_PANEL_CONFIG = 'data/regressor_panel.yaml'
+DECISION_CONFIG = 'data/decision.yaml'
 
 # -------------------------------------------------------------------------------------------------
 # View configuration
@@ -245,157 +251,6 @@ def investigate(
 
     except Exception as e:
         console.print(f'[bold red]Error:[/bold red] {e}')
-        raise typer.Exit(code=1)
-
-# -------------------------------------------------------------------------------------------------
-# Verify Stage 4 against Stage 3
-# -------------------------------------------------------------------------------------------------
-
-def _stage4_structural_inputs(
-    supervision_manifest: Optional[str],
-    distance_matrix: Optional[str],
-    relations_parquet: Optional[str],
-) -> Tuple[Path, Path]:
-    '''
-    The distance matrix and relations parquet that verify-stage4 reads.
-
-    With a supervision manifest both come from that one validated bundle (an explicitly supplied
-    path must be the bundle's own artifact). Without one, unset paths fall back to the legacy
-    ``./data`` files.
-    '''
-    if supervision_manifest:
-        paths = resolve_graph_supervision_paths(
-            supervision_manifest,
-            distance_matrix_path=distance_matrix,
-            relations_path=relations_parquet,
-        )
-        return paths.distance_matrix, paths.relations
-    return (
-        Path(distance_matrix or './data/naics_distance_matrix.parquet'),
-        Path(relations_parquet or './data/naics_relations.parquet'),
-    )
-
-@app.command('verify-stage4')
-def verify_stage4_command(
-    stage3_parquet: Annotated[
-        str,
-        typer.Option(
-            '--pre',
-            help='Path to Stage 3 (pre-HGCN) embeddings parquet',
-        ),
-    ] = './output/hyperbolic_projection/encodings.parquet',
-    stage4_parquet: Annotated[
-        str,
-        typer.Option(
-            '--post',
-            help='Path to Stage 4 (HGCN) embeddings parquet',
-        ),
-    ] = './output/hgcn/encodings.parquet',
-    distance_matrix: Annotated[
-        Optional[str],
-        typer.Option(
-            '--distance-matrix',
-            help=(
-                'Path to ground truth distance matrix parquet (default: the bundle artifact with '
-                '--supervision-manifest, else ./data/naics_distance_matrix.parquet)'
-            ),
-        ),
-    ] = None,
-    relations_parquet: Annotated[
-        Optional[str],
-        typer.Option(
-            '--relations',
-            help=(
-                'Path to relations parquet, used for the parent retrieval metric (default: the '
-                'bundle artifact with --supervision-manifest, else ./data/naics_relations.parquet)'
-            ),
-        ),
-    ] = None,
-    supervision_manifest: Annotated[
-        Optional[str],
-        typer.Option(
-            '--supervision-manifest',
-            help='Supervision bundle manifest; the distance matrix and relations come from it',
-        ),
-    ] = None,
-    max_cophenetic_drop: Annotated[
-        float,
-        typer.Option('--max-cophenetic-drop', help='Allowed drop in cophenetic correlation'),
-    ] = 0.02,
-    max_ndcg_drop: Annotated[
-        float,
-        typer.Option('--max-ndcg-drop', help='Allowed drop in NDCG@10'),
-    ] = 0.01,
-    min_local_improvement: Annotated[
-        float,
-        typer.Option('--min-local-improvement', help='Required parent retrieval improvement'),
-    ] = 0.05,
-    ndcg_k: Annotated[
-        int,
-        typer.Option('--ndcg-k', help='NDCG@K to evaluate'),
-    ] = 10,
-    parent_top_k: Annotated[
-        int,
-        typer.Option('--parent-top-k', help='Top-K used for parent retrieval accuracy'),
-    ] = 1,
-):
-    '''
-    Compare Stage 3 and Stage 4 embeddings at curvature 1.0.
-
-    Enforce cophenetic, NDCG, and parent-retrieval thresholds. Report structural
-    Spearman v1 separately; undefined values and deltas display as N/A.
-    '''
-
-    configure_logging('tools_verify_stage4.log')
-
-    cfg = Stage4VerificationConfig(
-        max_cophenetic_degradation=max_cophenetic_drop,
-        max_ndcg_degradation=max_ndcg_drop,
-        min_local_improvement=min_local_improvement,
-        ndcg_k=ndcg_k,
-        parent_top_k=parent_top_k,
-    )
-
-    try:
-        distance_matrix_path, relations_path = _stage4_structural_inputs(
-            supervision_manifest, distance_matrix, relations_parquet
-        )
-        result = verify_stage4(
-            Path(stage3_parquet),
-            Path(stage4_parquet),
-            distance_matrix_path,
-            relations_path,
-            cfg,
-        )
-    except Exception as exc:
-        console.print(f'[bold red]Verification failed:[/bold red] {exc}')
-        raise typer.Exit(code=1)
-
-    console.print('\n[bold cyan]Stage 4 Verification[/bold cyan]\n')
-    console.print('[bold]Pre-HGCN metrics:[/bold]')
-    for key, value in result['pre'].items():
-        formatted = 'N/A' if value is None else f'{value:.4f}'
-        console.print(f'  • {key}: {formatted}')
-
-    console.print('\n[bold]Post-HGCN metrics:[/bold]')
-    for key, value in result['post'].items():
-        formatted = 'N/A' if value is None else f'{value:.4f}'
-        console.print(f'  • {key}: {formatted}')
-
-    console.print('\n[bold]Deltas:[/bold]')
-    for key, value in result['delta'].items():
-        formatted = 'N/A' if value is None else f'{value:+.4f}'
-        console.print(f'  • {key}: {formatted}')
-
-    console.print('\n[bold]Threshold checks:[/bold]')
-    for key, passed in result['checks'].items():
-        status = '[green]PASS[/green]' if passed else '[red]FAIL[/red]'
-        console.print(f'  • {key}: {status}')
-
-    if result['passed']:
-        console.print('\n[bold green]✓ Stage 4 verification passed![/bold green]\n')
-    else:
-        console.print('\n[bold red]✗ Stage 4 verification failed thresholds[/bold red]\n')
         raise typer.Exit(code=1)
 
 # -------------------------------------------------------------------------------------------------
@@ -684,3 +539,256 @@ def regressor_panel(
             console.print(f'[bold red]Predictions not written:[/bold red] {exc}')
             raise typer.Exit(code=1)
         console.print(f'Predictions written to {output_path}')
+
+# -------------------------------------------------------------------------------------------------
+# Decisions (Req 5)
+# -------------------------------------------------------------------------------------------------
+
+@app.command('margins')
+def margins_command(
+    reference: Annotated[
+        str,
+        typer.Option('--reference', help="The reference configuration's arm record (JSON)"),
+    ],
+    multiple: Annotated[
+        float,
+        typer.Option('--multiple', help="Each δ as a multiple of the reference's across-seed SD"),
+    ],
+    name: Annotated[
+        str,
+        typer.Option('--name', help='Names the margins in the decision records that use them'),
+    ],
+    store: Annotated[
+        str,
+        typer.Option('--store', help='The artifact store the arm record references'),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where to write the margin record (JSON)'),
+    ],
+):
+    '''
+    Fix each panel's non-inferiority margin δ from a reference arm (Req 5).
+
+    δ is the multiple times the reference arm's across-seed standard deviation of the panel's
+    decision statistic (D10). Fix the margins before any other arm of a decision reads a panel: a
+    decision refuses every run that read before its margins were fixed.
+
+    Example:
+        Fix the margins at half a standard deviation::
+
+            $ uv run naics-embedder tools margins --reference reference.json --multiple 0.5 \\
+                --name reference-margins --store ~/naics-artifacts --output margins.json
+    '''
+
+    configure_logging('tools_margins.log')
+
+    cfg = load_config(DecisionConfig, DECISION_CONFIG)
+    try:
+        record = fix_margins(
+            read_record(reference, ArmRecord),
+            multiple,
+            name,
+            ArtifactStore(store),
+            min_seeds=cfg.min_seeds,
+        )
+        path = write_record(record, output)
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]Margins failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(
+        f'\n[bold cyan]Margins {name!r}, fixed {record.fixed_at.isoformat()}[/bold cyan]\n'
+    )
+    for entry in record.margins:
+        console.print(
+            f'  • {entry.panel}: δ {entry.margin:.6g} = {multiple:g} × SD {entry.sd:.6g} of '
+            f'{entry.statistic} over {len(entry.per_seed)} seeds'
+        )
+    console.print(f'\nMargin record: {path}\n')
+
+@app.command('decide')
+def decide_command(
+    arm: Annotated[
+        List[str],
+        typer.Option('--arm', help='An arm record (JSON); repeat for each arm'),
+    ],
+    margins: Annotated[
+        str,
+        typer.Option('--margins', help='The margin record (tools margins)'),
+    ],
+    name: Annotated[
+        str,
+        typer.Option('--name', help='Names the decision'),
+    ],
+    question: Annotated[
+        str,
+        typer.Option('--question', help='What the decision settles, in a sentence'),
+    ],
+    store: Annotated[
+        str,
+        typer.Option('--store', help='The artifact store the arm records reference'),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where to write the decision record (JSON)'),
+    ],
+):
+    '''
+    Decide among two or more arms under Req 5's rule over D8's three panels.
+
+    Each A-against-B comparison reads Δ on paired resamples of each panel's units, seeds nested.
+    A is adopted over B when it is non-inferior on all three panels (the 95 % interval's lower
+    bound above −δ) and superior on at least one (the 98⅓ % interval above zero). The survivors
+    are the arms no other arm is adopted over, and the tie order picks among them. The record
+    carries the arms with their selection-log records and artifact references, the margins, every
+    comparison, the non-dominated set, the tie order and the chosen arm.
+
+    Example:
+        Decide between a candidate and the reference::
+
+            $ uv run naics-embedder tools decide --arm candidate.json --arm reference.json \\
+                --margins margins.json --name dimension-8 --question "Is dimension 8 enough?" \\
+                --store ~/naics-artifacts --output decision.json
+    '''
+
+    configure_logging('tools_decide.log')
+
+    cfg = load_config(DecisionConfig, DECISION_CONFIG)
+    try:
+        record = decide(
+            name,
+            question,
+            [read_record(path, ArmRecord) for path in arm],
+            read_record(margins, MarginRecord),
+            ArtifactStore(store),
+            replicates=cfg.replicates,
+            bootstrap_seed=cfg.bootstrap_seed,
+            min_seeds=cfg.min_seeds,
+        )
+        path = write_record(record, output)
+    except (OSError, ValueError, TieUnresolvedError) as exc:
+        console.print(f'[bold red]Decision failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(f'\n[bold cyan]Decision {name!r}[/bold cyan]\n')
+    for comparison in record.comparisons:
+        verdict = 'adopted' if comparison.adopted else 'not adopted'
+        console.print(f'  • {comparison.a} over {comparison.b}: {verdict}')
+        for panel in comparison.panels:
+            low, high = panel.noninferiority_interval
+            upper_low, upper_high = panel.superiority_interval
+            console.print(
+                f'      {panel.panel}: Δ {panel.delta:+.4g}; 95 % [{low:+.4g}, {high:+.4g}] '
+                f'against −δ {-panel.margin:.4g}; 98⅓ % [{upper_low:+.4g}, {upper_high:+.4g}]'
+            )
+    cycle = ' (dominance cycled)' if record.cycle else ''
+    console.print(f'\nNon-dominated: {", ".join(record.non_dominated)}{cycle}')
+    console.print(f'Tie order: {", ".join(record.tie_order)}')
+    console.print(f'[bold]Chosen: {record.chosen}[/bold]')
+    console.print(f'\nDecision record: {path}\n')
+
+# -------------------------------------------------------------------------------------------------
+# Diagnostics (Req 6)
+# -------------------------------------------------------------------------------------------------
+
+@app.command('diagnostics')
+def diagnostics_command(
+    table: Annotated[
+        str,
+        typer.Option(
+            '--table',
+            help="The arm's code table in the export form (tangent coordinates if hyperbolic)",
+        ),
+    ],
+    geometry: Annotated[
+        str,
+        typer.Option('--geometry', help='euclidean, spherical or hyperbolic'),
+    ],
+    codebook: Annotated[
+        str,
+        typer.Option('--codebook', help="A supervision bundle's naics_codebook.parquet"),
+    ],
+    curvature: Annotated[
+        float,
+        typer.Option('--curvature', help="A hyperbolic arm's curvature magnitude"),
+    ] = 1.0,
+    output: Annotated[
+        Optional[str],
+        typer.Option('--output', help='Also write the report as JSON to this path'),
+    ] = None,
+):
+    '''
+    Report Req 6's structural diagnostics over every codebook code.
+
+    Sector separation (an AUC), within-sector rank correlation (over queries and over sectors),
+    MAP over ancestors, NDCG@5/10/20 with integer lowest-common-ancestor grades, the Pearson
+    correlation of distance with D*, and parent retrieval@1/5 without the 522 unary pairs. The
+    report describes an arm: nothing selects on it, and no statistic in it has a threshold.
+
+    Example:
+        Report on a hyperbolic arm's export::
+
+            $ uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \\
+                --codebook PATH/naics_codebook.parquet
+    '''
+
+    configure_logging('tools_diagnostics.log')
+
+    if geometry not in GEOMETRIES:
+        console.print(f'[bold red]--geometry must be one of {list(GEOMETRIES)}[/bold red]')
+        raise typer.Exit(code=1)
+    try:
+        codes = pl.read_parquet(codebook).get_column('code').to_list()
+        report = diagnostics_report(
+            pl.read_parquet(table), geometry, codebook_codes=codes, curvature=curvature
+        )
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]Diagnostics failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    separation = report.sector_separation
+    within = report.within_sector_rank_correlation
+    ancestors = report.map_over_ancestors
+    parents = report.parent_retrieval
+
+    def formatted(value: Optional[float]) -> str:
+        return 'undefined' if value is None else f'{value:.4f}'
+
+    console.print(
+        f'\n[bold cyan]Structural diagnostics (Req 6): {report.codes:,} codes, '
+        f'{report.geometry}[/bold cyan]\n'
+    )
+    console.print(
+        f'  • sector separation AUC: {separation.auc:.4f} ({separation.same_sector_pairs:,} '
+        f'same-sector, {separation.cross_sector_pairs:,} cross-sector pairs)'
+    )
+    console.print(
+        f'  • within-sector rank correlation: {formatted(within.mean_over_queries)} over '
+        f'{within.queries - within.undefined_queries:,} queries, '
+        f'{formatted(within.mean_over_sectors)} over {len(within.by_sector)} sectors '
+        f'({within.undefined_queries:,} undefined)'
+    )
+    levels = ', '.join(f'level {level} {value:.4f}' for level, value in ancestors.by_level.items())
+    console.print(
+        f'  • MAP over ancestors: {ancestors.value:.4f} over {ancestors.queries:,} queries '
+        f'({levels})'
+    )
+    ndcg = ', '.join(f'{k} {value.value:.4f}' for k, value in report.ndcg.items())
+    console.print(f'  • NDCG: {ndcg}')
+    console.print(
+        f'  • distance Pearson with D*: {formatted(report.distance_pearson.value)} over '
+        f'{report.distance_pearson.pairs:,} pairs'
+    )
+    at = ', '.join(f'@{k} {value:.4f}' for k, value in parents.at.items())
+    console.print(
+        f'  • parent retrieval: {at} over {parents.queries:,} queries '
+        f'({parents.unary_pairs_excluded} unary pairs excluded)'
+    )
+    console.print('\nDescriptive only: nothing selects on these, and none has a threshold.\n')
+
+    if output:
+        path = Path(output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(report.model_dump_json(indent=2) + '\n')
+        console.print(f'Report written to {path}')

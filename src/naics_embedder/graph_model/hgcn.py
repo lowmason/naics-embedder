@@ -326,9 +326,6 @@ class HGCNLightningModule(pyl.LightningModule):
             ]
         )
         self._ndcg_k_values = self._normalize_ndcg_k_values(cfg.ndcg_k_values)
-        self._primary_ndcg = (
-            10 if 10 in self._ndcg_k_values else self._ndcg_k_values[len(self._ndcg_k_values) // 2]
-        )
         self.node_codes = self._extract_node_codes(node_metadata)
         distance_tensor = self._load_tree_distance_tensor(self.node_codes)
         if distance_tensor is not None:
@@ -987,14 +984,9 @@ class HGCNLightningModule(pyl.LightningModule):
         metrics_tensor = cast(Dict[str, torch.Tensor], metrics)
         metrics_tensor['triplet_loss'] = val_triplet_loss
 
+        # Req 6: structural statistics are logged for the record, never shown as a headline
         for name, value in metrics_tensor.items():
-            self.log(
-                f'val/{name}',
-                value,
-                on_step=False,
-                on_epoch=True,
-                prog_bar=(name == 'relation_accuracy'),
-            )
+            self.log(f'val/{name}', value, on_step=False, on_epoch=True)
 
         # metrics contains Tensors when as_tensors=True, but we defensively handle floats
         processed_metrics: Dict[str, float] = {}
@@ -1020,15 +1012,7 @@ class HGCNLightningModule(pyl.LightningModule):
                             value, device=self.device
                         )
                     )
-                    self.log(
-                        f'val/{name}',
-                        tensor_value,
-                        on_step=False,
-                        on_epoch=True,
-                        prog_bar=(
-                            name == 'cophenetic_correlation' or name == f'ndcg@{self._primary_ndcg}'
-                        ),
-                    )
+                    self.log(f'val/{name}', tensor_value, on_step=False, on_epoch=True)
                     self._full_val_metrics[history_key] = (
                         float(value.detach().cpu()) if isinstance(value, torch.Tensor) else value
                     )
