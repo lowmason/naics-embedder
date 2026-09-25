@@ -460,14 +460,14 @@ them and nothing selects on them. Configurations are compared under Req 5 on the
 regressor panels (`tools margins`, `tools decide`), and Req 6's stratified diagnostics come
 from `tools diagnostics` (see the [usage guide](usage.md#tools-diagnostics)).
 
-| Metric | Description | Ideal Value |
-|--------|-------------|-------------|
-| Cophenetic Correlation | Correlation between embedding and tree distances | → 1.0 |
-| Structural Spearman v1 (`structural_spearman_v1`) | Average-rank correlation of canonical unordered distance pairs | Defined values approach 1.0 |
-| NDCG@5 | Ranking quality (top 5 neighbors) | → 1.0 |
-| NDCG@10 | Ranking quality (top 10 neighbors) | → 1.0 |
-| NDCG@20 | Ranking quality (top 20 neighbors) | → 1.0 |
-| Mean Distortion | Average distance distortion from tree | → 0.0 |
+| Metric | Description |
+|--------|-------------|
+| Cophenetic Correlation | Correlation between embedding and tree distances |
+| Structural Spearman v1 (`structural_spearman_v1`) | Average-rank correlation of canonical unordered distance pairs |
+| NDCG@5 | Ranking quality (top 5 neighbors) |
+| NDCG@10 | Ranking quality (top 10 neighbors) |
+| NDCG@20 | Ranking quality (top 20 neighbors) |
+| Mean Distortion | Average distance distortion from tree |
 
 ### Structural Spearman v1
 
