@@ -18,8 +18,9 @@ from naics_embedder.decision.scores import PANELS
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.decision.sweep import SeedArtifacts, run_seed_sweep
 from naics_embedder.panels.outcome import OutcomePanel
-from naics_embedder.panels.regressor import RegressorPanel
+from naics_embedder.panels.regressor import DECISION_LEVEL, RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.supervision.schema import IndexRole
 from tests.fixtures.decision import spec, write_text_only
 from tests.fixtures.regressor_panel import CODEBOOK, HELDOUT_GROUPS, SETTINGS, SIX_DIGIT
 
@@ -167,6 +168,9 @@ def test_every_seed_is_read_once_per_panel_and_its_records_are_the_logs(
         assert set(run.statistics) == set(PANELS)
     assert arm.panels.outcome == panels['outcome_panel'].fingerprint
     assert arm.panels.regressor == panels['regressor_panel'].fingerprint
+    outcome_data = panels['outcome_panel'].data_fingerprint(IndexRole.VALIDATION)
+    assert arm.panels.outcome_data == outcome_data
+    assert arm.panels.regressor_data == panels['regressor_panel'].data_fingerprint(DECISION_LEVEL)
 
 def test_the_artifacts_outlive_the_runners_files(
     tmp_path, regressor_rows, panels, store, text_only
@@ -237,3 +241,45 @@ def test_a_decision_over_swept_arms_adopts_the_informed_one(
     report = next(item for item in record.reports if item.arm == 'informed')
     assert report.statistics['outcome'] > 0.5
     assert report.gain['regressor_heldout'].point > 0
+
+def _retexted(panels, regressor_rows, log):
+    '''The outcome panel over the same roles, each query's text revised after its code.'''
+
+    rows = _role_rows().with_columns(text=pl.col('text') + ' (revised)')
+    return {**panels, 'outcome_panel': OutcomePanel(rows, SIX_DIGIT, log)}
+
+def _shifted(panels, regressor_rows, log):
+    '''The regressor panel over the same held-out draw, each outcome 1 higher.'''
+
+    rows = {
+        level: frame.with_columns(pl.col('outcome') + 1.0)
+        for level, frame in regressor_rows.items()
+    }
+    return {**panels, 'regressor_panel': RegressorPanel(rows, HELDOUT_GROUPS, log, SETTINGS)}
+
+@pytest.mark.parametrize(
+    'other_panels, field',
+    [(_retexted, 'outcome_data'), (_shifted, 'regressor_data')],
+)
+def test_arms_swept_over_other_panel_data_are_not_paired(
+    tmp_path, regressor_rows, panels, store, text_only, log, other_panels, field
+):
+    reference = _sweep('uninformed', False, tmp_path, regressor_rows, panels, store, text_only)
+    margins = fix_margins(reference, 1.0, 'fixture reference', store, min_seeds=5)
+    other = other_panels(panels, regressor_rows, log)
+    informed = _sweep('informed', True, tmp_path, regressor_rows, other, store, text_only)
+
+    # The splits are the same, so only the data fingerprints tell the panels apart
+    splits = (informed.panels.outcome, informed.panels.regressor)
+    assert splits == (reference.panels.outcome, reference.panels.regressor)
+    with pytest.raises(ValueError, match=f"differing in \\['{field}'\\]"):
+        decide(
+            'fixture decision',
+            'does the informed arm beat the uninformed one?',
+            [informed, reference],
+            margins,
+            store,
+            replicates=2000,
+            bootstrap_seed=20260924,
+            min_seeds=5,
+        )

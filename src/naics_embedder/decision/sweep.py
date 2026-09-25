@@ -161,7 +161,9 @@ def run_seed_sweep(
         store=str(store.root),
         panels=PanelSet(
             outcome=outcome_panel.fingerprint,
+            outcome_data=outcome_panel.data_fingerprint(IndexRole.VALIDATION),
             regressor=regressor_panel.fingerprint,
+            regressor_data=regressor_panel.data_fingerprint(DECISION_LEVEL),
             fit_settings=_fit_settings(regressor_panel),
         ),
         runs=runs,

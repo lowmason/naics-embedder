@@ -45,7 +45,9 @@ DESCRIPTIONS_SHA256 = 'd' * 64
 MAX_LENGTH = 16
 PANEL_SET = PanelSet(
     outcome='outcome-roles',
+    outcome_data='outcome-queries',
     regressor='heldout-draw',
+    regressor_data='decision-level-rows',
     fit_settings={
         'alphas': [0.1, 1.0],
         'folds': 2,

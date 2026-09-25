@@ -11,6 +11,8 @@ training data, not a selection, so reading them is not logged.
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
@@ -128,6 +130,22 @@ class OutcomePanel:
 
         with_entries = set(self._rows.get_column('code').to_list())
         return tuple(code for code in self.candidates if code not in with_entries)
+
+    def data_fingerprint(self, split: Union[IndexRole, str]) -> str:
+        '''
+        SHA-256 of what a read of the split scores: its queries (``entry_id``, ``code`` and
+        ``text``, in entry order) and the candidates.
+
+        ``fingerprint`` names the role assignment alone, which the log counts openings by, so two
+        panels can share it and still score other text or decode to other candidates. This
+        returns no rows, so it is not a read and logs nothing, even for the sealed test split.
+        '''
+
+        payload = {
+            'queries': self._split(IndexRole(split)).rows(),
+            'candidates': list(self.candidates),
+        }
+        return hashlib.sha256(json.dumps(payload).encode('utf-8')).hexdigest()
 
     def training_queries(self) -> pl.DataFrame:
         '''Training queries (``entry_id``, ``code``, ``text``); training data, so not logged.'''

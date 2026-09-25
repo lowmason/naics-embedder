@@ -272,13 +272,21 @@ def test_a_regressor_read_must_name_the_runs_tables(store, tmp_path, reference, 
     with pytest.raises(ValueError, match="another \\['text_only'\\]"):
         _decide([arm, reference], margins, store)
 
-def test_paired_arms_must_read_the_same_panels(store, tmp_path, reference, margins):
+@pytest.mark.parametrize(
+    'edit, message',
+    [
+        (lambda panels: panels['fit_settings'].update(folds=3), "\\['fit_settings'\\]"),
+        (lambda panels: panels.update(outcome_data='other'), "\\['outcome_data'\\]"),
+        (lambda panels: panels.update(regressor_data='other'), "\\['regressor_data'\\]"),
+    ],
+)
+def test_paired_arms_must_read_the_same_panels(store, tmp_path, reference, margins, edit, message):
     arm = _edited(
-        synthetic_arm(store, tmp_path, spec('other-folds'), {}),
-        lambda data: data['panels']['fit_settings'].update(folds=3),
+        synthetic_arm(store, tmp_path, spec('other-panels'), {}),
+        lambda data: edit(data['panels']),
     )
 
-    with pytest.raises(ValueError, match='other panels or fit settings'):
+    with pytest.raises(ValueError, match=f'other panels or fit settings .*differing in {message}'):
         _decide([arm, reference], margins, store)
 
 def test_the_text_only_table_must_come_from_the_arms_backbone_and_text(

@@ -9,7 +9,8 @@ Before any number is computed, every arm is checked:
   window (D9);
 - each run's log records are validation reads that name the run, its table and its text-only
   table by the fingerprints the store recorded;
-- all arms read the same panels with the same fit settings, so Δ pairs item for item.
+- all arms read the same panels, with the same data on them and the same fit settings, so Δ
+  pairs item for item.
 
 A decision also requires every run other than the margin record's own reference runs to have
 read nothing before the margins were fixed.
@@ -155,23 +156,25 @@ def _check_log_records(arm: ArmRecord, run: SeedRun) -> None:
 
 def check_pairing(arms: Sequence[ArmRecord], margins: MarginRecord) -> None:
     '''
-    Require every arm, and the margins' reference, to have read the same panels under the same
-    fit settings.
+    Require every arm, and the margins' reference, to have read the same panels, with the same
+    data on them, under the same fit settings.
 
     Raises:
-        ValueError: If two arms share a name, or one read other panels.
+        ValueError: If two arms share a name, or one read other panels (naming what differs).
     '''
 
     names = [arm.spec.name for arm in arms]
     if len(set(names)) != len(names):
         raise ValueError(f'arm names repeat: {names}')
+    first = arms[0].panels.model_dump()
     others = [(arm.spec.name, arm.panels) for arm in arms[1:]]
     others.append((f'the margin reference {margins.reference.spec.name}', margins.reference.panels))
     for name, panels in others:
-        if panels != arms[0].panels:
+        wrong = sorted(key for key, value in panels.model_dump().items() if value != first[key])
+        if wrong:
             raise ValueError(
-                f'{name} read other panels or fit settings than {arms[0].spec.name}: paired '
-                'arms must be scored on the same resample units (Req 5)'
+                f'{name} read other panels or fit settings than {arms[0].spec.name}, differing '
+                f'in {wrong}: paired arms must be scored on the same resample units (Req 5)'
             )
 
 def check_margins_first(arms: Sequence[ArmRecord], margins: MarginRecord) -> None:

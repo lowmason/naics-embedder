@@ -442,6 +442,27 @@ def test_openings_are_counted_per_held_out_draw(regressor_rows, log):
 
     assert [r['event'] for r in log.records()] == ['open', 'open']
 
+def test_the_data_fingerprint_names_the_rows_a_read_at_a_level_scores(panel, regressor_rows, log):
+    moved = _shift_outcomes(regressor_rows, pl.col('group') == '1111')
+    shifted = RegressorPanel(moved, HELDOUT_GROUPS, log, SETTINGS)
+    reordered = RegressorPanel(
+        {
+            level: rows.reverse().select(rows.columns[::-1])
+            for level, rows in regressor_rows.items()
+        },
+        HELDOUT_GROUPS,
+        log,
+        SETTINGS,
+    )
+
+    # One draw can hold other outcomes: only the data fingerprint tells the two apart
+    assert shifted.fingerprint == panel.fingerprint
+    assert shifted.data_fingerprint(6) != panel.data_fingerprint(6)
+    # A read at level 6 scores no other level's rows, and neither row nor column order is data
+    assert shifted.data_fingerprint(5) == panel.data_fingerprint(5)
+    assert reordered.data_fingerprint(6) == panel.data_fingerprint(6)
+    assert log.records() == []
+
 def test_an_arm_missing_a_panel_code_is_refused_before_anything_is_logged(
     panel, regressor_arm, log
 ):

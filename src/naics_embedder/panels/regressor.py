@@ -28,6 +28,8 @@ statistic it settles on and resample by four-digit group.
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import hashlib
+import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -583,6 +585,22 @@ class RegressorPanel:
         '''Rows per split at a level (counts only; reading rows goes through the log).'''
 
         return split_counts(self._frame(level))
+
+    def data_fingerprint(self, level: int) -> str:
+        '''
+        SHA-256 of the rows a read at the level scores from: every row there, its split included,
+        sorted by code and feature year, with the columns in name order.
+
+        ``fingerprint`` names the held-out draw alone, which the log counts openings by, so two
+        panels can share it and still fit other outcomes. This returns no rows, so it is not a
+        read and logs nothing. The values are hashed exactly: rows derived on another platform
+        can differ in a last bit, and then read as other data.
+        '''
+
+        frame = self._frame(level)
+        frame = frame.select(sorted(frame.columns)).sort('code', 'feature_year')
+        payload = {'columns': frame.columns, 'rows': frame.rows()}
+        return hashlib.sha256(json.dumps(payload).encode('utf-8')).hexdigest()
 
     def cell_status(self, regime: Regime, level: int) -> Optional[str]:
         '''None if the regime is defined at the level, otherwise the reason it is not.'''

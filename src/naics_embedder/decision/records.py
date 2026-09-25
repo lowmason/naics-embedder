@@ -85,10 +85,25 @@ class ArmSpec(_Record):
     settings: Dict[str, Any] = Field(default_factory=dict)
 
 class PanelSet(_Record):
-    '''The panels a run read; every arm of a decision must share them (Req 5's pairing).'''
+    '''
+    The panels a run read; every arm of a decision must share them (Req 5's pairing).
+
+    A split's fingerprint is the name the selection log gives it, and it does not pin the data a
+    read scored, so each panel is named twice.
+
+    Attributes:
+        outcome: The outcome panel's role assignment (``OutcomePanel.fingerprint``).
+        outcome_data: Its validation queries, text included, and its candidates
+            (``OutcomePanel.data_fingerprint``).
+        regressor: The regressor panel's held-out draw (``RegressorPanel.fingerprint``).
+        regressor_data: Its rows at the decision level (``RegressorPanel.data_fingerprint``).
+        fit_settings: The regressor panel's tuning and resampling settings.
+    '''
 
     outcome: str
+    outcome_data: str
     regressor: str
+    regressor_data: str
     fit_settings: Dict[str, Any]
 
 class SeedRun(_Record):
