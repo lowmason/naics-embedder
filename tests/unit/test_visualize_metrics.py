@@ -102,13 +102,12 @@ class TestParseLogFile:
         assert metrics[2]['radius_mean'] == pytest.approx(8.7654)
         assert metrics[2]['radius_std'] == pytest.approx(0.3456)
 
-    def test_parse_extracts_cophenetic_correlation(self, sample_log_file):
-        '''Test extraction of cophenetic correlation and pair count.'''
+    def test_parse_leaves_out_the_structural_statistic(self, sample_log_file):
+        '''Req 6: the cophenetic correlation the log still records is not read.'''
         metrics = parse_log_file(sample_log_file)
 
-        assert metrics[0]['cophenetic'] == pytest.approx(0.4521)
-        assert metrics[0]['n_pairs'] == 500
-        assert metrics[1]['cophenetic'] == pytest.approx(0.5678)
+        assert metrics
+        assert all('cophenetic' not in m and 'n_pairs' not in m for m in metrics)
 
     def test_parse_extracts_norm_cv(self, sample_log_file):
         '''Test extraction of Norm CV.'''
@@ -310,14 +309,17 @@ class TestPrintAnalysis:
         assert 'Initial' in captured.out
         assert 'Latest' in captured.out
 
-    def test_print_analysis_shows_hierarchy_preservation(self, sample_log_file, capsys):
-        '''Test that hierarchy preservation analysis is shown.'''
+    def test_print_analysis_grades_no_structural_statistic(self, sample_log_file, capsys):
+        '''Req 6: no grade, trend or recommendation reads a structural statistic.'''
         metrics = parse_log_file(sample_log_file)
+        for m in metrics:
+            m['cophenetic'] = 0.1
 
         print_analysis(metrics, 'test_stage')
 
         captured = capsys.readouterr()
-        assert 'HIERARCHY PRESERVATION' in captured.out
+        assert 'HIERARCHY PRESERVATION' not in captured.out
+        assert 'ophenetic' not in captured.out
 
     def test_print_analysis_warns_large_radius(self, tmp_path, capsys):
         '''Test warning for large radius.'''
@@ -376,17 +378,3 @@ class TestEdgeCases:
         metrics = parse_log_file(log_file)
 
         assert metrics[0]['radius_mean'] == pytest.approx(999999.999)
-
-    def test_parse_handles_negative_cophenetic(self, tmp_path):
-        '''Test parsing negative cophenetic values.'''
-        log_content = """
-2024-01-15 10:00:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 10:00:01 - INFO - Hyperbolic radius: 2.5 ± 0.1
-2024-01-15 10:00:02 - INFO - Hierarchy preservation: cophenetic=-0.1234 (500 pairs)
-"""
-        log_file = tmp_path / 'negative_cophenetic.log'
-        log_file.write_text(log_content)
-
-        metrics = parse_log_file(log_file)
-
-        assert metrics[0]['cophenetic'] == pytest.approx(-0.1234)

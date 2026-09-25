@@ -100,6 +100,21 @@ class TestVisualizeMetrics:
         assert result['num_epochs'] == 2
 
     @pytest.mark.skipif(not HAS_VISUALIZE, reason='visualization tools not available')
+    def test_visualize_metrics_tables_no_structural_statistic(self, sample_log_file, capsys):
+        '''Req 6: the summary table carries no cophenetic or Spearman column.'''
+        visualize_metrics(
+            stage='test_stage',
+            log_file=sample_log_file / 'logs' / 'train_sequential.log',
+            output_dir=sample_log_file / 'output',
+            project_root=sample_log_file,
+        )
+
+        output = capsys.readouterr().out
+        assert 'METRICS SUMMARY TABLE' in output
+        assert 'Cophenetic' not in output
+        assert 'Spearman' not in output
+
+    @pytest.mark.skipif(not HAS_VISUALIZE, reason='visualization tools not available')
     def test_visualize_metrics_raises_for_missing_log(self, tmp_path):
         '''Test error for missing log file.'''
         with pytest.raises(FileNotFoundError):

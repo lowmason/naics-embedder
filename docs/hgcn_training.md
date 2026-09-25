@@ -57,7 +57,8 @@ Refined Lorentz-model hyperbolic embeddings aligned with taxonomy structure.
 
 ## 8. Validation Metrics
 
-Stage 4 now mirrors the text-model evaluation suite so you can verify that graph refinement does not erode global structure:
+HGCN validation logs the text model's structural statistics for the record. No progress bar
+shows them and nothing selects on them (Req 6):
 
 - **Cophenetic correlation** – correlation between embedding distances and tree distances.
 - **Structural Spearman v1** (`structural_spearman_v1`) - average-rank structural agreement,

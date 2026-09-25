@@ -949,10 +949,13 @@ During training, the model computes validation metrics every epoch:
 - **Mean Average Precision (MAP):** Retrieval quality
 - **Diversity:** Average pairwise distance (should not collapse)
 
+Hierarchy correlation, MAP and the other structural statistics are logged for the record only
+(Req 6): no progress bar shows them, nothing selects on them, and they have no target values.
+Configurations are compared under Req 5 on the outcome and regressor panels (`tools margins`,
+`tools decide`), and Req 6's stratified diagnostics come from `tools diagnostics`.
+
 **Expected values (after convergence):**
 
-- Hierarchy correlation: > 0.7
-- MAP: > 0.6
 - Mean radius: 2.0-4.0 (depends on data and curvature)
 
 ## CI/CD and Documentation
@@ -1048,27 +1051,10 @@ is_valid = validate_hyperbolic_embeddings(embeddings, curvature=1.0, tolerance=1
 
 ### 2. Low Hierarchy Correlation
 
-**Symptom:** `hierarchy_corr` metric remains low (<0.3)
-
-**Causes:**
-
-- Insufficient training
-- Loss weights not balanced
-- Ground truth distances not informative
-- Curriculum not adapting properly
-
-**Solutions:**
-
-```bash
-# Investigate ground truth distances
-uv run naics-embedder tools investigate
-
-# Increase hierarchy loss weight
-uv run naics-embedder train loss.hierarchy_weight=0.5
-
-# Train longer
-uv run naics-embedder train training.trainer.max_epochs=30
-```
+A low `hierarchy_corr` or cophenetic value is not a failure to tune away. Structural statistics
+are diagnostics (Req 6), and raising a loss weight or picking a checkpoint because one improves
+selects on the taxonomy, which Req 1 rules out. Compare configurations under Req 5
+(`tools margins`, `tools decide`), and report Req 6's diagnostics with `tools diagnostics`.
 
 ### 3. OOM (Out of Memory) Errors
 

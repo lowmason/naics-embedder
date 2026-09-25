@@ -138,12 +138,15 @@ This aligns global and local geometric structure with the NAICS taxonomy.
 
 ### 5.4 Validation Metrics
 
-To ensure graph refinement does not erode the global structure captured by the text model, the same hierarchy-aware metrics introduced earlier in the pipeline are logged:
+HGCN validation logs the same structural statistics as the text model:
 
 - Cophenetic correlation + pair counts
 - Structural Spearman v1 (`structural_spearman_v1`) and unique-pair counts
 - NDCG\@K (configurable list, default `5/10/20`)
 - Hyperbolic distortion statistics
+
+These are logged for the record only (Req 6): no progress bar shows them and nothing selects on
+them. Req 6's stratified diagnostics come from `tools diagnostics` (section 5.5).
 
 `structural-spearman-v1` validates square symmetric distance matrices, averages each mirrored
 pair in CPU float64, and uses only the strict upper triangle (`i < j`), excluding the diagonal.

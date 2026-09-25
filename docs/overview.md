@@ -455,6 +455,11 @@ The system computes comprehensive evaluation metrics during training to monitor 
 
 ### Hierarchy Preservation Metrics
 
+These structural statistics are logged for the record only (Req 6): no progress bar shows
+them and nothing selects on them. Configurations are compared under Req 5 on the outcome and
+regressor panels (`tools margins`, `tools decide`), and Req 6's stratified diagnostics come
+from `tools diagnostics` (see the [usage guide](usage.md#tools-diagnostics)).
+
 | Metric | Description | Ideal Value |
 |--------|-------------|-------------|
 | Cophenetic Correlation | Correlation between embedding and tree distances | → 1.0 |

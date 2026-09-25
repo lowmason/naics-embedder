@@ -100,21 +100,14 @@ def visualize_metrics(
     print('\n' + '=' * 90)
     print('METRICS SUMMARY TABLE')
     print('=' * 90)
-    print(
-        f"{'Epoch':<8} {'Radius':<15} {'Cophenetic':<12} "
-        f"{'Spearman':<12} {'Dist CV':<10} {'Collapse':<10}"
-    )
+    print(f"{'Epoch':<8} {'Radius':<15} {'Dist CV':<10} {'Collapse':<10}")
     print('-' * 90)
     for m in metrics:
         epoch = m.get('epoch', 'N/A')
         radius = f"{m.get('radius_mean', 0):.2f}±{m.get('radius_std', 0):.2f}"
-        cophenetic = f"{m.get('cophenetic', 0):.4f}" if 'cophenetic' in m else 'N/A'
-        spearman = f"{m.get('spearman', 0):.4f}" if 'spearman' in m else 'N/A'
         dist_cv = f"{m.get('dist_cv', 0):.4f}" if 'dist_cv' in m else 'N/A'
         collapse = 'Yes' if m.get('collapse', False) else 'No'
-        print(
-            f'{epoch:<8} {radius:<15} {cophenetic:<12} {spearman:<12} {dist_cv:<10} {collapse:<10}'
-        )
+        print(f'{epoch:<8} {radius:<15} {dist_cv:<10} {collapse:<10}')
     print()
 
     return {

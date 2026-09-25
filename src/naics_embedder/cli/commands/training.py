@@ -715,12 +715,11 @@ def train(
 
         # Start training
         logger.info('Starting model training with evaluation metrics...\n')
-        console.print('[bold cyan]Evaluation metrics enabled:[/bold cyan]')
-        console.print('  • Cophenetic correlation (hierarchy preservation)')
-        console.print('  • NDCG@k (ranking quality: position-aware metric)')
+        console.print('[bold cyan]Validation logs:[/bold cyan]')
         console.print('  • Embedding statistics (norms, distances)')
         console.print('  • Collapse detection (variance, norm, distance)')
-        console.print('  • Distortion metrics (mean, std)\n')
+        # Req 6: a structural statistic is logged for the record, never announced as a headline
+        console.print('  • Structural statistics, for the record only (Req 6)\n')
 
         console.print(
             f'[bold yellow]Training for {cfg.training.trainer.max_epochs} epochs...[/bold yellow]\n'

@@ -149,9 +149,12 @@ uv run naics-embedder tools gpu --auto --apply
 ### `tools visualize`
 
 Visualize training metrics from log files. Creates comprehensive visualizations and analysis of training metrics including:
-- Hyperbolic radius over time
-- Hierarchy preservation correlations
+- Hyperbolic radius over time, and its spread
+- Training and validation loss
 - Embedding diversity metrics
+
+The structural statistics the logs still record are not shown: they are diagnostics (Req 6),
+reported by `tools diagnostics`.
 
 ```bash
 uv run naics-embedder tools visualize --stage 02_text
