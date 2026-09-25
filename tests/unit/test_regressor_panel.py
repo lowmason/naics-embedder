@@ -65,6 +65,8 @@ SEEN_COMPARATORS = (
     'covariates+text_only',
 )
 PURPOSE = 'exit test: fixture panel only'
+# What a fit decides for a scored row: its penalty and its prediction
+DECIDED = ['comparator', 'repeat', 'fold', 'code', 'feature_year', 'alpha', 'prediction']
 
 @pytest.fixture
 def log(tmp_path):
@@ -131,6 +133,11 @@ def test_no_scored_row_tunes_its_own_penalty(regressor_rows, regime):
     for task in plan:
         scored = set(task.score)
         assert all(scored.isdisjoint({*fit, *tuned}) for fit, tuned in task.tuning)
+        # Folds are grouped: no row of a scored group is scored while tuning the penalty
+        scored_groups = {groups[row] for row in scored}
+        assert all(
+            scored_groups.isdisjoint(groups[row] for row in tuned) for _, tuned in task.tuning
+        )
         if regime is Regime.SEEN:
             # Seen: every scored code has earlier rows in the fit set
             assert {codes[row] for row in scored} <= {codes[row] for row in task.fit}
@@ -197,6 +204,61 @@ def test_validation_reads_only_the_remainder_and_logs_each_read(
     assert records[0]['detail']['arm'] == regressor_arm.fingerprint
     assert records[0]['detail']['text_only'] == regressor_arm.text_only_fingerprint
     assert records[0]['detail']['comparators'] == list(SEEN_COMPARATORS)
+
+def _shift_outcomes(rows, where):
+    '''The panel rows, same order, with 10 added to the six-digit outcomes ``where`` picks.'''
+
+    frame = assign_splits(rows[6], HELDOUT_GROUPS).sort('code', 'feature_year')
+    outcome = pl.when(where).then(pl.col('outcome') + 10.0).otherwise(pl.col('outcome'))
+    return {**rows, 6: frame.with_columns(outcome=outcome).select(rows[6].columns)}
+
+def _read(rows, log_path, regime, split, arm):
+    '''One read of a fresh panel over ``rows``; a test read opens the outer set first.'''
+
+    panel = RegressorPanel(rows, HELDOUT_GROUPS, SelectionLog(log_path), SETTINGS)
+    if split == 'validation':
+        return panel.validation(regime, 6, arm, PURPOSE)
+    panel.open_outer(regime, PURPOSE)
+    return panel.test(regime, 6, arm, PURPOSE)
+
+def test_no_outcome_outside_the_remainder_reaches_a_test_prediction(
+    regressor_rows, regressor_arm, tmp_path
+):
+    # Both outer sets move; a test read fits and tunes on the remainder's outcomes only
+    shifted = _shift_outcomes(regressor_rows, pl.col('split') != RegressorSplit.REMAINDER.value)
+
+    for regime in Regime:
+        base = _read(regressor_rows, tmp_path / 'base.jsonl', regime, 'test', regressor_arm)
+        moved = _read(shifted, tmp_path / 'shifted.jsonl', regime, 'test', regressor_arm)
+
+        assert (moved.get_column('outcome') != base.get_column('outcome')).all()
+        assert moved.select(DECIDED).equals(base.select(DECIDED))
+
+@pytest.mark.parametrize(
+    ('regime', 'where'),
+    [
+        # A seen task fits the 2022 rows and tunes on the other folds' 2023 rows
+        (Regime.SEEN, (pl.col('group') == '1111') & (pl.col('feature_year') == 2023)),
+        # A held-out task leaves its scored groups out of its fit and every tuning split
+        (Regime.HELDOUT, pl.col('group') == '1111'),
+    ],
+)
+def test_no_scored_outcome_reaches_its_own_validation_prediction(
+    regressor_rows, regressor_arm, tmp_path, regime, where
+):
+    remainder = pl.col('split') == RegressorSplit.REMAINDER.value
+    shifted = _shift_outcomes(regressor_rows, where & remainder)
+
+    base = _read(regressor_rows, tmp_path / 'base.jsonl', regime, 'validation', regressor_arm)
+    moved = _read(shifted, tmp_path / 'shifted.jsonl', regime, 'validation', regressor_arm)
+
+    # The tasks that score a shifted row: the group's fold in each repeat
+    task = pl.col('repeat') * SETTINGS.folds + pl.col('fold')
+    changed = moved.get_column('outcome') != base.get_column('outcome')
+    scoring = base.filter(changed).select(task).to_series().unique().to_list()
+    assert len(scoring) == SETTINGS.repeats
+    scored = task.is_in(scoring)
+    assert moved.filter(scored).select(DECIDED).equals(base.filter(scored).select(DECIDED))
 
 # -------------------------------------------------------------------------------------------------
 # The committed draw (Exit: the panel reads the committed outer groups, never a fresh draw)
