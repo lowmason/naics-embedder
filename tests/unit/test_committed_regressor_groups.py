@@ -71,6 +71,12 @@ def test_a_fifth_of_each_sectors_groups_is_held_out(groups, provenance):
     assert (provenance['seed'], provenance['fraction']) == (20260924, '1/5')
     assert provenance['six_digit_population'] == 980
 
+def test_the_panel_config_pins_the_committed_draw():
+    cfg = load_config(RegressorPanelConfig, 'data/regressor_panel.yaml')
+
+    assert Path(cfg.heldout_groups_csv) == TABLE
+    assert cfg.heldout_groups_sha256 == TABLE_SHA256
+
 def test_the_draw_used_the_configured_inputs(provenance):
     cfg = load_config(RegressorPanelConfig, 'data/regressor_panel.yaml')
 

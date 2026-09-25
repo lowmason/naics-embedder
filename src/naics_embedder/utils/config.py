@@ -523,6 +523,10 @@ class RegressorPanelConfig(BaseModel):
         default='./conf/data/regressor_heldout_groups.csv',
         description='The committed held-out four-digit groups (data regressor-groups)',
     )
+    heldout_groups_sha256: str = Field(
+        default='deddfd4c395ca2ea8164e4425a4fdfff4e564360d20467d5a76163504cbb8ac4',
+        description="The committed draw's fingerprint; the panel reads no other held-out groups",
+    )
     provenance_json: str = Field(
         default='./conf/data/regressor_heldout_groups_provenance.json',
         description='Where data regressor-groups records how the groups were drawn',

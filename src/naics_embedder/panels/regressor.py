@@ -545,6 +545,7 @@ class RegressorPanel:
         qcew_sha256: Mapping[str, str],
         codebook_codes: Sequence[str],
         heldout_groups_csv: Union[str, Path],
+        heldout_groups_sha256: str,
         log_path: Union[str, Path],
         settings: FitSettings,
         branch_record: Mapping[str, Any],
@@ -553,11 +554,22 @@ class RegressorPanel:
         '''
         The panel from the pinned QCEW slices, a codebook and the committed held-out groups.
 
+        The groups must be the pinned draw: the log counts openings under the draw's
+        fingerprint, so a table edited or redrawn since would read as never opened.
+
         Raises:
-            ValueError: If the data are not the population ``branch_record`` names
-                (``verify_branch_record``).
+            ValueError: If the groups' fingerprint is not ``heldout_groups_sha256``, or the data
+                are not the population ``branch_record`` names (``verify_branch_record``).
         '''
 
+        heldout_groups = read_group_table(Path(heldout_groups_csv))
+        fingerprint = group_table_fingerprint(heldout_groups)
+        if fingerprint != heldout_groups_sha256:
+            raise ValueError(
+                f'{heldout_groups_csv}: the held-out groups (fingerprint {fingerprint}) are not '
+                f'the pinned draw {heldout_groups_sha256}; a redraw moves both outer sets, so it '
+                'takes a reviewed change of the pin'
+            )
         cells = load_national_cells(Path(qcew_dir), qcew_sha256)
         verify_branch_record(
             branch_record, codebook_codes,
@@ -567,12 +579,7 @@ class RegressorPanel:
         for level in levels:
             cells_at_level = level_cells(cells, codebook_codes, level)
             rows_by_level[level] = panel_rows(cells_at_level, population(cells_at_level))
-        return cls(
-            rows_by_level,
-            read_group_table(Path(heldout_groups_csv)),
-            SelectionLog(Path(log_path)),
-            settings,
-        )
+        return cls(rows_by_level, heldout_groups, SelectionLog(Path(log_path)), settings)
 
     @property
     def levels(self) -> Tuple[int, ...]:
@@ -811,6 +818,7 @@ def load_regressor_panel(
         qcew_sha256=cfg.qcew_sha256,
         codebook_codes=read_codebook_codes(Path(codebook_path), cfg.codebook_codes_sha256),
         heldout_groups_csv=cfg.heldout_groups_csv,
+        heldout_groups_sha256=cfg.heldout_groups_sha256,
         log_path=log_path or cfg.selection_log,
         settings=fit_settings(cfg),
         branch_record=require_branch_record(cfg).model_dump(),

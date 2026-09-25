@@ -93,8 +93,10 @@ Draw the regressor panel's held-out four-digit groups, once: a fifth of each sec
 (largest remainder, seeded) from the 980 six-digit codes Stage 1's finding names. The QCEW
 national slices are read from `qcew_dir` under the sha256 values pinned in
 `conf/data/regressor_panel.yaml`, and the codebook under its codes' fingerprint. The table is
-committed, and the panel reads it. A redraw moves both regressor outer sets, so an existing table
-is replaced only with `--force`.
+committed, and the panel reads it only under the fingerprint pinned there as
+`heldout_groups_sha256`. A redraw moves both regressor outer sets, so an existing table is
+replaced only with `--force`, and the panel reads a new draw only after a reviewed change of the
+pin.
 
 **Generates:** `conf/data/regressor_heldout_groups.csv`,
 `conf/data/regressor_heldout_groups_provenance.json`

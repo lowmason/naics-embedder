@@ -15,6 +15,9 @@ codebook_codes_sha256: 9b646af189dbc46870861367e7cd399d2328972754dbf1abb30ca5a86
 # data regressor-groups draws the held-out four-digit groups once: a fifth of each sector's
 # groups (largest remainder), seeded; the table is committed and never redrawn
 heldout_groups_csv: ./conf/data/regressor_heldout_groups.csv
+# The panel reads only this draw: the log counts openings under its fingerprint, so a redraw
+# takes a reviewed change of this pin
+heldout_groups_sha256: deddfd4c395ca2ea8164e4425a4fdfff4e564360d20467d5a76163504cbb8ac4
 provenance_json: ./conf/data/regressor_heldout_groups_provenance.json
 seed: 20260924
 heldout_fraction: 0.2

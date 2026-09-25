@@ -184,7 +184,9 @@ What the run shows about the panel, not about any arm:
 - **Stage 12** opens each regime's outer set once, with `tools regressor-panel --split test
   --open-purpose …` or `RegressorPanel.open_outer`, under fingerprint `deddfd4c…`. The log's
   panel names are `regressor_seen` and `regressor_heldout`. A second opening needs
-  `--reopen-reason` and is logged as `reopen`.
+  `--reopen-reason` and is logged as `reopen`. The panel reads no held-out groups but the draw
+  pinned as `heldout_groups_sha256` in `conf/data/regressor_panel.yaml`, so an edited or
+  redrawn table cannot open as a set never opened.
 
 ## Reproduction
 

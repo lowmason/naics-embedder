@@ -36,6 +36,7 @@ from naics_embedder.panels.regressor_splits import (
     RegressorSplit,
     assign_splits,
     codes_fingerprint,
+    group_table_fingerprint,
     write_group_table,
 )
 from naics_embedder.panels.selection_log import SelectionLog
@@ -268,12 +269,13 @@ def _from_sources(tmp_path, cells, groups, **overrides):
     qcew = tmp_path / 'qcew'
     pins = write_qcew_slices(qcew, cells)
     table = tmp_path / 'regressor_heldout_groups.csv'
-    write_group_table(groups, table)
+    fingerprint = write_group_table(groups, table)
     arguments = {
         'qcew_dir': qcew,
         'qcew_sha256': pins,
         'codebook_codes': CODEBOOK,
         'heldout_groups_csv': table,
+        'heldout_groups_sha256': fingerprint,
         'log_path': tmp_path / 'selection_log.jsonl',
         'settings': SETTINGS,
         'branch_record': BRANCH_RECORD,
@@ -299,6 +301,15 @@ def test_the_panel_reads_the_committed_groups_and_never_draws(
     # 111111 and 111112 in three feature years, and 1111 itself in three
     assert panel.split_counts(6)['heldout_outer'] == 6
     assert panel.split_counts(4)['heldout_outer'] == 3
+
+def test_from_sources_reads_no_groups_but_the_pinned_draw(tmp_path, regressor_cells):
+    # An edited or redrawn table would get a new fingerprint, under which the log counts none of
+    # the pinned draw's openings
+    pinned = group_table_fingerprint(HELDOUT_GROUPS)
+
+    with pytest.raises(ValueError, match='not the pinned draw'):
+        _from_sources(tmp_path, regressor_cells, ['1111'], heldout_groups_sha256=pinned)
+    assert not (tmp_path / 'selection_log.jsonl').exists()
 
 def test_from_sources_refuses_data_the_branch_record_does_not_name(tmp_path, regressor_cells):
     record = {**BRANCH_RECORD, 'excluded_codes': []}
@@ -685,12 +696,12 @@ def test_the_config_builds_the_panel_over_a_codebook(tmp_path, regressor_cells):
     codebook = tmp_path / 'naics_codebook.parquet'
     pl.DataFrame({'code': list(CODEBOOK)}).write_parquet(codebook)
     table = tmp_path / 'groups.csv'
-    write_group_table(HELDOUT_GROUPS, table)
     cfg = RegressorPanelConfig(
         qcew_dir=str(qcew),
         qcew_sha256=pins,
         codebook_codes_sha256=codes_fingerprint(CODEBOOK),
         heldout_groups_csv=str(table),
+        heldout_groups_sha256=write_group_table(HELDOUT_GROUPS, table),
         selection_log=str(tmp_path / 'selection_log.jsonl'),
         alphas=list(SETTINGS.alphas),
         folds=2,
@@ -709,6 +720,8 @@ def test_the_config_builds_the_panel_over_a_codebook(tmp_path, regressor_cells):
     assert other.log.path == tmp_path / 'other.jsonl'
     with pytest.raises(ValueError, match='no branch_record'):
         load_regressor_panel(cfg.model_copy(update={'branch_record': None}), codebook)
+    with pytest.raises(ValueError, match='not the pinned draw'):
+        load_regressor_panel(cfg.model_copy(update={'heldout_groups_sha256': '0' * 64}), codebook)
 
 def test_the_summary_pools_rows_per_panel_split_level_and_comparator():
     predictions = pl.DataFrame(
