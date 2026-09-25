@@ -459,7 +459,8 @@ def test_text_only_table_embeds_with_the_regressor_configs_backbone(monkeypatch,
     assert calls == [
         (Path('descriptions.parquet'), output, 'sentence-transformers/all-MiniLM-L6-v2', 512, 32)
     ]
-    assert 'text_only_provenance.json' in result.output
+    # Rich folds long paths at the terminal's width (80 columns on CI), wherever it falls
+    assert 'text_only_provenance.json' in result.output.replace('\n', '')
 
 def _regressor_arguments(tmp_path, codes=CODEBOOK):
     coordinates = tmp_path / 'arm.parquet'
