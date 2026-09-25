@@ -562,6 +562,14 @@ def test_a_float32_lorentz_export_is_refused_at_any_radius(curvature):
             'code': ['11', '21'],
             'e0': [1.0, float('nan')]
         }), 'not finite'),
+        # A log map at the origin keeps a zero time column, which would count as a dimension
+        (
+            pl.DataFrame({
+                'code': ['11', '21'],
+                'e0': [0.0, 0.0],
+                'e1': [1.0, 2.0]
+            }), r"constant columns \['e0'\]"
+        ),
     ],
 )
 def test_a_malformed_coordinate_table_is_refused(table, message):

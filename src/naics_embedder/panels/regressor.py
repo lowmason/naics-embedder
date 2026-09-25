@@ -316,7 +316,10 @@ def coordinate_matrix(table: pl.DataFrame) -> Tuple[Tuple[str, ...], np.ndarray]
     Raises:
         ValueError: If codes repeat, a coordinate is not finite, or the rows lie on a hyperboloid:
             Lorentz points (the train prompt's ``hyp_e*`` export) are not the export form, which
-            is tangent coordinates at the origin for a hyperbolic arm (Stage 6's export).
+            is tangent coordinates at the origin for a hyperbolic arm (Stage 6's export). Also if
+            a column is constant: it carries nothing and would count toward the arm's dimension,
+            which the text-only comparator is reduced to (D9). A log map at the origin keeps such
+            a column, its zero time coordinate.
     '''
 
     if 'code' not in table.columns:
@@ -334,6 +337,13 @@ def coordinate_matrix(table: pl.DataFrame) -> Tuple[Tuple[str, ...], np.ndarray]
         raise ValueError(
             'the coordinate table holds Lorentz points on a hyperboloid; the regressor panel '
             'takes the export form (tangent coordinates at the origin for a hyperbolic arm)'
+        )
+    constant = [name for name, spread in zip(columns, np.ptp(matrix, axis=0)) if spread == 0]
+    if constant:
+        raise ValueError(
+            f'the coordinate table has constant columns {constant}: they would count toward '
+            "the arm's dimension; export the tangent coordinates without a log map's zero time "
+            'coordinate'
         )
     return codes, matrix
 

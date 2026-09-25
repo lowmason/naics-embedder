@@ -179,7 +179,8 @@ What the run shows about the panel, not about any arm:
   `tools text-only-table --descriptions ARM_DESCRIPTIONS --backbone ARM_BACKBONE --output TABLE`.
   The panel reduces the table to each arm's dimension, so Stage 8's dimensions need no rebuild.
 - **Stage 6's export** writes tangent coordinates at the origin for a hyperbolic arm. The panel
-  refuses Lorentz points.
+  refuses Lorentz points, and constant columns such as the zero time coordinate a log map at the
+  origin keeps: that column would count toward the arm's dimension.
 - **Stage 12** opens each regime's outer set once, with `tools regressor-panel --split test
   --open-purpose …` or `RegressorPanel.open_outer`, under fingerprint `deddfd4c…`. The log's
   panel names are `regressor_seen` and `regressor_heldout`. A second opening needs

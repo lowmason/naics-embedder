@@ -230,7 +230,8 @@ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
 
 **Options:**
 - `--coordinates PATH` - The arm's 2,125-code table in the export form (tangent coordinates at
-  the origin for a hyperbolic arm)
+  the origin for a hyperbolic arm). Lorentz points and constant columns, such as a log map's
+  zero time coordinate, are refused
 - `--text-only PATH` - The text-only table (`tools text-only-table`)
 - `--codebook PATH` - A supervision bundle's `naics_codebook.parquet`
 - `--regime seen|heldout` - Regime to score (repeatable; default: both)
