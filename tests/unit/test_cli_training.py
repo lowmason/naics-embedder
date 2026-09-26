@@ -59,10 +59,7 @@ def training_env(monkeypatch, tmp_path):
         cfg.dirs.checkpoint_dir = str(checkpoints_dir)
         desc_path = tmp_path / 'descriptions.parquet'
         desc_path.write_text('data')
-        triplets_dir = tmp_path / 'triplets'
-        triplets_dir.mkdir(exist_ok=True)
         cfg.data_loader.streaming.descriptions_parquet = str(desc_path)
-        cfg.data_loader.streaming.triplets_parquet = str(triplets_dir)
         cfg.supervision.manifest_path = str(tmp_path / 'bundle' / 'manifest.json')
         cfg.training.trainer.max_epochs = 1
         cfg.training.trainer.devices = 1

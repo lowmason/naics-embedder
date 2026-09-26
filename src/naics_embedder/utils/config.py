@@ -1393,6 +1393,15 @@ class GraphConfig(BaseModel):
 # Main Configuration
 # -------------------------------------------------------------------------------------------------
 
+# Streaming paths that only legacy containment reads. Repaired training reads structural facts
+# and training pairs from the supervision bundle.
+LEGACY_STREAMING_PATHS = (
+    'distances_parquet',
+    'distance_matrix_parquet',
+    'relations_parquet',
+    'triplets_parquet',
+)
+
 class Config(BaseModel):
     '''Main configuration for NAICS training.'''
 
@@ -1443,6 +1452,16 @@ class Config(BaseModel):
                     'data_loader.streaming.phase1_exclusion_weight is invalid in repaired mode; '
                     'an explicit exclusion is never a negative'
                 )
+            for name in LEGACY_STREAMING_PATHS:
+                if getattr(self.data_loader.streaming, name) != (
+                    StreamingConfig.model_fields[name].default
+                ):
+                    raise ValueError(
+                        f'data_loader.streaming.{name} is a legacy path, which repaired training '
+                        'never reads: structural facts and training pairs come from the bundle '
+                        'at supervision.manifest_path. Remove the key, or set supervision.mode '
+                        'to legacy_containment'
+                    )
         return self
 
     @classmethod

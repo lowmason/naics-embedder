@@ -685,15 +685,34 @@ def test_overrides_cannot_reintroduce_legacy_keys_in_repaired_mode():
     with pytest.raises(ValidationError, match='rank_order_weight'):
         Config().override({'loss.rank_order_weight': 0.35})
 
+@pytest.mark.parametrize(
+    'name',
+    ['distances_parquet', 'distance_matrix_parquet', 'relations_parquet', 'triplets_parquet'],
+)
+def test_repaired_config_rejects_a_legacy_streaming_path(valid_config_dict, name):
+    # Repaired training reads structure and training pairs from the bundle only
+    valid_config_dict['data_loader']['streaming'][name] = './data/elsewhere'
+
+    with pytest.raises(
+        ValidationError, match=f'data_loader.streaming.{name} is a legacy path.*manifest_path'
+    ):
+        Config.model_validate(valid_config_dict)
+
+def test_overrides_cannot_point_repaired_training_at_a_legacy_path():
+    with pytest.raises(ValidationError, match='data_loader.streaming.relations_parquet'):
+        Config().override({'data_loader.streaming.relations_parquet': './data/other.parquet'})
+
 def test_legacy_containment_is_the_only_mode_accepting_legacy_keys(valid_config_dict):
     valid_config_dict['supervision'] = {'mode': 'legacy_containment'}
     valid_config_dict['loss']['rank_order_weight'] = 0.35
     valid_config_dict['data_loader']['streaming']['phase1_exclusion_weight'] = 100.0
+    valid_config_dict['data_loader']['streaming']['relations_parquet'] = './data/other.parquet'
 
     cfg = Config.model_validate(valid_config_dict)
 
     assert cfg.supervision.mode == 'legacy_containment'
     assert cfg.loss.rank_order_weight == 0.35
+    assert cfg.data_loader.streaming.relations_parquet == './data/other.parquet'
 
 @pytest.mark.parametrize(
     'supervision',

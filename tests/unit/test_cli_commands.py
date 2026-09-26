@@ -105,22 +105,16 @@ def test_data_supervision_prints_the_manifest_path(monkeypatch, runner, tmp_path
     assert configs[0].relation_id['cross_sector'] == 99
 
 @pytest.mark.parametrize('command', ['relations', 'distances', 'triplets'])
-def test_legacy_stage_commands_build_the_complete_bundle(monkeypatch, runner, tmp_path, command):
-    manifest = tmp_path / 'bundle-id' / 'manifest.json'
+def test_legacy_stage_commands_build_nothing(monkeypatch, runner, command):
     calls = []
-
-    def fake_generate(cfg):
-        calls.append(cfg)
-        return manifest
-
-    monkeypatch.setattr(data_cli, 'generate_supervision_bundle', fake_generate)
+    monkeypatch.setattr(data_cli, 'generate_supervision_bundle', calls.append)
 
     result = runner.invoke(data_cli.app, [command])
 
-    assert result.exit_code == 0
-    assert 'data supervision' in result.output
-    assert len(calls) == 1
-    assert str(manifest) in result.output
+    # A script running the old three-step sequence stops at its first step
+    assert result.exit_code == 1
+    assert 'naics-embedder data supervision' in result.output.replace('\n', ' ')
+    assert calls == []
 
 def test_data_roles_draws_the_table_with_both_configs(monkeypatch, runner, tmp_path):
     calls = []
