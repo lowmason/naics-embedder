@@ -39,7 +39,8 @@ def provenance_fields(
 
     Args:
         provenance: The provenance's JSON content.
-        table_sha256, matrix_fingerprint: The table's.
+        table_sha256: The table's sha256.
+        matrix_fingerprint: The table's ``matrix_fingerprint``.
         name: Names the provenance in an error.
 
     Raises:
