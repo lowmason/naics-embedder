@@ -43,10 +43,12 @@ def provenance_fields(
         name: Names the provenance in an error.
 
     Raises:
-        ValueError: If the provenance describes another file, names another
-            ``matrix_fingerprint``, or lacks a field D9 reads.
+        ValueError: If the provenance is not a JSON object, describes another file, names
+            another ``matrix_fingerprint``, or lacks a field D9 reads.
     '''
 
+    if not isinstance(provenance, Mapping):
+        raise ValueError(f'{name} is not a JSON object')
     if provenance.get('table_sha256') != table_sha256:
         raise ValueError(f'{name} describes another file than the table')
     if provenance.get('matrix_fingerprint', matrix_fingerprint) != matrix_fingerprint:
@@ -58,8 +60,11 @@ def provenance_fields(
             'descriptions_sha256': provenance['descriptions']['sha256'],
             'max_length': provenance['max_length'],
         }
-    except (KeyError, TypeError) as exc:
+    except KeyError as exc:
         raise ValueError(f'{name} lacks the field {exc}') from None
+    except TypeError:
+        # The provenance is an object, so only its descriptions entry can refuse a key
+        raise ValueError(f'{name}: its descriptions field is not a JSON object') from None
 
 # -------------------------------------------------------------------------------------------------
 # Store
@@ -70,7 +75,7 @@ class ArtifactStore:
     Immutable, content-addressed files under one root.
 
     The root is made absolute, so a record names the same store from any working directory, and
-    no reference may lead out of it.
+    no reference may lead out of it, whether through ``..``, an absolute path or a symlink.
     '''
 
     def __init__(self, root: Union[str, Path]):
@@ -98,7 +103,7 @@ class ArtifactStore:
             os.close(handle)
             try:
                 shutil.copyfile(path, staging)
-                # Verified before the rename: an object, once in place, is never replaced
+                # Only a copy that hashes to the digest is ever renamed into place
                 if sha256_file(staging) != digest:
                     raise ValueError(f'{path} changed while it was copied into the store')
                 os.replace(staging, target)

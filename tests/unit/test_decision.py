@@ -402,7 +402,9 @@ def test_the_text_only_check_reads_the_stored_provenance(store, tmp_path, refere
         lambda data: data['text_only'].update(revision=REVISION),
     )
 
-    with pytest.raises(ValueError, match='differ from its stored provenance'):
+    with pytest.raises(
+        ValueError, match="fields \\['revision'\\] differ from its stored provenance"
+    ):
         _decide([arm, reference], margins, store)
 
 def test_a_changed_artifact_is_refused(store, tmp_path, reference, margins):

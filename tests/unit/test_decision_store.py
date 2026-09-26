@@ -144,9 +144,21 @@ def _without_max_length(path, provenance):
     provenance.pop('max_length')
     provenance_path(path).write_text(json.dumps(provenance))
 
+def _as_a_list(path, provenance):
+    provenance_path(path).write_text(json.dumps([provenance]))
+
+def _descriptions_as_text(path, provenance):
+    provenance['descriptions'] = 'naics_descriptions.parquet'
+    provenance_path(path).write_text(json.dumps(provenance))
+
 @pytest.mark.parametrize(
     'edit, message',
-    [(_shortened, 'describes another file'), (_without_max_length, "lacks the field 'max_length'")],
+    [
+        (_shortened, 'describes another file'),
+        (_without_max_length, "lacks the field 'max_length'"),
+        (_as_a_list, 'is not a JSON object'),
+        (_descriptions_as_text, 'descriptions field is not a JSON object'),
+    ],
 )
 def test_nothing_is_stored_until_the_provenance_describes_the_table(store, tmp_path, edit, message):
     path = write_text_only(tmp_path / 'text')

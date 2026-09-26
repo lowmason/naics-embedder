@@ -119,8 +119,12 @@ def check_arm(arm: ArmRecord, store: ArtifactStore, min_seeds: int) -> None:
     if len(set(seeds)) != len(seeds) or len({run.run_id for run in arm.runs}) != len(arm.runs):
         raise ValueError(f'{name}: a seed or run id repeats')
     stored = store.text_only(arm.text_only.table, arm.text_only.provenance)
-    if stored != arm.text_only:
-        raise ValueError(f"{name}: the record's text-only fields differ from its stored provenance")
+    recorded = arm.text_only.model_dump()
+    wrong = sorted(key for key, value in stored.model_dump().items() if value != recorded[key])
+    if wrong:
+        raise ValueError(
+            f"{name}: the record's text-only fields {wrong} differ from its stored provenance"
+        )
     check_text_only(arm.spec, stored)
     for run in arm.runs:
         for reference in (run.checkpoint, run.table, run.scores, run.decoding, run.predictions):
