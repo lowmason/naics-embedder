@@ -401,6 +401,19 @@ def _require_writable(path: Path) -> None:
     if not os.access(target, os.W_OK):
         raise PermissionError(f'{target} is not writable')
 
+def _require_new_record(path: Path) -> None:
+    '''
+    Refuse a record file that exists, and require that it can be written.
+
+    Raises:
+        FileExistsError: If the path exists: a record is written once.
+        OSError: As ``_require_writable``.
+    '''
+
+    if path.exists():
+        raise FileExistsError(f'{path} exists; a record is written once')
+    _require_writable(path)
+
 @app.command('regressor-panel')
 def regressor_panel(
     coordinates: Annotated[
@@ -585,6 +598,8 @@ def margins_command(
 
     cfg = load_config(DecisionConfig, DECISION_CONFIG)
     try:
+        # Before the reference is read and resampled
+        _require_new_record(Path(output))
         record = fix_margins(
             read_record(reference, ArmRecord),
             multiple,
@@ -656,6 +671,8 @@ def decide_command(
 
     cfg = load_config(DecisionConfig, DECISION_CONFIG)
     try:
+        # Before any arm is read and resampled
+        _require_new_record(Path(output))
         record = decide(
             name,
             question,

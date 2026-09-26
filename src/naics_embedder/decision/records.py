@@ -163,9 +163,17 @@ class MarginRecord(_Record):
     fixed_at: datetime
 
     def margin(self, panel: str) -> float:
-        '''The panel's δ.'''
+        '''
+        The panel's δ.
 
-        return next(entry.margin for entry in self.margins if entry.panel == panel)
+        Raises:
+            ValueError: If the record holds no δ for the panel.
+        '''
+
+        for entry in self.margins:
+            if entry.panel == panel:
+                return entry.margin
+        raise ValueError(f'the margins {self.name!r} hold no δ for {panel}')
 
 # -------------------------------------------------------------------------------------------------
 # Decisions
@@ -250,13 +258,30 @@ class DecisionRecord(_Record):
 # -------------------------------------------------------------------------------------------------
 
 def write_record(record: BaseModel, path: Union[str, Path]) -> Path:
-    '''Write a record as indented JSON; refuse to overwrite a file.'''
+    '''
+    Write a record as indented JSON, once.
+
+    The file is created exclusively, so a writer racing for the same path fails instead of
+    overwriting it, and a write that fails removes its file, which would otherwise block the path.
+    A process killed mid-write can still leave a partial file.
+
+    Raises:
+        FileExistsError: If the path exists.
+    '''
 
     path = Path(path)
-    if path.exists():
-        raise FileExistsError(f'{path} exists; a record is written once')
+    text = record.model_dump_json(indent=2) + '\n'
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(record.model_dump_json(indent=2) + '\n', encoding='utf-8')
+    try:
+        handle = path.open('x', encoding='utf-8')
+    except FileExistsError:
+        raise FileExistsError(f'{path} exists; a record is written once') from None
+    try:
+        with handle:
+            handle.write(text)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
     return path
 
 def read_record(path: Union[str, Path], kind: Type[RecordType]) -> RecordType:

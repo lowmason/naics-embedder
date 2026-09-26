@@ -298,6 +298,39 @@ def test_margins_reports_a_missing_reference(runner, tmp_path, decision_inputs):
     assert not (tmp_path / 'margins.json').exists()
 
 @pytest.mark.unit
+def test_margins_refuses_an_existing_record_before_any_work(
+    runner, tmp_path, decision_inputs, monkeypatch
+):
+    store, reference = decision_inputs
+    (tmp_path / 'margins.json').write_text('an earlier record')
+    calls = []
+    monkeypatch.setattr(tools_cli, 'fix_margins', lambda *args, **kwargs: calls.append(args))
+
+    result = _margins(runner, tmp_path, store, reference)
+
+    assert calls == []
+    assert result.exit_code == 1
+    assert 'exists; a record is written once' in ' '.join(result.output.split())
+    assert (tmp_path / 'margins.json').read_text() == 'an earlier record'
+
+@pytest.mark.unit
+def test_decide_refuses_an_existing_record_before_any_work(
+    runner, tmp_path, decision_inputs, monkeypatch
+):
+    store, reference = decision_inputs
+    assert _margins(runner, tmp_path, store, reference).exit_code == 0
+    (tmp_path / 'decision.json').write_text('an earlier record')
+    calls = []
+    monkeypatch.setattr(tools_cli, 'decide', lambda *args, **kwargs: calls.append(args))
+
+    result = _decide(runner, tmp_path, store, [reference, reference])
+
+    assert calls == []
+    assert result.exit_code == 1
+    assert 'exists; a record is written once' in ' '.join(result.output.split())
+    assert (tmp_path / 'decision.json').read_text() == 'an earlier record'
+
+@pytest.mark.unit
 def test_decide_adopts_the_better_arm_and_writes_the_record(runner, tmp_path, decision_inputs):
     store, reference = decision_inputs
     assert _margins(runner, tmp_path, store, reference).exit_code == 0

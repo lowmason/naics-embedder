@@ -5,15 +5,16 @@ Before any number is computed, every arm is checked:
 
 - it has at least ``min_seeds`` seeds, each read once on each of the three panels;
 - every stored artifact still hashes to its reference;
-- its text-only table's provenance matches the arm's backbone, revision, descriptions and
-  window (D9);
+- its text-only table's stored provenance matches the arm's backbone, revision, descriptions
+  and window (D9);
 - each run's log records are validation reads that name the run, its table and its text-only
   table by the fingerprints the store recorded;
 - all arms read the same panels, with the same data on them and the same fit settings, so Δ
   pairs item for item.
 
-A decision also requires every run other than the margin record's own reference runs to have
-read nothing before the margins were fixed.
+A decision also requires the margins to hold one δ per panel, for its decision statistic, and
+every run other than the margin record's own reference runs to have read nothing before the
+margins were fixed.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -117,9 +118,10 @@ def check_arm(arm: ArmRecord, store: ArtifactStore, min_seeds: int) -> None:
         raise ValueError(f'{name}: {len(set(seeds))} distinct seeds, fewer than {min_seeds}')
     if len(set(seeds)) != len(seeds) or len({run.run_id for run in arm.runs}) != len(arm.runs):
         raise ValueError(f'{name}: a seed or run id repeats')
-    check_text_only(arm.spec, arm.text_only)
-    store.resolve(arm.text_only.table)
-    store.resolve(arm.text_only.provenance)
+    stored = store.text_only(arm.text_only.table, arm.text_only.provenance)
+    if stored != arm.text_only:
+        raise ValueError(f"{name}: the record's text-only fields differ from its stored provenance")
+    check_text_only(arm.spec, stored)
     for run in arm.runs:
         for reference in (run.checkpoint, run.table, run.scores, run.decoding, run.predictions):
             store.resolve(reference)
@@ -176,6 +178,23 @@ def check_pairing(arms: Sequence[ArmRecord], margins: MarginRecord) -> None:
                 f'{name} read other panels or fit settings than {arms[0].spec.name}, differing '
                 f'in {wrong}: paired arms must be scored on the same resample units (Req 5)'
             )
+
+def check_margins(margins: MarginRecord) -> None:
+    '''
+    Require the margins to hold one δ per panel, for the panel's decision statistic (D10).
+
+    Raises:
+        ValueError: If a panel has no δ or several, a δ is for another statistic, or the margins
+            name a panel no decision reads.
+    '''
+
+    held = sorted((entry.panel, entry.statistic) for entry in margins.margins)
+    needed = sorted((panel, DECISION_STATISTIC[panel]) for panel in PANELS)
+    if held != needed:
+        raise ValueError(
+            f'the margins {margins.name!r} hold {held}, not one δ per panel for its decision '
+            f'statistic: {needed} (D10)'
+        )
 
 def check_margins_first(arms: Sequence[ArmRecord], margins: MarginRecord) -> None:
     '''
@@ -307,6 +326,7 @@ def decide(
 
     if len(arms) < 2:
         raise ValueError('a decision compares at least two arms')
+    check_margins(margins)
     for arm in arms:
         check_arm(arm, store, min_seeds)
     check_pairing(arms, margins)

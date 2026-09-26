@@ -25,6 +25,7 @@ from naics_embedder.decision.scores import PANELS
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.panels.decoding import METRIC_NAMES
 from tests.fixtures.decision import (
+    REVISION,
     SD,
     SEED_OFFSETS,
     SIGMA,
@@ -90,6 +91,34 @@ def test_each_margin_is_the_multiple_times_the_references_across_seed_sd(margins
         assert len(entry.per_seed) == 5
         assert entry.sd == pytest.approx(SD)
         assert entry.margin == pytest.approx(2 * SD)
+
+def _without_heldout(data):
+    data['margins'] = [entry for entry in data['margins'] if entry['panel'] != 'regressor_heldout']
+
+def test_a_panel_without_a_margin_is_named(margins):
+    partial = MarginRecord.model_validate(_json_edited(margins, _without_heldout))
+
+    assert partial.margin('outcome') == margins.margin('outcome')
+    with pytest.raises(ValueError, match='no δ for regressor_heldout'):
+        partial.margin('regressor_heldout')
+
+@pytest.mark.parametrize(
+    'edit',
+    [
+        _without_heldout,
+        lambda data: data['margins'][0].update(statistic='top1'),
+        lambda data: data['margins'].append(data['margins'][0]),
+    ],
+    ids=['a panel without one', 'another statistic', 'a panel twice'],
+)
+def test_a_decision_needs_one_margin_per_panel_for_its_statistic(
+    store, tmp_path, reference, margins, edit
+):
+    edited = MarginRecord.model_validate(_json_edited(margins, edit))
+    candidate = synthetic_arm(store, tmp_path, spec('candidate', dimension=32), {})
+
+    with pytest.raises(ValueError, match='not one δ per panel'):
+        _decide([candidate, reference], edited, store)
 
 def test_a_margin_needs_a_positive_multiple_and_a_reference_that_varies(store, tmp_path, reference):
     with pytest.raises(ValueError, match='positive'):
@@ -363,6 +392,17 @@ def test_the_text_only_table_must_come_from_the_arms_backbone_and_text(
     arm = synthetic_arm(store, tmp_path, spec('stale'), {}, text_only_table=stale)
 
     with pytest.raises(ValueError, match='D9'):
+        _decide([arm, reference], margins, store)
+
+def test_the_text_only_check_reads_the_stored_provenance(store, tmp_path, reference, margins):
+    stale = write_text_only(tmp_path / 'stale', revision='an-older-revision')
+    # The record's copy claims the arm's revision; the stored provenance names the older one
+    arm = _edited(
+        synthetic_arm(store, tmp_path, spec('stale', dimension=32), {}, text_only_table=stale),
+        lambda data: data['text_only'].update(revision=REVISION),
+    )
+
+    with pytest.raises(ValueError, match='differ from its stored provenance'):
         _decide([arm, reference], margins, store)
 
 def test_a_changed_artifact_is_refused(store, tmp_path, reference, margins):
