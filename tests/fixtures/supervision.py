@@ -152,6 +152,8 @@ def pair_facts_fixture() -> pl.DataFrame:
             'is_explicit_exclusion': [
                 False, True, False, False, False, True, False, False, False, False
             ],
+            # No five-digit code, so no unary pair
+            'unary_pair': [False] * 10,
         }
     )
 

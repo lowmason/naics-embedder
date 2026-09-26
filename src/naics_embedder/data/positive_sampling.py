@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import polars as pl
 
+from naics_embedder.utils.naics_hierarchy import unary_pairs
 from naics_embedder.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,9 @@ def enumerate_positives(
 ) -> pl.DataFrame:
     '''Enumerate all possible positives for each anchor across three strata.
 
+    A unary pair (Req 9), a five-digit code and its only six-digit child, is a positive in
+    neither direction.
+
     Strata:
         0 - Descendants: for levels 2-5, the next level of descendants
         1 - Ancestors: for levels 3-6, the parent codes up to level 2
@@ -311,6 +315,19 @@ def enumerate_positives(
         stratum_id=pl.col('stratum_id'),
         stratum_wgt=pl.col('stratum_wgt'),
     )
+    unary = unary_pairs(anchors.get_column('anchor').to_list())
+    unary_keys = pl.DataFrame(
+        unary + [(child, parent) for parent, child in unary],
+        schema={
+            'anchor_code': pl.Utf8,
+            'positive_code': pl.Utf8
+        },
+        orient='row',
+    )
+    kept = positives.join(unary_keys, on=['anchor_code', 'positive_code'], how='anti')
+    if kept.height < positives.height:
+        logger.info(f'Dropped {positives.height - kept.height:,} unary positive pairs')
+    positives = kept
     if codebook_supplied:
         unknown = positives.filter(
             pl.col('anchor_idx').is_null() | pl.col('positive_idx').is_null()

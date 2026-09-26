@@ -15,7 +15,11 @@ from naics_embedder.data.supervision_bundle import (
     generate_supervision_bundle_from_frames,
     relation_matrix_from_pair_facts,
 )
-from naics_embedder.supervision.artifacts import load_validated_bundle, sha256_file
+from naics_embedder.supervision.artifacts import (
+    load_validated_bundle,
+    sha256_file,
+    validate_training_pairs_members,
+)
 from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.utils.config import SupervisionBuildConfig
 
@@ -454,6 +458,62 @@ def test_production_bundle_uses_a_uuid_and_the_descriptions_file_hash(
     assert manifest['artifacts']['pair_facts']['row_count'] == 17 * 16 // 2
     assert manifest['artifacts']['pair_facts']['exclusion_count'] == 2
 
+def test_the_unary_pairs_are_flagged_and_never_generated_positives(
+    tmp_path, hierarchy_descriptions_parquet
+):
+    manifest_path = generate_supervision_bundle(
+        SupervisionBuildConfig(
+            descriptions_parquet=hierarchy_descriptions_parquet,
+            output_root=str(tmp_path / 'bundles'),
+        )
+    )
+    bundle = load_validated_bundle(manifest_path)
+    facts = pl.read_parquet(bundle.artifact_path('pair_facts'))
+    pairs = pl.read_parquet(list(bundle.member_paths('training_pairs')))
+
+    unary = facts.filter(pl.col('unary_pair')).select('code_i', 'code_j').rows()
+    positives = set(pairs.select('anchor_code', 'positive_code').unique().rows())
+    # Each five-digit code in the hierarchy has one six-digit child
+    assert unary == [
+        ('31111', '311111'),
+        ('31121', '311211'),
+        ('32111', '321111'),
+        ('44111', '441111'),
+    ]
+    assert not positives & set(unary)
+    assert bundle.manifest.artifacts['pair_facts'].schema_version == 'pair-facts-v2'
+    assert bundle.manifest.validation_results['unary_pairs_flagged'] is True
+    assert bundle.manifest.validation_results['no_unary_positives'] is True
+
+def test_pair_facts_refuse_a_unary_flag_the_codes_do_not_support(
+    tmp_path, descriptions_fixture, pair_facts_fixture
+):
+    # '111111' and '111112' are six-digit siblings, not a five-digit code and its only child
+    flagged = pair_facts_fixture.with_columns(
+        unary_pair=pl.col('code_i_id').eq(0) & pl.col('code_j_id').eq(1)
+    )
+
+    with pytest.raises(ValueError, match='unary_pair is wrong on 1 pairs, e.g. 111111/111112'):
+        generate_supervision_bundle_from_frames(
+            output_root=tmp_path,
+            bundle_id='bundle-a',
+            generator_revision='revision-a',
+            naics_vintage=2022,
+            descriptions=descriptions_fixture,
+            pair_facts=flagged,
+        )
+
+def test_training_pairs_refuse_a_unary_positive(tmp_path, pair_facts_fixture):
+    # Rows generated while (0, 1) was unflagged keep it as a positive; the flagged facts refuse them
+    path = tmp_path / 'training_pairs.parquet'
+    build_training_pairs(pair_facts_fixture).write_parquet(path)
+    flagged = pair_facts_fixture.with_columns(
+        unary_pair=pl.col('code_i_id').eq(0) & pl.col('code_j_id').eq(1)
+    )
+
+    with pytest.raises(ValueError, match='a training positive is a unary pair'):
+        validate_training_pairs_members([path], flagged, n_codes=5)
+
 # -------------------------------------------------------------------------------------------------
 # Fail-closed bundle loading
 # -------------------------------------------------------------------------------------------------
@@ -572,6 +632,18 @@ def test_loader_rejects_training_exclusions_that_disagree_with_pair_facts(genera
     )
 
     with pytest.raises(ValueError, match='training_pairs.*bundle-a.*pair facts'):
+        load_validated_bundle(generated_bundle)
+
+def test_loader_rejects_a_rehashed_unary_flag(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'pair_facts',
+        lambda frame: frame.with_columns(
+            unary_pair=pl.col('code_i_id').eq(0) & pl.col('code_j_id').eq(1)
+        ),
+    )
+
+    with pytest.raises(ValueError, match='pair_facts.*bundle-a.*unary_pair is wrong'):
         load_validated_bundle(generated_bundle)
 
 def test_loader_rejects_a_rehashed_exclusion_negative(generated_bundle):

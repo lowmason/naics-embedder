@@ -2,7 +2,8 @@
 Training-pair projection from canonical supervision pair facts.
 
 Positive/negative combinatorics reproduce the legacy generator: a positive is a canonical,
-within-sector, non-exclusion pair; a negative ``j`` for (anchor ``a``, positive ``p``) requires the
+within-sector pair that is neither an exclusion nor a unary pair (Req 9: a five-digit code and its
+only six-digit child); a negative ``j`` for (anchor ``a``, positive ``p``) requires the
 directed rows ``p -> j`` and ``a -> j``; cross-sector negatives are capped per (anchor, positive).
 A pair is cross-sector when it carries the ``cross_sector`` relation label. An explicit exclusion
 of the anchor, in either direction, is never a negative (Req 8).
@@ -55,6 +56,7 @@ _SHARED_PAIR_COLUMNS = (
     'structural_relation_id',
     'structural_relation_name',
     'is_explicit_exclusion',
+    'unary_pair',
 )
 
 def _anchor_view(pair_facts: pl.DataFrame) -> pl.DataFrame:
@@ -93,13 +95,17 @@ def _anchor_view(pair_facts: pl.DataFrame) -> pl.DataFrame:
     return pl.concat([canonical, reversed_rows])
 
 def _positive_pairs(anchor_view: pl.DataFrame) -> pl.DataFrame:
-    '''Canonical, within-sector, non-exclusion pairs; reversed rows never become positives.'''
+    '''
+    Canonical, within-sector pairs that are neither exclusions nor unary pairs; reversed rows never
+    become positives.
+    '''
 
     return anchor_view.filter(
         ~pl.col('is_reversed'),
         pl.col('structural_distance').gt(0.0),
         pl.col('structural_relation_id').ne(CROSS_SECTOR_RELATION_ID),
         ~pl.col('is_explicit_exclusion'),
+        ~pl.col('unary_pair'),
     ).select(
         pl.col('anchor_code_id'),
         pl.col('candidate_code_id').alias('positive_code_id'),

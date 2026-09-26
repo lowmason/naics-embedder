@@ -39,10 +39,12 @@ from naics_embedder.supervision.artifacts import (
     STRUCTURAL_PAIR_COLUMNS,
     codebook_fingerprint,
     sha256_file,
+    unary_pair_expression,
     validate_exclusion_derivation,
     validate_index_role_table,
     validate_matrix,
     validate_structural_pairs,
+    validate_unary_pairs,
     write_versioned_dataset_batches,
     write_versioned_parquet,
 )
@@ -189,8 +191,8 @@ def build_pair_facts(
 
     Returns:
         One row per unordered pair of distinct codes in canonical orientation, with untouched
-        structural columns plus ``code_i_excludes_code_j``, ``code_j_excludes_code_i``, and
-        ``is_explicit_exclusion``.
+        structural columns plus ``code_i_excludes_code_j``, ``code_j_excludes_code_i``,
+        ``is_explicit_exclusion`` and ``unary_pair``.
     '''
 
     structural = distances.join(
@@ -215,7 +217,9 @@ def build_pair_facts(
     if structural.height != distances.height or structural.height != relations.height:
         raise ValueError('structural distance and relation frames describe different pairs')
     validate_structural_pairs(structural, codebook)
-    return attach_exclusion_provenance(structural, descriptions, codebook)
+    return attach_exclusion_provenance(structural, descriptions, codebook).with_columns(
+        unary_pair=unary_pair_expression(codebook.get_column('code').to_list())
+    )
 
 # -------------------------------------------------------------------------------------------------
 # Matrices
@@ -295,6 +299,7 @@ PAIR_FACT_SCHEMA = {
     'code_i_excludes_code_j': pl.Boolean,
     'code_j_excludes_code_i': pl.Boolean,
     'is_explicit_exclusion': pl.Boolean,
+    'unary_pair': pl.Boolean,
 }
 
 # -------------------------------------------------------------------------------------------------
@@ -374,6 +379,7 @@ def validate_pair_facts(
     flags = ['code_i_excludes_code_j', 'code_j_excludes_code_i', 'is_explicit_exclusion']
     if not published.select(flags).equals(pair_facts.select(flags)):
         raise ValueError('pair facts exclusion flags disagree with the published exclusions')
+    validate_unary_pairs(pair_facts, codebook)
 
     return {
         'codebook_contiguous_unique': True,
@@ -389,6 +395,7 @@ def validate_pair_facts(
         'distance_triangle_inequality': True,
         'exclusion_derivation': True,
         'exclusions_match_descriptions': True,
+        'unary_pairs_flagged': True,
     }
 
 def _validate_matrices(
@@ -433,6 +440,16 @@ def _validate_training_identity(batch: pl.DataFrame, pair_keys: pl.DataFrame) ->
         )
         if keys.join(pair_keys, on=['low', 'high'], how='anti').height:
             raise ValueError(f'training pair {other} identities do not join to pair facts')
+
+def _validate_no_unary_positives(batch: pl.DataFrame, unary_keys: pl.DataFrame) -> None:
+    '''No generated positive may be a unary pair (Req 9).'''
+
+    keys = batch.select(
+        low=pl.min_horizontal('anchor_code_id', 'positive_code_id').cast(pl.Int32),
+        high=pl.max_horizontal('anchor_code_id', 'positive_code_id').cast(pl.Int32),
+    )
+    if keys.join(unary_keys, on=['low', 'high'], how='semi').height:
+        raise ValueError('a generated training positive is a unary pair')
 
 # -------------------------------------------------------------------------------------------------
 # Compatibility long-form artifacts
@@ -487,10 +504,12 @@ def _checked_training_batches(
         low=pl.min_horizontal('code_i_id', 'code_j_id'),
         high=pl.max_horizontal('code_i_id', 'code_j_id'),
     )
+    unary_keys = pair_keys.filter(pair_facts.get_column('unary_pair'))
     for batch in iter_training_pair_batches(
         pair_facts, cross_sector_cap=cross_sector_cap, cap_seed=cap_seed
     ):
         _validate_training_identity(batch, pair_keys)
+        _validate_no_unary_positives(batch, unary_keys)
         counts['rows'] += batch.height
         counts['exclusions'] += int(batch.get_column('negative_is_explicit_exclusion').sum())
         yield batch.with_columns(pl.col('anchor_code_id').alias(TRAINING_PAIRS_PARTITION_COLUMN))
@@ -671,6 +690,7 @@ def generate_supervision_bundle_from_frames(
             {
                 'direct_positive_safety': True,
                 'no_exclusion_negatives': True,
+                'no_unary_positives': True,
                 'training_exclusion_derivation': True,
                 'training_identity_joins': True,
                 'artifact_hashes_recorded': True,

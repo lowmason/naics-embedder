@@ -41,6 +41,14 @@ def test_fixture_triples_match_the_legacy_combinatorics(pair_facts_fixture):
     assert _triples(pairs) == [(0, 1, 3), (0, 1, 4), (1, 2, 4)]
     assert not pairs.get_column('positive_is_explicit_exclusion').any()
 
+def test_a_unary_pair_is_never_a_positive(pair_facts_fixture):
+    # Flag (0, 1): its two triples go, and the third stays
+    flagged = pair_facts_fixture.with_columns(
+        unary_pair=pl.col('code_i_id').eq(0) & pl.col('code_j_id').eq(1)
+    )
+
+    assert _triples(build_training_pairs(flagged)) == [(1, 2, 4)]
+
 @pytest.fixture
 def cross_prefix_pair_facts() -> pl.DataFrame:
     # Codes 0 '111111', 1 '111112', 2 '222221', 3 '222222'; '111111' excludes '222221'.
@@ -63,6 +71,7 @@ def cross_prefix_pair_facts() -> pl.DataFrame:
             'code_i_excludes_code_j': [False, True, False, False, False, False],
             'code_j_excludes_code_i': [False, False, False, False, False, False],
             'is_explicit_exclusion': [False, True, False, False, False, False],
+            'unary_pair': [False] * 6,
         },
         schema_overrides={
             'code_i_id': pl.Int32,
@@ -124,6 +133,7 @@ def labelled_cross_sector_pair_facts() -> pl.DataFrame:
             'code_i_excludes_code_j': [False] * 6,
             'code_j_excludes_code_i': [False] * 6,
             'is_explicit_exclusion': [False] * 6,
+            'unary_pair': [False] * 6,
         },
         schema_overrides={
             'code_i_id': pl.Int32,
@@ -173,6 +183,7 @@ def wide_cross_sector_pair_facts() -> pl.DataFrame:
                     'code_i_excludes_code_j': (i, j) == (0, 4),
                     'code_j_excludes_code_i': False,
                     'is_explicit_exclusion': (i, j) == (0, 4),
+                    'unary_pair': False,
                 }
             )
     return pl.DataFrame(

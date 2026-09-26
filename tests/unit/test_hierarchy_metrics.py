@@ -54,3 +54,25 @@ def test_hierarchy_retrieval_metrics_detect_confusion():
     assert metrics['parent_retrieval@2'] == pytest.approx(1.0)
     assert metrics['child_retrieval@2'] == pytest.approx(0.75)
     assert metrics['sibling_confusion_rate'] == pytest.approx(1.0)
+
+def test_parent_retrieval_skips_the_unary_pairs():
+    # '31111' has one six-digit child, '311111': a unary pair (Req 9). That child's nearest code is
+    # its parent's sibling '31112', which would score a miss; the other two children find their
+    # parent, so retrieval without the unary pair is perfect.
+    hierarchy = NaicsHierarchy([('3111', '31111'), ('3111', '31112'), ('31111', '311111')])
+    codes = ['3111', '31111', '31112', '311111']
+    distance_matrix = torch.tensor(
+        [
+            [0.0, 0.1, 0.1, 0.5],
+            [0.1, 0.0, 0.3, 0.4],
+            [0.1, 0.3, 0.0, 0.2],
+            [0.5, 0.4, 0.2, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+
+    metrics = compute_hierarchy_retrieval_metrics(
+        distance_matrix, codes, hierarchy, parent_top_k=1, child_top_k=0
+    )
+
+    assert metrics['parent_retrieval@1'] == pytest.approx(1.0)

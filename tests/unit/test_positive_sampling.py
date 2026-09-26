@@ -971,3 +971,21 @@ def test_enumerate_positives_uses_a_supplied_codebook(
         descriptions_parquet, relations_parquet, code_to_idx=code_to_idx
     )
     assert set(sampler.anchors) <= set(code_to_idx.values())
+
+@pytest.mark.unit
+def test_enumerate_positives_drops_the_unary_pairs(
+    descriptions_parquet, relations_parquet, sample_descriptions_df
+):
+    '''A five-digit code and its only six-digit child are never each other's positive (Req 9).'''
+
+    codes = sample_descriptions_df.get_column('code').to_list()
+    code_to_idx = {code: position for position, code in enumerate(codes)}
+
+    result = enumerate_positives(descriptions_parquet, relations_parquet, code_to_idx=code_to_idx)
+    pairs = set(result.select('anchor_code', 'positive_code').iter_rows())
+
+    for parent, child in [('32111', '321111'), ('33111', '331111'), ('44111', '441111')]:
+        assert (parent, child) not in pairs
+        assert (child, parent) not in pairs
+    # '31111' has two six-digit children, so both stay its positives
+    assert {('31111', '311111'), ('31111', '311112')} <= pairs

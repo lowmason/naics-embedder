@@ -28,7 +28,7 @@ from naics_embedder.supervision.schema import (
     SemanticTarget,
     SupervisionManifest,
 )
-from naics_embedder.utils.naics_hierarchy import code_lineage, tree_distance_matrix
+from naics_embedder.utils.naics_hierarchy import code_lineage, tree_distance_matrix, unary_pairs
 
 # -------------------------------------------------------------------------------------------------
 # Contract metadata keys
@@ -316,6 +316,34 @@ def validate_exclusion_derivation(pair_facts: pl.DataFrame) -> None:
             'code_i_excludes_code_j OR code_j_excludes_code_i'
         )
 
+def unary_pair_expression(codes: Iterable[str]) -> pl.Expr:
+    '''
+    Whether a canonical pair is a unary pair among ``codes`` (Req 9): a five-digit code and its
+    only six-digit child. Canonical orientation puts the five-digit code in ``code_i``.
+    '''
+
+    children = [child for _, child in unary_pairs(codes)]
+    return pl.col('code_j').is_in(children) & pl.col('code_i').eq(pl.col('code_j').str.slice(0, 5))
+
+def validate_unary_pairs(pair_facts: pl.DataFrame, codebook: pl.DataFrame) -> None:
+    '''
+    ``unary_pair`` must mark exactly the unary pairs among the codebook's codes (Req 9).
+
+    Raises:
+        ValueError: If the column is missing, or wrong or null on any pair.
+    '''
+
+    if 'unary_pair' not in pair_facts.columns:
+        raise ValueError('pair facts lack the unary_pair column')
+    expected = unary_pair_expression(codebook.get_column('code').to_list())
+    wrong = pair_facts.filter(pl.col('unary_pair').ne_missing(expected))
+    if wrong.height:
+        code_i, code_j = wrong.select('code_i', 'code_j').row(0)
+        raise ValueError(
+            f'unary_pair is wrong on {wrong.height:,} pairs, e.g. {code_i}/{code_j}: a unary pair '
+            'is a five-digit code and its only six-digit child'
+        )
+
 INDEX_ROLES_ARTIFACT = 'index_roles'
 INDEX_ROLE_COLUMNS = ('entry_id', 'code', 'text', 'role')
 
@@ -396,6 +424,7 @@ def _directed_pair_facts(pair_facts: pl.DataFrame) -> pl.DataFrame:
                 fact_other_excludes=pl.col('code_j_excludes_code_i'),
                 fact_distance=pl.col('structural_distance').cast(pl.Float32),
                 fact_relation=pl.col('structural_relation_id').cast(pl.Int16),
+                fact_unary=pl.col('unary_pair'),
             ),
             pair_facts.select(
                 anchor=pl.col('code_j_id').cast(pl.Int32),
@@ -404,6 +433,7 @@ def _directed_pair_facts(pair_facts: pl.DataFrame) -> pl.DataFrame:
                 fact_other_excludes=pl.col('code_i_excludes_code_j'),
                 fact_distance=pl.col('structural_distance').cast(pl.Float32),
                 fact_relation=pl.col('structural_relation_id').cast(pl.Int16),
+                fact_unary=pl.col('unary_pair'),
             ),
         ]
     )
@@ -419,10 +449,11 @@ def validate_training_pairs_members(
     Validate training-pair member files against the codebook and canonical pair facts.
 
     Every identity must be a known code ID, no direct positive or negative may be an explicit
-    exclusion of its anchor, exclusion and semantic columns must be internally consistent, and
-    every anchor/positive and anchor/negative view must match the pair facts (structure and both
-    exclusion directions). Members are checked in bounded chunks of files, which is exact because
-    every row check is row-local and every uniqueness check is a join against the pair facts.
+    exclusion of its anchor, no positive may be a unary pair, exclusion and semantic columns must
+    be internally consistent, and every anchor/positive and anchor/negative view must match the
+    pair facts (structure and both exclusion directions). Members are checked in bounded chunks
+    of files, which is exact because every row check is row-local and every uniqueness check is a
+    join against the pair facts.
     '''
 
     if not paths:
@@ -481,6 +512,8 @@ def _validate_training_chunk(paths: List[Path], directed: pl.DataFrame, n_codes:
     ).unique().collect().join(directed, on=['anchor', 'other'], how='left')
     if positives.filter(pl.col('fact_distance').is_null()).height:
         raise ValueError('positive identities do not join to pair facts')
+    if positives.filter(pl.col('fact_unary')).height:
+        raise ValueError('a training positive is a unary pair')
     if positives.filter(
         pl.col('distance').ne(pl.col('fact_distance'))
         | pl.col('relation').ne(pl.col('fact_relation'))
@@ -606,6 +639,7 @@ def _validate_relations(root: Path, manifest: SupervisionManifest) -> None:
     def check_pair_facts() -> None:
         validate_structural_pairs(pair_facts.select(STRUCTURAL_PAIR_COLUMNS), codebook)
         validate_exclusion_derivation(pair_facts)
+        validate_unary_pairs(pair_facts, codebook)
 
     _in_context('pair_facts', bundle_id, check_pair_facts)
 
