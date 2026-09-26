@@ -418,11 +418,11 @@ def validate_training_pairs_members(
     '''
     Validate training-pair member files against the codebook and canonical pair facts.
 
-    Every identity must be a known code ID, no direct positive may be an explicit exclusion,
-    exclusion and semantic columns must be internally consistent, and every anchor/positive and
-    anchor/negative view must match the pair facts (structure and both exclusion directions).
-    Members are checked in bounded chunks of files, which is exact because every row check is
-    row-local and every uniqueness check is a join against the pair facts.
+    Every identity must be a known code ID, no direct positive or negative may be an explicit
+    exclusion of its anchor, exclusion and semantic columns must be internally consistent, and
+    every anchor/positive and anchor/negative view must match the pair facts (structure and both
+    exclusion directions). Members are checked in bounded chunks of files, which is exact because
+    every row check is row-local and every uniqueness check is a join against the pair facts.
     '''
 
     if not paths:
@@ -447,6 +447,7 @@ def _validate_training_chunk(paths: List[Path], directed: pl.DataFrame, n_codes:
             ]
         ).sum(),
         excluded_positives=pl.col('positive_is_explicit_exclusion').sum(),
+        excluded_negatives=pl.col('negative_is_explicit_exclusion').sum(),
         derivation=pl.col('negative_is_explicit_exclusion').ne(
             pl.col('anchor_excludes_negative') | pl.col('negative_excludes_anchor')
         ).sum(),
@@ -460,6 +461,11 @@ def _validate_training_chunk(paths: List[Path], directed: pl.DataFrame, n_codes:
         raise ValueError(f'{summary["unmapped"]:,} rows contain an unmapped code identity')
     if summary['excluded_positives']:
         raise ValueError('a direct positive is an explicit exclusion')
+    if summary['excluded_negatives']:
+        raise ValueError(
+            f'{summary["excluded_negatives"]:,} training negatives are explicit exclusions of '
+            'their anchors'
+        )
     if summary['derivation']:
         raise ValueError('negative exclusion derivation is inconsistent')
     if summary['semantic']:

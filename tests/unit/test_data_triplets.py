@@ -9,17 +9,14 @@ from naics_embedder.data.create_triplets import (
     build_training_pairs,
 )
 
-def test_training_pairs_keep_semantics_separate_from_structure(pair_facts_fixture):
+def test_no_training_negative_is_an_explicit_exclusion(pair_facts_fixture):
+    # '111111' excludes '111113' and '222222' excludes '111112': neither pair is ever a negative
     pairs = build_training_pairs(pair_facts_fixture)
-    excluded = pairs.filter(pl.col('negative_is_explicit_exclusion')).row(0, named=True)
-    ordinary = pairs.filter(~pl.col('negative_is_explicit_exclusion')).row(0, named=True)
 
-    assert excluded['negative_semantic_target'] == 'unrelated'
-    assert excluded['negative_semantic_source'] == 'explicit_exclusion'
-    assert excluded['negative_structural_distance'] > 0.0
-    assert excluded['negative_sampling_role'] == 'negative'
-    assert ordinary['negative_semantic_target'] == 'unknown'
-    assert ordinary['negative_semantic_source'] == 'unlabeled'
+    assert not pairs.get_column('negative_is_explicit_exclusion').any()
+    assert pairs.get_column('negative_semantic_target').unique().to_list() == ['unknown']
+    assert pairs.get_column('negative_semantic_source').unique().to_list() == ['unlabeled']
+    assert pairs.get_column('negative_sampling_role').unique().to_list() == ['negative']
 
 def test_explicit_exclusion_cannot_be_a_direct_positive(pair_facts_fixture):
     pairs = build_training_pairs(pair_facts_fixture)
@@ -37,10 +34,11 @@ def _triples(pairs: pl.DataFrame) -> list[tuple[int, int, int]]:
 
 def test_fixture_triples_match_the_legacy_combinatorics(pair_facts_fixture):
     # Positives are canonical, within-sector, non-exclusion pairs: (0, 1) and (1, 2); (0, 2) is
-    # an exclusion. A negative j needs rows positive -> j and anchor -> j.
+    # an exclusion. A negative j needs rows positive -> j and anchor -> j, and is never an
+    # exclusion of its anchor: 2 is anchor 0's, and 3 excludes anchor 1.
     pairs = build_training_pairs(pair_facts_fixture)
 
-    assert _triples(pairs) == [(0, 1, 2), (0, 1, 3), (0, 1, 4), (1, 2, 3), (1, 2, 4)]
+    assert _triples(pairs) == [(0, 1, 3), (0, 1, 4), (1, 2, 4)]
     assert not pairs.get_column('positive_is_explicit_exclusion').any()
 
 @pytest.fixture
@@ -75,30 +73,32 @@ def cross_prefix_pair_facts() -> pl.DataFrame:
     )
 
 def test_reversed_cross_prefix_rows_seed_negatives_for_later_anchors(cross_prefix_pair_facts):
-    # Anchor 2 ('222221') only reaches codes 0 and 1 through reversed same-level rows, exactly as
-    # the legacy keep-filter admitted both orientations of cross-prefix pairs.
+    # Anchor 2 ('222221') reaches code 1 only through a reversed same-level row, exactly as the
+    # legacy keep-filter admitted both orientations of cross-prefix pairs. Code 0 excludes it, so
+    # neither is ever the other's negative.
     pairs = build_training_pairs(cross_prefix_pair_facts)
 
-    assert _triples(pairs) == [(0, 1, 2), (0, 1, 3), (2, 3, 0), (2, 3, 1)]
+    assert _triples(pairs) == [(0, 1, 3), (2, 3, 1)]
 
 def test_reversed_rows_map_exclusion_directions_into_the_anchor_view(cross_prefix_pair_facts):
-    pairs = build_training_pairs(cross_prefix_pair_facts)
-    forward = pairs.filter(pl.col('anchor_code_id').eq(0)
-                           & pl.col('negative_code_id').eq(2)).row(0, named=True)
-    reverse = pairs.filter(pl.col('anchor_code_id').eq(2)
-                           & pl.col('negative_code_id').eq(0)).row(0, named=True)
+    # The directions still reach the anchor view, which is how the generator finds the exclusions
+    # it must drop
+    view = _anchor_view(cross_prefix_pair_facts)
+    forward = view.filter(pl.col('anchor_code_id').eq(0)
+                          & pl.col('candidate_code_id').eq(2)).row(0, named=True)
+    reverse = view.filter(pl.col('anchor_code_id').eq(2)
+                          & pl.col('candidate_code_id').eq(0)).row(0, named=True)
 
-    assert (forward['anchor_excludes_negative'], forward['negative_excludes_anchor']) == (
+    assert (forward['anchor_excludes_candidate'], forward['candidate_excludes_anchor']) == (
         True,
         False,
     )
-    assert (reverse['anchor_excludes_negative'], reverse['negative_excludes_anchor']) == (
+    assert (reverse['anchor_excludes_candidate'], reverse['candidate_excludes_anchor']) == (
         False,
         True,
     )
-    assert reverse['negative_is_explicit_exclusion'] is True
-    assert reverse['negative_semantic_target'] == 'unrelated'
-    assert reverse['negative_structural_distance'] == 10.0
+    assert reverse['is_explicit_exclusion'] is True
+    assert reverse['structural_distance'] == 10.0
 
 @pytest.fixture
 def labelled_cross_sector_pair_facts() -> pl.DataFrame:
@@ -185,18 +185,16 @@ def wide_cross_sector_pair_facts() -> pl.DataFrame:
         },
     )
 
-def test_cross_sector_cap_keeps_a_deterministic_subset_and_exempts_exclusions(
-    wide_cross_sector_pair_facts,
-):
+def test_cross_sector_cap_keeps_a_deterministic_subset(wide_cross_sector_pair_facts):
     uncapped = build_training_pairs(wide_cross_sector_pair_facts, cross_sector_cap=100)
     capped = build_training_pairs(wide_cross_sector_pair_facts, cross_sector_cap=2, cap_seed=11)
     again = build_training_pairs(wide_cross_sector_pair_facts, cross_sector_cap=2, cap_seed=11)
 
-    assert _triples(uncapped) == [(0, 1, 2), (0, 1, 3), (0, 1, 4), (0, 1, 5), (0, 1, 6)]
+    # '444444' (code 4) is anchor 0's exclusion, so it is never a negative, capped or not
+    assert _triples(uncapped) == [(0, 1, 2), (0, 1, 3), (0, 1, 5), (0, 1, 6)]
     assert capped.equals(again)
     assert set(_triples(capped)) <= set(_triples(uncapped))
-    assert capped.filter(pl.col('negative_is_explicit_exclusion')).height == 1
-    assert capped.filter(~pl.col('negative_is_explicit_exclusion')).height == 2
+    assert capped.height == 2
 
 # -------------------------------------------------------------------------------------------------
 # Structural margins (legacy consumers such as HGCN read these values)
@@ -242,14 +240,25 @@ def test_structural_margins_read_d_star_differences():
 
 def test_inconsistent_exclusion_derivation_is_fatal(pair_facts_fixture):
     pairs = build_training_pairs(pair_facts_fixture)
-    bad = pairs.with_columns(negative_is_explicit_exclusion=pl.lit(False))
+    bad = pairs.with_columns(anchor_excludes_negative=pl.lit(True))
 
     with pytest.raises(ValueError, match='exclusion derivation'):
         _validate_training_pairs(bad)
 
 def test_semantic_target_must_follow_exclusion_provenance(pair_facts_fixture):
     pairs = build_training_pairs(pair_facts_fixture)
-    bad = pairs.with_columns(negative_semantic_target=pl.lit('unknown'))
+    bad = pairs.with_columns(negative_semantic_target=pl.lit('unrelated'))
 
     with pytest.raises(ValueError, match='semantic'):
+        _validate_training_pairs(bad)
+
+def test_an_exclusion_negative_is_fatal(pair_facts_fixture):
+    pairs = build_training_pairs(pair_facts_fixture)
+    bad = pairs.with_columns(
+        anchor_excludes_negative=pl.lit(True),
+        negative_is_explicit_exclusion=pl.lit(True),
+        negative_semantic_target=pl.lit('unrelated'),
+    )
+
+    with pytest.raises(ValueError, match='training negative cannot be an explicit exclusion'):
         _validate_training_pairs(bad)

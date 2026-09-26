@@ -670,6 +670,7 @@ def generate_supervision_bundle_from_frames(
         validation_results.update(
             {
                 'direct_positive_safety': True,
+                'no_exclusion_negatives': True,
                 'training_exclusion_derivation': True,
                 'training_identity_joins': True,
                 'artifact_hashes_recorded': True,

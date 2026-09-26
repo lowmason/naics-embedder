@@ -199,13 +199,13 @@ def test_graph_loader_reads_rebuilt_training_pairs_without_new_semantics(generat
         'relation_margin',
         'distance_margin',
     }
-    # '111113' is as far from '111111' as the positive '111112' (D* 2), under a farther relation,
-    # so it takes the fixed equal-distance margin
+    # '111113' is the anchor's exclusion and never a negative, so the first is '222222', across
+    # sectors: the fixed relation margin, and a D* difference of 10 - 2
     assert negative == {
-        'negative_idx': 2,
-        'negative_code': '111113',
-        'relation_margin': 1.0,
-        'distance_margin': pytest.approx(0.3333),
+        'negative_idx': 3,
+        'negative_code': '222222',
+        'relation_margin': 15.0,
+        'distance_margin': 8.0,
     }
 
 @pytest.mark.unit

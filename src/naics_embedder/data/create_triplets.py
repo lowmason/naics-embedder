@@ -4,7 +4,8 @@ Training-pair projection from canonical supervision pair facts.
 Positive/negative combinatorics reproduce the legacy generator: a positive is a canonical,
 within-sector, non-exclusion pair; a negative ``j`` for (anchor ``a``, positive ``p``) requires the
 directed rows ``p -> j`` and ``a -> j``; cross-sector negatives are capped per (anchor, positive).
-A pair is cross-sector when it carries the ``cross_sector`` relation label.
+A pair is cross-sector when it carries the ``cross_sector`` relation label. An explicit exclusion
+of the anchor, in either direction, is never a negative (Req 8).
 Semantics are explicit columns: structural values are never overloaded to carry exclusion meaning.
 '''
 
@@ -111,7 +112,9 @@ def _positive_pairs(anchor_view: pl.DataFrame) -> pl.DataFrame:
     )
 
 def _negative_candidates(anchor_view: pl.DataFrame) -> pl.DataFrame:
-    return anchor_view.select(
+    '''Every candidate of an anchor except its explicit exclusions, in either direction.'''
+
+    return anchor_view.filter(~pl.col('is_explicit_exclusion')).select(
         pl.col('anchor_code_id'),
         pl.col('candidate_code_id').alias('negative_code_id'),
         pl.col('candidate_code').alias('negative_code'),
@@ -188,16 +191,13 @@ def _cap_keys(seed: int, *parts: np.ndarray) -> np.ndarray:
 
 def _cap_cross_sector(frame: pl.DataFrame, cap: int, seed: int) -> pl.DataFrame:
     '''
-    Keep at most ``cap`` cross-sector, non-exclusion negatives per (anchor, positive).
+    Keep at most ``cap`` cross-sector negatives per (anchor, positive).
 
     Rows are ranked by a stable hash of (seed, anchor, positive, negative), so the retained subset
-    is reproducible across processes and platforms. Explicit exclusions are never capped.
+    is reproducible across processes and platforms.
     '''
 
-    capped = (
-        pl.col('negative_structural_relation_id').eq(CROSS_SECTOR_RELATION_ID)
-        & ~pl.col('negative_is_explicit_exclusion')
-    )
+    capped = pl.col('negative_structural_relation_id').eq(CROSS_SECTOR_RELATION_ID)
     eligible = frame.filter(capped)
     if eligible.is_empty():
         return frame
@@ -292,6 +292,8 @@ def _validate_training_pairs(training_pairs: pl.DataFrame) -> None:
 
     if training_pairs.filter(pl.col('positive_is_explicit_exclusion')).height:
         raise ValueError('direct positive cannot be an explicit exclusion')
+    if training_pairs.filter(pl.col('negative_is_explicit_exclusion')).height:
+        raise ValueError('a training negative cannot be an explicit exclusion of its anchor')
     inconsistent = training_pairs.filter(
         pl.col('negative_is_explicit_exclusion').ne(
             pl.col('anchor_excludes_negative') | pl.col('negative_excludes_anchor')
@@ -408,7 +410,7 @@ def build_training_pairs(
 
     Args:
         pair_facts: Canonical pair facts with directional exclusion provenance.
-        cross_sector_cap: Maximum cross-sector, non-exclusion negatives per (anchor, positive).
+        cross_sector_cap: Maximum cross-sector negatives per (anchor, positive).
         cap_seed: Seed for the stable ranking that chooses capped negatives.
 
     Returns:

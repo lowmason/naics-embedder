@@ -396,8 +396,10 @@ def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
     assert manifest['codebook_order'] == ['111111', '111112', '111113', '222222', '333333']
     assert artifacts['pair_facts']['row_count'] == 10
     assert artifacts['pair_facts']['exclusion_count'] == 2
-    assert artifacts['training_pairs']['row_count'] == 5
-    assert artifacts['training_pairs']['exclusion_count'] == 2
+    # Two of the five triples ran through an exclusion pair, which is never a negative
+    assert artifacts['training_pairs']['row_count'] == 3
+    assert artifacts['training_pairs']['exclusion_count'] == 0
+    assert manifest['validation_results']['no_exclusion_negatives'] is True
     assert all(manifest['validation_results'].values())
     for check in (
         'distance_is_d_star',
@@ -558,19 +560,33 @@ def test_loader_rejects_a_rehashed_excluded_direct_positive(generated_bundle):
         load_validated_bundle(generated_bundle)
 
 def test_loader_rejects_training_exclusions_that_disagree_with_pair_facts(generated_bundle):
+    # Anchor 0's negatives become code 2, its exclusion, with every exclusion flag still false
     _rewrite_member(
         generated_bundle,
         'training_pairs',
         lambda frame: frame.with_columns(
-            anchor_excludes_negative=pl.lit(False),
-            negative_excludes_anchor=pl.lit(False),
-            negative_is_explicit_exclusion=pl.lit(False),
-            negative_semantic_target=pl.lit('unknown'),
-            negative_semantic_source=pl.lit('unlabeled'),
+            negative_code_id=pl.when(pl.col('anchor_code_id').eq(0)).then(
+                pl.lit(2).cast(frame.schema['negative_code_id'])
+            ).otherwise(pl.col('negative_code_id'))
         ),
     )
 
     with pytest.raises(ValueError, match='training_pairs.*bundle-a.*pair facts'):
+        load_validated_bundle(generated_bundle)
+
+def test_loader_rejects_a_rehashed_exclusion_negative(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'training_pairs',
+        lambda frame: frame.with_columns(
+            anchor_excludes_negative=pl.lit(True),
+            negative_is_explicit_exclusion=pl.lit(True),
+            negative_semantic_target=pl.lit('unrelated'),
+            negative_semantic_source=pl.lit('explicit_exclusion'),
+        ),
+    )
+
+    with pytest.raises(ValueError, match='training_pairs.*bundle-a.*explicit exclusions of'):
         load_validated_bundle(generated_bundle)
 
 # -------------------------------------------------------------------------------------------------
