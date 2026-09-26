@@ -10,7 +10,7 @@
 2. [System Architecture Overview](#2-system-architecture-overview)
 3. [Multi-Channel Text Encoding](#3-multi-channel-text-encoding)
 4. [Mixture-of-Experts Fusion](#4-mixture-of-experts-fusion)
-5. [Hyperbolic Geometry & Lorentz Model](#5-hyperbolic-geometry--lorentz-model)
+5. [Hyperbolic Geometry and Lorentz Model](#5-hyperbolic-geometry-and-lorentz-model)
 6. [Contrastive Learning Framework](#6-contrastive-learning-framework)
 7. [Sampling Strategies](#7-sampling-strategies)
 8. [Curriculum Learning (SADC)](#8-structure-aware-dynamic-curriculum-sadc)
@@ -143,7 +143,7 @@ This requires synchronizing expert utilization counts (f_i) and router probabili
 
 ---
 
-## 5. Hyperbolic Geometry & Lorentz Model
+## 5. Hyperbolic Geometry and Lorentz Model
 
 ### The Geometric Mismatch Problem
 
