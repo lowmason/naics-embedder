@@ -6,11 +6,13 @@
 
 **Status: APPROVED (2026-09-23); resumed three times on 2026-09-24.** Derived in a session that
 could not ask questions, then the six open questions were answered interactively and the
-eleven-stage partition approved at the human checkpoint (decisions D1–D6 below). Stages 1–3 are
+eleven-stage partition approved at the human checkpoint (decisions D1–D6 below). Stages 1–4 are
 complete. The first resume re-validated Stages 2–11 against Stage 1 and recorded D7 and D8; the
 second re-validated Stages 3–11 against Stage 2, recorded D9 and added Stage 12 (below); the third
 re-validated Stages 4–12 against Stage 3 and recorded D10 and D11, which settle the former Open
-questions. Stage 4 is next, per its ROUTING line, in a fresh session.
+questions. Stage 4's completion commit (9c028ae, 2026-09-25) re-validated the entries of Stages
+5–12 against what Stage 4 shipped, and no separate resume followed. Stage 5 is next, per its
+ROUTING line, in a fresh session.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
