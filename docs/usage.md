@@ -270,7 +270,8 @@ uv run naics-embedder tools margins --reference reference.json --multiple 0.5 \
 - `--multiple FLOAT` - Each δ as a multiple of the reference's across-seed standard deviation
 - `--name TEXT` - Names the margins in the decision records that use them
 - `--store PATH` - The artifact store the arm record references
-- `--output PATH` - Where to write the margin record; an existing file is never overwritten
+- `--output PATH` - Where to write the margin record; an existing file is refused before any
+  work, never overwritten
 
 ### `tools decide`
 
@@ -299,7 +300,8 @@ uv run naics-embedder tools decide --arm candidate.json --arm reference.json \
 - `--margins PATH` - The margin record (`tools margins`)
 - `--name TEXT`, `--question TEXT` - Name the decision and say what it settles
 - `--store PATH` - The artifact store the arm records reference
-- `--output PATH` - Where to write the decision record; an existing file is never overwritten
+- `--output PATH` - Where to write the decision record; an existing file is refused before any
+  work, never overwritten
 
 ### `tools diagnostics`
 

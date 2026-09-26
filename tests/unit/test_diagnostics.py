@@ -15,6 +15,8 @@ from naics_embedder.metrics.diagnostics import (
     average_precision,
     diagnostics_report,
     distance_pearson,
+    map_over_ancestors,
+    ndcg,
     ndcg_at,
     pairwise_distances,
     parent_retrieval,
@@ -84,6 +86,56 @@ def test_within_sector_rank_correlation_is_one_when_distance_orders_as_d_star(tr
     assert (exact.queries, exact.undefined_queries) == (15, 0)
     assert reversed_.mean_over_sectors == pytest.approx(-1.0)
     assert (flat.mean_over_queries, flat.undefined_queries) == (None, 15)
+
+def test_the_mean_over_sectors_weighs_each_sector_once(tree):
+    target = _target(tree).astype(float)
+    # Distance orders as D* for sector 11's nine queries and against it for sector 21's six
+    in_11 = np.array([code.startswith('1') for code in CODES])
+    distances = np.where(in_11[:, None], target, -target)
+
+    result = within_sector_rank_correlation(distances, target, tree.sector, CODES)
+
+    assert result.by_sector == pytest.approx({'11': 1.0, '21': -1.0})
+    assert result.mean_over_queries == pytest.approx((9 - 6) / 15)
+    assert result.mean_over_sectors == pytest.approx(0.0)
+
+# Two sectors, 11 above 111 above 1111, and 21 above 211. Each row ranks one query's candidates:
+# 11 → 1111, 111, 21, 211; 111 → 1111, 11, 21, 211; 1111 → 111, 21, 11, 211;
+# 21 → 1111, 111, 11, 211; 211 → 21, 1111, 111, 11
+SMALL = ('11', '111', '1111', '21', '211')
+SMALL_DISTANCES = np.array(
+    [
+        [0.0, 2.0, 1.0, 3.0, 4.0],
+        [2.0, 0.0, 1.0, 3.0, 4.0],
+        [3.0, 1.0, 0.0, 2.0, 4.0],
+        [3.0, 2.0, 1.0, 0.0, 4.0],
+        [4.0, 3.0, 2.0, 1.0, 0.0],
+    ]
+)
+
+def test_map_over_ancestors_averages_each_non_sector_querys_precision():
+    small = Tree.from_codes(SMALL)
+
+    result = map_over_ancestors(SMALL_DISTANCES, small)
+
+    # 111 finds 11 second: 1/2. 1111 finds 111 first and 11 third: (1 + 2/3) / 2. 211 finds 21
+    # first: 1. The sectors have no ancestors and are not queries.
+    assert result.queries == 3
+    assert result.value == pytest.approx((1 / 2 + 5 / 6 + 1) / 3)
+    assert result.by_level == pytest.approx({'3': (1 / 2 + 1) / 2, '4': 5 / 6})
+
+def test_ndcg_scores_every_query_on_lowest_common_ancestor_depths():
+    small = Tree.from_codes(SMALL)
+
+    result = ndcg(SMALL_DISTANCES, small.lca_depth(), small.depth, 2)
+
+    # At k = 2: 1111 ranks 111 (gain 2) then 21 (0) against an ideal of 2 then 11 (1); 21 ranks
+    # two codes of the other sector (0, 0) against an ideal of 211 (1); 11, 111 and 211 rank
+    # their gains ideally
+    partial = 2 / (2 + 1 / np.log2(3))
+    assert result.queries == 5
+    assert result.value == pytest.approx((3 + partial) / 5)
+    assert result.by_level == pytest.approx({'2': 0.5, '3': 1.0, '4': partial})
 
 def test_average_precision_breaks_ties_against_relevance():
     # Ranked: 0 (relevant), 2, 1 (relevant: tied with 2, so after it), 3 (relevant), 5, 4
