@@ -12,6 +12,7 @@ import pytest
 from naics_embedder.panels.leakage import (
     find_leakage,
     find_leakage_within,
+    leaking_texts,
     normalize_text,
     text_segments,
     training_text_segments,
@@ -115,3 +116,18 @@ def test_threshold_must_lie_in_the_unit_interval(threshold):
 def test_empty_inputs_flag_nothing():
     assert find_leakage([], ['soybean farming']).leaked.tolist() == []
     assert find_leakage(['soybean farming'], []).leaked.tolist() == [False]
+
+def test_leaking_texts_flags_each_text_a_query_leaks_into():
+    segments = [
+        ['growing soybeans', 'soybean farming'],
+        ['hay farming'],
+        [],
+        ['corn farming and sweet corn'],
+    ]
+
+    # 'soybeans growing' reorders the first text's segment; 'sweet corn' occurs in the last
+    flags = leaking_texts(segments, ['Soybeans, growing', 'Sweet corn'])
+
+    assert flags.tolist() == [True, False, False, True]
+    assert leaking_texts([], ['Sweet corn']).tolist() == []
+    assert leaking_texts([['hay farming']], []).tolist() == [False]

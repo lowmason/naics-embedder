@@ -110,6 +110,8 @@ class TestDownloadConfig:
             DownloadConfig(output_parquet='./data/output.csv')
         with pytest.raises(ValidationError):
             DownloadConfig(index_roles_parquet='./data/roles.csv')
+        with pytest.raises(ValidationError):
+            DownloadConfig(redirections_parquet='./data/redirections.csv')
 
     def test_yaml_matches_defaults(self):
         '''The shipped YAML pins the index file and names the committed role table.'''

@@ -200,3 +200,41 @@ def find_leakage_within(
     exact = np.array([counts.get(text, 0) > 1 for text in normalized], dtype=bool)
     near = _near_duplicate_flags(normalized, normalized, min_jaccard, same_list=True)
     return LeakageMatches(exact=exact, near_duplicate=near)
+
+def leaking_texts(
+    segments: Sequence[Sequence[str]],
+    queries: Sequence[str],
+    *,
+    min_jaccard: Fraction = NEAR_DUPLICATE_MIN_JACCARD,
+) -> np.ndarray:
+    '''
+    Flag each text that some query leaks into, under ``find_leakage``'s two rules.
+
+    Args:
+        segments: Each text's normalized segments, as ``text_segments`` returns them.
+        queries: The queries, normalized here.
+        min_jaccard: The near-duplicate threshold.
+
+    Returns:
+        One boolean per text: some query occurs in, or near-duplicates, one of its segments.
+    '''
+
+    _check_threshold(min_jaccard)
+    normalized = _normalized_queries(queries)
+    flags = np.zeros(len(segments), dtype=bool)
+    owners = np.array([row for row, parts in enumerate(segments) for _ in parts], dtype=np.int64)
+    flat = [part for parts in segments for part in parts]
+    if not flat or not normalized:
+        return flags
+    padded = [f' {query} ' for query in normalized]
+    # yapf: disable
+    exact = (
+        pl.DataFrame({'segment': [f' {part} ' for part in flat]})
+        .select(pl.col('segment').str.extract_many(padded, overlapping=True).list.len() > 0)
+        .to_series()
+        .to_numpy()
+    )
+    # yapf: enable
+    near = _near_duplicate_flags(flat, normalized, min_jaccard, same_list=False)
+    np.logical_or.at(flags, owners, exact | near)
+    return flags

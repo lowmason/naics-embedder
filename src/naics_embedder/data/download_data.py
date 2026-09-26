@@ -15,6 +15,7 @@ from urllib.parse import unquote, urlparse
 import polars as pl
 import yaml
 
+from naics_embedder.data.redirections import build_redirections, exclusion_channel
 from naics_embedder.panels.index_roles import (
     attach_role_text,
     read_role_table,
@@ -282,36 +283,16 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
 # NAICS exclusions
 # -------------------------------------------------------------------------------------------------
 
-def _get_exclusions(exclusions_df: pl.DataFrame, descriptions_3: pl.DataFrame,
-                    codes: Set[str]) -> Tuple[pl.DataFrame, pl.DataFrame]:
+def _exclusion_paragraphs(descriptions_3: pl.DataFrame) -> pl.DataFrame:
+    '''
+    Each code's "Excluded" paragraph (``code``, ``description_id``, ``description``).
 
-    # Load descriptions from cross-reference file
-    # yapf: disable
-    exclusions_1 = (
-        exclusions_df
-        .filter(
-            pl.col('excluded').str.contains(r' \d{2,6}'),
-        )
-    )
-    # yapf: enable
+    The paragraph is a code's last description block, when that block mentions an exclusion and
+    names a code. It leaves the description and joins the redirection table (Req 8).
+    '''
 
-    # Aggregate exclusions by code
     # yapf: disable
-    exclusions_2 = (
-        exclusions_1
-        .group_by('code', maintain_order=True)
-        .agg(excluded=pl.col('excluded'))
-        .select(
-            code=pl.col('code'),
-            description_id=pl.lit(1, pl.UInt32),
-            description=pl.col('excluded').list.join(' ')
-        )
-    )
-    # yapf: enable
-
-    # Extract excluded activities (typically last description block for a code)
-    # yapf: disable
-    exclusions_3 = (
+    return (
         descriptions_3
         .filter(
             pl.col('description_id').max().over('code').eq(pl.col('description_id')),
@@ -325,70 +306,6 @@ def _get_exclusions(exclusions_df: pl.DataFrame, descriptions_3: pl.DataFrame,
         )
     )
     # yapf: enable
-
-    # Exclusions for cleaning descriptions
-    descriptions_exclusions = exclusions_3.select('code', 'description_id')
-
-    # Combine and extract excluded codes
-    # yapf: disable
-    exclusions_4 = (
-        pl.concat([exclusions_2, exclusions_3])
-        .filter(pl.col('description').is_not_null())
-        .with_columns(
-            digit=pl.col('description')
-                    .str.extract_all(r' \d{2,6}')
-                    .list.eval(pl.element().str.strip_prefix(' '))
-                    .list.set_intersection(codes)
-                    .list.drop_nulls()
-                    .list.set_intersection(codes)
-                    .list.drop_nulls()
-        )
-        .filter(pl.col('digit').list.len().gt(0))
-    )
-    # yapf: enable
-
-    # Final exclusions DataFrame
-    # yapf: disable
-    exclusions = (
-        exclusions_4
-        .explode('digit')
-        .select(
-            level=pl.col('code').str.len_chars().cast(pl.UInt8),
-            code=pl.col('code'),
-            excluded=pl.col('description'),
-            excluded_codes=pl.col('digit'),
-        )
-        .sort('level', 'code')
-        .group_by('level', 'code', maintain_order=True)
-        .agg(
-            excluded=pl.col('excluded'),
-            excluded_codes=pl.col('excluded_codes')
-        )
-        .with_columns(
-            excluded=pl.col('excluded').list.join(' ')
-        )
-    )
-    # yapf: enable
-
-    # yapf: disable
-    exclusions_cnt = (
-        exclusions
-        .with_columns(
-            excluded_count=pl.col('excluded_codes').list.len()
-        )
-        .get_column('excluded_count')
-        .sum()
-    )
-    # yapf: enable
-
-    logger.info('Exclusions:')
-    logger.info('  Reference codes:')
-    logger.info(f'    Cross-references: {exclusions_2.height: ,}')
-    logger.info(f'    Extracted from descriptions: {exclusions_3.height: ,}')
-    logger.info(f'    Final: {exclusions.height: ,}')
-    logger.info(f'  Excluded codes: {exclusions_cnt: ,}\n')
-
-    return exclusions, descriptions_exclusions
 
 # -------------------------------------------------------------------------------------------------
 # NAICS examples
@@ -638,21 +555,48 @@ def naics_index_entries(sources: NaicsSources) -> pl.DataFrame:
     logger.info(f'  Codes with entries: {entries.get_column("code").n_unique(): ,}\n')
     return entries
 
-def build_descriptions(sources: NaicsSources, examples_entries: pl.DataFrame) -> pl.DataFrame:
+def naics_redirections(
+    sources: NaicsSources,
+    held_out_queries: Sequence[str] = (),
+) -> pl.DataFrame:
     '''
-    One row per code: title, description, examples channel and exclusions.
+    The redirection table of the Census files (``redirections.build_redirections``).
+
+    Rows are the cross-reference file's rows in file order, then the "Excluded" paragraphs
+    harvested from descriptions in code order. A row that one of ``held_out_queries`` leaks into
+    is withheld.
+    '''
+
+    _, codes = _get_titles(sources.titles)
+    _, descriptions_3 = _get_descriptions_1(sources.descriptions)
+    references = sources.exclusions.select('code', text=pl.col('excluded'))
+    paragraphs = _exclusion_paragraphs(descriptions_3).select('code', text=pl.col('description'))
+    return build_redirections(references, paragraphs.sort('code'), codes, held_out_queries)
+
+def build_descriptions(
+    sources: NaicsSources,
+    examples_entries: pl.DataFrame,
+    redirections: Optional[pl.DataFrame] = None,
+) -> pl.DataFrame:
+    '''
+    One row per code: title, description and its source, examples channel and exclusion channel.
 
     Args:
         sources: The four Census files.
         examples_entries: The index entries that form examples channels (``entry_id``,
             ``code``, ``text``); every other entry of a code with index entries is a query.
+        redirections: The redirection table whose rows form the exclusion channel
+            (``redirections.exclusion_channel``); built from ``sources`` with no row withheld
+            when omitted.
     '''
 
     titles, codes = _get_titles(sources.titles)
 
     descriptions_2, descriptions_3 = _get_descriptions_1(sources.descriptions)
 
-    exclusions, descriptions_exclusions = _get_exclusions(sources.exclusions, descriptions_3, codes)
+    if redirections is None:
+        redirections = naics_redirections(sources)
+    exclusions = exclusion_channel(redirections)
 
     index_codes = set(_get_index_entries(sources.index, codes).get_column('code').to_list())
     examples, descriptions_examples = _get_examples(
@@ -660,7 +604,10 @@ def build_descriptions(sources: NaicsSources, examples_entries: pl.DataFrame) ->
     )
 
     descriptions = _get_descriptions_2(
-        descriptions_3, descriptions_exclusions, descriptions_examples, codes
+        descriptions_3,
+        _exclusion_paragraphs(descriptions_3).select('code', 'description_id'),
+        descriptions_examples,
+        codes,
     )
 
     # yapf: disable
@@ -800,11 +747,13 @@ def download_preprocess_data(
     force: bool = False,
 ) -> pl.DataFrame:
     '''
-    Build the descriptions parquet and the index-roles parquet from the Census files.
+    Build the descriptions, index-roles and redirection parquets from the Census files.
 
     Every index entry takes its role from the frozen role table (``cfg.index_roles_csv``). A
-    code's examples channel holds its examples-role entries only, and no validation or test query
-    may match any training text (Req 3); both are checked before anything is written.
+    code's examples channel holds its examples-role entries only. A redirection row that a
+    validation or test query leaks into is withheld from the exclusion channel, and no held-out
+    query may match any training text or activity phrase (Req 3). Everything is checked before
+    anything is written.
 
     Args:
         cfg: Download configuration; ``conf/data/download.yaml`` when omitted.
@@ -834,17 +783,22 @@ def download_preprocess_data(
     sources = load_naics_sources(cfg)
 
     role_rows = attach_role_text(read_role_table(roles_csv), naics_index_entries(sources))
+    held_out = role_rows.filter(
+        pl.col('role').is_in([IndexRole.VALIDATION.value, IndexRole.TEST.value])
+    )
+    redirections = naics_redirections(sources, held_out.get_column('text').to_list())
 
     naics_final = build_descriptions(
-        sources, role_rows.filter(pl.col('role') == IndexRole.EXAMPLES.value)
+        sources, role_rows.filter(pl.col('role') == IndexRole.EXAMPLES.value), redirections
     )
 
     six_digit_codes = naics_final.filter(pl.col('level') == 6).get_column('code').to_list()
     validate_index_role_table(role_rows, six_digit_codes)
     verify_examples_channel(naics_final, role_rows)
     logger.info(f'Present texts per channel: {verify_text_channels(naics_final)}')
-    leakage = verify_role_leakage(naics_final, role_rows)
-    logger.info(f'Held-out queries matching training text: {leakage}\n')
+    activities = redirections.get_column('activity').drop_nulls().to_list()
+    leakage = verify_role_leakage(naics_final, role_rows, extra_texts=activities)
+    logger.info(f'Held-out queries matching training text or activity phrases: {leakage}\n')
 
     (naics_final.write_parquet(cfg.output_parquet))
 
@@ -862,6 +816,16 @@ def download_preprocess_data(
         parquet_df=role_rows,
         message='NAICS index entries and their roles written to',
         output_parquet=cfg.index_roles_parquet,
+        logger=logger,
+    )
+
+    Path(cfg.redirections_parquet).parent.mkdir(parents=True, exist_ok=True)
+    redirections.write_parquet(cfg.redirections_parquet)
+
+    _parquet_stats(
+        parquet_df=redirections,
+        message='NAICS redirection table written to',
+        output_parquet=cfg.redirections_parquet,
         logger=logger,
     )
 

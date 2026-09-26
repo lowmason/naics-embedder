@@ -8,8 +8,9 @@ import polars as pl
 import pytest
 
 from naics_embedder.data import download_data
+from naics_embedder.data.redirections import REDIRECTIONS_SCHEMA
 from naics_embedder.utils.config import DownloadConfig
-from tests.fixtures.naics_sources import TITLES
+from tests.fixtures.naics_sources import EXCLUSIONS, TITLES
 
 ENTRY_SCHEMA = {'entry_id': pl.Int64, 'code': pl.Utf8, 'text': pl.Utf8}
 
@@ -136,30 +137,24 @@ def test_get_examples_rejects_entries_of_codes_without_index_entries():
         download_data._get_examples({'111'}, examples_entries, descriptions, descriptions)
 
 @pytest.mark.unit
-def test_get_exclusions_combines_crossrefs_and_descriptions():
-    exclusions_df = pl.DataFrame({
-        'code': ['111'],
-        'excluded': ['See 222 and 333'],
-    })
+def test_exclusion_paragraphs_are_final_blocks_naming_an_exclusion_and_a_code():
     descriptions_3 = pl.DataFrame(
         {
-            'code': ['111', '111'],
-            'description_id': pl.Series('description_id', [1, 2], dtype=pl.UInt32),
-            'description': ['Some text', 'Excluded 333'],
+            'code': ['111', '111', '222', '222', '333'],
+            'description_id': pl.Series([1, 2, 1, 2, 1], dtype=pl.UInt32),
+            'description': [
+                'Some text',
+                'Excluded are farms, classified in Industry 333.',
+                'Excluded are ranches, classified in Industry 111.',  # not the last block
+                'More text',
+                'Excluded are orchards.',  # names no code
+            ],
         }
     )
-    codes = {'111', '222', '333'}
 
-    exclusions, descriptions_exclusions = download_data._get_exclusions(
-        exclusions_df, descriptions_3, codes
-    )
+    paragraphs = download_data._exclusion_paragraphs(descriptions_3)
 
-    assert descriptions_exclusions.height == 1
-    assert descriptions_exclusions.row(0, named=True)['description_id'] == 2
-
-    assert exclusions.height == 1
-    row = exclusions.row(0, named=True)
-    assert set(row['excluded_codes']) == {'222', '333'}
+    assert paragraphs.rows() == [('111', 2, 'Excluded are farms, classified in Industry 333.')]
 
 @pytest.mark.unit
 def test_get_descriptions_2_removes_flagged_sections():
@@ -396,6 +391,27 @@ def test_build_descriptions_keeps_queries_out_of_the_examples_channel(naics_sour
     assert examples['111191'] is None
     assert 'Illustrative' not in descriptions.filter(pl.col('code') == '11119')['description'][0]
 
+@pytest.mark.unit
+def test_build_descriptions_builds_the_exclusion_channel_from_the_redirections(naics_sources):
+    entries = download_data.naics_index_entries(naics_sources).filter(pl.col('entry_id') == 0)
+    kept = download_data.naics_redirections(naics_sources)
+    # The query reorders the activity phrase of 111110's only cross-reference
+    query = 'Soybeans for green manure, growing'
+    withheld = download_data.naics_redirections(naics_sources, [query])
+
+    open_channel = download_data.build_descriptions(naics_sources, entries, kept)
+    closed_channel = download_data.build_descriptions(naics_sources, entries, withheld)
+
+    columns = ['excluded', 'excluded_codes']
+    assert kept.get_column('withheld').to_list() == [False]
+    assert open_channel.filter(pl.col('code') == '111110').select(columns).row(0) == (
+        EXCLUSIONS[0][1], ['111120']
+    )
+    assert withheld.get_column('withheld').to_list() == [True]
+    assert closed_channel.filter(pl.col('code') == '111110').select(columns).row(0) == (
+        None, ['111120']
+    )
+
 # -------------------------------------------------------------------------------------------------
 # The descriptions file a supervision bundle pins
 # -------------------------------------------------------------------------------------------------
@@ -483,6 +499,7 @@ def preprocess_cfg(tmp_path, monkeypatch, naics_sources):
     return DownloadConfig(
         output_parquet=str(tmp_path / 'data' / 'naics_descriptions.parquet'),
         index_roles_parquet=str(tmp_path / 'data' / 'naics_index_roles.parquet'),
+        redirections_parquet=str(tmp_path / 'data' / 'naics_redirections.parquet'),
         index_roles_csv=str(roles_csv),
     )
 
@@ -499,6 +516,11 @@ def test_preprocess_builds_examples_from_the_role_table(preprocess_cfg):
     assert roles.columns == ['entry_id', 'code', 'text', 'role']
     assert roles.get_column('entry_id').to_list() == [i for i, _, _ in ROLE_TABLE]
     assert roles.row(3) == (3, '111110', 'Soybean seed production', 'test')
+    redirections = pl.read_parquet(preprocess_cfg.redirections_parquet)
+    assert redirections.schema == pl.Schema(REDIRECTIONS_SCHEMA)
+    assert redirections.select('reference_id', 'code', 'activity', 'withheld').rows() == [
+        (0, '111110', 'Growing soybeans for green manure', False)
+    ]
 
 @pytest.mark.unit
 def test_preprocess_refuses_a_held_out_query_that_matches_training_text(preprocess_cfg):
@@ -509,9 +531,10 @@ def test_preprocess_refuses_a_held_out_query_that_matches_training_text(preproce
 
     with pytest.raises(ValueError, match='held-out queries match training text'):
         download_data.download_preprocess_data(preprocess_cfg)
-    # Every check runs before either file is written
+    # Every check runs before any file is written
     assert not Path(preprocess_cfg.output_parquet).exists()
     assert not Path(preprocess_cfg.index_roles_parquet).exists()
+    assert not Path(preprocess_cfg.redirections_parquet).exists()
 
 @pytest.mark.unit
 def test_preprocess_needs_the_role_table(preprocess_cfg, tmp_path):

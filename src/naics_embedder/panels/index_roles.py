@@ -323,19 +323,24 @@ def verify_role_leakage(
     descriptions: pl.DataFrame,
     role_rows: pl.DataFrame,
     min_jaccard: Fraction = NEAR_DUPLICATE_MIN_JACCARD,
+    *,
+    extra_texts: Sequence[str] = (),
 ) -> Dict[str, Dict[str, int]]:
     '''
     Match every validation and test query against all training text; fail on any match.
 
     Training text is every code's title, description, examples channel and exclusion text in
-    ``descriptions``, plus every training-role query.
+    ``descriptions``, every training-role query, and ``extra_texts``: the redirection table's
+    activity phrases, which Stage 7 trains on as queries (Req 8).
 
     Returns:
         Exact and near-duplicate match counts per held-out split (all zero on success).
     '''
 
     training = role_rows.filter(pl.col('role') == IndexRole.TRAINING.value)
-    corpus = training_text_segments(descriptions, extra_texts=training.get_column('text'))
+    corpus = training_text_segments(
+        descriptions, extra_texts=[*training.get_column('text').to_list(), *extra_texts]
+    )
     report: Dict[str, Dict[str, int]] = {}
     for role in (IndexRole.VALIDATION, IndexRole.TEST):
         queries = role_rows.filter(pl.col('role') == role.value).get_column('text').to_list()
