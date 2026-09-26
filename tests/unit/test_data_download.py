@@ -174,7 +174,7 @@ def test_get_descriptions_2_removes_flagged_sections():
     descriptions_examples = pl.DataFrame({'code': ['111'], 'description_id_min': [3]})
 
     cleaned = download_data._get_descriptions_2(
-        descriptions_3, descriptions_exclusions, descriptions_examples
+        descriptions_3, descriptions_exclusions, descriptions_examples, {'111'}
     )
 
     assert cleaned.height == 1
@@ -221,13 +221,96 @@ def test_description_drops_whole_illustrative_examples_section(
         index_codes, examples_entries, descriptions_3, descriptions_3
     )
     descriptions = download_data._get_descriptions_2(
-        descriptions_3, descriptions_exclusions, descriptions_examples
+        descriptions_3, descriptions_exclusions, descriptions_examples, {'111199'}
     )
 
     assert descriptions.get_column('description').to_list() == [
         'This industry comprises establishments growing grain.'
     ]
     assert examples.get_column('examples').to_list() == expected_examples
+
+@pytest.mark.unit
+def test_a_code_without_official_text_inherits_its_only_childs_description():
+    blocks = [
+        ('1111', ''),
+        ('11111', ''),  # the Census pointer "See industry description for 111110." is removed
+        ('111110', 'This industry comprises establishments growing soybeans.'),
+        ('1112', ''),
+        ('11121', 'This industry comprises establishments growing wheat.'),
+        ('11122', 'This industry comprises establishments growing corn.'),
+    ]
+    codes = [code for code, _ in blocks]
+    descriptions_3 = pl.DataFrame(
+        {
+            'code': codes,
+            'description_id': pl.Series([1] * len(blocks), dtype=pl.UInt32),
+            'description': [text for _, text in blocks],
+        }
+    )
+    no_blocks = pl.DataFrame(schema={'code': pl.Utf8, 'description_id': pl.UInt32})
+    no_examples = pl.DataFrame(schema={'code': pl.Utf8, 'description_id_min': pl.UInt32})
+
+    descriptions = download_data._get_descriptions_2(
+        descriptions_3, no_blocks, no_examples, set(codes)
+    )
+
+    assert descriptions.rows() == [
+        ('1111', 'This industry group comprises establishments growing soybeans.', '111110'),
+        ('11111', 'This NAICS industry comprises establishments growing soybeans.', '111110'),
+        ('111110', 'This industry comprises establishments growing soybeans.', '111110'),
+        # Two children and no official text: no pick at all (Req 9)
+        ('1112', None, None),
+        ('11121', 'This industry comprises establishments growing wheat.', '11121'),
+        ('11122', 'This industry comprises establishments growing corn.', '11122'),
+    ]
+
+@pytest.mark.unit
+def test_build_descriptions_records_provenance_and_leaves_absent_channels_null(naics_sources):
+    entries = download_data.naics_index_entries(naics_sources)
+
+    descriptions = download_data.build_descriptions(
+        naics_sources, entries.filter(pl.col('entry_id') == 0)
+    )
+
+    assert descriptions.columns[4:6] == ['description', 'description_source']
+    assert descriptions.get_column('description_source').to_list() == [code for code, _ in TITLES]
+    assert descriptions.filter(pl.col('code') == '111120').get_column('examples').item() is None
+    assert download_data.verify_text_channels(descriptions) == {
+        'title': 9,
+        'description': 9,
+        'examples': 2,
+        'excluded': 1,
+    }
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'column, value, message',
+    [
+        pytest.param('excluded', '', 'blank', id='empty'),
+        pytest.param('examples', '  ', 'blank', id='whitespace'),
+        pytest.param('examples', 'Soybean farming; [EMPTY]', 'placeholder', id='placeholder'),
+        pytest.param('description_source', None, 'description_source', id='provenance'),
+    ],
+)
+def test_verify_text_channels_refuses_blanks_placeholders_and_missing_provenance(
+    column, value, message
+):
+    frame = pl.DataFrame(
+        {
+            'code': ['111110'],
+            'title': ['Soybean Farming'],
+            'description': ['This industry comprises establishments growing soybeans.'],
+            'description_source': ['111110'],
+            'examples': ['Soybean farming'],
+            'excluded': [None],
+        },
+        schema_overrides={
+            'excluded': pl.Utf8
+        },
+    ).with_columns(pl.lit(value, pl.Utf8).alias(column))
+
+    with pytest.raises(ValueError, match=message):
+        download_data.verify_text_channels(frame)
 
 # -------------------------------------------------------------------------------------------------
 # Local sources and the pinned index file
