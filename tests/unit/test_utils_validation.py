@@ -199,3 +199,20 @@ def test_repaired_data_paths_do_not_require_legacy_artifacts(tmp_path):
     result = validate_data_paths(cfg)
     assert result.valid is False
     assert any('Distances file not found' in err for err in result.errors)
+
+@pytest.mark.unit
+def test_missing_legacy_artifacts_name_no_command_that_cannot_build_them(tmp_path):
+    # `data triplets` builds nothing (M8) and `data all` builds only a bundle, so neither
+    # supplies a missing legacy artifact
+    cfg = Config.model_validate({'supervision': {'mode': 'legacy_containment'}})
+    streaming = cfg.data_loader.streaming
+    streaming.descriptions_parquet = _touch(tmp_path / 'descriptions.parquet')
+    for name in ('distances_parquet', 'distance_matrix_parquet', 'relations_parquet'):
+        setattr(streaming, name, str(tmp_path / f'missing_{name}'))
+    streaming.triplets_parquet = str(tmp_path / 'missing_triplets')
+
+    errors = validate_data_paths(cfg).errors
+
+    assert len(errors) == 4
+    assert all('naics-embedder data supervision' in error for error in errors)
+    assert not any('data triplets' in error or 'data all' in error for error in errors)

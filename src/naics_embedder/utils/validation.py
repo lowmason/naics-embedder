@@ -118,6 +118,15 @@ class ValidationResult:
 # Data Path Validation
 # -------------------------------------------------------------------------------------------------
 
+DESCRIPTIONS_HINT = '  Run: uv run naics-embedder data all'
+
+# No command writes a legacy long-form file any more: each is a compatibility member of the
+# supervision bundle, under the same file name as its legacy default.
+LEGACY_ARTIFACT_HINT = (
+    '  No command writes this path. Point it at the same-named member of a supervision bundle,\n'
+    '  which `uv run naics-embedder data supervision` builds'
+)
+
 def validate_data_paths(cfg: Config) -> ValidationResult:
     '''
     Verify that required data files exist and are accessible.
@@ -145,9 +154,7 @@ def validate_data_paths(cfg: Config) -> ValidationResult:
     if cfg.supervision.mode == 'repaired':
         path = Path(required_files['descriptions'])
         if not path.exists():
-            result.add_error(
-                f'Descriptions file not found: {path}\n  Run: uv run naics-embedder data all'
-            )
+            result.add_error(f'Descriptions file not found: {path}\n{DESCRIPTIONS_HINT}')
         return result
 
     required_files.update(
@@ -161,9 +168,8 @@ def validate_data_paths(cfg: Config) -> ValidationResult:
     for name, path_str in required_files.items():
         path = Path(path_str)
         if not path.exists():
-            result.add_error(
-                f'{name.capitalize()} file not found: {path_str}\n  Run: uv run naics-embedder data all'
-            )
+            hint = DESCRIPTIONS_HINT if name == 'descriptions' else LEGACY_ARTIFACT_HINT
+            result.add_error(f'{name.capitalize()} file not found: {path_str}\n{hint}')
 
     # Check triplets directory
     triplets_path = Path(cfg.data_loader.streaming.triplets_parquet)
@@ -174,13 +180,10 @@ def validate_data_paths(cfg: Config) -> ValidationResult:
         parquet_files = list(triplets_path.glob('**/*.parquet'))
         if not parquet_files:
             result.add_error(
-                f'Triplets directory is empty: {triplets_path}\n'
-                f'  Run: uv run naics-embedder data triplets'
+                f'Triplets directory is empty: {triplets_path}\n{LEGACY_ARTIFACT_HINT}'
             )
     elif not triplets_path.exists():
-        result.add_error(
-            f'Triplets path not found: {triplets_path}\n  Run: uv run naics-embedder data triplets'
-        )
+        result.add_error(f'Triplets path not found: {triplets_path}\n{LEGACY_ARTIFACT_HINT}')
 
     return result
 
