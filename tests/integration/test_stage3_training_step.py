@@ -191,22 +191,24 @@ def test_forced_reorder_preserves_uid_across_every_loss_field(
         '_compute_structural_preference_loss',
         spy.structural,
     )
+    # Slots 2 and 1, reversed: codes 4 and 3. Slot 0 holds code 2, anchor 0's exclusion, which is
+    # never selectable.
     monkeypatch.setattr(
         tiny_repaired_model.selection_coordinator,
         'select',
-        forced_selection([2, 0, 1]),
+        forced_selection([2, 1]),
     )
 
     loss = tiny_repaired_model.training_step(repaired_training_batch, batch_idx=0)
     loss.backward()
 
     assert spy.contrastive_uids == spy.structural_uids
-    assert spy.code_ids == [4, 2, 3]
-    assert spy.structural_distances == [10.0, 2.0, 10.0]
-    assert spy.exclusion_flags == [False, True, False]
+    assert spy.code_ids == [4, 3]
+    assert spy.structural_distances == [10.0, 10.0]
+    assert spy.exclusion_flags == [False, False]
     # The stub computes gate probabilities in float32, so compare approximately.
-    assert spy.router_first_column == pytest.approx([0.3, 0.1, 0.2])
-    assert spy.false_negative_flags == [False, False, True]
+    assert spy.router_first_column == pytest.approx([0.3, 0.2])
+    assert spy.false_negative_flags == [False, True]
     assert all(uid[2] >= 0 for row in spy.contrastive_uids for uid in row)
     assert torch.isfinite(loss)
     assert all(
@@ -214,8 +216,25 @@ def test_forced_reorder_preserves_uid_across_every_loss_field(
         for parameter in tiny_repaired_model.parameters()
     )
 
+def test_a_selection_naming_an_exclusion_is_refused(
+    tiny_repaired_model,
+    repaired_training_batch,
+    monkeypatch,
+):
+    # Slot 0 holds code 2, anchor 0's exclusion: it is never eligible (Req 8), so a selection that
+    # names it cannot reach a loss
+    monkeypatch.setattr(
+        tiny_repaired_model.selection_coordinator,
+        'select',
+        forced_selection([0, 1]),
+    )
+
+    with pytest.raises(ValueError, match='invalid source candidate at row 0, slot 0'):
+        tiny_repaired_model.training_step(repaired_training_batch, batch_idx=0)
+
 # -------------------------------------------------------------------------------------------------
 # Real coordinator: mining decides once enabled, and never selects a structurally closer relative
+# or an exclusion
 # -------------------------------------------------------------------------------------------------
 
 # Hierarchy fixture code IDs: anchor '311111' (4), positive '3111' (2, its grandparent), parent
@@ -277,14 +296,9 @@ def _hierarchy_batch(model):
                 'enable_hard_negative_mining': True,
                 'enable_router_guided_sampling': True
             },
-            [
-                SelectionReason.EXCLUSION_QUOTA,
-                SelectionReason.GEOMETRIC,
-                SelectionReason.GEOMETRIC,
-                SelectionReason.ROUTER,
-            ],
+            [SelectionReason.GEOMETRIC] * 2 + [SelectionReason.ROUTER] * 2,
         ),
-        ({}, [SelectionReason.EXCLUSION_QUOTA] + [SelectionReason.DIFFICULTY] * 3),
+        ({}, [SelectionReason.DIFFICULTY] * 4),
     ],
 )
 def test_real_coordinator_step_mines_when_enabled_and_respects_eligibility(
@@ -307,9 +321,10 @@ def test_real_coordinator_step_mines_when_enabled_and_respects_eligibility(
     reasons = [SelectionReason(reason) for reason in selected.selection_reasons[0].tolist()]
     assert reasons == expected
     # The parent leads the difficulty proposal and is the anchor's nearest code, yet it is
-    # structurally closer than the grandparent positive, so no path may select it.
+    # structurally closer than the grandparent positive, so no path may select it. Nor may any
+    # path select the exclusion (11).
     assert 3 not in selected.code_id[0].tolist()
-    assert 11 in selected.code_id[0].tolist()
+    assert 11 not in selected.code_id[0].tolist()
     assert torch.isfinite(loss)
 
 def test_old_parallel_arrays_misalign_but_checked_selection_does_not(candidate_batch):

@@ -13,42 +13,25 @@ from naics_embedder.supervision.selection import (
     stable_hash,
 )
 
-def test_quota_selects_exactly_one_exclusion_and_rotates(candidate_batch_with_exclusions):
-    coordinator = NegativeSelectionCoordinator()
-    chosen = []
-    for epoch in range(3):
-        selection = coordinator.select(
-            candidate_batch_with_exclusions,
-            anchor_code_ids=torch.tensor([10]),
-            positive_code_ids=torch.tensor([11]),
-            k=3,
-            epoch=epoch,
-            global_seed=7,
-            proposals=(),
-        )
-        selected = candidate_batch_with_exclusions.select(selection)
-        assert selected.is_explicit_exclusion.sum().item() == 1
-        chosen.append(selected.code_id[selected.is_explicit_exclusion].item())
+def test_an_explicit_exclusion_is_never_selected(candidate_batch_with_exclusions):
+    # Codes 20-22 are the anchor's exclusions (Req 8), so only 30-32 can fill the three slots
+    selection = NegativeSelectionCoordinator().select(
+        candidate_batch_with_exclusions,
+        anchor_code_ids=torch.tensor([10]),
+        positive_code_ids=torch.tensor([11]),
+        k=3,
+        proposals=(),
+    )
+    selected = candidate_batch_with_exclusions.select(selection)
 
-    assert len(set(chosen)) == 3
+    assert selected.code_id.tolist() == [[30, 31, 32]]
+    assert not selected.is_explicit_exclusion.any()
+    assert selection.reasons.tolist() == [[SelectionReason.BACKFILL] * 3]
 
-def test_rotation_is_reproducible_for_same_seed_anchor_and_epoch(candidate_batch_with_exclusions):
-    coordinator = NegativeSelectionCoordinator()
-    args = {
-        'candidates': candidate_batch_with_exclusions,
-        'anchor_code_ids': torch.tensor([10]),
-        'positive_code_ids': torch.tensor([11]),
-        'k': 1,
-        'epoch': 4,
-        'global_seed': 123,
-        'proposals': (),
-    }
-
-    first = coordinator.select(**args)
-    second = coordinator.select(**args)
-
-    assert torch.equal(first.source_indices, second.source_indices)
-    assert first.reasons.item() == SelectionReason.EXCLUSION_QUOTA
+def test_exclusions_add_no_selection_capacity(candidate_batch_with_exclusions):
+    # Three non-exclusion codes cannot fill four slots, however many exclusions the pool holds
+    with pytest.raises(ValueError, match='requested 4.*available 3 .unique non-exclusion codes'):
+        _select(candidate_batch_with_exclusions, k=4)
 
 def test_no_exclusion_uses_all_slots_for_ordinary_candidates(candidate_batch):
     selection = NegativeSelectionCoordinator().select(
@@ -56,8 +39,6 @@ def test_no_exclusion_uses_all_slots_for_ordinary_candidates(candidate_batch):
         anchor_code_ids=torch.tensor([100]),
         positive_code_ids=torch.tensor([104]),
         k=3,
-        epoch=0,
-        global_seed=7,
         proposals=(),
     )
     selected = candidate_batch.select(selection)
@@ -76,8 +57,6 @@ def test_proposal_ties_break_by_code_then_uid(candidate_batch):
         anchor_code_ids=torch.tensor([100]),
         positive_code_ids=torch.tensor([104]),
         k=3,
-        epoch=0,
-        global_seed=7,
         proposals=(proposal, ),
     )
     assert candidate_batch.select(selection).code_id.tolist() == [[101, 102, 103]]
@@ -99,8 +78,6 @@ def test_geometric_then_router_merge_is_deterministic_and_code_unique(candidate_
         anchor_code_ids=torch.tensor([100]),
         positive_code_ids=torch.tensor([104]),
         k=3,
-        epoch=0,
-        global_seed=7,
         proposals=(geometric, router),
     )
 
@@ -119,8 +96,6 @@ def test_duplicate_codes_collapse_to_smallest_occurrence_uid(candidate_batch_wit
         anchor_code_ids=torch.tensor([100]),
         positive_code_ids=torch.tensor([104]),
         k=2,
-        epoch=0,
-        global_seed=7,
         proposals=(),
     )
     selected = candidate_batch_with_duplicate_code.select(selection)
@@ -140,27 +115,23 @@ def test_insufficient_unique_candidates_is_fatal(candidate_batch):
             anchor_code_ids=torch.tensor([100]),
             positive_code_ids=torch.tensor([104]),
             k=4,
-            epoch=0,
-            global_seed=7,
             proposals=(),
         )
 
 # -------------------------------------------------------------------------------------------------
-# Quota protection and eligibility
+# Exclusions and eligibility
 # -------------------------------------------------------------------------------------------------
 
-def _select(batch, *, k, proposals=(), anchor=10, positive=11, epoch=0):
+def _select(batch, *, k, proposals=(), anchor=10, positive=11):
     return NegativeSelectionCoordinator().select(
         batch,
         anchor_code_ids=torch.tensor([anchor]),
         positive_code_ids=torch.tensor([positive]),
         k=k,
-        epoch=epoch,
-        global_seed=7,
         proposals=proposals,
     )
 
-def test_proposals_cannot_add_a_second_exclusion(candidate_batch_with_exclusions):
+def test_proposals_cannot_select_an_exclusion(candidate_batch_with_exclusions):
     batch = candidate_batch_with_exclusions
     greedy = CandidateProposal(
         source_indices=torch.tensor([[0, 1, 2, 3]]),
@@ -170,29 +141,10 @@ def test_proposals_cannot_add_a_second_exclusion(candidate_batch_with_exclusions
 
     selected = batch.select(_select(batch, k=3, proposals=(greedy, )))
 
-    assert selected.is_explicit_exclusion.sum().item() == 1
-    assert selected.code_id.unique().numel() == 3
-    assert selected.selection_reasons.tolist()[0][0] == SelectionReason.EXCLUSION_QUOTA
-    assert 30 in selected.code_id.tolist()[0]
-
-def test_one_slot_is_enough_for_the_reserved_exclusion(candidate_batch_with_exclusions):
-    batch = candidate_batch_with_exclusions
-    ordinary_only = CandidateProposal(
-        source_indices=torch.tensor([[3, 4, 5]]),
-        scores=torch.tensor([[3.0, 2.0, 1.0]]),
-        reason=SelectionReason.GEOMETRIC,
-    )
-
-    selected = batch.select(_select(batch, k=1, proposals=(ordinary_only, )))
-
-    assert selected.is_explicit_exclusion.tolist() == [[True]]
-
-def test_rotation_covers_every_exclusion_cyclically(candidate_batch_with_exclusions):
-    batch = candidate_batch_with_exclusions
-    chosen = [batch.select(_select(batch, k=1, epoch=epoch)).code_id.item() for epoch in range(6)]
-
-    assert sorted(chosen[:3]) == [20, 21, 22]
-    assert chosen[3:] == chosen[:3]
+    # The three exclusions outscore code 30 but are skipped; backfill supplies 31 and 32
+    reasons = selected.selection_reasons.tolist()[0]
+    assert selected.code_id.tolist() == [[30, 31, 32]]
+    assert reasons == [SelectionReason.GEOMETRIC] + [SelectionReason.BACKFILL] * 2
 
 def test_anchor_positive_and_invalid_candidates_are_never_selected(candidate_batch):
     batch = replace(candidate_batch, valid_mask=torch.tensor([[True, True, False]]))
@@ -221,8 +173,6 @@ def test_malformed_proposal_scores_are_fatal(candidate_batch, bad_score):
             anchor_code_ids=torch.tensor([100]),
             positive_code_ids=torch.tensor([104]),
             k=3,
-            epoch=0,
-            global_seed=7,
             proposals=(proposal, ),
         )
 
@@ -238,8 +188,6 @@ def test_negative_infinity_marks_an_ineligible_proposal_entry(candidate_batch):
         anchor_code_ids=torch.tensor([100]),
         positive_code_ids=torch.tensor([104]),
         k=3,
-        epoch=0,
-        global_seed=7,
         proposals=(proposal, ),
     )
 
@@ -312,8 +260,6 @@ def test_malformed_score_in_an_unreached_proposal_is_still_fatal(candidate_batch
             anchor_code_ids=torch.tensor([100]),
             positive_code_ids=torch.tensor([104]),
             k=3,
-            epoch=0,
-            global_seed=7,
             proposals=(filling, unreached),
         )
 

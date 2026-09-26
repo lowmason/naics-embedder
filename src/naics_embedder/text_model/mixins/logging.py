@@ -206,8 +206,10 @@ class LoggingMixin:
         Log low-cardinality integrity counters for one checked selection as epoch sums.
 
         ``entity_valid_mask`` marks real (non-padding) candidates; ``candidates.valid_mask``
-        additionally applies anchor-relative structural eligibility. Counters carry no candidate
-        identities in their names or values.
+        additionally applies anchor-relative eligibility: structurally farther than the positive
+        and never an explicit exclusion. The structural counter leaves exclusions out, which
+        ``anchors_with_exclusions`` reports. Counters carry no candidate identities in their names
+        or values.
         '''
         selectable_codes = candidates.code_id.masked_fill(~candidates.valid_mask, -1)
         sorted_codes = selectable_codes.sort(dim=1).values
@@ -226,7 +228,7 @@ class LoggingMixin:
                                                                   ).sum(),
             'train/integrity/invalid_candidates_ignored': (~entity_valid_mask).sum(),
             'train/integrity/structurally_ineligible_candidates': (
-                entity_valid_mask & ~candidates.valid_mask
+                entity_valid_mask & ~candidates.valid_mask & ~candidates.is_explicit_exclusion
             ).sum(),
             'train/integrity/duplicate_candidates_removed': duplicates,
         }

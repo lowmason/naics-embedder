@@ -9,9 +9,8 @@ relation margin. Candidates sourced at runtime (universe backfill, the distribut
 pass through the same rule, so the repaired pipeline never repels an *ordinary* candidate that
 the generated supervision would not treat as a negative.
 
-Explicit exclusions are exempt: their exclusion is authoritative regardless of structure (the
-quota may select a structurally close exclusion, as the contract requires), so callers apply
-eligibility to ordinary candidates only.
+An explicit exclusion is never a negative (Req 8), whatever its structure: callers remove
+exclusions alongside this rule.
 '''
 
 # -------------------------------------------------------------------------------------------------

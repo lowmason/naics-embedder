@@ -128,7 +128,7 @@ def _repaired_item(
     positive_distance: float,
     positive_relation_id: int,
     pool: list,
-    selection_k: int = 3,
+    selection_k: int = 2,
 ) -> dict:
     return {
         'anchor_code_id': anchor_id,
@@ -155,8 +155,9 @@ def _repaired_item(
 @pytest.fixture
 def repaired_training_batch():
     '''
-    Two repaired rows with uneven pools: row 0 (anchor 0) holds its exclusion (2) and one padding
-    row; row 1 (anchor 2) repeats code 4 and has no exclusion in its pool.
+    Two repaired rows with uneven pools: row 0 (anchor 0) holds its exclusion (2), which no path
+    selects, and one padding row; row 1 (anchor 2) repeats code 4 and has no exclusion in its
+    pool. Each row selects two negatives.
     '''
 
     return collate_fn(
@@ -391,7 +392,7 @@ class TestTrainingStep:
     def test_training_step_false_negative_masking(
         self, naics_model, repaired_training_batch, monkeypatch
     ):
-        '''Pseudo-related masking happens after selection and never clears an exclusion.'''
+        '''Pseudo-related masking happens after selection, on the selected negatives only.'''
 
         naics_model.current_curriculum_flags = {'enable_clustering': True}
         monkeypatch.setattr(naics_model, '_update_curriculum_state', lambda *_args: None)
@@ -411,7 +412,7 @@ class TestTrainingStep:
         loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
 
         flags = dict(zip(captured['codes'], captured['mask']))
-        assert flags == {2: False, 3: True, 4: False}
+        assert flags == {3: True, 4: False}
         assert not torch.isnan(loss)
 
     def test_selection_health_counters_are_epoch_sums(
@@ -428,14 +429,14 @@ class TestTrainingStep:
             call.args[0]: call.args[1].item()
             for call in log.call_args_list if call.args[0].startswith('train/integrity/')
         }
-        # Mining is off, so the difficulty proposal fills every ordinary slot: row 0 selects its
-        # exclusion by quota plus two codes; row 1 (no exclusion in its pool) selects three.
+        # Mining is off, so the difficulty proposal fills every slot, two per row. Row 0's
+        # exclusion sits in its pool but takes no slot, and the structural counter leaves it out.
         assert counters == {
             'train/integrity/anchors_with_exclusions': 1.0,
-            'train/integrity/quota_selections': 1.0,
+            'train/integrity/quota_selections': 0.0,
             'train/integrity/geometric_selections': 0.0,
             'train/integrity/router_selections': 0.0,
-            'train/integrity/difficulty_selections': 5.0,
+            'train/integrity/difficulty_selections': 4.0,
             'train/integrity/deterministic_backfills': 0.0,
             'train/integrity/invalid_candidates_ignored': 1.0,
             'train/integrity/structurally_ineligible_candidates': 0.0,
@@ -543,6 +544,26 @@ class TestValidationStep:
             loss = naics_model.validation_step(repaired_training_batch, batch_idx=0)
 
         assert torch.isfinite(loss)
+
+    def test_validation_step_never_scores_an_exclusion(
+        self, naics_model, repaired_training_batch, monkeypatch
+    ):
+        '''Validation applies training's eligibility, so an exclusion in the pool is not scored.'''
+
+        captured = {}
+        forward = naics_model.loss_fn.forward
+
+        def spy(*args, **kwargs):
+            captured['valid_mask'] = kwargs['valid_mask'].tolist()
+            return forward(*args, **kwargs)
+
+        monkeypatch.setattr(naics_model.loss_fn, 'forward', spy)
+        naics_model.eval()
+        with torch.no_grad():
+            naics_model.validation_step(repaired_training_batch, batch_idx=0)
+
+        # Row 0's pool is [2, 3, 4] plus padding, and code 2 is anchor 0's exclusion
+        assert captured['valid_mask'] == [[False, True, True, False], [True, True, True, True]]
 
     def test_validation_step_embedding_storage(self, naics_model, repaired_training_batch):
         '''Test that validation step stores embeddings.'''
@@ -1097,10 +1118,10 @@ class TestEdgeCases:
         assert not torch.isinf(loss)
 
     def test_selection_capacity_failure_is_fatal(self, naics_model):
-        '''An anchor without K selectable codes aborts the step with its code ID.'''
+        '''An anchor without K selectable codes aborts the step; its exclusion adds no capacity.'''
 
         batch = collate_fn(
-            [_repaired_item(0, 1, 0.5, 1, [2, 3], selection_k=3)],
+            [_repaired_item(0, 1, 0.5, 1, [2, 3, 4], selection_k=3)],
             supervision_mode='repaired',
         )
 

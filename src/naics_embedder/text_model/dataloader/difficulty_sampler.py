@@ -216,8 +216,8 @@ def propose_by_difficulty(
     Propose candidate-pool positions by the annealed difficulty curriculum.
 
     Returns source positions (never gathered candidates) in proposal order. Explicit exclusions are
-    never proposed: the one-slot exclusion quota owns their representation. Bucket shortfalls
-    cascade to the next bucket and finally to any remaining non-exclusion candidate.
+    never proposed, since an exclusion is never a negative (Req 8). Bucket shortfalls cascade to
+    the next bucket and finally to any remaining non-exclusion candidate.
 
     Args:
         candidates: The canonical candidate pool (dicts with ``negative_structural_distance`` and

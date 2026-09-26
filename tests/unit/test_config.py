@@ -668,7 +668,7 @@ def test_repaired_config_rejects_high_exclusion_weight(valid_config_dict):
 
     with pytest.raises(
         ValidationError,
-        match='phase1_exclusion_weight.*one-slot exclusion quota',
+        match='phase1_exclusion_weight.*an explicit exclusion is never a negative',
     ):
         Config.model_validate(valid_config_dict)
 

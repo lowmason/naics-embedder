@@ -704,7 +704,7 @@ class StreamingConfig(BaseModel):
         gt=0.0,
         description=(
             'Legacy-containment only: constant sampling weight for excluded codes. Repaired '
-            'Stage-3 training rejects it; the one-slot exclusion quota owns representation.'
+            'Stage-3 training rejects it: an explicit exclusion is never a negative.'
         ),
     )
 
@@ -1428,7 +1428,7 @@ class Config(BaseModel):
             if self.data_loader.streaming.phase1_exclusion_weight is not None:
                 raise ValueError(
                     'data_loader.streaming.phase1_exclusion_weight is invalid in repaired mode; '
-                    'the one-slot exclusion quota owns representation'
+                    'an explicit exclusion is never a negative'
                 )
         return self
 

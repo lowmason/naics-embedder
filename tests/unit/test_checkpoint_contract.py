@@ -162,3 +162,15 @@ def test_weights_only_rejects_shape_mismatched_encoder_weights(tmp_path, tiny_re
 
     with pytest.raises(ValueError, match='encoder.0.weight'):
         load_weights_only(tiny_repaired_model, path)
+
+def test_a_checkpoint_trained_under_the_exclusion_quota_cannot_exact_resume(
+    tmp_path, runtime_contract
+):
+    # negative-selection-v1 reserved a slot for an explicit exclusion; v2 never selects one
+    path = tmp_path / 'quota.ckpt'
+    saved = {**runtime_contract.model_dump(), 'mining_contract_version': 'negative-selection-v1'}
+    torch.save({'stage3_supervision': saved}, path)
+
+    assert runtime_contract.mining_contract_version == 'negative-selection-v2'
+    with pytest.raises(ValueError, match='exact resume'):
+        validate_exact_resume(path, runtime_contract)

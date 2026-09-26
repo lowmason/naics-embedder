@@ -357,7 +357,7 @@ def test_repaired_model_and_datamodule_receive_bundle_supervision(training_env):
     assert model_kwargs['supervision_bundle'] is training_env.bundle
     assert model_kwargs['checkpoint_contract'].bundle_id == 'bundle-a'
     assert model_kwargs['structural_preference_weight'] == 0.35
-    assert model_kwargs['selection_seed'] == 42
+    assert 'selection_seed' not in model_kwargs
     for legacy_key in ('rank_order_weight', 'distance_matrix_path', 'relations_parquet_path'):
         assert legacy_key not in model_kwargs
     assert datamodule_kwargs['supervision_mode'] == 'repaired'

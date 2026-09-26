@@ -1,10 +1,10 @@
 '''
-Deterministic final negative selection with a protected, rotating one-slot exclusion quota.
+Deterministic final negative selection over non-exclusion candidates.
 
-For each anchor the coordinator (1) reserves exactly one explicit exclusion when any exists,
-rotating through the anchor's exclusions by epoch; (2) merges strategy proposals in priority
-order over non-exclusion candidates; (3) deduplicates by code ID, keeping the smallest occurrence
-UID; (4) breaks ties by code ID, then UID; and (5) backfills deterministically. It returns one
+For each anchor the coordinator (1) merges strategy proposals in priority order; (2) deduplicates
+by code ID, keeping the smallest occurrence UID; (3) breaks ties by code ID, then UID; and (4)
+backfills deterministically. An explicit exclusion is never selected: an exclusion pair is not a
+code-code negative (Req 8), so no slot is reserved for one. The coordinator returns one
 ``NegativeSelection`` of source indices; it never gathers candidate fields itself.
 '''
 
@@ -27,7 +27,7 @@ from naics_embedder.supervision.candidates import (
 from naics_embedder.supervision.schema import SelectionReason
 
 # -------------------------------------------------------------------------------------------------
-# Stable rotation hash
+# Stable hash
 # -------------------------------------------------------------------------------------------------
 
 def stable_hash(global_seed: int, anchor_code_id: int) -> int:
@@ -105,16 +105,14 @@ class NegativeSelectionCoordinator:
         anchor_code_ids: torch.Tensor,
         positive_code_ids: torch.Tensor,
         k: int,
-        epoch: int,
-        global_seed: int,
         proposals: Sequence[CandidateProposal],
     ) -> NegativeSelection:
         '''
-        Select ``k`` unique negative codes per anchor.
+        Select ``k`` unique negative codes per anchor, never an explicit exclusion.
 
         Raises:
             ValueError: If ``k < 1``, shapes disagree, or an anchor lacks ``k`` selectable codes
-                (one exclusion slot plus unique non-exclusion codes).
+                (unique non-exclusion codes).
         '''
 
         if k < 1:
@@ -160,7 +158,7 @@ class NegativeSelectionCoordinator:
 
             available_by_code: Dict[int, int] = {}
             for index in range(pool_size):
-                if not valid_rows[row][index]:
+                if not valid_rows[row][index] or explicit_rows[row][index]:
                     continue
                 code_id = int(codes[index])
                 if code_id in forbidden:
@@ -169,27 +167,10 @@ class NegativeSelectionCoordinator:
                 if previous is None or uids[index] < uids[previous]:
                     available_by_code[code_id] = index
 
-            exclusion_codes = sorted(
-                code_id for code_id, index in available_by_code.items() if explicit_rows[row][index]
-            )
-            ordinary_codes: Set[int] = {
-                code_id
-                for code_id, index in available_by_code.items() if not explicit_rows[row][index]
-            }
             chosen: List[int] = []
             chosen_scores: List[float] = []
             chosen_reasons: List[int] = []
             chosen_codes: Set[int] = set()
-
-            if exclusion_codes:
-                rotation = (stable_hash(global_seed, int(anchors[row])) + epoch) % len(
-                    exclusion_codes
-                )
-                reserved_code = exclusion_codes[rotation]
-                chosen.append(available_by_code[reserved_code])
-                chosen_scores.append(math.inf)
-                chosen_reasons.append(int(SelectionReason.EXCLUSION_QUOTA))
-                chosen_codes.add(reserved_code)
 
             for indices, scores, reason in proposal_rows:
                 if len(chosen) == k:
@@ -199,7 +180,7 @@ class NegativeSelectionCoordinator:
                     if index < 0 or index >= pool_size or not valid_rows[row][index]:
                         continue
                     code_id = int(codes[index])
-                    if code_id not in ordinary_codes or code_id in chosen_codes:
+                    if code_id not in available_by_code or code_id in chosen_codes:
                         continue
                     score = float(scores[row][proposal_slot])
                     if score == -math.inf:
@@ -223,7 +204,7 @@ class NegativeSelectionCoordinator:
             if len(chosen) < k:
                 remaining = sorted(
                     (code_id, uids[index], index) for code_id, index in available_by_code.items()
-                    if code_id in ordinary_codes and code_id not in chosen_codes
+                    if code_id not in chosen_codes
                 )
                 for code_id, _, index in remaining:
                     chosen.append(index)
@@ -234,10 +215,9 @@ class NegativeSelectionCoordinator:
                         break
 
             if len(chosen) != k:
-                capacity = (1 if exclusion_codes else 0) + len(ordinary_codes)
                 raise ValueError(
                     f'anchor code ID {int(anchors[row])} requested {k} unique negative codes; '
-                    f'available {capacity} (one exclusion slot plus unique non-exclusion codes)'
+                    f'available {len(available_by_code)} (unique non-exclusion codes)'
                 )
             selected_rows.append(chosen)
             score_rows.append(chosen_scores)

@@ -24,7 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 CONTRACT_VERSION = 'stage3-supervision-v2'
 STRUCTURAL_PREFERENCE_LOSS_VERSION = 'structural-preference-v1'
-MINING_CONTRACT_VERSION = 'negative-selection-v1'
+# v2: no slot is reserved for an explicit exclusion, which is never a negative (Req 8)
+MINING_CONTRACT_VERSION = 'negative-selection-v2'
 
 # -------------------------------------------------------------------------------------------------
 # Structural margin contract
