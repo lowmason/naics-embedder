@@ -184,11 +184,12 @@
       rename and unlink it on failure; parse the stored provenance; resolve the root and refuse
       references that leave it; check `--output` first. Size: quick-fix. Done when: each is
       fixed or recorded as accepted, before Stage 7's reference sweep on Lambda.
-      → done 2026-09-26 (/deferred quick fix): all six fixed as proposed, except (2) accepted
-      in part: a write that raises removes its file, but a process killed mid-write can still
-      leave a partial record, which must be deleted by hand; `put_text_only` checks the
-      provenance before storing either file, and `decide` refuses a record whose text-only
-      fields differ from its stored provenance.
+      → done 2026-09-26 (/deferred quick fix): all six fixed, (2) only in part: a write that
+      raises removes its file, but a process killed mid-write can still leave a partial
+      record, to be deleted by hand (accepted). Beyond the proposals: (1) runs before any arm
+      is checked; (4) stores nothing until the provenance checks out, and `decide` refuses a
+      record whose text-only fields differ from its stored provenance, naming them; (5) also
+      refuses a symlink inside the store that leads out of it.
 - [ ] Review Minor, for Stage 6: (1) `regressor_scores` (src/naics_embedder/decision/scores.py)
       counts each row's predictions with `pl.len()`, not its distinct `repeat` values, so a
       duplicated repeat beside a missing one passes; the panel's own `_predict` is the only
