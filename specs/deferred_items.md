@@ -149,7 +149,7 @@
       3's group resampling; Task 6's record reports the held-out regime by feature year).
 
 ## 6-decision-rule-and-diagnostics — 2026-09-25
-- [ ] Review Important (final review, group A; deferred by the user): guards and statistic
+- [x] Review Important (final review, group A; deferred by the user): guards and statistic
       wrappers that no test exercises, each correct by reading. In
       src/naics_embedder/decision/decide.py: the repeated seed or run id refusal, the margin
       reference's pairing entry, the regressor `fingerprint` and `arm` log keys, the repeated
@@ -162,7 +162,9 @@
       assert per guard in tests/unit/test_decision.py, test_decision_sweep.py,
       test_decision_resampling.py and test_diagnostics.py. Size: quick-fix. Done when:
       deleting any listed guard fails a test, before Stage 7's first real `tools decide`.
-- [ ] Review Minor (final review, group B): the decision records and the artifact store trust
+      → done 2026-09-26 (/deferred quick fix): each guard's test fails when the guard is
+      deleted, 13 of 13 checked; the MAP and NDCG values are worked by hand on a five-code tree.
+- [x] Review Minor (final review, group B): the decision records and the artifact store trust
       their inputs more than a Lambda run can. (1) `decide` never checks that the margins
       record covers every panel with its `DECISION_STATISTIC`, and `MarginRecord.margin` raises
       a bare StopIteration for a missing panel (src/naics_embedder/decision/decide.py,
@@ -182,6 +184,11 @@
       rename and unlink it on failure; parse the stored provenance; resolve the root and refuse
       references that leave it; check `--output` first. Size: quick-fix. Done when: each is
       fixed or recorded as accepted, before Stage 7's reference sweep on Lambda.
+      → done 2026-09-26 (/deferred quick fix): all six fixed as proposed, except (2) accepted
+      in part: a write that raises removes its file, but a process killed mid-write can still
+      leave a partial record, which must be deleted by hand; `put_text_only` checks the
+      provenance before storing either file, and `decide` refuses a record whose text-only
+      fields differ from its stored provenance.
 - [ ] Review Minor, for Stage 6: (1) `regressor_scores` (src/naics_embedder/decision/scores.py)
       counts each row's predictions with `pl.len()`, not its distinct `repeat` values, so a
       duplicated repeat beside a missing one passes; the panel's own `_predict` is the only
