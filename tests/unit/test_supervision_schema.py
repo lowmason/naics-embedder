@@ -48,7 +48,7 @@ def test_manifest_round_trip_preserves_contract_identity(tmp_path):
 
     restored = SupervisionManifest.model_validate_json(path.read_text())
 
-    assert restored.contract_version == 'stage3-supervision-v1'
+    assert restored.contract_version == 'stage3-supervision-v2'
     assert restored.codebook_order == ('111111', '111112', '111113')
     assert restored.artifacts['codebook'].files[0].sha256 == 'a' * 64
     assert SemanticTarget.UNRELATED.value == 'unrelated'

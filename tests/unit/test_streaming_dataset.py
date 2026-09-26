@@ -924,7 +924,7 @@ class TestPositiveSampler:
 )
 def test_repaired_streaming_cache_rejects_missing_identity(missing):
     envelope = {
-        'contract_version': 'stage3-supervision-v1',
+        'contract_version': 'stage3-supervision-v2',
         'bundle_id': 'bundle-a',
         'codebook_fingerprint': 'a' * 64,
         'cache_schema_version': 'streaming-candidates-v1',
@@ -935,14 +935,14 @@ def test_repaired_streaming_cache_rejects_missing_identity(missing):
     with pytest.raises(ValueError, match=missing):
         _validate_streaming_cache_envelope(
             envelope,
-            expected_contract='stage3-supervision-v1',
+            expected_contract='stage3-supervision-v2',
             expected_bundle_id='bundle-a',
             expected_codebook_fingerprint='a' * 64,
         )
 
 def test_repaired_streaming_cache_rejects_another_bundle():
     envelope = {
-        'contract_version': 'stage3-supervision-v1',
+        'contract_version': 'stage3-supervision-v2',
         'bundle_id': 'bundle-b',
         'codebook_fingerprint': 'a' * 64,
         'cache_schema_version': 'streaming-candidates-v1',
@@ -952,7 +952,7 @@ def test_repaired_streaming_cache_rejects_another_bundle():
     with pytest.raises(ValueError, match='bundle_id mismatch'):
         _validate_streaming_cache_envelope(
             envelope,
-            expected_contract='stage3-supervision-v1',
+            expected_contract='stage3-supervision-v2',
             expected_bundle_id='bundle-a',
             expected_codebook_fingerprint='a' * 64,
         )
@@ -960,7 +960,7 @@ def test_repaired_streaming_cache_rejects_another_bundle():
 def test_repaired_streaming_cache_returns_a_valid_payload():
     rows = [{'anchor_code_id': 0}]
     envelope = {
-        'contract_version': 'stage3-supervision-v1',
+        'contract_version': 'stage3-supervision-v2',
         'bundle_id': 'bundle-a',
         'codebook_fingerprint': 'a' * 64,
         'cache_schema_version': 'streaming-candidates-v1',
@@ -969,7 +969,7 @@ def test_repaired_streaming_cache_returns_a_valid_payload():
 
     assert _validate_streaming_cache_envelope(
         envelope,
-        expected_contract='stage3-supervision-v1',
+        expected_contract='stage3-supervision-v2',
         expected_bundle_id='bundle-a',
         expected_codebook_fingerprint='a' * 64,
     ) is rows
@@ -980,7 +980,7 @@ def test_repaired_streaming_cache_rejects_unversioned_payloads():
             [{
                 'anchor_idx': 0
             }],
-            expected_contract='stage3-supervision-v1',
+            expected_contract='stage3-supervision-v2',
             expected_bundle_id='bundle-a',
             expected_codebook_fingerprint='a' * 64,
         )

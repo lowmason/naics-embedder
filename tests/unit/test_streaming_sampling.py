@@ -17,16 +17,24 @@ from naics_embedder.text_model.dataloader.streaming_dataset import (
 )
 from naics_embedder.utils.config import SansStaticConfig
 
-def _index(size: int, anchor_code_id: int, exclusion_code_ids: tuple[int, ...]) -> SupervisionIndex:
+def _index(
+    size: int, anchor_code_id: int, positive_code_id: int, exclusion_code_ids: tuple[int, ...]
+) -> SupervisionIndex:
     directed = torch.zeros((size, size), dtype=torch.bool)
     for code_id in exclusion_code_ids:
         directed[anchor_code_id, code_id] = True
+    # Every pair is cross-sector (D* 10) except the anchor and its sibling positive (D* 2)
+    distance = torch.full((size, size), 10.0)
+    relation = torch.full((size, size), 99, dtype=torch.int16)
+    for code_i, code_j in ((anchor_code_id, positive_code_id), (positive_code_id, anchor_code_id)):
+        distance[code_i, code_j] = 2.0
+        relation[code_i, code_j] = 2
     return SupervisionIndex(
         code_to_id={str(code_id): code_id
                     for code_id in range(size)},
         id_to_code=tuple(str(code_id) for code_id in range(size)),
-        structural_distance=torch.full((size, size), 99.0),
-        structural_relation_id=torch.full((size, size), 99, dtype=torch.int16),
+        structural_distance=distance,
+        structural_relation_id=relation,
         directed_exclusion=directed,
     )
 
@@ -48,7 +56,7 @@ def pool_builder():
             *raw_candidate_code_ids,
             *exclusion_code_ids,
         ) + 4
-        index = _index(size, anchor_code_id, exclusion_code_ids)
+        index = _index(size, anchor_code_id, positive_code_id, exclusion_code_ids)
         raw = [
             {
                 'negative_code_id': code_id,

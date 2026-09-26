@@ -56,16 +56,16 @@ def structural_frames_fixture() -> tuple[pl.DataFrame, pl.DataFrame]:
     distances = pl.DataFrame(
         pair_columns
         | {'structural_distance': [
-            0.5,
             2.0,
-            99.0,
-            99.0,
-            3.0,
-            99.0,
-            99.0,
-            99.0,
-            99.0,
-            99.0,
+            2.0,
+            10.0,
+            10.0,
+            2.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
         ]}
     )
     relations = pl.DataFrame(
@@ -119,16 +119,16 @@ def pair_facts_fixture() -> pl.DataFrame:
                 '333333',
             ],
             'structural_distance': [
-                0.5,
                 2.0,
-                99.0,
-                99.0,
-                3.0,
-                99.0,
-                99.0,
-                99.0,
-                99.0,
-                99.0,
+                2.0,
+                10.0,
+                10.0,
+                2.0,
+                10.0,
+                10.0,
+                10.0,
+                10.0,
+                10.0,
             ],
             'structural_relation_id': [1, 2, 99, 99, 3, 99, 99, 99, 99, 99],
             'structural_relation_name': [
@@ -170,7 +170,7 @@ def generated_bundle(tmp_path, descriptions_fixture, pair_facts_fixture):
 def validated_bundle(generated_bundle):
     return load_validated_bundle(
         generated_bundle,
-        expected_contract='stage3-supervision-v1',
+        expected_contract='stage3-supervision-v2',
     )
 
 # -------------------------------------------------------------------------------------------------

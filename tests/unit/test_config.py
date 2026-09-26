@@ -506,9 +506,9 @@ class TestSupervisionBuildConfig:
 
         # The shipped build carries the index roles; the default (for fixtures) does not
         assert cfg == SupervisionBuildConfig(index_roles_parquet='./data/naics_index_roles.parquet')
-        assert cfg.contract_version == 'stage3-supervision-v1'
+        assert cfg.contract_version == 'stage3-supervision-v2'
         assert cfg.relation_id['cross_sector'] == 99
-        assert cfg.output_root == './data/supervision/stage3-supervision-v1'
+        assert cfg.output_root == './data/supervision/stage3-supervision-v2'
 
     def test_rejects_other_contract_versions(self):
         with pytest.raises(ValidationError):
@@ -641,7 +641,7 @@ def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
 
     assert cfg.supervision.mode == 'repaired'
     assert cfg.supervision.manifest_path is None
-    assert cfg.supervision.contract_version == 'stage3-supervision-v1'
+    assert cfg.supervision.contract_version == 'stage3-supervision-v2'
     assert cfg.loss.structural_preference == StructuralPreferenceConfig()
     assert cfg.loss.rank_order_weight is None
     assert cfg.data_loader.streaming.phase1_exclusion_weight is None

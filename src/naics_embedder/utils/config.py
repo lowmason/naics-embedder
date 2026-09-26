@@ -392,8 +392,8 @@ class SupervisionBuildConfig(BaseModel):
             'them as its optional index_roles member'
         ),
     )
-    output_root: str = './data/supervision/stage3-supervision-v1'
-    contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
+    output_root: str = './data/supervision/stage3-supervision-v2'
+    contract_version: Literal['stage3-supervision-v2'] = CONTRACT_VERSION
     naics_vintage: int = 2022
     relation_id: Dict[str, int] = Field(
         default_factory=lambda: {
@@ -592,7 +592,7 @@ class SupervisionRuntimeConfig(BaseModel):
             'before repaired training'
         ),
     )
-    contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
+    contract_version: Literal['stage3-supervision-v2'] = CONTRACT_VERSION
 
 class CheckpointLoadMode(str, Enum):
     '''How a training run may use a checkpoint.'''

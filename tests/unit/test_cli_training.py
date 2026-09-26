@@ -28,7 +28,7 @@ def training_env(monkeypatch, tmp_path):
     context.exact_resume_calls = []
     context.bundle = SimpleNamespace(
         manifest=SimpleNamespace(
-            contract_version='stage3-supervision-v1',
+            contract_version='stage3-supervision-v2',
             bundle_id='bundle-a',
             codebook_fingerprint='a' * 64,
         )

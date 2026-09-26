@@ -28,19 +28,19 @@ def _margins(negative_distance, negative_relation, positive_distance, positive_r
 @pytest.mark.parametrize(
     ('negative', 'positive', 'expected'),
     [
-        # Cross-sector negatives always receive the fixed legacy margins.
-        ((99.0, 99), (0.5, 1), (15.0, 10.0)),
-        # The relation label marks a cross-sector negative, whatever its distance.
-        ((10.0, 99), (2.0, 2), (15.0, 10.0)),
+        # A cross-sector negative, marked by its relation label, receives the fixed relation
+        # margin; its distance margin is the D* difference.
+        ((10.0, 99), (2.0, 2), (15.0, 8.0)),
+        ((6.0, 99), (1.0, 1), (15.0, 5.0)),
         # Farther relation at an equal distance receives the fixed equal-distance margin.
         ((2.0, 3), (2.0, 2), (1.0, 0.3333)),
-        # The -0.5 lineal adjustment receives its fixed margin when the relation is farther.
-        ((1.5, 3), (2.0, 2), (1.0, 0.6667)),
+        # A lineal negative one step past a lineal positive: no half-step.
+        ((2.0, 3), (1.0, 1), (2.0, 1.0)),
         # Otherwise both margins are raw deltas.
-        ((3.0, 7), (0.5, 1), (6.0, 2.5)),
+        ((3.0, 7), (1.0, 1), (6.0, 2.0)),
     ],
 )
-def test_structural_margins_follow_the_generator_special_cases(negative, positive, expected):
+def test_structural_margins_follow_the_generator_rule(negative, positive, expected):
     relation_margin, distance_margin = _margins(*negative, *positive)
 
     assert relation_margin.item() == pytest.approx(expected[0])
@@ -49,9 +49,10 @@ def test_structural_margins_follow_the_generator_special_cases(negative, positiv
 @pytest.mark.parametrize(
     ('negative', 'positive'),
     [
-        ((0.5, 1), (1.5, 3)),  # the anchor's parent while the positive is its grandparent
+        ((1.0, 1), (2.0, 3)),  # the anchor's parent while the positive is its grandparent
         ((2.0, 2), (2.0, 2)),  # another sibling of a sibling positive: no relation margin
-        ((1.5, 3), (3.0, 7)),  # structurally closer by both measures
+        ((2.0, 3), (3.0, 7)),  # structurally closer by both measures
+        ((6.0, 99), (8.0, 7)),  # a cross-sector negative closer in D* than the positive
     ],
 )
 def test_structurally_closer_or_equal_negatives_are_ineligible(negative, positive):

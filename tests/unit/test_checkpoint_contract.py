@@ -80,7 +80,7 @@ def test_contract_for_bundle_reads_manifest_identity(validated_bundle):
 
     assert contract.supervision_mode == 'repaired'
     assert contract.bundle_id == 'bundle-a'
-    assert contract.contract_version == 'stage3-supervision-v1'
+    assert contract.contract_version == 'stage3-supervision-v2'
     assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
 
 def test_weights_only_loads_allowlisted_encoder_and_resets_training_state(

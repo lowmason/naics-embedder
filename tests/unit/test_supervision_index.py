@@ -25,7 +25,7 @@ def test_loader_rejects_mixed_bundle_metadata(generated_bundle):
     with pytest.raises(ValueError, match='pair_facts.*bundle-a.*bundle-b'):
         load_validated_bundle(
             generated_bundle,
-            expected_contract='stage3-supervision-v1',
+            expected_contract='stage3-supervision-v2',
         )
 
 def test_join_maps_canonical_directions_into_anchor_view(validated_bundle):
@@ -42,7 +42,7 @@ def test_join_maps_canonical_directions_into_anchor_view(validated_bundle):
         joined.is_explicit_exclusion,
         joined.anchor_excludes_candidate | joined.candidate_excludes_anchor,
     )
-    assert joined.structural_distance.tolist() == [[2.0], [99.0]]
+    assert joined.structural_distance.tolist() == [[2.0], [10.0]]
 
 def test_join_rejects_unknown_ids_with_anchor_context(validated_bundle):
     index = SupervisionIndex.from_bundle(validated_bundle)
@@ -96,6 +96,6 @@ def test_index_matrices_match_the_pair_facts(validated_bundle):
 
     assert index.id_to_code == ('111111', '111112', '111113', '222222', '333333')
     assert index.code_to_id['222222'] == 3
-    assert index.structural_distance[0, 1] == index.structural_distance[1, 0] == 0.5
+    assert index.structural_distance[0, 1] == index.structural_distance[1, 0] == 2.0
     assert index.structural_relation_id[1, 2] == index.structural_relation_id[2, 1] == 3
     assert torch.diagonal(index.structural_distance).eq(0).all()

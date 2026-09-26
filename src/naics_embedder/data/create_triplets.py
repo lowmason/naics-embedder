@@ -19,12 +19,9 @@ import numpy as np
 import polars as pl
 
 from naics_embedder.supervision.schema import (
-    CROSS_SECTOR_DISTANCE_MARGIN,
     CROSS_SECTOR_RELATION_ID,
     CROSS_SECTOR_RELATION_MARGIN,
     EQUAL_DISTANCE_MARGIN,
-    LINEAL_ADJUSTED_DISTANCE_MARGIN,
-    LINEAL_DISTANCE_DELTA,
     SamplingRole,
     SemanticSource,
     SemanticTarget,
@@ -40,8 +37,8 @@ CROSS_SECTOR_NEGATIVE_CAP = 100
 CROSS_SECTOR_CAP_SEED = 0
 MAX_PAIRS_PER_BATCH = 4_000
 
-# Legacy margin weights, preserved for graph-model compatibility. The structural margin special
-# cases live in supervision.schema so the runtime eligibility rule shares them.
+# Legacy margin weights, preserved for graph-model compatibility. The structural margin constants
+# live in supervision.schema so the runtime eligibility rule shares them.
 RELATION_MARGIN_WEIGHT = 0.3333
 DISTANCE_MARGIN_WEIGHT = 0.6667
 
@@ -132,11 +129,11 @@ def _negative_candidates(anchor_view: pl.DataFrame) -> pl.DataFrame:
 
 def _structural_margins(frame: pl.DataFrame) -> pl.DataFrame:
     '''
-    Add relation/distance margins with the legacy special cases and keep ordered triplets.
+    Add relation/distance margins and keep ordered triplets.
 
-    Cross-sector negatives receive fixed margins; equal distances and the -0.5 lineal adjustment
-    receive fixed distance margins when the relation margin is positive. Triplets whose negative is
-    not structurally farther than the positive are dropped.
+    The distance margin is the difference in D*, except that an equal distance receives a fixed
+    margin when the relation margin is positive. Cross-sector negatives receive a fixed relation
+    margin. Triplets whose negative is not structurally farther than the positive are dropped.
     '''
 
     # yapf: disable
@@ -154,9 +151,7 @@ def _structural_margins(frame: pl.DataFrame) -> pl.DataFrame:
                                                    ).otherwise(relation_delta),
         distance_margin=pl.when(relation_delta.gt(0) & distance_delta.eq(0.0)).then(
             pl.lit(EQUAL_DISTANCE_MARGIN)
-        ).when(relation_delta.gt(0) & distance_delta.eq(LINEAL_DISTANCE_DELTA)).then(
-            pl.lit(LINEAL_ADJUSTED_DISTANCE_MARGIN)
-        ).when(cross_sector).then(pl.lit(CROSS_SECTOR_DISTANCE_MARGIN)).otherwise(distance_delta),
+        ).otherwise(distance_delta),
     ).filter(
         pl.col('relation_margin').gt(0),
         pl.col('distance_margin').gt(0),

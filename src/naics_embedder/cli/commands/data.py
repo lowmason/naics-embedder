@@ -250,7 +250,7 @@ def supervision():
         ``data/naics_descriptions.parquet`` - From the preprocess stage.
 
     Output:
-        ``data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json`` and its artifacts.
+        ``data/supervision/stage3-supervision-v2/<bundle-id>/manifest.json`` and its artifacts.
         The manifest path is printed; configure it as ``supervision.manifest_path``.
 
     Example:

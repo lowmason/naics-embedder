@@ -8,7 +8,7 @@ seed: 42
 # structural facts, exclusions, and training pairs.
 supervision:
   mode: repaired  # Options: repaired, legacy_containment (explicit, tagged, never exact-resumes)
-  contract_version: stage3-supervision-v1
+  contract_version: stage3-supervision-v2
   manifest_path: null  # data supervision prints the exact immutable path to set before training
 
 # Curriculum scheduler configuration (Structure-Aware Dynamic Curriculum)

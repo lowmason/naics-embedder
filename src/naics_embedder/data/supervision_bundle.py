@@ -383,6 +383,10 @@ def validate_pair_facts(
         'pair_coverage': True,
         'nonzero_structural_distance': True,
         'no_structural_sentinel': True,
+        'distance_is_d_star': True,
+        'cross_sector_distance_formula': True,
+        'cross_sector_relation_label': True,
+        'distance_triangle_inequality': True,
         'exclusion_derivation': True,
         'exclusions_match_descriptions': True,
     }

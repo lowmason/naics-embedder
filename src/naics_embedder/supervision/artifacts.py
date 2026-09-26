@@ -22,11 +22,13 @@ import pyarrow.parquet as pq
 
 from naics_embedder.supervision.schema import (
     CONTRACT_VERSION,
+    CROSS_SECTOR_RELATION_ID,
     ArtifactFile,
     IndexRole,
     SemanticTarget,
     SupervisionManifest,
 )
+from naics_embedder.utils.naics_hierarchy import code_lineage, tree_distance_matrix
 
 # -------------------------------------------------------------------------------------------------
 # Contract metadata keys
@@ -193,7 +195,7 @@ def codebook_fingerprint(codebook: pl.DataFrame) -> str:
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 def validate_structural_pairs(structural: pl.DataFrame, codebook: pl.DataFrame) -> None:
-    '''Fail closed on identity, uniqueness, orientation, coverage, or sentinel violations.'''
+    '''Fail closed on identity, uniqueness, orientation, coverage, sentinel, or D* violations.'''
 
     identities = codebook.select(code_id=pl.col('code_id'), expected=pl.col('code'))
     for side in ('i', 'j'):
@@ -245,6 +247,64 @@ def validate_structural_pairs(structural: pl.DataFrame, codebook: pl.DataFrame) 
         | pl.col('structural_relation_name').eq('excluded')
     ).height:
         raise ValueError('structural relation fields contain an exclusion sentinel')
+    validate_tree_distances(structural)
+
+def validate_tree_distances(structural: pl.DataFrame) -> None:
+    '''
+    Fail closed unless every structural distance is D* (Req 7).
+
+    D* is an integer, never the retired cross-sector constant 99. A pair across sectors, whose
+    lowest common ancestor is the virtual root, has λ(i) + λ(j) − 2, where λ is the number of
+    digits, and carries the ``cross_sector`` relation label, which no other pair carries. The
+    stored distances satisfy the triangle inequality over every ordered triple of codes, and each
+    equals :func:`~naics_embedder.utils.naics_hierarchy.tree_distance_matrix` on its pair: the path
+    length through the pair's lowest common ancestor.
+    '''
+
+    distance = structural.get_column('structural_distance').to_numpy().astype(np.float64)
+    if (distance != np.round(distance)).any():
+        raise ValueError('structural distances must be integers: D* has no half-step')
+    if (distance == 99.0).any():
+        raise ValueError('structural distances contain the retired cross-sector constant 99')
+
+    codes = sorted(
+        set(structural.get_column('code_i').to_list())
+        | set(structural.get_column('code_j').to_list())
+    )
+    position = {code: row for row, code in enumerate(codes)}
+    rows, columns = (
+        structural.get_column(name).replace_strict(position, return_dtype=pl.Int64).to_numpy()
+        for name in ('code_i', 'code_j')
+    )
+
+    sectors = np.array([code_lineage(code)[0] for code in codes])
+    digits = np.array([len(code) for code in codes])
+    across = sectors[rows] != sectors[columns]
+    if not np.array_equal(distance[across], (digits[rows] + digits[columns] - 2)[across]):
+        raise ValueError('cross-sector distances must equal λ(i) + λ(j) − 2')
+    labelled = structural.get_column('structural_relation_id').to_numpy() == CROSS_SECTOR_RELATION_ID
+    if not np.array_equal(labelled, across):
+        raise ValueError(
+            'the cross_sector relation label must mark exactly the pairs across sectors: '
+            f'{int((labelled != across).sum()):,} pairs disagree'
+        )
+
+    matrix = np.zeros((len(codes), len(codes)), dtype=np.int16)
+    matrix[rows, columns] = distance
+    matrix[columns, rows] = distance
+    for middle in range(len(codes)):
+        if (matrix[:, middle, None] + matrix[None, middle, :] < matrix).any():
+            raise ValueError(f'D* violates the triangle inequality through {codes[middle]}')
+
+    expected = tree_distance_matrix(codes)[rows, columns]
+    if not np.array_equal(distance, expected):
+        wrong = np.flatnonzero(distance != expected)
+        first = wrong[0]
+        raise ValueError(
+            f'structural distance differs from D* on {wrong.size:,} pairs, e.g. '
+            f'{codes[rows[first]]}/{codes[columns[first]]}: {distance[first]:g} != '
+            f'{expected[first]}'
+        )
 
 def validate_exclusion_derivation(pair_facts: pl.DataFrame) -> None:
     '''The symmetric exclusion flag must equal the OR of both directional flags.'''

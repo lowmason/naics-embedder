@@ -52,7 +52,7 @@ def cross_prefix_pair_facts() -> pl.DataFrame:
             'code_j_id': [1, 2, 3, 2, 3, 3],
             'code_i': ['111111', '111111', '111111', '111112', '111112', '222221'],
             'code_j': ['111112', '222221', '222222', '222221', '222222', '222222'],
-            'structural_distance': [2.0, 99.0, 99.0, 99.0, 99.0, 2.0],
+            'structural_distance': [2.0, 10.0, 10.0, 10.0, 10.0, 2.0],
             'structural_relation_id': [2, 99, 99, 99, 99, 2],
             'structural_relation_name': [
                 'sibling',
@@ -98,7 +98,7 @@ def test_reversed_rows_map_exclusion_directions_into_the_anchor_view(cross_prefi
     )
     assert reverse['negative_is_explicit_exclusion'] is True
     assert reverse['negative_semantic_target'] == 'unrelated'
-    assert reverse['negative_structural_distance'] == 99.0
+    assert reverse['negative_structural_distance'] == 10.0
 
 @pytest.fixture
 def labelled_cross_sector_pair_facts() -> pl.DataFrame:
@@ -142,7 +142,9 @@ def test_cross_sector_pairs_are_read_from_their_relation_label(labelled_cross_se
     assert positives.select('anchor_code_id', 'positive_code_id').rows() == [(0, 1), (2, 3)]
     assert _triples(pairs) == [(0, 1, 2), (0, 1, 3)]
     assert pairs.get_column('relation_margin').to_list() == [15.0, 15.0]
-    assert pairs.get_column('distance_margin').to_list() == [10.0, 10.0]
+    # The distance margin is the D* difference: '22' is 6 from the anchor, '222222' 10, and the
+    # positive 2
+    assert pairs.get_column('distance_margin').to_list() == [4.0, 8.0]
     assert pairs.get_column('unrelated').to_list() == [True, True]
     assert capped.height == 1
 
@@ -165,7 +167,7 @@ def wide_cross_sector_pair_facts() -> pl.DataFrame:
                     'code_j_id': j,
                     'code_i': codes[i],
                     'code_j': codes[j],
-                    'structural_distance': 2.0 if siblings else 99.0,
+                    'structural_distance': 2.0 if siblings else 10.0,
                     'structural_relation_id': 2 if siblings else 99,
                     'structural_relation_name': 'sibling' if siblings else 'cross_sector',
                     'code_i_excludes_code_j': (i, j) == (0, 4),
@@ -200,13 +202,13 @@ def test_cross_sector_cap_keeps_a_deterministic_subset_and_exempts_exclusions(
 # Structural margins (legacy consumers such as HGCN read these values)
 # -------------------------------------------------------------------------------------------------
 
-def test_structural_margins_preserve_the_legacy_special_cases():
+def test_structural_margins_read_d_star_differences():
     frame = pl.DataFrame(
         {
-            'positive_structural_relation_id': [7, 2, 1, 1, 7],
-            'positive_structural_distance': [4.0, 2.0, 0.5, 0.5, 4.0],
-            'negative_structural_relation_id': [8, 3, 99, 2, 2],
-            'negative_structural_distance': [4.0, 1.5, 99.0, 2.0, 2.0],
+            'positive_structural_relation_id': [7, 1, 1, 2, 7, 7],
+            'positive_structural_distance': [4.0, 1.0, 1.0, 2.0, 4.0, 8.0],
+            'negative_structural_relation_id': [8, 3, 99, 5, 2, 99],
+            'negative_structural_distance': [4.0, 2.0, 6.0, 3.0, 2.0, 6.0],
         },
         schema_overrides={
             'positive_structural_relation_id': pl.Int16,
@@ -218,18 +220,18 @@ def test_structural_margins_preserve_the_legacy_special_cases():
 
     margins = _structural_margins(frame)
 
-    # Rows: equal distance with a farther relation, a -0.5 lineal adjustment, a cross-sector
-    # negative, an ordinary farther negative; the structurally closer negative is dropped.
-    assert margins.get_column('relation_margin').to_list() == pytest.approx([1.0, 1.0, 15.0, 1.0])
-    assert margins.get_column('distance_margin').to_list() == pytest.approx(
-        [0.3333, 0.6667, 10.0, 1.5]
-    )
+    # Rows: an equal D* with a farther relation (the one fixed distance margin), a lineal negative
+    # one step past a lineal positive, a cross-sector negative, an ordinary farther negative. The
+    # structurally closer negative is dropped, and so is a cross-sector negative that is closer in
+    # D* than the positive.
+    assert margins.get_column('relation_margin').to_list() == pytest.approx([1.0, 2.0, 15.0, 3.0])
+    assert margins.get_column('distance_margin').to_list() == pytest.approx([0.3333, 1.0, 5.0, 1.0])
     assert margins.get_column('margin').to_list() == pytest.approx(
         [
             1.0 / (1.0 * 0.3333 + 0.3333 * 0.6667),
-            1.0 / (1.0 * 0.3333 + 0.6667 * 0.6667),
-            1.0 / (15.0 * 0.3333 + 10.0 * 0.6667),
-            1.0 / (1.0 * 0.3333 + 1.5 * 0.6667),
+            1.0 / (2.0 * 0.3333 + 1.0 * 0.6667),
+            1.0 / (15.0 * 0.3333 + 5.0 * 0.6667),
+            1.0 / (3.0 * 0.3333 + 1.0 * 0.6667),
         ],
         rel=1e-5,
     )

@@ -69,8 +69,8 @@ def test_matrices_reconcile_with_pair_facts_and_codebook_order(
     distance_matrix = distance_matrix_from_pair_facts(facts, codebook)
     relation_matrix = relation_matrix_from_pair_facts(facts, codebook)
 
-    assert distance_matrix.row(0)[1] == 0.5
-    assert distance_matrix.row(1)[0] == 0.5
+    assert distance_matrix.row(0)[1] == 2.0
+    assert distance_matrix.row(1)[0] == 2.0
     assert relation_matrix.row(0)[1] == 1
     assert relation_matrix.row(1)[0] == 1
     assert codebook_fingerprint(codebook) == codebook_fingerprint(codebook.clone())
@@ -142,7 +142,7 @@ def depth_first_frames() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
         'code_i': ['311', '311', '311', '3111', '3111', '3112'],
         'code_j': ['3111', '31111', '3112', '31111', '3112', '31111'],
     }
-    distances = pl.DataFrame(pairs | {'structural_distance': [0.5, 1.5, 0.5, 0.5, 2.0, 3.0]})
+    distances = pl.DataFrame(pairs | {'structural_distance': [1.0, 2.0, 1.0, 1.0, 2.0, 3.0]})
     relations = pl.DataFrame(
         pairs
         | {
@@ -200,15 +200,15 @@ def test_pair_facts_reject_a_deeper_first_row(depth_first_frames):
 def test_pair_facts_reject_a_reversed_duplicate_pair(depth_first_frames):
     descriptions, distances, relations = depth_first_frames
     reversed_key = {'idx_i': [3], 'idx_j': [1], 'code_i': ['3112'], 'code_j': ['3111']}
-    distances = pl.concat([distances, pl.DataFrame(reversed_key | {'structural_distance': [99.0]})])
+    distances = pl.concat([distances, pl.DataFrame(reversed_key | {'structural_distance': [2.0]})])
     relations = pl.concat(
         [
             relations,
             pl.DataFrame(
                 reversed_key
                 | {
-                    'structural_relation_id': [99],
-                    'structural_relation_name': ['cross_sector'],
+                    'structural_relation_id': [2],
+                    'structural_relation_name': ['sibling'],
                 }
             ),
         ]
@@ -234,6 +234,59 @@ def test_pair_facts_reject_ids_that_disagree_with_the_codebook(depth_first_frame
 
     with pytest.raises(ValueError, match='codebook'):
         build_pair_facts(distances, relations, mislabeled, build_codebook(mislabeled))
+
+# -------------------------------------------------------------------------------------------------
+# D* (Req 7): every stored distance is checked
+# -------------------------------------------------------------------------------------------------
+
+def _set_pair(frame: pl.DataFrame, code_i: str, code_j: str, column: str, value) -> pl.DataFrame:
+    chosen = pl.col('code_i').eq(code_i) & pl.col('code_j').eq(code_j)
+    return frame.with_columns(
+        pl.when(chosen).then(pl.lit(value)).otherwise(pl.col(column)).alias(column)
+    )
+
+@pytest.mark.parametrize(
+    ('code_i', 'code_j', 'value', 'message'),
+    [
+        # D* has no half-step for a lineal pair
+        ('311', '3111', 0.5, 'no half-step'),
+        # 3112 and 31111 are 3 apart; at 4 they would be farther than through 311 (1 + 2)
+        ('3112', '31111', 4.0, 'triangle inequality'),
+        # A parent and its child are 1 apart; 2 keeps the triangle inequality but is not D*
+        ('311', '3111', 2.0, 'differs from D\\*'),
+    ],
+)
+def test_pair_facts_reject_a_distance_that_is_not_d_star(
+    depth_first_frames, code_i, code_j, value, message
+):
+    descriptions, distances, relations = depth_first_frames
+    distances = _set_pair(distances, code_i, code_j, 'structural_distance', value)
+
+    with pytest.raises(ValueError, match=message):
+        build_pair_facts(distances, relations, descriptions, build_codebook(descriptions))
+
+def test_pair_facts_reject_a_cross_sector_label_inside_a_sector(depth_first_frames):
+    descriptions, distances, relations = depth_first_frames
+    relations = _set_pair(relations, '3111', '3112', 'structural_relation_id', 99)
+
+    with pytest.raises(ValueError, match='cross_sector relation label'):
+        build_pair_facts(distances, relations, descriptions, build_codebook(descriptions))
+
+@pytest.mark.parametrize(
+    ('value', 'message'),
+    [(99.0, 'retired cross-sector constant 99'), (9.0, 'cross-sector distances must equal')],
+)
+def test_pair_facts_reject_a_cross_sector_distance_off_the_formula(
+    descriptions_fixture, structural_frames_fixture, value, message
+):
+    # '111111' and '222222' meet only at the virtual root: 6 + 6 - 2 = 10
+    distances, relations = structural_frames_fixture
+    distances = _set_pair(distances, '111111', '222222', 'structural_distance', value)
+
+    with pytest.raises(ValueError, match=message):
+        build_pair_facts(
+            distances, relations, descriptions_fixture, build_codebook(descriptions_fixture)
+        )
 
 # -------------------------------------------------------------------------------------------------
 # Immutable bundle publication
@@ -346,6 +399,13 @@ def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
     assert artifacts['training_pairs']['row_count'] == 5
     assert artifacts['training_pairs']['exclusion_count'] == 2
     assert all(manifest['validation_results'].values())
+    for check in (
+        'distance_is_d_star',
+        'cross_sector_distance_formula',
+        'cross_sector_relation_label',
+        'distance_triangle_inequality',
+    ):
+        assert manifest['validation_results'][check] is True
     for record in artifacts.values():
         assert sum(member['row_count'] for member in record['files']) == record['row_count']
         for member in record['files']:
@@ -420,8 +480,8 @@ def test_loader_accepts_a_generated_bundle(generated_bundle):
         bundle.artifact_path('missing_artifact')
 
 def test_loader_rejects_another_contract_version(generated_bundle):
-    with pytest.raises(ValueError, match='expected supervision contract stage3-supervision-v2'):
-        load_validated_bundle(generated_bundle, expected_contract='stage3-supervision-v2')
+    with pytest.raises(ValueError, match='expected supervision contract stage3-supervision-v1'):
+        load_validated_bundle(generated_bundle, expected_contract='stage3-supervision-v1')
 
 def test_loader_rejects_bytes_that_do_not_match_the_manifest_hash(generated_bundle):
     manifest = json.loads(generated_bundle.read_text())
@@ -461,6 +521,20 @@ def test_loader_rejects_a_rehashed_structural_sentinel(generated_bundle):
     )
 
     with pytest.raises(ValueError, match='pair_facts.*bundle-a.*structural distance zero'):
+        load_validated_bundle(generated_bundle)
+
+def test_loader_rejects_a_rehashed_legacy_cross_sector_distance(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'pair_facts',
+        lambda frame: frame.with_columns(
+            structural_distance=pl.when(pl.col('structural_relation_id').eq(99)).then(
+                pl.lit(99.0, dtype=pl.Float32)
+            ).otherwise(pl.col('structural_distance'))
+        ),
+    )
+
+    with pytest.raises(ValueError, match='pair_facts.*bundle-a.*retired cross-sector constant'):
         load_validated_bundle(generated_bundle)
 
 def test_loader_rejects_a_rehashed_matrix_that_drifts_from_pair_facts(generated_bundle):

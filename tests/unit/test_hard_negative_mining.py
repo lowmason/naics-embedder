@@ -63,7 +63,9 @@ def test_gathered_entity_is_rejoined_for_each_local_anchor(validated_bundle):
         valid_mask=active_valid,
     )
 
-    assert joined.structural_distance.tolist() == [[2.0], [3.0]]
+    # Both anchors are siblings of code 2 (D* 2), under different relation labels
+    assert joined.structural_distance.tolist() == [[2.0], [2.0]]
+    assert joined.structural_relation_id.tolist() == [[2], [3]]
     assert joined.is_explicit_exclusion.tolist() == [[True], [False]]
 
 # -------------------------------------------------------------------------------------------------
@@ -175,7 +177,7 @@ def _host_batch(pools: list[list[int]], anchor: int = 0, positive: int = 1) -> d
         'selection_k': 2,
         'anchor_code_id': torch.tensor([anchor] * len(pools)),
         'positive_code_id': torch.tensor([positive] * len(pools)),
-        'positive_structural_distance': torch.tensor([0.5] * len(pools)),
+        'positive_structural_distance': torch.tensor([2.0] * len(pools)),
         'positive_structural_relation_id': torch.tensor([1] * len(pools), dtype=torch.int16),
         'candidate_code_id': torch.tensor([pool + [-1] * (width - len(pool)) for pool in pools]),
         'candidate_valid_mask': torch.tensor(
@@ -240,13 +242,16 @@ def test_select_negative_batch_keeps_every_field_on_one_identity(validated_bundl
     )
     expected_distance = index.structural_distance[0][selected.code_id]
     assert torch.equal(selected.structural_distance, expected_distance)
-    # Positive: child at distance 0.5. Code 2 is the anchor's sibling exclusion (relation 2,
-    # distance 2.0 -> raw deltas); codes 3 and 4 are cross-sector (fixed 15 / 10 margins).
-    expected_margins = {2: (1.0, 1.5), 3: (15.0, 10.0), 4: (15.0, 10.0)}
+    # Positive: code 1 at D* 2 (relation 1). Code 2 is the anchor's sibling exclusion at the same
+    # D* with a farther relation (relation margin 1, the fixed equal-distance margin); codes 3 and
+    # 4 are cross-sector (relation margin 15, distance margin 10 - 2).
+    expected_margins = {2: (1.0, 0.3333), 3: (15.0, 8.0), 4: (15.0, 8.0)}
     for row in range(selected.code_id.shape[0]):
         for slot, code in enumerate(selected.code_id[row].tolist()):
             assert selected.relation_margin[row, slot].item() == expected_margins[code][0]
-            assert selected.distance_margin[row, slot].item() == expected_margins[code][1]
+            assert selected.distance_margin[row, slot].item() == pytest.approx(
+                expected_margins[code][1]
+            )
     assert len(host.health) == 1
 
 # Production-shaped hierarchy (tests/fixtures/supervision.py HIERARCHY_CODES): code IDs follow

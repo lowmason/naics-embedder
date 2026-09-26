@@ -202,7 +202,7 @@ def test_forced_reorder_preserves_uid_across_every_loss_field(
 
     assert spy.contrastive_uids == spy.structural_uids
     assert spy.code_ids == [4, 2, 3]
-    assert spy.structural_distances == [99.0, 2.0, 99.0]
+    assert spy.structural_distances == [10.0, 2.0, 10.0]
     assert spy.exclusion_flags == [False, True, False]
     # The stub computes gate probabilities in float32, so compare approximately.
     assert spy.router_first_column == pytest.approx([0.3, 0.1, 0.2])

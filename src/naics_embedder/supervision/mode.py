@@ -28,7 +28,7 @@ class SupervisionModePolicy:
                 enable_structural_losses=True,
                 enable_candidate_reordering=True,
                 enable_pseudo_related=True,
-                checkpoint_tag='stage3-supervision-v1',
+                checkpoint_tag='stage3-supervision-v2',
             )
         if name == 'legacy_containment':
             return cls(

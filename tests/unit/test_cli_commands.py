@@ -101,7 +101,7 @@ def test_data_supervision_prints_the_manifest_path(monkeypatch, runner, tmp_path
 
     assert result.exit_code == 0
     assert str(manifest) in result.output
-    assert configs[0].contract_version == 'stage3-supervision-v1'
+    assert configs[0].contract_version == 'stage3-supervision-v2'
     assert configs[0].relation_id['cross_sector'] == 99
 
 @pytest.mark.parametrize('command', ['relations', 'distances', 'triplets'])
