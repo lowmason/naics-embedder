@@ -6,6 +6,7 @@ code as their oracle.
 '''
 
 from pathlib import Path
+from typing import List
 
 import polars as pl
 import pytest
@@ -18,6 +19,7 @@ from naics_embedder.data.supervision_bundle import (
 )
 from naics_embedder.supervision.artifacts import load_validated_bundle
 from naics_embedder.supervision.candidates import NegativeCandidateBatch
+from naics_embedder.supervision.schema import InputWindowRecord
 from naics_embedder.utils.config import SupervisionBuildConfig
 
 @pytest.fixture
@@ -207,6 +209,34 @@ REDIRECTION_ROWS = [
     ),
 ]
 
+# The five codes' texts are short, so none exceeds the window
+FIVE_CODE_INPUT_WINDOW = {
+    'backbone': 'sentence-transformers/all-MiniLM-L6-v2',
+    'window': 128,
+    'channels': {
+        'title': {
+            'present': 5,
+            'over': 0,
+            'share': 0.0
+        },
+        'description': {
+            'present': 5,
+            'over': 0,
+            'share': 0.0
+        },
+        'examples': {
+            'present': 3,
+            'over': 0,
+            'share': 0.0
+        },
+        'excluded': {
+            'present': 2,
+            'over': 0,
+            'share': 0.0
+        },
+    },
+}
+
 @pytest.fixture
 def redirections_fixture() -> pl.DataFrame:
     return pl.DataFrame(REDIRECTION_ROWS, schema=REDIRECTIONS_SCHEMA, orient='row')
@@ -250,6 +280,7 @@ def build_bundle(
             'pair_facts': pair_facts_fixture,
             'index_roles': index_roles_fixture,
             'redirections': redirections_fixture,
+            'input_window': InputWindowRecord.model_validate(FIVE_CODE_INPUT_WINDOW),
         }
         return generate_supervision_bundle_from_frames(**{**inputs, **overrides})
 
@@ -410,10 +441,21 @@ def hierarchy_descriptions_parquet(tmp_path, hierarchy_descriptions) -> str:
 def hierarchy_redirections() -> pl.DataFrame:
     return pl.DataFrame(HIERARCHY_REDIRECTION_ROWS, schema=REDIRECTIONS_SCHEMA, orient='row')
 
+def _count_words(texts: List[str]) -> List[int]:
+    return [len(text.split()) + 2 for text in texts]
+
 @pytest.fixture
-def hierarchy_manifest(tmp_path, hierarchy_descriptions_parquet, hierarchy_redirections) -> Path:
+def count_words():
+    '''Token counts for tests: one token per word, plus two for [CLS] and [SEP].'''
+
+    return _count_words
+
+@pytest.fixture
+def hierarchy_build_config(
+    tmp_path, hierarchy_descriptions_parquet, hierarchy_redirections
+) -> SupervisionBuildConfig:
     '''
-    The manifest of the bundle that the production path builds from the hierarchy.
+    The build configuration of the hierarchy's bundle, its inputs written under ``tmp_path``.
 
     The hierarchy has no index entries, so its role table is empty.
     '''
@@ -422,11 +464,15 @@ def hierarchy_manifest(tmp_path, hierarchy_descriptions_parquet, hierarchy_redir
     redirections_path = tmp_path / 'hierarchy_redirections.parquet'
     pl.DataFrame(schema=INDEX_ROLE_SCHEMA).write_parquet(roles_path)
     hierarchy_redirections.write_parquet(redirections_path)
-    return generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            index_roles_parquet=str(roles_path),
-            redirections_parquet=str(redirections_path),
-            output_root=str(tmp_path / 'bundles'),
-        )
+    return SupervisionBuildConfig(
+        descriptions_parquet=hierarchy_descriptions_parquet,
+        index_roles_parquet=str(roles_path),
+        redirections_parquet=str(redirections_path),
+        output_root=str(tmp_path / 'bundles'),
     )
+
+@pytest.fixture
+def hierarchy_manifest(hierarchy_build_config) -> Path:
+    '''The manifest of the bundle that the production path builds from the hierarchy.'''
+
+    return generate_supervision_bundle(hierarchy_build_config, count_tokens=_count_words)

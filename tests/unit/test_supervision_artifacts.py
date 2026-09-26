@@ -12,6 +12,7 @@ from naics_embedder.data.supervision_bundle import (
     codebook_fingerprint,
     distance_matrix_from_pair_facts,
     generate_supervision_bundle,
+    input_window_record,
     relation_matrix_from_pair_facts,
 )
 from naics_embedder.panels.index_roles import verify_role_leakage
@@ -23,8 +24,13 @@ from naics_embedder.supervision.artifacts import (
     validate_redirection_table,
     validate_training_pairs_members,
 )
-from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.supervision.schema import (
+    CONTRACT_VERSION,
+    ChannelOverflow,
+    InputWindowRecord,
+)
 from naics_embedder.utils.config import SupervisionBuildConfig
+from tests.fixtures.supervision import FIVE_CODE_INPUT_WINDOW
 
 def test_exclusion_provenance_does_not_mutate_structure(
     descriptions_fixture, structural_frames_fixture
@@ -805,7 +811,7 @@ def test_loader_rejects_a_manifest_missing_a_required_validation_result(generate
         load_validated_bundle(generated_bundle)
 
 def test_production_bundle_takes_its_members_from_its_config(
-    tmp_path, hierarchy_descriptions, hierarchy_redirections
+    tmp_path, hierarchy_descriptions, hierarchy_redirections, count_words
 ):
     roles = pl.DataFrame(
         [
@@ -838,10 +844,118 @@ def test_production_bundle_takes_its_members_from_its_config(
         output_root=str(tmp_path / 'bundles'),
     )
 
-    manifest = json.loads(generate_supervision_bundle(cfg).read_text())
+    manifest = json.loads(generate_supervision_bundle(cfg, count_tokens=count_words).read_text())
 
     assert manifest['artifacts']['index_roles']['row_count'] == 3
     assert manifest['artifacts']['redirections']['row_count'] == 2
     parameters = manifest['generation_parameters']
     assert parameters['index_roles_parquet'] == str(roles_path.resolve())
     assert parameters['redirections_parquet'] == str(redirections_path.resolve())
+
+# -------------------------------------------------------------------------------------------------
+# The input-window record
+# -------------------------------------------------------------------------------------------------
+
+def _five_code_record(examples: int = 3, **changes) -> InputWindowRecord:
+    '''The five-code record, counting ``examples`` present examples texts, with fields changed.'''
+
+    channels = dict(FIVE_CODE_INPUT_WINDOW['channels'])
+    channels['examples'] = {'present': examples, 'over': 0, 'share': 0.0}
+    fields = {**FIVE_CODE_INPUT_WINDOW, 'channels': channels, **changes}
+    return InputWindowRecord.model_validate(fields)
+
+def test_the_input_window_record_counts_each_channels_texts_beyond_the_window(
+    text_descriptions_fixture, count_words
+):
+    # Under the word count, 127 words make 129 tokens, one beyond the window; 126 words fit it
+    texts = {'111111': ' '.join(['farming'] * 127), '111112': ' '.join(['farming'] * 126)}
+    descriptions = text_descriptions_fixture.with_columns(
+        description=pl.col('code').replace_strict(texts, default=pl.col('description'))
+    )
+
+    record = input_window_record(
+        descriptions, 'sentence-transformers/all-MiniLM-L6-v2', count_words
+    )
+
+    assert record.window == 128
+    assert record.channels['description'] == ChannelOverflow(present=5, over=1, share=0.2)
+    assert record.channels['examples'] == ChannelOverflow(present=3, over=0, share=0.0)
+    assert record.channels['excluded'] == ChannelOverflow(present=2, over=0, share=0.0)
+
+def test_a_bundle_records_its_input_window(generated_bundle):
+    manifest = json.loads(generated_bundle.read_text())
+
+    assert manifest['input_window'] == FIVE_CODE_INPUT_WINDOW
+    assert load_validated_bundle(generated_bundle).manifest.input_window == _five_code_record()
+
+@pytest.mark.parametrize(
+    ('record', 'message'),
+    [
+        (_five_code_record(window=256), 'all-MiniLM-L6-v2 is 128 tokens, not 256'),
+        (_five_code_record(channels={}), 'must cover the channels'),
+        (_five_code_record(examples=4), 'counts 4 examples texts, but the descriptions hold 3'),
+    ],
+)
+def test_bundle_refuses_an_input_window_record_that_does_not_fit(
+    tmp_path, build_bundle, record, message
+):
+    with pytest.raises(ValueError, match=message):
+        build_bundle(input_window=record)
+    assert list(tmp_path.iterdir()) == []
+
+def test_production_bundle_counts_tokens_with_the_backbones_cached_tokenizer(
+    monkeypatch, hierarchy_build_config
+):
+    import transformers
+
+    calls = []
+
+    def from_pretrained(name, **kwargs):
+        calls.append((name, kwargs))
+        # Every text is 130 tokens, beyond the window
+        return lambda texts, truncation: {'input_ids': [[0] * 130 for _ in texts]}
+
+    monkeypatch.setattr(transformers.AutoTokenizer, 'from_pretrained', from_pretrained)
+
+    manifest = json.loads(generate_supervision_bundle(hierarchy_build_config).read_text())
+
+    assert calls == [('sentence-transformers/all-MiniLM-L6-v2', {'local_files_only': True})]
+    assert manifest['input_window'] == {
+        'backbone': 'sentence-transformers/all-MiniLM-L6-v2',
+        'window': 128,
+        'channels': {
+            'title': {
+                'present': 17,
+                'over': 17,
+                'share': 1.0
+            },
+            'description': {
+                'present': 17,
+                'over': 17,
+                'share': 1.0
+            },
+            'examples': {
+                'present': 0,
+                'over': 0,
+                'share': 0.0
+            },
+            'excluded': {
+                'present': 2,
+                'over': 2,
+                'share': 1.0
+            },
+        },
+    }
+
+def test_loader_names_the_contract_of_a_manifest_it_cannot_parse(generated_bundle):
+    # A v1 manifest predates the input-window record, so it does not parse as a v2 one
+    manifest = json.loads(generated_bundle.read_text())
+    manifest['contract_version'] = 'stage3-supervision-v1'
+    del manifest['input_window']
+    generated_bundle.write_text(json.dumps(manifest, indent=2))
+
+    with pytest.raises(
+        ValueError,
+        match='expected supervision contract stage3-supervision-v2, found stage3-supervision-v1',
+    ):
+        load_validated_bundle(generated_bundle)

@@ -515,6 +515,14 @@ class TestSupervisionBuildConfig:
         with pytest.raises(ValidationError):
             SupervisionBuildConfig(contract_version='legacy')
 
+    def test_backbone_is_the_training_backbone(self, valid_config_dict):
+        # The manifest records the window of the backbone that training reads
+        assert SupervisionBuildConfig().backbone == valid_config_dict['model']['base_model_name']
+
+    def test_rejects_a_backbone_without_a_recorded_window(self):
+        with pytest.raises(ValidationError, match='no trained input window is recorded'):
+            SupervisionBuildConfig(backbone='bert-base-uncased')
+
     def test_rejects_unknown_keys(self):
         with pytest.raises(ValidationError):
             SupervisionBuildConfig(rank_order_weight=0.35)

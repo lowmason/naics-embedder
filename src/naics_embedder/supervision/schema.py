@@ -16,7 +16,7 @@ from enum import Enum, IntEnum
 from pathlib import PurePosixPath
 from typing import Any, Dict, Mapping, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # -------------------------------------------------------------------------------------------------
 # Contract and schema versions
@@ -160,6 +160,35 @@ class ArtifactRecord(BaseModel):
             raise ValueError('artifact path must be a relative bundle path')
         return value
 
+class ChannelOverflow(BaseModel):
+    '''One text channel's present texts and those longer than the input window.'''
+
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    present: int = Field(ge=0)
+    over: int = Field(ge=0)
+    share: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode='after')
+    def validate_counts(self) -> 'ChannelOverflow':
+        if self.over > self.present:
+            raise ValueError('more texts exceed the window than are present')
+        return self
+
+class InputWindowRecord(BaseModel):
+    '''
+    The backbone's trained input window, and each text channel's texts beyond it (Req 9).
+
+    The window comes from the backbone's own documentation (``utils/input_window.py``), and
+    every tokenizing path truncates to it, so these counts are the texts truncation shortens.
+    '''
+
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    backbone: str = Field(min_length=1)
+    window: int = Field(gt=0)
+    channels: Dict[str, ChannelOverflow]
+
 class SupervisionManifest(BaseModel):
     '''Top-level, write-last description of one immutable supervision bundle.'''
 
@@ -178,3 +207,4 @@ class SupervisionManifest(BaseModel):
     structural_relation_ids: Mapping[str, int]
     artifacts: Dict[str, ArtifactRecord]
     validation_results: Mapping[str, bool]
+    input_window: InputWindowRecord

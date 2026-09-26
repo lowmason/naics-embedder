@@ -20,7 +20,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 import polars as pl
@@ -32,6 +32,7 @@ from naics_embedder.data.create_triplets import (
     CROSS_SECTOR_NEGATIVE_CAP,
     iter_training_pair_batches,
 )
+from naics_embedder.data.download_data import TEXT_CHANNELS
 from naics_embedder.data.redirections import exclusion_channel
 from naics_embedder.panels.index_roles import verify_examples_channel, verify_role_leakage
 from naics_embedder.supervision.artifacts import (
@@ -66,9 +67,11 @@ from naics_embedder.supervision.schema import (
     TRAINING_PAIRS_SCHEMA_VERSION,
     ArtifactFile,
     ArtifactRecord,
+    InputWindowRecord,
     SupervisionManifest,
 )
 from naics_embedder.utils.config import DistancesConfig, SupervisionBuildConfig
+from naics_embedder.utils.input_window import overflow_shares, token_counter, trained_window
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +264,56 @@ def relation_matrix_from_pair_facts(
     '''Relation-ID lookup matrix mirroring the canonical relation ID in both directions.'''
 
     return _matrix(pair_facts, codebook, 'structural_relation_id', np.int16)
+
+# -------------------------------------------------------------------------------------------------
+# The input window
+# -------------------------------------------------------------------------------------------------
+
+def input_window_record(
+    descriptions: pl.DataFrame,
+    backbone: str,
+    count_tokens: Callable[[List[str]], List[int]],
+) -> InputWindowRecord:
+    '''
+    The backbone's trained window and each text channel's texts beyond it (Req 9).
+
+    Each code's text counts once per channel. The exclusion channel is already de-duplicated,
+    with each cross-reference in it once.
+
+    Args:
+        descriptions: Descriptions with the four text channels.
+        backbone: The backbone whose trained window applies (``utils/input_window.py``).
+        count_tokens: Token counts of a list of texts under the backbone's tokenizer, special
+            tokens included.
+    '''
+
+    window = trained_window(backbone)
+    texts = {channel: descriptions.get_column(channel).to_list() for channel in TEXT_CHANNELS}
+    return InputWindowRecord(
+        backbone=backbone,
+        window=window,
+        channels=overflow_shares(texts, count_tokens, window),
+    )
+
+def _validate_input_window(record: InputWindowRecord, descriptions: pl.DataFrame) -> None:
+    '''The record must hold the backbone's trained window and count these descriptions' texts.'''
+
+    window = trained_window(record.backbone)
+    if record.window != window:
+        raise ValueError(
+            f'the trained input window of {record.backbone} is {window} tokens, not '
+            f'{record.window}'
+        )
+    if sorted(record.channels) != sorted(TEXT_CHANNELS):
+        raise ValueError(f'the input-window record must cover the channels {list(TEXT_CHANNELS)}')
+    for channel in TEXT_CHANNELS:
+        texts = descriptions.get_column(channel).to_list()
+        present = sum(1 for text in texts if text is not None and text.strip())
+        if record.channels[channel].present != present:
+            raise ValueError(
+                f'the input-window record counts {record.channels[channel].present:,} {channel} '
+                f'texts, but the descriptions hold {present:,}'
+            )
 
 # -------------------------------------------------------------------------------------------------
 # Bundle layout
@@ -671,6 +724,7 @@ def generate_supervision_bundle_from_frames(
     pair_facts: pl.DataFrame,
     index_roles: pl.DataFrame,
     redirections: pl.DataFrame,
+    input_window: InputWindowRecord,
     description_fingerprint: Optional[str] = None,
     structural_relation_ids: Optional[Mapping[str, int]] = None,
     generation_parameters: Optional[Mapping[str, Any]] = None,
@@ -685,7 +739,8 @@ def generate_supervision_bundle_from_frames(
     holds one known role, examples channels hold examples-role entries only, and no held-out
     query matches any training text or activity phrase. The table is well formed, the
     descriptions' exclusion channel is the one it builds, and it names exactly the pair facts'
-    exclusions.
+    exclusions. ``input_window`` must hold the backbone's trained window and count the texts of
+    ``descriptions``.
 
     Artifacts are written to ``<output_root>/.<bundle_id>.staging``; the manifest is written only
     after every artifact validates, and the staging directory is then atomically renamed to
@@ -703,6 +758,7 @@ def generate_supervision_bundle_from_frames(
         raise FileExistsError(f'supervision bundle {bundle_id} already exists at {final}')
 
     codebook = build_codebook(descriptions)
+    _validate_input_window(input_window, descriptions)
     pair_facts = _normalize_pair_facts(pair_facts)
     validation_results = validate_pair_facts(pair_facts, descriptions, codebook)
     distance_matrix = distance_matrix_from_pair_facts(pair_facts, codebook)
@@ -772,6 +828,7 @@ def generate_supervision_bundle_from_frames(
             ),
             artifacts=artifacts,
             validation_results=validation_results,
+            input_window=input_window,
         )
         (staging / MANIFEST_FILENAME).write_text(manifest.model_dump_json(indent=2))
         if final.exists():
@@ -788,13 +845,22 @@ def generate_supervision_bundle_from_frames(
     )
     return final / MANIFEST_FILENAME
 
-def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
+def generate_supervision_bundle(
+    cfg: SupervisionBuildConfig,
+    *,
+    count_tokens: Optional[Callable[[List[str]], List[int]]] = None,
+) -> Path:
     '''
     Build and publish a new supervision bundle from the files ``data preprocess`` writes.
 
     It reads the configured descriptions, index roles and redirection table. The bundle ID is a
     fresh UUID4, and the description fingerprint is the SHA-256 of the exact descriptions file,
     so training can later verify it runs against the same input.
+
+    Args:
+        cfg: The build configuration.
+        count_tokens: Token counts of a list of texts, for the input-window record. By default
+            the backbone's own tokenizer counts them, read from the local cache only.
 
     Returns:
         Path to the published ``manifest.json``.
@@ -816,6 +882,20 @@ def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
     )
     relations = compute_structural_relations(str(descriptions_path), cfg.relation_id)
     pair_facts = build_pair_facts(distances, relations, descriptions, codebook)
+    if count_tokens is None:
+        # Imported here: only a real build loads the tokenizer
+        from transformers import AutoTokenizer
+
+        count_tokens = token_counter(
+            AutoTokenizer.from_pretrained(cfg.backbone, local_files_only=True)
+        )
+    input_window = input_window_record(descriptions, cfg.backbone, count_tokens)
+    logger.info(f'Input window: {input_window.window} tokens ({input_window.backbone})')
+    for channel, overflow in input_window.channels.items():
+        logger.info(
+            f'  {channel}: {overflow.over:,} of {overflow.present:,} texts beyond it '
+            f'({overflow.share:.4f})'
+        )
     return generate_supervision_bundle_from_frames(
         output_root=Path(cfg.output_root),
         bundle_id=str(uuid.uuid4()),
@@ -825,6 +905,7 @@ def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
         pair_facts=pair_facts,
         index_roles=pl.read_parquet(index_roles_path),
         redirections=pl.read_parquet(redirections_path),
+        input_window=input_window,
         description_fingerprint=sha256_file(descriptions_path),
         structural_relation_ids=cfg.relation_id,
         generation_parameters=parameters,

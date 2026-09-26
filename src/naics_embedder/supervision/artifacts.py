@@ -11,6 +11,7 @@ and row count.
 # -------------------------------------------------------------------------------------------------
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Collection, Iterable, List, Optional, Tuple
@@ -843,8 +844,10 @@ def load_validated_bundle(
     '''
     Load a supervision bundle, failing closed on any contract, integrity, or relational violation.
 
-    Checks the contract version, every member's existence, hash, row count, and Parquet contract
-    metadata, and that every required validation result is recorded as passed. It then re-runs
+    Reads the contract version from the raw manifest before parsing it, so an older contract's
+    bundle fails with the contract message rather than a parse error. Then checks every member's
+    existence, hash, row count, and Parquet contract metadata, and that every required
+    validation result is recorded as passed. It then re-runs
     the relational checks: codebook order and fingerprint; pair-fact identity, orientation,
     coverage, sentinels and exclusion derivation; long-form and matrix reconciliation;
     training-pair identity, exclusion, and structure; the index-entry role table (one known role
@@ -859,12 +862,13 @@ def load_validated_bundle(
     path = Path(manifest_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f'supervision manifest not found: {path}')
-    manifest = SupervisionManifest.model_validate_json(path.read_text())
-    if manifest.contract_version != expected_contract:
+    raw = json.loads(path.read_text())
+    found = raw.get('contract_version') if isinstance(raw, dict) else None
+    if found != expected_contract:
         raise ValueError(
-            f'expected supervision contract {expected_contract}, '
-            f'found {manifest.contract_version} in {path}'
+            f'expected supervision contract {expected_contract}, found {found} in {path}'
         )
+    manifest = SupervisionManifest.model_validate(raw)
 
     root = path.parent
     _validate_members(root, manifest)

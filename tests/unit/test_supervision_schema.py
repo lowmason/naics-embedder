@@ -7,6 +7,8 @@ from naics_embedder.supervision.schema import (
     CONTRACT_VERSION,
     ArtifactFile,
     ArtifactRecord,
+    ChannelOverflow,
+    InputWindowRecord,
     SemanticSource,
     SemanticTarget,
     SupervisionManifest,
@@ -39,6 +41,11 @@ def _manifest() -> SupervisionManifest:
             )
         },
         validation_results={'codebook_unique': True},
+        input_window=InputWindowRecord(
+            backbone='sentence-transformers/all-MiniLM-L6-v2',
+            window=128,
+            channels={'title': ChannelOverflow(present=3, over=0, share=0.0)},
+        ),
     )
 
 def test_manifest_round_trip_preserves_contract_identity(tmp_path):
@@ -60,3 +67,14 @@ def test_manifest_rejects_parent_traversal():
 
     with pytest.raises(ValidationError, match='relative bundle path'):
         SupervisionManifest.model_validate(manifest)
+
+def test_manifest_requires_the_input_window_record():
+    manifest = _manifest().model_dump()
+    del manifest['input_window']
+
+    with pytest.raises(ValidationError, match='input_window'):
+        SupervisionManifest.model_validate(manifest)
+
+def test_channel_overflow_refuses_more_texts_beyond_the_window_than_present():
+    with pytest.raises(ValidationError, match='more texts exceed the window than are present'):
+        ChannelOverflow(present=1, over=2, share=1.0)
