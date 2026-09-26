@@ -34,7 +34,7 @@ min_groups: 10
 # The text-only comparator (roadmap D9): the arm's backbone, frozen, reading the arm's text
 text_only:
   backbone: sentence-transformers/all-MiniLM-L6-v2
-  max_length: 512
+  max_length: 128
   batch_size: 32
 
 # Every validation read, outer-set opening and outer read is appended here (Req 4). logs/ is

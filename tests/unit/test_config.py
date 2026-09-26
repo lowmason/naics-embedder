@@ -24,9 +24,12 @@ from naics_embedder.utils.config import (
     RegressorPanelConfig,
     SamplingConfig,
     SansStaticConfig,
+    StreamingConfig,
     StructuralPreferenceConfig,
     SupervisionBuildConfig,
     SupervisionRuntimeConfig,
+    TextOnlyConfig,
+    TokenizationConfig,
     load_config,
 )
 from tests.fixtures.regressor_panel import BRANCH_RECORD
@@ -585,6 +588,7 @@ class TestRegressorPanelConfig:
 
         assert text_only.backbone == arm['model']['base_model_name']
         assert text_only.max_length == arm['data_loader']['tokenization']['max_length']
+        assert text_only.max_length == arm['data_loader']['streaming']['max_length']
 
     @pytest.mark.parametrize('fraction', [0.0, 1.0])
     def test_the_held_out_fraction_lies_strictly_between_zero_and_one(self, fraction):
@@ -752,3 +756,19 @@ class TestGraphConfig:
         cfg = GraphConfig.from_yaml('conf/graph.yaml')
 
         assert cfg.model_fields_set == set(yaml.safe_load(Path('conf/graph.yaml').read_text()))
+
+# -------------------------------------------------------------------------------------------------
+# The backbone's trained input window (Req 9)
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_every_tokenizing_config_defaults_to_the_trained_window():
+    assert TokenizationConfig().max_length == 128
+    assert StreamingConfig().max_length == 128
+    assert TextOnlyConfig().max_length == 128
+
+@pytest.mark.unit
+@pytest.mark.parametrize('config_class', [TokenizationConfig, StreamingConfig, TextOnlyConfig])
+def test_a_max_length_beyond_the_trained_window_is_refused(config_class):
+    with pytest.raises(ValidationError, match='trained input window'):
+        config_class(max_length=512)

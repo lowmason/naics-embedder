@@ -9,6 +9,7 @@ Tests cover:
 - get_tokens utility function
 '''
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -149,8 +150,11 @@ class TestBuildTokenizationCache:
         assert 'attention_mask' in title_dict
         title_input_ids = title_dict['input_ids']  # type: ignore
         desc_input_ids = desc_dict['input_ids']  # type: ignore
-        assert title_input_ids.shape == (24, )
+        # Every channel at the window, titles included
+        assert title_input_ids.shape == (128, )
         assert desc_input_ids.shape == (128, )
+        assert title_dict['present'] is True
+        assert item['excluded']['present'] is False  # type: ignore
 
     def test_build_tokenization_cache_empty_text(self, tmp_path):
         '''Test building cache with empty text fields.'''
@@ -170,8 +174,11 @@ class TestBuildTokenizationCache:
         cache = _build_tokenization_cache(str(path), 'sentence-transformers/all-MiniLM-L6-v2', 128)
 
         assert len(cache) == 1
-        # Empty text should be replaced with [EMPTY]
         assert cache[0]['code'] == '311111'
+        # A blank channel is absent: [CLS] [SEP] only, never a placeholder text
+        for channel in ('title', 'description', 'excluded', 'examples'):
+            assert cache[0][channel]['present'] is False  # type: ignore
+            assert int(cache[0][channel]['attention_mask'].sum()) == 2  # type: ignore
 
     def test_build_tokenization_cache_max_length(self, sample_descriptions_parquet):
         '''Test cache building respects max_length.'''
@@ -186,6 +193,38 @@ class TestBuildTokenizationCache:
         desc_attention_mask = desc_dict['attention_mask']  # type: ignore
         assert desc_input_ids.shape == (64, )
         assert desc_attention_mask.shape == (64, )
+
+    def test_null_channels_are_absent(self, tmp_path):
+        '''A null channel is encoded like a blank one and flagged absent (Req 9).'''
+        path = tmp_path / 'null_descriptions.parquet'
+        pl.DataFrame(
+            {
+                'index': [0],
+                'code': ['311111'],
+                'title': ['Dog Food Manufacturing'],
+                'description': [None],
+                'excluded': [None],
+                'examples': [None],
+            },
+            schema_overrides={
+                'description': pl.Utf8,
+                'excluded': pl.Utf8,
+                'examples': pl.Utf8
+            },
+        ).write_parquet(path)
+
+        cache = _build_tokenization_cache(str(path), 'sentence-transformers/all-MiniLM-L6-v2', 128)
+
+        assert cache[0]['title']['present'] is True  # type: ignore
+        for channel in ('description', 'excluded', 'examples'):
+            assert cache[0][channel]['present'] is False  # type: ignore
+            assert int(cache[0][channel]['attention_mask'].sum()) == 2  # type: ignore
+
+    def test_a_window_beyond_the_trained_one_is_refused(self, sample_descriptions_parquet):
+        with pytest.raises(ValueError, match='trained input window'):
+            _build_tokenization_cache(
+                sample_descriptions_parquet, 'sentence-transformers/all-MiniLM-L6-v2', 256
+            )
 
 # -------------------------------------------------------------------------------------------------
 # Cache Save/Load Tests
@@ -711,6 +750,24 @@ def test_token_cache_without_a_sidecar_is_rebuilt(
     cache_path = Path(tokenization_config.output_path)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(sample_tokenization_cache, cache_path)
+
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+
+    assert len(counted_builds) == 1
+
+def test_a_cache_in_the_placeholder_format_is_rebuilt(
+    tokenization_config, sample_tokenization_cache, counted_builds
+):
+    cache_path = Path(tokenization_config.output_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(sample_tokenization_cache, cache_path)
+    # The sidecar a cache built before Stage 5 wrote: the same inputs, no channel format
+    earlier = {
+        **FINGERPRINTS,
+        'tokenizer_name': tokenization_config.tokenizer_name,
+        'max_length': tokenization_config.max_length,
+    }
+    cache_path.with_name(cache_path.name + '.meta.json').write_text(json.dumps(earlier))
 
     tokenization_cache(tokenization_config, **FINGERPRINTS)
 

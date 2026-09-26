@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.utils.input_window import check_window
 
 logger = logging.getLogger(__name__)
 
@@ -481,11 +482,18 @@ class TextOnlyConfig(BaseModel):
         description="The arm's backbone (model.base_model_name), read from the local cache",
     )
     max_length: int = Field(
-        default=512,
+        default=128,
         ge=1,
         description="Tokens kept per channel text: the arm's data_loader max_length",
     )
     batch_size: int = Field(default=32, ge=1, description='Texts per forward pass')
+
+    @model_validator(mode='after')
+    def fit_the_trained_window(self) -> 'TextOnlyConfig':
+        '''Refuse a max_length beyond the backbone's trained window (Req 9).'''
+
+        check_window(self.backbone, self.max_length)
+        return self
 
 class RegressorBranchRecord(BaseModel):
     '''
@@ -609,11 +617,20 @@ class TokenizationConfig(BaseModel):
         default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace tokenizer name'
     )
     max_length: Optional[int] = Field(
-        default=None, description='Maximum sequence length (None = use model default)'
+        default=None,
+        ge=1,
+        description="Tokens kept per channel text; None is the backbone's trained window",
     )
     output_path: str = Field(
         default='./data/token_cache/token_cache.pt', description='Path to save tokenization cache'
     )
+
+    @model_validator(mode='after')
+    def fit_the_trained_window(self) -> 'TokenizationConfig':
+        '''Resolve a null max_length to the trained window, and refuse a longer one (Req 9).'''
+
+        self.max_length = check_window(self.tokenizer_name, self.max_length)
+        return self
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'TokenizationConfig':
@@ -657,7 +674,11 @@ class StreamingConfig(BaseModel):
     tokenizer_name: str = Field(
         default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace tokenizer name'
     )
-    max_length: int = Field(default=512, description='Maximum sequence length for tokenization')
+    max_length: int = Field(
+        default=128,
+        ge=1,
+        description="Tokens kept per channel text, at most the backbone's trained window",
+    )
     seed: int = Field(default=42, ge=0, description='Random seed for sampling')
 
     # Sampling parameters
@@ -748,6 +769,13 @@ class StreamingConfig(BaseModel):
                 f'n_negatives_phase1 ({self.n_negatives_phase1}) must be <= '
                 f'n_candidates ({self.n_candidates})'
             )
+        return self
+
+    @model_validator(mode='after')
+    def fit_the_trained_window(self) -> 'StreamingConfig':
+        '''Refuse a max_length beyond the backbone's trained window (Req 9).'''
+
+        check_window(self.tokenizer_name, self.max_length)
         return self
 
 class SansStaticConfig(BaseModel):

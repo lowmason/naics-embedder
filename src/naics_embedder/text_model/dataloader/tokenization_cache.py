@@ -15,8 +15,14 @@ import torch
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from naics_embedder.utils.config import TokenizationConfig
+from naics_embedder.utils.input_window import check_window
 
 logger = logging.getLogger(__name__)
+
+# How channels are encoded: every channel at the window, and an absent one as the empty string
+# with ``present`` False. A cache in the earlier format (a placeholder text, titles at 24 tokens)
+# records no format in its sidecar, so it is rebuilt.
+CACHE_FORMAT = 'channels-v2'
 
 # Disable tokenizer parallelism to avoid fork issues with multiprocessing
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -26,39 +32,49 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 # -------------------------------------------------------------------------------------------------
 
 def _tokenize_text(
-    dict: Dict[str, str],
+    row: Dict[str, Any],
     field: str,
     counter: Dict[str, int],
     tokenizer: PreTrainedTokenizerBase,
     max_length: int,
-) -> Tuple[Dict[str, torch.Tensor], Dict[str, int]]:
-    '''Tokenize a single text field.'''
+) -> Tuple[Dict[str, Any], Dict[str, int]]:
+    '''
+    Tokenize one channel text, truncated and padded to ``max_length``.
 
-    text = dict.get(field, '')
+    An absent channel (null or blank) is encoded as the empty string, ``[CLS] [SEP]``, never as
+    placeholder text, and its ``present`` flag is False so fusion can mask it (Req 9).
+    '''
 
-    if not text or text == '':
-        text = '[EMPTY]'
-    else:
+    text = row.get(field) or ''
+    present = bool(text.strip())
+    if present:
         counter[field] += 1
+    else:
+        text = ''
 
     encoded = tokenizer(
         text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt'
     )
 
-    input_ids = encoded['input_ids']
-    attention_mask = encoded['attention_mask']
-
     encoding = {
-        'input_ids': torch.squeeze(input_ids),  # type: ignore
-        'attention_mask': torch.squeeze(attention_mask),  # type: ignore
+        'input_ids': torch.squeeze(encoded['input_ids']),  # type: ignore
+        'attention_mask': torch.squeeze(encoded['attention_mask']),  # type: ignore
+        'present': present,
     }
 
     return encoding, counter
 
-def _build_tokenization_cache(descriptions_path: str, tokenizer_name: str,
-                              max_length: int) -> Dict[int, Dict[str, torch.Tensor]]:
-    '''Build tokenization cache from descriptions file.'''
+def _build_tokenization_cache(
+    descriptions_path: str, tokenizer_name: str, max_length: Optional[int]
+) -> Dict[int, Dict[str, Any]]:
+    '''
+    Build tokenization cache from descriptions file.
 
+    Every channel, titles included, is truncated and padded to ``max_length``, which may not
+    exceed the backbone's trained window (None is the window).
+    '''
+
+    max_length = check_window(tokenizer_name, max_length)
     logger.info('Building tokenization cache...')
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -71,7 +87,7 @@ def _build_tokenization_cache(descriptions_path: str, tokenizer_name: str,
     for row in df_iter:
         idx, code = row['index'], row['code']
 
-        title, cnt = _tokenize_text(row, 'title', cnt, tokenizer, 24)
+        title, cnt = _tokenize_text(row, 'title', cnt, tokenizer, max_length)
         description, cnt = _tokenize_text(row, 'description', cnt, tokenizer, max_length)
         excluded, cnt = _tokenize_text(row, 'excluded', cnt, tokenizer, max_length)
         examples, cnt = _tokenize_text(row, 'examples', cnt, tokenizer, max_length)
@@ -199,6 +215,7 @@ def _cache_identity(
         'codebook_fingerprint': codebook_fingerprint,
         'tokenizer_name': cfg.tokenizer_name,
         'max_length': cfg.max_length,
+        'cache_format': CACHE_FORMAT,
     }
 
 def _write_cache_sidecar(
