@@ -704,7 +704,7 @@ class StreamingConfig(BaseModel):
         default=True,
         description=(
             'Use Phase 1 tree-distance based sampling '
-            '(inverse weighting, sibling masking, exclusion mining)'
+            '(inverse weighting and sibling masking)'
         ),
     )
     phase1_alpha: float = Field(

@@ -26,11 +26,16 @@ uv run naics-embedder --help
 
 Download and preprocess all raw NAICS data files. Each code's examples channel holds only its
 examples-role index entries, per the committed role table (see `data roles`); the code's other
-entries are outcome-panel queries. Preprocessing fails if any validation or test query matches
-training text.
+entries are outcome-panel queries. It also writes the redirection table: every cross-reference
+row and harvested "Excluded" paragraph once, with the codes it names. Each code's exclusion
+channel is built from that table, and a row that a held-out query leaks into is withheld from
+the channel. A code without official description text inherits its only child's, and
+`description_source` records whose text it is. An absent channel is null. Preprocessing fails if
+any validation or test query matches training text or an activity phrase.
 
 **Requires:** `conf/data/index_roles.csv`  
-**Generates:** `data/naics_descriptions.parquet`, `data/naics_index_roles.parquet`
+**Generates:** `data/naics_descriptions.parquet`, `data/naics_index_roles.parquet`,
+`data/naics_redirections.parquet`
 
 ```bash
 uv run naics-embedder data preprocess
@@ -44,14 +49,17 @@ uv run naics-embedder data preprocess
 
 ### `data supervision`
 
-Build one immutable, validated Stage-3 supervision bundle: the codebook, pair facts (structural
-distance and relation plus directional explicit exclusions), legacy-compatible distance and
-relation views and matrices, training pairs, and curriculum difficulty thresholds. The manifest is
-written last and the bundle directory is published atomically.
+Build one immutable, validated Stage-3 supervision bundle. It holds the codebook, the pair facts
+(D*, the structural relation, directional explicit exclusions and the unary-pair flag),
+legacy-compatible distance and relation views and matrices, and training pairs. It also holds
+the curriculum difficulty thresholds, the index roles and the redirection table. The manifest
+records the backbone's input window and each channel's texts beyond it. The manifest is written
+last and the bundle directory is published atomically.
 
-**Requires:** `data/naics_descriptions.parquet`, `data/naics_index_roles.parquet` (carried as the
-bundle's optional `index_roles` member)  
-**Generates:** `data/supervision/stage3-supervision-v1/<bundle-id>/` (prints
+**Requires:** `data/naics_descriptions.parquet`, `data/naics_index_roles.parquet`,
+`data/naics_redirections.parquet` (the last two become required bundle members), and the
+backbone's tokenizer in the local Hugging Face cache  
+**Generates:** `data/supervision/stage3-supervision-v2/<bundle-id>/` (prints
 `Supervision manifest: <path>`; set `supervision.manifest_path` to it before training)
 
 ```bash
@@ -61,8 +69,8 @@ uv run naics-embedder data supervision
 ### `data relations`, `data distances`, `data triplets`
 
 Deprecated stage commands. Publishing one partial authority would let artifacts from different
-generations mix, so each prints a migration notice and builds the complete supervision bundle
-(same as `data supervision`).
+generations mix, so each prints a migration notice and exits with status 1 without building
+anything; `data supervision` builds the complete bundle.
 
 ### `data all`
 
@@ -203,8 +211,9 @@ uv run naics-embedder tools outcome-baseline
 Embed every code's text with the arm's backbone, frozen: each of the four channels is mean-pooled
 over its tokens, and a code's vector is the mean of its present channels (roadmap D9). The
 backbone comes from the local Hugging Face cache (default: `text_only.backbone` in
-`conf/data/regressor_panel.yaml`). The regressor panel reduces the table to the arm's dimension
-by PCA.
+`conf/data/regressor_panel.yaml`). Each channel is truncated to the backbone's trained input
+window, and `text_only.max_length` may not exceed it (Req 9). The regressor panel reduces the
+table to the arm's dimension by PCA.
 
 **Generates:** the table and `<stem>_provenance.json` beside it
 

@@ -8,7 +8,7 @@ preference loss that replaces LambdaRank:
 ```yaml
 supervision:
   mode: repaired
-  contract_version: stage3-supervision-v1
+  contract_version: stage3-supervision-v2
   manifest_path: null  # data supervision prints the exact immutable path to set before training
 
 loss:
@@ -30,10 +30,14 @@ loss:
 - `loss.structural_preference.temperature` must be positive; `margin` and `tie_tolerance` must be
   nonnegative.
 - Repaired configurations reject `loss.rank_order_weight` (a legacy LambdaRank setting; configure
-  `loss.structural_preference` instead) and `data_loader.streaming.phase1_exclusion_weight` (the
-  one-slot exclusion quota owns exclusion representation). The old key is never reinterpreted as
-  the new loss because the objectives differ.
-- Both legacy keys are accepted only with the explicit `supervision.mode: legacy_containment`.
+  `loss.structural_preference` instead) and `data_loader.streaming.phase1_exclusion_weight` (an
+  explicit exclusion is never a negative). The old key is never reinterpreted as the new loss
+  because the objectives differ.
+- Repaired configurations also reject a legacy streaming path (`distances_parquet`,
+  `distance_matrix_parquet`, `relations_parquet`, `triplets_parquet`) set to anything but its
+  default: repaired training reads structural facts and training pairs from the bundle.
+- The legacy keys and paths are accepted only with the explicit
+  `supervision.mode: legacy_containment`.
 - `train --checkpoint-load-mode [exact|weights_only]` selects exact resume (identical supervision
   contract) or an explicit weights-only migration; see the
   [Training Guide](../text_training.md#exact-resume-versus-weights-only-migration).

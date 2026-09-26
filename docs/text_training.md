@@ -2,7 +2,7 @@
 
 This guide explains how to train the NAICS Hyperbolic Embedding System with the dynamic Structure-Aware Dynamic Curriculum (SADC) scheduler. The current workflow uses a single configuration file (`conf/config.yaml`) to control model, data, trainer, and curriculum settings.
 
-Stage-3 training runs under the **repaired supervision contract** (`stage3-supervision-v1`): one
+Stage-3 training runs under the **repaired supervision contract** (`stage3-supervision-v2`): one
 immutable, validated supervision bundle is the only authority for code identity, structural facts,
 explicit exclusions, and training pairs. See
 [Stage-3 Supervision Integrity](#stage-3-supervision-integrity) before starting a run.
@@ -21,7 +21,7 @@ explicit exclusions, and training pairs. See
     - [The Supervision Bundle](#the-supervision-bundle)
     - [Three Independent Axes](#three-independent-axes)
     - [Candidate Identity](#candidate-identity)
-    - [Exactly-One Exclusion Rotation](#exactly-one-exclusion-rotation)
+    - [Negative Selection](#negative-selection)
     - [Structural Preference Loss](#structural-preference-loss)
     - [Cache Regeneration](#cache-regeneration)
     - [Exact Resume versus Weights-Only Migration](#exact-resume-versus-weights-only-migration)
@@ -214,52 +214,91 @@ Each step is a gate:
 
 1. **Generate** — `data supervision` builds a complete bundle in a staging directory, validates
    every artifact, writes the manifest last, and atomically publishes
-   `data/supervision/stage3-supervision-v1/<bundle-id>/`. It prints
-   `Supervision manifest: <path>`; nothing partial is ever visible under that path. The legacy
-   stage commands (`data relations`, `data distances`, `data triplets`) print a migration notice
-   and build the same complete bundle.
+   `data/supervision/stage3-supervision-v2/<bundle-id>/`. It reads the descriptions, index roles
+   and redirection table that `data preprocess` writes, and the backbone's tokenizer from the
+   local Hugging Face cache. It prints `Supervision manifest: <path>`; nothing partial is ever
+   visible under that path. The legacy stage commands (`data relations`, `data distances`,
+   `data triplets`) print a migration notice and exit with status 1 without building anything.
 2. **Configure** — `supervision.manifest_path` names exactly one bundle. The shipped
    `conf/config.yaml` leaves it `null`, which parses but cannot train: the mandatory gate stops
    with `Repaired Stage-3 training requires supervision.manifest_path` and prints the command
    above.
 3. **Validate** — before any DataModule, checkpoint, or model work, `train` re-validates the whole
-   bundle (contract version, member hashes and row counts, Parquet contract metadata, codebook
-   order and fingerprint, pair-fact coverage and orientation, matrix reconciliation, training-pair
-   joins) and checks that `data_loader.streaming.descriptions_parquet` is the file the bundle was
-   generated from. `--skip-validation` does not skip this gate.
+   bundle and checks that `data_loader.streaming.descriptions_parquet` is the file the bundle was
+   generated from. The bundle checks cover the contract version, member hashes and row counts,
+   Parquet contract metadata, and every required validation result. They also cover codebook
+   order and fingerprint, pair-fact coverage and orientation, D* and the unary-pair flags,
+   matrix reconciliation, training-pair joins, the index roles and the redirection table.
+   `--skip-validation` does not skip this gate.
 4. **Train or resume** — a fresh run, an exact resume (identical contract), or an explicit
    weights-only migration. There is no automatic fallback to legacy files.
 
 ### The Supervision Bundle
 
-A bundle is immutable and versioned. Its manifest records the contract and per-artifact schema
-versions, NAICS vintage, codebook order and fingerprint, input fingerprints, generator revision,
-generation parameters, the structural relation-ID mapping, and every member's path, SHA-256,
-row count, and exclusion count. Every Parquet member also carries the contract version, bundle ID,
-and schema version in its metadata, so artifacts from different bundles can never be mixed.
+A bundle is immutable and versioned. Its manifest records:
+
+- the contract and per-artifact schema versions, and the NAICS vintage;
+- the codebook order and fingerprint, the input fingerprints, the generator revision and the
+  generation parameters;
+- the structural relation-ID mapping;
+- every member's path, SHA-256, row count, and exclusion count;
+- every validation result the build ran;
+- the input window.
+
+Every Parquet member also carries the contract version, bundle ID, and schema version in its
+metadata, so artifacts from different bundles can never be mixed.
 
 | Artifact | Contents |
 |---|---|
 | `naics_codebook.parquet` | Canonical `code_id` ↔ `code` order |
-| `naics_pair_facts.parquet` | One row per unordered code pair: structural distance and relation, both exclusion directions, and their OR |
+| `naics_pair_facts.parquet` | One row per unordered code pair: D* and the structural relation, both exclusion directions and their OR, and the unary-pair flag |
 | `naics_distances.parquet` / `naics_distance_matrix.parquet` | Legacy-compatible long-form and matrix views, reconciled against the pair facts |
 | `naics_relations.parquet` / `naics_relation_matrix.parquet` | Legacy-compatible relations with explicit exclusion columns (no exclusion relation) |
-| `naics_training_pairs/` | Training pairs with identities, semantic fields, exclusion provenance, and raw structure |
+| `naics_training_pairs/` | Training pairs with identities, semantic fields, exclusion provenance, and raw structure; no negative is an explicit exclusion and no positive is a unary pair |
 | `curriculum_difficulty_thresholds.json` | Curriculum thresholds derived from the same bundle |
+| `naics_index_roles.parquet` | Every Census index entry with its one role: examples-channel text, or a training, validation or test query |
+| `naics_redirections.parquet` | Every cross-reference and harvested "Excluded" paragraph once: its code and text, activity phrase, named codes, lineal codes and withheld flag |
 
 Validation failures name the artifact and bundle ID, for example
 `distance_matrix (<bundle-id>): matrix does not reconcile with the long-form pair facts`,
 `codebook hash mismatch at <path>: expected <sha>, found <sha>`,
-`expected supervision contract stage3-supervision-v1, found <version> in <path>`,
+`expected supervision contract stage3-supervision-v2, found <version> in <path>`,
 `a direct positive is an explicit exclusion`, or
 `structural relation fields contain an exclusion sentinel`. Regenerate the bundle rather than
 editing members.
+
+**D\*.** The pair facts carry D*, the tree path length through a virtual root above the 20
+sectors (Req 7): `depth_i + depth_j - 2 * depth_LCA`. Sectors sit at depth 1, and the combined
+sectors 31-33, 44-45 and 48-49 count as one. There is no half-step and no cross-sector constant:
+across sectors D* is λ(i) + λ(j) − 2, where λ is the number of digits. The build checks every
+pair against `utils/naics_hierarchy.tree_distance_matrix`, the function Stage 4's diagnostics
+read, and checks the triangle inequality over all triples. Cross-sector pairs are found by their
+relation label (`cross_sector`, relation ID 99), never by a distance.
+
+**Redirections.** A cross-reference reroutes an activity; it does not assert that two codes are
+unrelated (Req 8). The redirection table holds every cross-reference row and every "Excluded"
+paragraph harvested from a description, once each. A code's exclusion channel is its rows' text,
+each row once, in table order. A held-out query that leaks into a row withholds it: the row
+stays in the table and its named codes stay exclusions, but its text leaves the channel and its
+activity phrase is dropped. The build's leakage check also reads the activity phrases, which
+Stage 7 trains on as queries. A lineal reference, a code naming its own ancestor or descendant,
+stays text only.
+
+**Unary pairs.** A five-digit code whose only child is its six-digit code forms a unary pair
+(Req 9). The pair facts flag the 522 unary pairs. They are never generated or sampled
+positives, and parent retrieval never scores them.
+
+**Input window.** The manifest's `input_window` records the backbone's trained window: 128 tokens
+for `sentence-transformers/all-MiniLM-L6-v2`, from its model card. Per text channel it records
+the present texts, the texts beyond the window and their share. Every tokenizing path truncates
+to the window (`utils/input_window.py`). An absent channel is null in the descriptions, and the
+tokenization cache encodes it as the empty string, never as a placeholder.
 
 ### Three Independent Axes
 
 Each (anchor, candidate) pair carries three independent kinds of supervision:
 
-- **Structure** — the raw NAICS tree distance and relation (`cross_sector` = 99 across sectors).
+- **Structure** — D* and the NAICS relation (`cross_sector`, relation ID 99, across sectors).
   Exclusion processing never alters these values.
 - **Semantic target and source** — `RELATED` / `UNRELATED` / `UNKNOWN`, sourced from a
   `TRAINING_POSITIVE`, an `EXPLICIT_EXCLUSION`, or `UNLABELED`. Model-derived pseudo-relatedness is
@@ -283,40 +322,31 @@ source slot `-1`, are never selectable, and never contribute to a loss. In multi
 intrinsic entity fields (UID, code ID, embedding, router output, validity) are gathered; supervision
 is recomputed for each local anchor.
 
-### Exactly-One Exclusion Rotation
+### Negative Selection
 
-When an anchor has explicit exclusions in its pool, final selection reserves exactly one slot for
-one of them; the other slots come from strategy proposals over non-exclusion candidates, with
+An explicit exclusion is never a negative (Req 8(c)). The generator drops every candidate that is
+an explicit exclusion of its anchor, the canonical pool never admits one, and final selection
+refuses one. No slot is reserved for exclusions. The `K` slots come from strategy proposals, with
 duplicates removed by code (keeping the smallest UID), ties broken by code ID then UID, and a
 deterministic backfill. Proposals are consulted in order:
 
 1. **Phase 2+ miners.** With hard-negative mining on, the geometric miner proposes its share of the
    `K` slots, `K - int(K * router_mix_ratio)`; with router-guided mining also on, the router fills
-   the rest. `router_mix_ratio` comes from `curriculum.anneal` (default 0.5). A reserved exclusion
-   slot comes out of the router's share. Miners score one occurrence per code (the smallest
-   candidate UID, which the coordinator keeps) and never the anchor or positive code, so on
-   multiple GPUs, where a code repeats across rows and ranks of the global pool, the miners still
-   fill their slots with distinct codes.
+   the rest. `router_mix_ratio` comes from `curriculum.anneal` (default 0.5). Miners score one
+   occurrence per code (the smallest candidate UID, which the coordinator keeps) and never the
+   anchor or positive code, so on multiple GPUs, where a code repeats across rows and ranks of the
+   global pool, the miners still fill their slots with distinct codes.
 2. **The difficulty proposal** from the data layer, which is the only proposal in Phase 1 and the
    fallback afterwards.
 3. **Deterministic backfill** from the remaining eligible codes.
 
-Ordinary candidates are **eligible** only if they are structurally farther from the anchor than
-the positive, the same rule every generated training negative satisfies (including its
-cross-sector, equal-distance, and lineal special cases). Candidates sourced at runtime, such as
-universe backfill and the multi-GPU global pool, therefore never repel a relative the generated
-supervision would not treat as a negative. Explicit exclusions are exempt because their exclusion
-is authoritative. The reserved exclusion rotates across epochs:
-
-```text
-index = (stable_hash(seed, anchor_code_id) + epoch) mod n_exclusions
-```
-
-over the anchor's sorted exclusion code IDs, where `stable_hash` is a SHA-256 based,
-process-independent hash of the training seed and anchor. This quota replaces the legacy
-`phase1_exclusion_weight`, which the repaired configuration rejects. Explicit exclusions always
-stay repulsive in the contrastive denominator: a pseudo-related (clustering) signal can never mask
-or attract an explicit exclusion.
+A candidate is **eligible** only if it is not an explicit exclusion of the anchor and is
+structurally farther from the anchor than the positive. That is the rule every generated
+training negative satisfies, including its cross-sector and equal-distance special cases.
+Candidates sourced at runtime, such as universe backfill and the multi-GPU global pool, therefore
+never repel a relative that the generated supervision would not treat as a negative. The
+repaired configuration rejects the legacy `phase1_exclusion_weight`. No exclusion is ever
+selected, so none reaches the contrastive denominator.
 
 ### Structural Preference Loss
 
@@ -410,12 +440,12 @@ structural preference gradient corrects an inverted pair, that bundle validation
 that a full training step feeds every loss the same selected candidates.
 
 During training, epoch-summed integrity counters report selection health:
-`train/integrity/anchors_with_exclusions`, the per-reason selections (`quota_selections`,
-`geometric_selections`, `router_selections`, `difficulty_selections`, `deterministic_backfills`),
-`invalid_candidates_ignored` (padding), `structurally_ineligible_candidates`, and
-`duplicate_candidates_removed`.
+`train/integrity/anchors_with_exclusions`, the per-reason selections (`geometric_selections`,
+`router_selections`, `difficulty_selections`, `deterministic_backfills`, and `quota_selections`,
+which stays at zero because no slot is reserved), `invalid_candidates_ignored` (padding),
+`structurally_ineligible_candidates`, and `duplicate_candidates_removed`.
 
-Validation scores every eligible candidate of each validation pool, including every exclusion,
+Validation scores every eligible candidate of each validation pool, never an explicit exclusion,
 with no mining or pseudo-labels, so `val/contrastive_loss` depends only on the model and the
 epoch-independent validation pools. Its values are not comparable with legacy runs, whose
 validation contrasted a fixed negative list.
@@ -428,13 +458,14 @@ This page clarifies the split between the streaming data pipeline and the model 
 
 ### Data Layer (Streaming Dataset)
 
-- Build one canonical candidate pool per (anchor, positive) from the bundle's training pairs: all
-  of the anchor's explicit exclusions plus unique ordinary codes, never the anchor or positive.
+- Build one canonical candidate pool per (anchor, positive) from the bundle's training pairs:
+  unique codes structurally farther from the anchor than the positive, never an explicit
+  exclusion of the anchor, the anchor or the positive.
 - Phase 1 sampling:
-  - Inverse tree-distance weighting (`P(n) ∝ 1 / d_tree(a, n)^α`).
-  - Sibling masking (`d_tree <= 2` set to zero).
-  - Difficulty proposals over the pool (explicit exclusions are represented by the selection quota,
-    not by sampling weight).
+  - Inverse tree-distance weighting over D* (`P(n) ∝ 1 / d_tree(a, n)^α`).
+  - Sibling masking (`d_tree == 2` set to zero, which under D* also masks a grandparent or
+    grandchild).
+  - Difficulty proposals over the pool.
 - Static baseline (SANS):
   - Set `sampling.strategy=sans_static` to replace the dynamic weighting with fixed near/far buckets.
   - Configure bucket ratios under `sampling.sans_static` (e.g., `near_bucket_weight`, `near_distance_threshold`).
