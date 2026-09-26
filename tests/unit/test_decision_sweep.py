@@ -162,6 +162,7 @@ def test_every_seed_is_read_once_per_panel_and_its_records_are_the_logs(
         for record in run.log_records:
             assert (record['event'], record['split']) == ('read', 'validation')
             assert record['detail']['arm_name'] == 'uninformed'
+            assert record['detail'].get('seed') == run.seed
             if record['panel'] != 'outcome':
                 assert record['detail']['arm'] == run.table.matrix_fingerprint
                 assert record['detail']['text_only'] == arm.text_only.table.matrix_fingerprint
@@ -207,6 +208,21 @@ def test_a_text_only_table_from_another_backbone_is_refused_before_any_read(
             spec('mislabelled', dimension=16),
             SEEDS,
             SyntheticRunner(tmp_path / 'runs' / 'mislabelled', False, _signal(regressor_rows)),
+            text_only_table=text_only,
+            store=store,
+            purpose=PURPOSE,
+            **panels,
+        )
+    assert log.records() == []
+
+def test_a_repeated_seed_is_refused_before_any_read(
+    tmp_path, regressor_rows, panels, store, text_only, log
+):
+    with pytest.raises(ValueError, match='a seed repeats'):
+        run_seed_sweep(
+            spec('uninformed', dimension=3),
+            (0, 1, 1),
+            SyntheticRunner(tmp_path / 'runs' / 'uninformed', False, _signal(regressor_rows)),
             text_only_table=text_only,
             store=store,
             purpose=PURPOSE,

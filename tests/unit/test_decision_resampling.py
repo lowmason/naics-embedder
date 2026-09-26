@@ -78,6 +78,16 @@ def test_pairing_cancels_what_the_arms_share_whatever_the_units_drawn():
     np.testing.assert_allclose(delta, 0.1)
     assert unpaired.std() > 0.1
 
+def test_a_shuffled_frames_values_come_back_in_the_items_order():
+    # Items 1 and 2 in unit a, item 3 in unit b, whatever order the frame lists them in
+    items = PanelItems.from_values(_frame(['b', 'a', 'a'], ['3', '2', '1'], [0.0, 0.0, 0.0]))
+    shuffled = _frame(['a', 'b', 'a'], ['2', '3', '1'], [20.0, 40.0, 10.0])
+
+    values = items.values(shuffled)
+
+    np.testing.assert_array_equal(values, [10.0, 20.0, 40.0])
+    np.testing.assert_array_equal(items.sums(values), [[30.0, 40.0]])
+
 def test_paired_arms_must_share_items_and_units():
     items = PanelItems.from_values(_frame(['a', 'b'], ['1', '2'], [0.0, 0.0]))
 

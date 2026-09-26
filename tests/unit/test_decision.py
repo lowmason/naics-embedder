@@ -13,7 +13,13 @@ import json
 import pytest
 
 from naics_embedder.decision.decide import decide, fix_margins
-from naics_embedder.decision.records import ArmRecord, DecisionRecord, read_record, write_record
+from naics_embedder.decision.records import (
+    ArmRecord,
+    DecisionRecord,
+    MarginRecord,
+    read_record,
+    write_record,
+)
 from naics_embedder.decision.rule import SUPERIORITY_LEVEL
 from naics_embedder.decision.scores import PANELS
 from naics_embedder.decision.store import ArtifactStore
@@ -62,12 +68,17 @@ def _comparison(record, a, b):
 def _panel(comparison, panel):
     return next(item for item in comparison.panels if item.panel == panel)
 
+def _json_edited(record, edit):
+    '''A record's JSON form after ``edit`` changes it.'''
+
+    data = json.loads(record.model_dump_json())
+    edit(data)
+    return data
+
 def _edited(arm, edit):
     '''The arm record after ``edit`` changes its JSON form.'''
 
-    data = json.loads(arm.model_dump_json())
-    edit(data)
-    return ArmRecord.model_validate(data)
+    return ArmRecord.model_validate(_json_edited(arm, edit))
 
 # -------------------------------------------------------------------------------------------------
 # Margins
@@ -263,14 +274,70 @@ def test_a_runs_log_records_must_be_its_own_validation_reads(
     with pytest.raises(ValueError, match=message):
         _decide([arm, reference], margins, store)
 
-def test_a_regressor_read_must_name_the_runs_tables(store, tmp_path, reference, margins):
+@pytest.mark.parametrize(
+    'edit, key',
+    [
+        (lambda read: read['detail'].update(text_only='other'), 'text_only'),
+        (lambda read: read['detail'].update(arm='other'), 'arm'),
+        (lambda read: read.update(fingerprint='other'), 'fingerprint'),
+    ],
+    ids=['text_only', 'arm', 'fingerprint'],
+)
+def test_a_regressor_read_must_name_the_runs_tables_and_its_panel(
+    store, tmp_path, reference, margins, edit, key
+):
     arm = _edited(
-        synthetic_arm(store, tmp_path, spec('edited'), {}),
-        lambda data: data['runs'][0]['log_records'][1]['detail'].update(text_only='other'),
+        synthetic_arm(store, tmp_path, spec('edited', dimension=32), {}),
+        lambda data: edit(data['runs'][0]['log_records'][1]),
     )
 
-    with pytest.raises(ValueError, match="another \\['text_only'\\]"):
+    with pytest.raises(ValueError, match=f"another \\['{key}'\\]"):
         _decide([arm, reference], margins, store)
+
+def test_a_decision_compares_at_least_two_arms(store, reference, margins):
+    with pytest.raises(ValueError, match='at least two arms'):
+        _decide([reference], margins, store)
+
+def test_two_arms_may_not_share_a_name(store, tmp_path, reference, margins):
+    # One name at two dimensions, so that without the refusal the tie order would pick one
+    twins = [
+        synthetic_arm(store, tmp_path, spec('twin', dimension=dimension), {})
+        for dimension in (16, 32)
+    ]
+
+    with pytest.raises(ValueError, match='arm names repeat'):
+        _decide(twins, margins, store)
+
+@pytest.mark.parametrize(
+    'edit',
+    [
+        lambda data: data['runs'][5].update(seed=4),
+        lambda data: data['runs'][5].update(run_id=data['runs'][4]['run_id']),
+    ],
+    ids=['seed', 'run id'],
+)
+def test_a_seed_or_run_id_may_not_repeat_within_an_arm(store, tmp_path, reference, margins, edit):
+    # Six runs, so five distinct seeds remain when one repeats
+    arm = _edited(
+        synthetic_arm(
+            store, tmp_path, spec('repeated', dimension=32), {}, offsets=SEED_OFFSETS + (0.0, )
+        ),
+        edit,
+    )
+
+    with pytest.raises(ValueError, match='a seed or run id repeats'):
+        _decide([arm, reference], margins, store)
+
+def test_the_margin_reference_must_have_read_the_arms_panels(store, tmp_path, reference, margins):
+    other = MarginRecord.model_validate(
+        _json_edited(
+            margins, lambda data: data['reference']['panels'].update(outcome_data='other')
+        )
+    )
+    candidate = synthetic_arm(store, tmp_path, spec('candidate', dimension=32), {})
+
+    with pytest.raises(ValueError, match="the margin reference reference .*\\['outcome_data'\\]"):
+        _decide([candidate, reference], other, store)
 
 @pytest.mark.parametrize(
     'edit, message',
