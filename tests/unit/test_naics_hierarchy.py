@@ -8,13 +8,17 @@ deduplication, conflict handling, and caching behavior.
 
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pytest
 
 from naics_embedder.utils.naics_hierarchy import (
     HierarchyIntegrityError,
     NaicsHierarchy,
+    code_lineage,
     load_naics_hierarchy,
+    tree_distance_matrix,
+    unary_pairs,
 )
 
 # -------------------------------------------------------------------------------------------------
@@ -600,3 +604,63 @@ class TestEdgeCases:
 
         assert hierarchy.get_parent('111') == '11-13'
         assert hierarchy.get_parent('441') == '44-45'
+
+# -------------------------------------------------------------------------------------------------
+# D* and unary pairs (Req 7, Req 9)
+# -------------------------------------------------------------------------------------------------
+
+# Two sectors: 11, and the combined 31-33 keyed by 31. 11121 and 31111 each have one six-digit
+# child; 11111 and 32111 have two.
+TREE_CODES = (
+    '11', '111', '1111', '11111', '111111', '111112', '1112', '11121', '111211', '31', '311',
+    '3111', '31111', '311111', '321', '3211', '32111', '321111', '321112'
+)
+
+def _row(code):
+    return TREE_CODES.index(code)
+
+def test_code_lineage_runs_from_the_sector_and_joins_combined_sectors():
+    assert code_lineage('321111') == ('31', '321', '3211', '32111', '321111')
+    assert code_lineage('11') == ('11', )
+
+def test_d_star_runs_through_the_lowest_common_ancestor():
+    d = tree_distance_matrix(TREE_CODES)
+
+    assert d[_row('111111'), _row('111112')] == 2  # siblings, through 11111
+    assert d[_row('11111'), _row('111111')] == 1  # parent and child: no half-step
+    assert d[_row('1111'), _row('111111')] == 2  # grandparent
+    assert d[_row('111111'), _row('111211')] == 6  # through 111
+    assert d[_row('311111'), _row('321111')] == 8  # 31-33 is one sector
+    assert d.dtype == np.int64
+    assert not np.diagonal(d).any()
+    assert np.array_equal(d, d.T)
+
+def test_across_sectors_d_star_is_both_levels_less_two():
+    d = tree_distance_matrix(TREE_CODES)
+
+    for i, code_a in enumerate(TREE_CODES):
+        for j, code_b in enumerate(TREE_CODES):
+            if code_a[:2] == '11' and code_b[:2] != '11':
+                assert d[i, j] == len(code_a) + len(code_b) - 2
+    assert d[_row('11'), _row('31')] == 2  # two sectors are siblings under the virtual root
+
+def test_d_star_needs_only_the_code_strings():
+    # No ancestor of these codes is present
+    assert tree_distance_matrix(['111111', '111112', '222222']).tolist() == [
+        [0, 2, 10],
+        [2, 0, 10],
+        [10, 10, 0],
+    ]
+    assert tree_distance_matrix([]).shape == (0, 0)
+
+def test_d_star_satisfies_the_triangle_inequality():
+    d = tree_distance_matrix(TREE_CODES)
+
+    # d[i, k] <= d[i, j] + d[j, k] for every ordered triple
+    assert not (d[:, None, :] > d[:, :, None] + d[None, :, :]).any()
+
+def test_unary_pairs_are_five_digit_codes_with_one_six_digit_child():
+    assert unary_pairs(TREE_CODES) == [('11121', '111211'), ('31111', '311111')]
+
+def test_a_four_digit_code_with_one_child_forms_no_unary_pair():
+    assert unary_pairs(['1111', '11111', '111111', '111112']) == []

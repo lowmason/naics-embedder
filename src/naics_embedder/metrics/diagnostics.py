@@ -19,8 +19,9 @@ never a headline (Req 1; Req 6; Verification "Diagnostics").
   are not scored.
 
 D* is the tree metric through a virtual root (Req 7): depth_i + depth_j − 2 depth_LCA, where a
-sector has depth 1. It is computed here from the codes themselves (``panels.decoding``'s
-lineage, combined sectors as one). Distances are the arm's own: Euclidean, cosine for a
+sector has depth 1. It comes from the codes themselves, through
+``utils.naics_hierarchy.tree_distance_matrix``, the function the supervision bundle's distances
+use (combined sectors as one). Distances are the arm's own: Euclidean, cosine for a
 spherical arm, and for a hyperbolic arm the geodesic distance between the exponential maps of
 its tangent coordinates at the origin. A tie in distance is broken against relevance, as the
 decoding scorer breaks it against the truth, except in the AUC and Spearman's ranks, which
@@ -42,12 +43,12 @@ from pydantic import BaseModel, ConfigDict
 from scipy.stats import rankdata
 
 from naics_embedder.panels.decoding import (
-    code_lineage,
     cosine_distances,
     euclidean_distances,
     lorentz_distances,
 )
 from naics_embedder.panels.regressor import coordinate_matrix
+from naics_embedder.utils.naics_hierarchy import code_lineage, tree_distance_matrix, unary_pairs
 
 Geometry = Literal['euclidean', 'spherical', 'hyperbolic']
 GEOMETRIES = ('euclidean', 'spherical', 'hyperbolic')
@@ -166,10 +167,8 @@ class Tree:
     def unary_children(self) -> np.ndarray:
         '''Whether each code is the six-digit half of a unary pair (Req 9).'''
 
-        parent = self.parent
-        counts = np.bincount(parent[parent >= 0], minlength=len(self.codes))
-        six_digit = np.array([len(code) == 6 for code in self.codes])
-        return six_digit & (parent >= 0) & (counts[np.maximum(parent, 0)] == 1)
+        children = {child for _, child in unary_pairs(self.codes)}
+        return np.array([code in children for code in self.codes], dtype=bool)
 
 # -------------------------------------------------------------------------------------------------
 # Distances
@@ -366,7 +365,7 @@ def diagnostics_report(
     tree = Tree.from_codes(codes)
     distances = pairwise_distances(matrix, geometry, curvature)
     lca = tree.lca_depth()
-    target = tree.depth[:, None] + tree.depth[None, :] - 2 * lca
+    target = tree_distance_matrix(codes)
     return DiagnosticsReport(
         codes=len(codes),
         geometry=geometry,

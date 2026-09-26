@@ -5,9 +5,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+import numpy as np
 import polars as pl
 
 SECTOR_CODE_LENGTH = 2
+UNARY_PARENT_LENGTH = 5
 # Combined sectors 31-33, 44-45, and 48-49 are keyed by their first code, as in compute_relations
 COMBINED_SECTOR_KEYS = {'32': '31', '33': '31', '45': '44', '49': '48'}
 
@@ -20,6 +22,61 @@ def naics_parent_code(code: str) -> Optional[str]:
         sector = code[:SECTOR_CODE_LENGTH]
         return COMBINED_SECTOR_KEYS.get(sector, sector)
     return code[:-1]
+
+@lru_cache(maxsize=None)
+def code_lineage(code: str) -> Tuple[str, ...]:
+    '''The code's ancestors from its sector down to the code itself.'''
+
+    chain = [code]
+    parent = naics_parent_code(code)
+    while parent is not None:
+        chain.append(parent)
+        parent = naics_parent_code(parent)
+    return tuple(reversed(chain))
+
+def tree_distance_matrix(codes: Sequence[str]) -> np.ndarray:
+    '''
+    D* between every two codes (Req 7): the tree path length through a virtual root.
+
+    A code's depth is the length of its lineage, 1 for a sector, and D* is
+    ``depth_i + depth_j - 2 depth_LCA`` with the virtual root at depth 0. Pairs across sectors
+    therefore get λ(i) + λ(j) − 2, where λ is the number of digits. Combined sectors (31-33,
+    44-45, 48-49) count as one. Only the code strings are read, so ancestors need not be among
+    ``codes``.
+
+    Returns:
+        ``(len(codes), len(codes))`` int64 matrix, zero on the diagonal.
+    '''
+
+    lineages = [code_lineage(code) for code in codes]
+    if not lineages:
+        return np.zeros((0, 0), dtype=np.int64)
+    ids: Dict[str, int] = {}
+    lineage = np.full((len(lineages), max(map(len, lineages))), -1, dtype=np.int64)
+    for row, chain in enumerate(lineages):
+        for depth, ancestor in enumerate(chain):
+            lineage[row, depth] = ids.setdefault(ancestor, len(ids))
+    depth = (lineage >= 0).sum(axis=1)
+    shared = np.zeros((len(lineages), len(lineages)), dtype=np.int64)
+    for column in lineage.T:
+        shared += (column[:, None] == column[None, :]) & (column[:, None] >= 0)
+    return depth[:, None] + depth[None, :] - 2 * shared
+
+def unary_pairs(codes: Iterable[str]) -> List[Tuple[str, str]]:
+    '''
+    The unary pairs among ``codes`` (Req 9): a five-digit code and its only six-digit child.
+
+    Returns:
+        ``(parent, child)`` pairs sorted by parent.
+    '''
+
+    present = set(codes)
+    children: Dict[str, List[str]] = defaultdict(list)
+    for code in present:
+        parent = naics_parent_code(code)
+        if parent is not None and len(parent) == UNARY_PARENT_LENGTH and parent in present:
+            children[parent].append(code)
+    return sorted((parent, kids[0]) for parent, kids in children.items() if len(kids) == 1)
 
 class HierarchyIntegrityError(ValueError):
     '''A relations file lacks a NAICS parent link between two codes it contains.'''
