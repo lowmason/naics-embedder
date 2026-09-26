@@ -255,18 +255,10 @@ def test_pool_fails_when_the_universe_cannot_supply_k(pool_builder):
 HIERARCHY_ELIGIBLE = {0, 1, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16}
 
 @pytest.fixture
-def hierarchy_index(tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+def hierarchy_index(hierarchy_manifest):
     from naics_embedder.supervision.artifacts import load_validated_bundle
-    from naics_embedder.utils.config import SupervisionBuildConfig
 
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
-    return SupervisionIndex.from_bundle(load_validated_bundle(manifest))
+    return SupervisionIndex.from_bundle(load_validated_bundle(hierarchy_manifest))
 
 def _raw(index, code_ids):
     return [

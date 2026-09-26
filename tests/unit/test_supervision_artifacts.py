@@ -12,12 +12,15 @@ from naics_embedder.data.supervision_bundle import (
     codebook_fingerprint,
     distance_matrix_from_pair_facts,
     generate_supervision_bundle,
-    generate_supervision_bundle_from_frames,
     relation_matrix_from_pair_facts,
 )
+from naics_embedder.panels.index_roles import verify_role_leakage
 from naics_embedder.supervision.artifacts import (
+    REDIRECTIONS_SCHEMA,
+    REQUIRED_VALIDATION_RESULTS,
     load_validated_bundle,
     sha256_file,
+    validate_redirection_table,
     validate_training_pairs_members,
 )
 from naics_embedder.supervision.schema import CONTRACT_VERSION
@@ -296,17 +299,8 @@ def test_pair_facts_reject_a_cross_sector_distance_off_the_formula(
 # Immutable bundle publication
 # -------------------------------------------------------------------------------------------------
 
-def test_bundle_writes_manifest_last_with_matching_parquet_metadata(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
-    manifest_path = generate_supervision_bundle_from_frames(
-        output_root=tmp_path,
-        bundle_id='bundle-a',
-        generator_revision='revision-a',
-        naics_vintage=2022,
-        descriptions=descriptions_fixture,
-        pair_facts=pair_facts_fixture,
-    )
+def test_bundle_writes_manifest_last_with_matching_parquet_metadata(build_bundle):
+    manifest_path = build_bundle()
 
     manifest = json.loads(manifest_path.read_text())
     codebook_path = manifest_path.parent / manifest['artifacts']['codebook']['path']
@@ -318,52 +312,22 @@ def test_bundle_writes_manifest_last_with_matching_parquet_metadata(
     assert metadata[b'naics_embedder.bundle_id'].decode() == 'bundle-a'
     assert metadata[b'naics_embedder.schema_version'].decode() == 'codebook-v1'
 
-def test_bundle_never_overwrites_an_existing_generation(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
-    kwargs = {
-        'output_root': tmp_path,
-        'bundle_id': 'bundle-a',
-        'generator_revision': 'revision-a',
-        'naics_vintage': 2022,
-        'descriptions': descriptions_fixture,
-        'pair_facts': pair_facts_fixture,
-    }
-    generate_supervision_bundle_from_frames(**kwargs)
+def test_bundle_never_overwrites_an_existing_generation(build_bundle):
+    build_bundle()
 
     with pytest.raises(FileExistsError, match='bundle-a'):
-        generate_supervision_bundle_from_frames(**kwargs)
+        build_bundle()
 
-def test_failed_validation_publishes_no_manifest(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
+def test_failed_validation_publishes_no_manifest(tmp_path, build_bundle, pair_facts_fixture):
     inconsistent = pair_facts_fixture.with_columns(is_explicit_exclusion=pl.lit(False))
 
     with pytest.raises(ValueError, match='exclusion derivation'):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id='broken',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=descriptions_fixture,
-            pair_facts=inconsistent,
-        )
+        build_bundle(bundle_id='broken', pair_facts=inconsistent)
 
     assert not (tmp_path / 'broken' / 'manifest.json').exists()
 
-def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
-    manifests = [
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id=bundle_id,
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=descriptions_fixture,
-            pair_facts=pair_facts_fixture,
-        ) for bundle_id in ('bundle-a', 'bundle-b')
-    ]
+def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(build_bundle):
+    manifests = [build_bundle(bundle_id=bundle_id) for bundle_id in ('bundle-a', 'bundle-b')]
     loaded = [json.loads(path.read_text()) for path in manifests]
     frames = [
         pl.read_parquet(path.parent / manifest['artifacts']['pair_facts']['path'])
@@ -374,16 +338,9 @@ def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(
     assert frames[0].equals(frames[1])
 
 def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
-    tmp_path, descriptions_fixture, pair_facts_fixture
+    tmp_path, build_bundle
 ):
-    manifest_path = generate_supervision_bundle_from_frames(
-        output_root=tmp_path,
-        bundle_id='bundle-a',
-        generator_revision='revision-a',
-        naics_vintage=2022,
-        descriptions=descriptions_fixture,
-        pair_facts=pair_facts_fixture,
-    )
+    manifest_path = build_bundle()
     manifest = json.loads(manifest_path.read_text())
     artifacts = manifest['artifacts']
 
@@ -396,6 +353,8 @@ def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
         'relation_matrix',
         'training_pairs',
         'difficulty_thresholds',
+        'index_roles',
+        'redirections',
     }
     assert manifest['codebook_order'] == ['111111', '111112', '111113', '222222', '333333']
     assert artifacts['pair_facts']['row_count'] == 10
@@ -425,49 +384,29 @@ def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
                 )
     assert not list(tmp_path.glob('.*staging*'))
 
-def test_failed_generation_leaves_no_staging_directory(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
+def test_failed_generation_leaves_no_staging_directory(tmp_path, build_bundle, pair_facts_fixture):
     with pytest.raises(ValueError):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
+        build_bundle(
             bundle_id='broken',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=descriptions_fixture,
             pair_facts=pair_facts_fixture.with_columns(structural_distance=pl.lit(0.0)),
         )
 
     assert list(tmp_path.iterdir()) == []
 
 def test_production_bundle_uses_a_uuid_and_the_descriptions_file_hash(
-    tmp_path, hierarchy_descriptions_parquet
+    hierarchy_manifest, hierarchy_descriptions_parquet
 ):
-    cfg = SupervisionBuildConfig(
-        descriptions_parquet=hierarchy_descriptions_parquet,
-        output_root=str(tmp_path / 'bundles'),
-    )
-
-    manifest_path = generate_supervision_bundle(cfg)
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(hierarchy_manifest.read_text())
 
     assert str(uuid.UUID(manifest['bundle_id'])) == manifest['bundle_id']
-    assert manifest_path.parent.name == manifest['bundle_id']
+    assert hierarchy_manifest.parent.name == manifest['bundle_id']
     assert manifest['description_fingerprint'] == sha256_file(hierarchy_descriptions_parquet)
     assert manifest['structural_relation_ids']['cross_sector'] == 99
     assert manifest['artifacts']['pair_facts']['row_count'] == 17 * 16 // 2
     assert manifest['artifacts']['pair_facts']['exclusion_count'] == 2
 
-def test_the_unary_pairs_are_flagged_and_never_generated_positives(
-    tmp_path, hierarchy_descriptions_parquet
-):
-    manifest_path = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
-    bundle = load_validated_bundle(manifest_path)
+def test_the_unary_pairs_are_flagged_and_never_generated_positives(hierarchy_manifest):
+    bundle = load_validated_bundle(hierarchy_manifest)
     facts = pl.read_parquet(bundle.artifact_path('pair_facts'))
     pairs = pl.read_parquet(list(bundle.member_paths('training_pairs')))
 
@@ -485,23 +424,14 @@ def test_the_unary_pairs_are_flagged_and_never_generated_positives(
     assert bundle.manifest.validation_results['unary_pairs_flagged'] is True
     assert bundle.manifest.validation_results['no_unary_positives'] is True
 
-def test_pair_facts_refuse_a_unary_flag_the_codes_do_not_support(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
+def test_pair_facts_refuse_a_unary_flag_the_codes_do_not_support(build_bundle, pair_facts_fixture):
     # '111111' and '111112' are six-digit siblings, not a five-digit code and its only child
     flagged = pair_facts_fixture.with_columns(
         unary_pair=pl.col('code_i_id').eq(0) & pl.col('code_j_id').eq(1)
     )
 
     with pytest.raises(ValueError, match='unary_pair is wrong on 1 pairs, e.g. 111111/111112'):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id='bundle-a',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=descriptions_fixture,
-            pair_facts=flagged,
-        )
+        build_bundle(pair_facts=flagged)
 
 def test_training_pairs_refuse_a_unary_positive(tmp_path, pair_facts_fixture):
     # Rows generated while (0, 1) was unflagged keep it as a positive; the flagged facts refuse them
@@ -662,13 +592,11 @@ def test_loader_rejects_a_rehashed_exclusion_negative(generated_bundle):
         load_validated_bundle(generated_bundle)
 
 # -------------------------------------------------------------------------------------------------
-# The optional index-roles member
+# The index-roles and redirections members
 # -------------------------------------------------------------------------------------------------
 
-def test_bundle_carries_the_index_roles_after_checking_them(
-    generated_bundle_with_roles, index_roles_fixture
-):
-    manifest = json.loads(generated_bundle_with_roles.read_text())
+def test_bundle_carries_the_index_roles_after_checking_them(generated_bundle, index_roles_fixture):
+    manifest = json.loads(generated_bundle.read_text())
     record = manifest['artifacts']['index_roles']
 
     assert record['path'] == 'naics_index_roles.parquet'
@@ -680,11 +608,29 @@ def test_bundle_carries_the_index_roles_after_checking_them(
         'index_roles_no_leakage',
     ):
         assert manifest['validation_results'][check] is True
-    bundle = load_validated_bundle(generated_bundle_with_roles)
+    bundle = load_validated_bundle(generated_bundle)
     assert pl.read_parquet(bundle.artifact_path('index_roles')).equals(index_roles_fixture)
 
+def test_bundle_carries_the_redirection_table_after_checking_it(
+    generated_bundle, redirections_fixture
+):
+    manifest = json.loads(generated_bundle.read_text())
+    record = manifest['artifacts']['redirections']
+
+    assert record['path'] == 'naics_redirections.parquet'
+    assert record['schema_version'] == 'redirections-v1'
+    assert record['row_count'] == 2
+    for check in (
+        'redirections_well_formed',
+        'redirections_match_exclusion_channel',
+        'redirections_match_pair_facts',
+    ):
+        assert manifest['validation_results'][check] is True
+    bundle = load_validated_bundle(generated_bundle)
+    assert pl.read_parquet(bundle.artifact_path('redirections')).equals(redirections_fixture)
+
 def test_bundle_refuses_an_examples_channel_holding_queries(
-    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture
+    tmp_path, build_bundle, text_descriptions_fixture
 ):
     stale = text_descriptions_fixture.with_columns(
         examples=pl.when(pl.col('code') == '111111').then(
@@ -693,47 +639,174 @@ def test_bundle_refuses_an_examples_channel_holding_queries(
     )
 
     with pytest.raises(ValueError, match='examples channel other than'):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id='stale',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=stale,
-            pair_facts=pair_facts_fixture,
-            index_roles=index_roles_fixture,
-        )
+        build_bundle(bundle_id='stale', descriptions=stale)
     assert list(tmp_path.iterdir()) == []
 
-def test_bundle_refuses_a_held_out_query_matching_training_text(
-    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture
-):
+def test_bundle_refuses_a_held_out_query_matching_training_text(build_bundle, index_roles_fixture):
     # Entry 1 (validation) becomes another code's title
     leaky = index_roles_fixture.with_columns(
         text=pl.when(pl.col('entry_id') == 1).then(pl.lit('Industry 222222')).otherwise('text')
     )
 
     with pytest.raises(ValueError, match='held-out queries match training text'):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id='leaky',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=text_descriptions_fixture,
-            pair_facts=pair_facts_fixture,
-            index_roles=leaky,
+        build_bundle(bundle_id='leaky', index_roles=leaky)
+
+def test_the_leakage_check_reads_the_activity_phrases(monkeypatch, build_bundle):
+    # Stage 7 trains on the activity phrases as queries, so no held-out query may match one
+    seen = []
+
+    def spy(descriptions, role_rows, *args, extra_texts=(), **kwargs):
+        seen.append(list(extra_texts))
+        return verify_role_leakage(
+            descriptions, role_rows, *args, extra_texts=extra_texts, **kwargs
         )
 
-def test_loader_rejects_an_index_entry_with_two_roles(generated_bundle_with_roles):
+    monkeypatch.setattr('naics_embedder.data.supervision_bundle.verify_role_leakage', spy)
+    build_bundle()
+
+    assert seen == [['Growing peanuts', 'Canola crushing']]
+
+def test_bundle_refuses_an_exclusion_channel_the_table_does_not_build(
+    tmp_path, build_bundle, text_descriptions_fixture
+):
+    # Code 111111's channel repeats its one cross-reference, which must appear once
+    doubled = text_descriptions_fixture.with_columns(
+        excluded=pl.when(pl.col('code') == '111111').then(
+            pl.concat_str('excluded', pl.lit(' '), 'excluded')
+        ).otherwise('excluded')
+    )
+
+    with pytest.raises(ValueError, match='exclusion channel other than the redirection table'):
+        build_bundle(bundle_id='doubled', descriptions=doubled)
+    assert list(tmp_path.iterdir()) == []
+
+# A well-formed table over the codes '11111', '111111', '111112' and '222222': a cross-reference,
+# a cross-reference naming its code's parent, and a withheld "Excluded" paragraph
+WELL_FORMED_REDIRECTIONS = [
+    (
+        0,
+        'cross_reference',
+        '111111',
+        'Growing peanuts--are classified in Industry 111112.',
+        'Growing peanuts',
+        ['111112'],
+        [],
+        False,
+    ),
+    (
+        1,
+        'cross_reference',
+        '111112',
+        'Mixed farming--are classified in Industry 11111.',
+        'Mixed farming',
+        ['11111'],
+        ['11111'],
+        False,
+    ),
+    (
+        2,
+        'description',
+        '222222',
+        'Farm supplies are classified in Industry 111111.',
+        None,
+        ['111111'],
+        [],
+        True,
+    ),
+]
+REDIRECTION_CODES = ['11111', '111111', '111112', '222222']
+
+def _redirections(rows) -> pl.DataFrame:
+    return pl.DataFrame(rows, schema=REDIRECTIONS_SCHEMA, orient='row')
+
+def test_redirection_table_accepts_a_well_formed_table():
+    validate_redirection_table(_redirections(WELL_FORMED_REDIRECTIONS), REDIRECTION_CODES)
+
+@pytest.mark.parametrize(
+    ('row', 'column', 'value', 'message'),
+    [
+        (0, 'reference_id', 5, 'reference IDs must run from zero'),
+        (0, 'source', 'index', 'unknown redirection sources'),
+        (0, 'named_codes', ['999999'], 'names a code outside the codebook'),
+        (0, 'named_codes', ['111111'], 'names its own code'),
+        (1, 'lineal_codes', [], 'lineal_codes must be'),
+        (2, 'activity', 'Farm supplies', 'activity phrase'),
+    ],
+)
+def test_redirection_table_refuses_a_malformed_row(row, column, value, message):
+    rows = [list(values) for values in WELL_FORMED_REDIRECTIONS]
+    rows[row][list(REDIRECTIONS_SCHEMA).index(column)] = value
+
+    with pytest.raises(ValueError, match=message):
+        validate_redirection_table(_redirections(rows), REDIRECTION_CODES)
+
+def test_redirection_table_refuses_other_columns():
+    table = _redirections(WELL_FORMED_REDIRECTIONS).drop('withheld')
+
+    with pytest.raises(ValueError, match='redirection columns must be'):
+        validate_redirection_table(table, REDIRECTION_CODES)
+
+def test_loader_rejects_an_index_entry_with_two_roles(generated_bundle):
     _rewrite_member(
-        generated_bundle_with_roles,
+        generated_bundle,
         'index_roles',
         lambda frame: frame.with_columns(entry_id=pl.lit(0, pl.Int64)),
     )
 
     with pytest.raises(ValueError, match='index_roles .*more than one role'):
-        load_validated_bundle(generated_bundle_with_roles)
+        load_validated_bundle(generated_bundle)
 
-def test_production_bundle_takes_the_index_roles_from_its_config(tmp_path, hierarchy_descriptions):
+def test_loader_rejects_a_rehashed_redirection_naming_another_code(generated_bundle):
+    # Row 1 now sends canola crushing to '333333', which '222222' does not exclude
+    _rewrite_member(
+        generated_bundle,
+        'redirections',
+        lambda frame: frame.with_columns(
+            named_codes=pl.Series([['111113'], ['333333']], dtype=pl.List(pl.Utf8))
+        ),
+    )
+
+    with pytest.raises(
+        ValueError, match='redirections .*bundle-a.*1 named pairs are not exclusions'
+    ):
+        load_validated_bundle(generated_bundle)
+
+@pytest.mark.parametrize('member', ['index_roles', 'redirections'])
+def test_loader_requires_both_members(generated_bundle, member):
+    manifest = json.loads(generated_bundle.read_text())
+    del manifest['artifacts'][member]
+    generated_bundle.write_text(json.dumps(manifest, indent=2))
+
+    with pytest.raises(ValueError, match=rf"lacks required artifacts: \['{member}'\]"):
+        load_validated_bundle(generated_bundle)
+
+def test_a_build_records_exactly_the_required_validation_results(generated_bundle):
+    recorded = json.loads(generated_bundle.read_text())['validation_results']
+
+    assert set(recorded) == set(REQUIRED_VALIDATION_RESULTS)
+    # The member checks are among them, Req 3's leakage check included
+    assert {
+        'index_roles_one_role_per_entry',
+        'index_roles_examples_channel',
+        'index_roles_no_leakage',
+        'redirections_well_formed',
+        'redirections_match_exclusion_channel',
+        'redirections_match_pair_facts',
+    } <= set(REQUIRED_VALIDATION_RESULTS)
+
+def test_loader_rejects_a_manifest_missing_a_required_validation_result(generated_bundle):
+    manifest = json.loads(generated_bundle.read_text())
+    del manifest['validation_results']['index_roles_no_leakage']
+    generated_bundle.write_text(json.dumps(manifest, indent=2))
+
+    with pytest.raises(
+        ValueError, match=r"lacks required validation results: \['index_roles_no_leakage'\]"
+    ):
+        load_validated_bundle(generated_bundle)
+
+def test_production_bundle_takes_its_members_from_its_config(
+    tmp_path, hierarchy_descriptions, hierarchy_redirections
+):
     roles = pl.DataFrame(
         [
             (0, '311111', 'Dog food manufacturing', 'examples'),
@@ -750,21 +823,25 @@ def test_production_bundle_takes_the_index_roles_from_its_config(tmp_path, hiera
     )
     examples = {'311111': 'Dog food manufacturing', '441111': 'New car dealers'}
     descriptions = hierarchy_descriptions.with_columns(
-        description=pl.lit('This industry comprises establishments.'),
-        examples=pl.col('code').replace_strict(examples, default=None),
-        excluded=pl.lit(None, pl.Utf8),
+        examples=pl.col('code').replace_strict(examples, default=None)
     )
     descriptions_path = tmp_path / 'naics_descriptions.parquet'
     roles_path = tmp_path / 'naics_index_roles.parquet'
+    redirections_path = tmp_path / 'naics_redirections.parquet'
     descriptions.write_parquet(descriptions_path)
     roles.write_parquet(roles_path)
+    hierarchy_redirections.write_parquet(redirections_path)
     cfg = SupervisionBuildConfig(
         descriptions_parquet=str(descriptions_path),
         index_roles_parquet=str(roles_path),
+        redirections_parquet=str(redirections_path),
         output_root=str(tmp_path / 'bundles'),
     )
 
     manifest = json.loads(generate_supervision_bundle(cfg).read_text())
 
     assert manifest['artifacts']['index_roles']['row_count'] == 3
-    assert manifest['generation_parameters']['index_roles_parquet'] == str(roles_path.resolve())
+    assert manifest['artifacts']['redirections']['row_count'] == 2
+    parameters = manifest['generation_parameters']
+    assert parameters['index_roles_parquet'] == str(roles_path.resolve())
+    assert parameters['redirections_parquet'] == str(redirections_path.resolve())

@@ -20,7 +20,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, Mapping, Optional
+from typing import Any, Dict, Iterator, Mapping, Optional, Sequence
 
 import numpy as np
 import polars as pl
@@ -32,10 +32,12 @@ from naics_embedder.data.create_triplets import (
     CROSS_SECTOR_NEGATIVE_CAP,
     iter_training_pair_batches,
 )
+from naics_embedder.data.redirections import exclusion_channel
 from naics_embedder.panels.index_roles import verify_examples_channel, verify_role_leakage
 from naics_embedder.supervision.artifacts import (
     INDEX_ROLE_COLUMNS,
     INDEX_ROLES_ARTIFACT,
+    REDIRECTIONS_ARTIFACT,
     STRUCTURAL_PAIR_COLUMNS,
     codebook_fingerprint,
     sha256_file,
@@ -43,6 +45,8 @@ from naics_embedder.supervision.artifacts import (
     validate_exclusion_derivation,
     validate_index_role_table,
     validate_matrix,
+    validate_redirection_exclusions,
+    validate_redirection_table,
     validate_structural_pairs,
     validate_unary_pairs,
     write_versioned_dataset_batches,
@@ -56,6 +60,7 @@ from naics_embedder.supervision.schema import (
     DISTANCES_SCHEMA_VERSION,
     INDEX_ROLES_SCHEMA_VERSION,
     PAIR_FACTS_SCHEMA_VERSION,
+    REDIRECTIONS_SCHEMA_VERSION,
     RELATION_MATRIX_SCHEMA_VERSION,
     RELATIONS_SCHEMA_VERSION,
     TRAINING_PAIRS_SCHEMA_VERSION,
@@ -274,6 +279,7 @@ ARTIFACT_FILENAMES = {
     'training_pairs': 'naics_training_pairs',
     'difficulty_thresholds': 'curriculum_difficulty_thresholds.json',
     INDEX_ROLES_ARTIFACT: 'naics_index_roles.parquet',
+    REDIRECTIONS_ARTIFACT: 'naics_redirections.parquet',
 }
 
 ARTIFACT_SCHEMA_VERSIONS = {
@@ -286,6 +292,7 @@ ARTIFACT_SCHEMA_VERSIONS = {
     'training_pairs': TRAINING_PAIRS_SCHEMA_VERSION,
     'difficulty_thresholds': DIFFICULTY_THRESHOLDS_SCHEMA_VERSION,
     INDEX_ROLES_ARTIFACT: INDEX_ROLES_SCHEMA_VERSION,
+    REDIRECTIONS_ARTIFACT: REDIRECTIONS_SCHEMA_VERSION,
 }
 
 PAIR_FACT_SCHEMA = {
@@ -417,17 +424,50 @@ def _validate_index_roles(
     index_roles: pl.DataFrame,
     descriptions: pl.DataFrame,
     codebook: pl.DataFrame,
+    activities: Sequence[str],
 ) -> Dict[str, bool]:
-    '''Check the optional index-roles member against the bundle's own descriptions and codes.'''
+    '''
+    Check the index-roles member against the bundle's descriptions, codes and activity phrases.
+
+    No held-out query may match training text, which includes the redirection table's activity
+    phrases, because Stage 7 trains on them as queries (Req 3).
+    '''
 
     six_digit_codes = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
     validate_index_role_table(index_roles, six_digit_codes.to_list())
     verify_examples_channel(descriptions, index_roles)
-    verify_role_leakage(descriptions, index_roles)
+    verify_role_leakage(descriptions, index_roles, extra_texts=activities)
     return {
         'index_roles_one_role_per_entry': True,
         'index_roles_examples_channel': True,
         'index_roles_no_leakage': True,
+    }
+
+def _validate_redirections(
+    redirections: pl.DataFrame,
+    descriptions: pl.DataFrame,
+    codebook: pl.DataFrame,
+    pair_facts: pl.DataFrame,
+) -> Dict[str, bool]:
+    '''
+    Check the redirections member against the codebook, the descriptions and the pair facts.
+
+    The descriptions' exclusion channel must be the one the table builds, so each cross-reference
+    appears in it once (Req 8(a)), and the table must name exactly the pair facts' exclusions.
+    '''
+
+    validate_redirection_table(redirections, codebook.get_column('code').to_list())
+    built = descriptions.select('code').join(exclusion_channel(redirections), on='code', how='left')
+    carried = descriptions.select('code', 'excluded', 'excluded_codes')
+    if not built.sort('code').equals(carried.sort('code')):
+        raise ValueError(
+            'descriptions carry an exclusion channel other than the redirection table builds'
+        )
+    validate_redirection_exclusions(redirections, pair_facts)
+    return {
+        'redirections_well_formed': True,
+        'redirections_match_exclusion_channel': True,
+        'redirections_match_pair_facts': True,
     }
 
 def _validate_training_identity(batch: pl.DataFrame, pair_keys: pl.DataFrame) -> None:
@@ -538,7 +578,8 @@ def _write_bundle_artifacts(
     relation_matrix: pl.DataFrame,
     cross_sector_cap: int,
     cap_seed: int,
-    index_roles: Optional[pl.DataFrame] = None,
+    index_roles: pl.DataFrame,
+    redirections: pl.DataFrame,
 ) -> Dict[str, ArtifactRecord]:
     exclusions = int(pair_facts.get_column('is_explicit_exclusion').sum())
 
@@ -570,13 +611,15 @@ def _write_bundle_artifacts(
             exclusion_count=exclusions,
         ),
         'relation_matrix': _record('relation_matrix', parquet('relation_matrix', relation_matrix)),
-    }
-    if index_roles is not None:
-        records[INDEX_ROLES_ARTIFACT] = _record(
+        INDEX_ROLES_ARTIFACT: _record(
             INDEX_ROLES_ARTIFACT,
             parquet(INDEX_ROLES_ARTIFACT,
                     index_roles.select(INDEX_ROLE_COLUMNS).sort('entry_id')),
-        )
+        ),
+        REDIRECTIONS_ARTIFACT: _record(
+            REDIRECTIONS_ARTIFACT, parquet(REDIRECTIONS_ARTIFACT, redirections)
+        ),
+    }
 
     counts = {'rows': 0, 'exclusions': 0}
     training_files = write_versioned_dataset_batches(
@@ -626,20 +669,23 @@ def generate_supervision_bundle_from_frames(
     naics_vintage: int,
     descriptions: pl.DataFrame,
     pair_facts: pl.DataFrame,
+    index_roles: pl.DataFrame,
+    redirections: pl.DataFrame,
     description_fingerprint: Optional[str] = None,
     structural_relation_ids: Optional[Mapping[str, int]] = None,
     generation_parameters: Optional[Mapping[str, Any]] = None,
     cross_sector_cap: int = CROSS_SECTOR_NEGATIVE_CAP,
     cap_seed: int = CROSS_SECTOR_CAP_SEED,
-    index_roles: Optional[pl.DataFrame] = None,
 ) -> Path:
     '''
     Validate canonical frames and publish them as one immutable supervision bundle.
 
-    ``index_roles`` (every index entry with its text and role) becomes the optional
-    ``index_roles`` member after three checks against ``descriptions``: one known role per entry,
-    examples channels built from examples-role entries only, and no held-out query matching any
-    training text.
+    ``index_roles`` (every index entry with its text and role) and ``redirections`` (the
+    redirection table) become required members after checks against ``descriptions``. Each entry
+    holds one known role, examples channels hold examples-role entries only, and no held-out
+    query matches any training text or activity phrase. The table is well formed, the
+    descriptions' exclusion channel is the one it builds, and it names exactly the pair facts'
+    exclusions.
 
     Artifacts are written to ``<output_root>/.<bundle_id>.staging``; the manifest is written only
     after every artifact validates, and the staging directory is then atomically renamed to
@@ -663,8 +709,13 @@ def generate_supervision_bundle_from_frames(
     relation_matrix = relation_matrix_from_pair_facts(pair_facts, codebook)
     _validate_matrices(pair_facts, codebook, distance_matrix, relation_matrix)
     validation_results['matrix_reconciliation'] = True
-    if index_roles is not None:
-        validation_results.update(_validate_index_roles(index_roles, descriptions, codebook))
+    validation_results.update(
+        _validate_redirections(redirections, descriptions, codebook, pair_facts)
+    )
+    activities = redirections.get_column('activity').drop_nulls().to_list()
+    validation_results.update(
+        _validate_index_roles(index_roles, descriptions, codebook, activities)
+    )
 
     output_root.mkdir(parents=True, exist_ok=True)
     try:
@@ -685,6 +736,7 @@ def generate_supervision_bundle_from_frames(
             cross_sector_cap=cross_sector_cap,
             cap_seed=cap_seed,
             index_roles=index_roles,
+            redirections=redirections,
         )
         validation_results.update(
             {
@@ -738,26 +790,26 @@ def generate_supervision_bundle_from_frames(
 
 def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
     '''
-    Build and publish a new supervision bundle from the configured descriptions.
+    Build and publish a new supervision bundle from the files ``data preprocess`` writes.
 
-    The bundle ID is a fresh UUID4, and the description fingerprint is the SHA-256 of the exact
-    descriptions file, so training can later verify it runs against the same input.
+    It reads the configured descriptions, index roles and redirection table. The bundle ID is a
+    fresh UUID4, and the description fingerprint is the SHA-256 of the exact descriptions file,
+    so training can later verify it runs against the same input.
 
     Returns:
         Path to the published ``manifest.json``.
     '''
 
     descriptions_path = Path(cfg.descriptions_parquet)
+    index_roles_path = Path(cfg.index_roles_parquet)
+    redirections_path = Path(cfg.redirections_parquet)
     descriptions = pl.read_parquet(descriptions_path)
     parameters = {
         'descriptions_parquet': str(descriptions_path.resolve()),
+        'index_roles_parquet': str(index_roles_path.resolve()),
+        'redirections_parquet': str(redirections_path.resolve()),
         'output_root': str(Path(cfg.output_root).resolve()),
     }
-    index_roles = None
-    if cfg.index_roles_parquet is not None:
-        index_roles_path = Path(cfg.index_roles_parquet)
-        index_roles = pl.read_parquet(index_roles_path)
-        parameters['index_roles_parquet'] = str(index_roles_path.resolve())
     codebook = build_codebook(descriptions)
     distances = compute_structural_distances(
         str(descriptions_path), DistancesConfig(input_parquet=str(descriptions_path))
@@ -771,8 +823,9 @@ def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
         naics_vintage=cfg.naics_vintage,
         descriptions=descriptions,
         pair_facts=pair_facts,
+        index_roles=pl.read_parquet(index_roles_path),
+        redirections=pl.read_parquet(redirections_path),
         description_fingerprint=sha256_file(descriptions_path),
         structural_relation_ids=cfg.relation_id,
         generation_parameters=parameters,
-        index_roles=index_roles,
     )

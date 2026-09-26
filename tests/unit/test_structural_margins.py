@@ -11,11 +11,9 @@ import pytest
 import torch
 
 from naics_embedder.data.create_triplets import _structural_margins
-from naics_embedder.data.supervision_bundle import generate_supervision_bundle
 from naics_embedder.supervision.artifacts import load_validated_bundle
 from naics_embedder.supervision.index import SupervisionIndex
 from naics_embedder.supervision.margins import structural_margins, structurally_eligible
-from naics_embedder.utils.config import SupervisionBuildConfig
 
 def _margins(negative_distance, negative_relation, positive_distance, positive_relation):
     return structural_margins(
@@ -65,16 +63,8 @@ def test_structurally_closer_or_equal_negatives_are_ineligible(negative, positiv
 
     assert eligible.tolist() == [False]
 
-def test_runtime_rule_equals_the_generator_rule_over_every_hierarchy_triple(
-    tmp_path, hierarchy_descriptions_parquet
-):
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
-    index = SupervisionIndex.from_bundle(load_validated_bundle(manifest))
+def test_runtime_rule_equals_the_generator_rule_over_every_hierarchy_triple(hierarchy_manifest):
+    index = SupervisionIndex.from_bundle(load_validated_bundle(hierarchy_manifest))
     size = len(index.id_to_code)
     rows = [
         (anchor, positive, negative) for anchor in range(size) for positive in range(size)

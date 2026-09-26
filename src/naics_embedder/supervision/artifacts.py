@@ -174,6 +174,40 @@ REQUIRED_ARTIFACTS = (
     'relation_matrix',
     'training_pairs',
     'difficulty_thresholds',
+    'index_roles',
+    'redirections',
+)
+
+# Every check a bundle build records. The loader refuses a manifest that lacks one, so a bundle
+# built without a check never loads.
+REQUIRED_VALIDATION_RESULTS = (
+    'codebook_contiguous_unique',
+    'codebook_identity',
+    'pair_keys_unique',
+    'canonical_orientation',
+    'pair_coverage',
+    'nonzero_structural_distance',
+    'no_structural_sentinel',
+    'distance_is_d_star',
+    'cross_sector_distance_formula',
+    'cross_sector_relation_label',
+    'distance_triangle_inequality',
+    'exclusion_derivation',
+    'exclusions_match_descriptions',
+    'unary_pairs_flagged',
+    'matrix_reconciliation',
+    'redirections_well_formed',
+    'redirections_match_exclusion_channel',
+    'redirections_match_pair_facts',
+    'index_roles_one_role_per_entry',
+    'index_roles_examples_channel',
+    'index_roles_no_leakage',
+    'direct_positive_safety',
+    'no_exclusion_negatives',
+    'no_unary_positives',
+    'training_exclusion_derivation',
+    'training_identity_joins',
+    'artifact_hashes_recorded',
 )
 
 STRUCTURAL_PAIR_COLUMNS = (
@@ -385,6 +419,95 @@ def validate_index_role_table(
     if short.height:
         raise ValueError(
             f'{short.height:,} codes have fewer than {min_examples_per_code} examples-role entries'
+        )
+
+REDIRECTIONS_ARTIFACT = 'redirections'
+CROSS_REFERENCE_SOURCE = 'cross_reference'
+DESCRIPTION_SOURCE = 'description'
+REDIRECTIONS_SCHEMA = {
+    'reference_id': pl.Int64,
+    'source': pl.Utf8,
+    'code': pl.Utf8,
+    'text': pl.Utf8,
+    'activity': pl.Utf8,
+    'named_codes': pl.List(pl.Utf8),
+    'lineal_codes': pl.List(pl.Utf8),
+    'withheld': pl.Boolean,
+}
+
+def validate_redirection_table(redirections: pl.DataFrame, codes: Collection[str]) -> None:
+    '''
+    Fail closed unless the redirection table is well formed (Req 8).
+
+    Its columns are ``REDIRECTIONS_SCHEMA``'s, in order, and ``reference_id`` runs from zero in
+    table order. Every row comes from a known source and names codebook codes other than its
+    own, and ``lineal_codes`` holds exactly the named codes that are the row's code's ancestors
+    or descendants. Only a cross-reference row that names a code and is not withheld may carry
+    an activity phrase.
+    '''
+
+    if redirections.schema != pl.Schema(REDIRECTIONS_SCHEMA):
+        raise ValueError(f'redirection columns must be {list(REDIRECTIONS_SCHEMA)}, as typed there')
+    required = [name for name in REDIRECTIONS_SCHEMA if name != 'activity']
+    if redirections.select(pl.any_horizontal(pl.col(required).is_null()).any()).item():
+        raise ValueError('a redirection row lacks a required value')
+    if redirections.get_column('reference_id').to_list() != list(range(redirections.height)):
+        raise ValueError('reference IDs must run from zero in table order')
+    sources = set(redirections.get_column('source').to_list())
+    unknown = sorted(sources - {CROSS_REFERENCE_SOURCE, DESCRIPTION_SOURCE})
+    if unknown:
+        raise ValueError(f'unknown redirection sources: {unknown}')
+    known = set(codes)
+    for row in redirections.iter_rows(named=True):
+        code, named = row['code'], row['named_codes']
+        where = f'redirection {row["reference_id"]} ({code})'
+        if code not in known or not set(named) <= known:
+            raise ValueError(f'{where} names a code outside the codebook')
+        if code in named:
+            raise ValueError(f'{where} names its own code')
+        lineal = [
+            other for other in named if other in code_lineage(code) or code in code_lineage(other)
+        ]
+        if row['lineal_codes'] != lineal:
+            raise ValueError(
+                f'{where}: lineal_codes must be the named ancestors and descendants, {lineal}'
+            )
+        redirects = row['source'] == CROSS_REFERENCE_SOURCE and bool(named)
+        if row['activity'] is not None and (row['withheld'] or not redirects):
+            raise ValueError(
+                f'{where} carries an activity phrase, which only a cross-reference row that '
+                'names a code and is not withheld may carry'
+            )
+
+def validate_redirection_exclusions(redirections: pl.DataFrame, pair_facts: pl.DataFrame) -> None:
+    '''
+    Fail closed unless the redirection table names exactly the pair facts' explicit exclusions.
+
+    Every (code, named code) pair of the table, withheld rows included, must be a directed
+    exclusion of the pair facts, and every directed exclusion must be named by some row.
+    '''
+
+    # yapf: disable
+    named = (
+        redirections
+        .select('code', other=pl.col('named_codes'))
+        .explode('other')
+        .drop_nulls()
+        .unique()
+    )
+    # yapf: enable
+    excluded = pl.concat(
+        [
+            pair_facts.filter('code_i_excludes_code_j').select(code='code_i', other='code_j'),
+            pair_facts.filter('code_j_excludes_code_i').select(code='code_j', other='code_i'),
+        ]
+    ).unique()
+    unmatched = named.join(excluded, on=['code', 'other'], how='anti').height
+    unnamed = excluded.join(named, on=['code', 'other'], how='anti').height
+    if unmatched or unnamed:
+        raise ValueError(
+            f'the redirection table and the pair facts disagree: {unmatched:,} named pairs are '
+            f'not exclusions, and {unnamed:,} exclusions are named by no row'
         )
 
 def validate_matrix(
@@ -697,15 +820,21 @@ def _validate_relations(root: Path, manifest: SupervisionManifest) -> None:
         lambda: validate_training_pairs_members(training_paths, pair_facts, codebook.height),
     )
 
-    # Optional under stage3-supervision-v1: bundles built before the outcome panel lack it
-    if INDEX_ROLES_ARTIFACT in manifest.artifacts:
-        roles = read(INDEX_ROLES_ARTIFACT)
-        six_digit_codes = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
-        _in_context(
-            INDEX_ROLES_ARTIFACT,
-            bundle_id,
-            lambda: validate_index_role_table(roles, six_digit_codes.to_list()),
-        )
+    roles = read(INDEX_ROLES_ARTIFACT)
+    six_digit_codes = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
+    _in_context(
+        INDEX_ROLES_ARTIFACT,
+        bundle_id,
+        lambda: validate_index_role_table(roles, six_digit_codes.to_list()),
+    )
+
+    redirections = read(REDIRECTIONS_ARTIFACT)
+
+    def check_redirections() -> None:
+        validate_redirection_table(redirections, codebook.get_column('code').to_list())
+        validate_redirection_exclusions(redirections, pair_facts)
+
+    _in_context(REDIRECTIONS_ARTIFACT, bundle_id, check_redirections)
 
 def load_validated_bundle(
     manifest_path: str | Path,
@@ -715,11 +844,12 @@ def load_validated_bundle(
     Load a supervision bundle, failing closed on any contract, integrity, or relational violation.
 
     Checks the contract version, every member's existence, hash, row count, and Parquet contract
-    metadata, the recorded validation results, and then re-runs the relational checks: codebook
-    order and fingerprint, pair-fact identity/orientation/coverage/sentinels/exclusion derivation,
-    long-form and matrix reconciliation, training-pair identity, exclusion, and structure, and,
-    when the bundle carries one, the index-entry role table (one known role per entry, six-digit
-    codes only, the examples-channel floor).
+    metadata, and that every required validation result is recorded as passed. It then re-runs
+    the relational checks: codebook order and fingerprint; pair-fact identity, orientation,
+    coverage, sentinels and exclusion derivation; long-form and matrix reconciliation;
+    training-pair identity, exclusion, and structure; the index-entry role table (one known role
+    per entry, six-digit codes only, the examples-channel floor); and the redirection table (well
+    formed, naming exactly the pair facts' exclusions).
 
     Raises:
         FileNotFoundError: If the manifest does not exist.
@@ -738,6 +868,11 @@ def load_validated_bundle(
 
     root = path.parent
     _validate_members(root, manifest)
+    missing = sorted(set(REQUIRED_VALIDATION_RESULTS) - set(manifest.validation_results))
+    if missing:
+        raise ValueError(
+            f'bundle {manifest.bundle_id} lacks required validation results: {missing}'
+        )
     if not all(manifest.validation_results.values()):
         failed = sorted(k for k, passed in manifest.validation_results.items() if not passed)
         raise ValueError(f'bundle manifest records failed validations: {failed}')

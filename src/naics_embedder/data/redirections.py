@@ -41,22 +41,14 @@ from naics_embedder.panels.leakage import (
     normalize_text,
     text_segments,
 )
+from naics_embedder.supervision.artifacts import (
+    CROSS_REFERENCE_SOURCE,
+    DESCRIPTION_SOURCE,
+    REDIRECTIONS_SCHEMA,
+)
 from naics_embedder.utils.naics_hierarchy import code_lineage
 
 logger = logging.getLogger(__name__)
-
-CROSS_REFERENCE_SOURCE = 'cross_reference'
-DESCRIPTION_SOURCE = 'description'
-REDIRECTIONS_SCHEMA = {
-    'reference_id': pl.Int64,
-    'source': pl.Utf8,
-    'code': pl.Utf8,
-    'text': pl.Utf8,
-    'activity': pl.Utf8,
-    'named_codes': pl.List(pl.Utf8),
-    'lineal_codes': pl.List(pl.Utf8),
-    'withheld': pl.Boolean,
-}
 
 # "Growing soybeans--are classified in ...", "Establishments ... are classified in ...", and the
 # source's one misspelling, "are lclassified"

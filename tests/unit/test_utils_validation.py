@@ -2,7 +2,7 @@ import polars as pl
 import pytest
 import torch
 
-from naics_embedder.utils.config import Config, SupervisionBuildConfig, TokenizationConfig
+from naics_embedder.utils.config import Config, TokenizationConfig
 from naics_embedder.utils.validation import (
     ValidationError,
     require_valid_config,
@@ -126,15 +126,10 @@ def test_require_valid_config_raises_validation_error(tmp_path):
 # -------------------------------------------------------------------------------------------------
 
 @pytest.fixture
-def production_bundle(tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+def production_bundle(hierarchy_manifest):
+    '''The hierarchy's bundle, built by the production path.'''
 
-    return generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
+    return hierarchy_manifest
 
 def _repaired_cfg(manifest_path, descriptions_path) -> Config:
     cfg = Config()

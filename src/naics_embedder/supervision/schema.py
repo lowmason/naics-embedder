@@ -53,6 +53,7 @@ RELATION_MATRIX_SCHEMA_VERSION = 'relation-matrix-v1'
 TRAINING_PAIRS_SCHEMA_VERSION = 'training-pairs-v1'
 DIFFICULTY_THRESHOLDS_SCHEMA_VERSION = 'difficulty-thresholds-v1'
 INDEX_ROLES_SCHEMA_VERSION = 'index-roles-v1'
+REDIRECTIONS_SCHEMA_VERSION = 'redirections-v1'
 
 # -------------------------------------------------------------------------------------------------
 # Supervision vocabulary

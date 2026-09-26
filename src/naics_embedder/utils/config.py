@@ -385,12 +385,13 @@ class SupervisionBuildConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     descriptions_parquet: str = './data/naics_descriptions.parquet'
-    index_roles_parquet: Optional[str] = Field(
-        default=None,
-        description=(
-            'Index entries with their roles, from `data preprocess`; when set, the bundle carries '
-            'them as its optional index_roles member'
-        ),
+    index_roles_parquet: str = Field(
+        default='./data/naics_index_roles.parquet',
+        description='The index_roles member: index entries and roles from `data preprocess`',
+    )
+    redirections_parquet: str = Field(
+        default='./data/naics_redirections.parquet',
+        description='The redirections member: the redirection table from `data preprocess`',
     )
     output_root: str = './data/supervision/stage3-supervision-v2'
     contract_version: Literal['stage3-supervision-v2'] = CONTRACT_VERSION

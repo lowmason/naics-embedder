@@ -211,20 +211,16 @@ def _selection_worker(rank, world_size, init_file, manifest, queue):
 
 @pytest.mark.integration
 def test_two_rank_selection_mines_the_global_pool_under_local_eligibility(
-    tmp_path, hierarchy_descriptions_parquet
+    tmp_path, hierarchy_manifest
 ):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
-    from naics_embedder.utils.config import SupervisionBuildConfig
-
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
     init_file = tmp_path / 'gloo-init'
     queue = mp.get_context('spawn').SimpleQueue()
-    mp.spawn(_selection_worker, args=(2, init_file, str(manifest), queue), nprocs=2, join=True)
+    mp.spawn(
+        _selection_worker,
+        args=(2, init_file, str(hierarchy_manifest), queue),
+        nprocs=2,
+        join=True,
+    )
     rank0, rank1 = sorted(queue.get() for _ in range(2))
 
     # Rank 0: the three geometrically nearest eligible codes, all remote. Its parent (3) is nearest

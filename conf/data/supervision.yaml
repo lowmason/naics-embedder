@@ -2,6 +2,7 @@
 
 descriptions_parquet: ./data/naics_descriptions.parquet
 index_roles_parquet: ./data/naics_index_roles.parquet
+redirections_parquet: ./data/naics_redirections.parquet
 output_root: ./data/supervision/stage3-supervision-v2
 contract_version: stage3-supervision-v2
 naics_vintage: 2022

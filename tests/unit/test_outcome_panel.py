@@ -326,15 +326,11 @@ def test_from_files_refuses_descriptions_that_hold_every_entry(tmp_path, role_ro
     with pytest.raises(ValueError, match='examples channel other than'):
         OutcomePanel.from_files(roles_path, descriptions_path, tmp_path / 'log.jsonl')
 
-def test_from_bundle_reads_the_member_and_the_codebook(generated_bundle_with_roles, tmp_path):
-    bundle = load_validated_bundle(generated_bundle_with_roles)
+def test_from_bundle_reads_the_member_and_the_codebook(generated_bundle, tmp_path):
+    bundle = load_validated_bundle(generated_bundle)
 
     panel = OutcomePanel.from_bundle(bundle, tmp_path / 'log.jsonl')
 
     assert panel.candidates == ('111111', '111112', '111113', '222222', '333333')
     assert panel.entryless_candidates == ('111113', '333333')
     assert panel.validation_queries('check')['entry_id'].to_list() == [1]
-
-def test_from_bundle_needs_the_member(validated_bundle, tmp_path):
-    with pytest.raises(ValueError, match='index_roles'):
-        OutcomePanel.from_bundle(validated_bundle, tmp_path / 'log.jsonl')

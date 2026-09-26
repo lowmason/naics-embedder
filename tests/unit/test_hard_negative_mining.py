@@ -256,18 +256,10 @@ HIERARCHY_EXCLUSION = 11
 CROSS_SECTOR_CODES = [12, 13, 14, 15, 16]
 
 @pytest.fixture
-def hierarchy_index(tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+def hierarchy_index(hierarchy_manifest):
     from naics_embedder.supervision.artifacts import load_validated_bundle
-    from naics_embedder.utils.config import SupervisionBuildConfig
 
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
-    return SupervisionIndex.from_bundle(load_validated_bundle(manifest))
+    return SupervisionIndex.from_bundle(load_validated_bundle(hierarchy_manifest))
 
 def _hierarchy_batch(index, pool, positive, selection_k):
     batch = _host_batch([pool], anchor=HIERARCHY_ANCHOR, positive=positive)

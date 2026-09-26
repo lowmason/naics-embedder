@@ -243,16 +243,7 @@ def test_a_selection_naming_an_exclusion_is_refused(
 HIERARCHY_POOL = [3, 11, 12, 13, 14, 15, 16]
 
 @pytest.fixture
-def hierarchy_model(monkeypatch, tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
-    from naics_embedder.utils.config import SupervisionBuildConfig
-
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
+def hierarchy_model(monkeypatch, hierarchy_manifest):
     monkeypatch.setattr(model_module, 'MultiChannelEncoder', StubMultiChannelEncoder)
     model = model_module.NAICSContrastiveModel(
         base_model_name='test-stub',
@@ -263,7 +254,7 @@ def hierarchy_model(monkeypatch, tmp_path, hierarchy_descriptions_parquet):
         radius_reg_weight=0.0,
         level_radius_weight=0.0,
         load_balancing_coef=0.0,
-        supervision_manifest_path=str(manifest),
+        supervision_manifest_path=str(hierarchy_manifest),
     )
     model.current_schedule_scalars = {'router_mix_ratio': 0.5}
     monkeypatch.setattr(model, '_update_curriculum_state', lambda *_args: None)
