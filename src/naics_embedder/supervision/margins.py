@@ -3,7 +3,8 @@ Structural negative margins and eligibility at runtime.
 
 The torch mirror of the generator rule ``create_triplets._structural_margins``: an ordinary
 negative must be structurally farther from the anchor than the positive. Cross-sector
-negatives receive fixed margins; equal distances and the -0.5 lineal adjustment receive fixed
+negatives, those with the ``cross_sector`` relation label, receive fixed margins; equal
+distances and the -0.5 lineal adjustment receive fixed
 distance margins when the relation margin is positive. Candidates sourced at runtime (universe
 backfill, the distributed global pool) pass through the same rule, so the repaired pipeline never
 repels an *ordinary* candidate that the generated supervision would not treat as a negative.
@@ -22,8 +23,8 @@ from typing import Tuple
 import torch
 
 from naics_embedder.supervision.schema import (
-    CROSS_SECTOR_DISTANCE,
     CROSS_SECTOR_DISTANCE_MARGIN,
+    CROSS_SECTOR_RELATION_ID,
     CROSS_SECTOR_RELATION_MARGIN,
     EQUAL_DISTANCE_MARGIN,
     LINEAL_ADJUSTED_DISTANCE_MARGIN,
@@ -52,13 +53,13 @@ def structural_margins(
         ``(relation_margin, distance_margin)`` as float32 tensors.
     '''
 
-    negative_distance = negative_distance.to(torch.float32)
-    relation_delta = negative_relation_id.to(torch.float32) - positive_relation_id.to(torch.float32)
-    distance_delta = negative_distance - positive_distance.to(torch.float32)
-    negative_distance, relation_delta, distance_delta = torch.broadcast_tensors(
-        negative_distance, relation_delta, distance_delta
+    negative_relation_id = negative_relation_id.to(torch.float32)
+    relation_delta = negative_relation_id - positive_relation_id.to(torch.float32)
+    distance_delta = negative_distance.to(torch.float32) - positive_distance.to(torch.float32)
+    negative_relation_id, relation_delta, distance_delta = torch.broadcast_tensors(
+        negative_relation_id, relation_delta, distance_delta
     )
-    cross_sector = negative_distance.eq(CROSS_SECTOR_DISTANCE)
+    cross_sector = negative_relation_id.eq(CROSS_SECTOR_RELATION_ID)
     farther_relation = relation_delta.gt(0)
 
     relation_margin = relation_delta.masked_fill(cross_sector, CROSS_SECTOR_RELATION_MARGIN)

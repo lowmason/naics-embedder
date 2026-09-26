@@ -2,8 +2,9 @@
 Training-pair projection from canonical supervision pair facts.
 
 Positive/negative combinatorics reproduce the legacy generator: a positive is a canonical,
-non-maximal, non-exclusion pair; a negative ``j`` for (anchor ``a``, positive ``p``) requires the
+within-sector, non-exclusion pair; a negative ``j`` for (anchor ``a``, positive ``p``) requires the
 directed rows ``p -> j`` and ``a -> j``; cross-sector negatives are capped per (anchor, positive).
+A pair is cross-sector when it carries the ``cross_sector`` relation label.
 Semantics are explicit columns: structural values are never overloaded to carry exclusion meaning.
 '''
 
@@ -18,8 +19,8 @@ import numpy as np
 import polars as pl
 
 from naics_embedder.supervision.schema import (
-    CROSS_SECTOR_DISTANCE,
     CROSS_SECTOR_DISTANCE_MARGIN,
+    CROSS_SECTOR_RELATION_ID,
     CROSS_SECTOR_RELATION_MARGIN,
     EQUAL_DISTANCE_MARGIN,
     LINEAL_ADJUSTED_DISTANCE_MARGIN,
@@ -93,13 +94,13 @@ def _anchor_view(pair_facts: pl.DataFrame) -> pl.DataFrame:
     )
     return pl.concat([canonical, reversed_rows])
 
-def _positive_pairs(anchor_view: pl.DataFrame, max_distance: float) -> pl.DataFrame:
-    '''Canonical, non-maximal, non-exclusion pairs; reversed rows never become positives.'''
+def _positive_pairs(anchor_view: pl.DataFrame) -> pl.DataFrame:
+    '''Canonical, within-sector, non-exclusion pairs; reversed rows never become positives.'''
 
     return anchor_view.filter(
         ~pl.col('is_reversed'),
         pl.col('structural_distance').gt(0.0),
-        pl.col('structural_distance').ne(max_distance),
+        pl.col('structural_relation_id').ne(CROSS_SECTOR_RELATION_ID),
         ~pl.col('is_explicit_exclusion'),
     ).select(
         pl.col('anchor_code_id'),
@@ -147,7 +148,7 @@ def _structural_margins(frame: pl.DataFrame) -> pl.DataFrame:
         pl.col('negative_structural_distance').cast(pl.Float64)
         - pl.col('positive_structural_distance').cast(pl.Float64)
     )
-    cross_sector = pl.col('negative_structural_distance').eq(CROSS_SECTOR_DISTANCE)
+    cross_sector = pl.col('negative_structural_relation_id').eq(CROSS_SECTOR_RELATION_ID)
     return frame.with_columns(
         relation_margin=pl.when(cross_sector).then(pl.lit(CROSS_SECTOR_RELATION_MARGIN)
                                                    ).otherwise(relation_delta),
@@ -199,7 +200,7 @@ def _cap_cross_sector(frame: pl.DataFrame, cap: int, seed: int) -> pl.DataFrame:
     '''
 
     capped = (
-        pl.col('negative_structural_distance').eq(CROSS_SECTOR_DISTANCE)
+        pl.col('negative_structural_relation_id').eq(CROSS_SECTOR_RELATION_ID)
         & ~pl.col('negative_is_explicit_exclusion')
     )
     eligible = frame.filter(capped)
@@ -284,7 +285,7 @@ def _project(frame: pl.DataFrame) -> pl.DataFrame:
         pl.col('positive_structural_relation_id').alias('positive_relation'),
         pl.col('negative_structural_relation_id').alias('negative_relation'),
         pl.col('negative_is_explicit_exclusion').alias('excluded'),
-        pl.col('negative_structural_distance').eq(CROSS_SECTOR_DISTANCE).alias('unrelated'),
+        pl.col('negative_structural_relation_id').eq(CROSS_SECTOR_RELATION_ID).alias('unrelated'),
     )
 
 # -------------------------------------------------------------------------------------------------
@@ -370,8 +371,7 @@ def iter_training_pair_batches(
     if cross_sector_cap < 0 or cap_seed < 0:
         raise ValueError('cross-sector cap and cap seed must be nonnegative')
     anchor_view = _anchor_view(pair_facts)
-    max_distance = pair_facts.get_column('structural_distance').max()
-    positives = _positive_pairs(anchor_view, max_distance)
+    positives = _positive_pairs(anchor_view)
     via = anchor_view.select(
         pl.col('anchor_code_id').alias('positive_code_id'),
         pl.col('candidate_code_id').alias('negative_code_id'),
@@ -431,7 +431,7 @@ def build_training_pairs(
         return pl.concat(batches)
     anchor_view = _anchor_view(pair_facts)
     return _triplets_for_positives(
-        _positive_pairs(anchor_view, 0.0).head(0),
+        _positive_pairs(anchor_view).head(0),
         anchor_view.select(
             pl.col('anchor_code_id').alias('positive_code_id'),
             pl.col('candidate_code_id').alias('negative_code_id'),

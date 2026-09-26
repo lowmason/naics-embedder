@@ -30,6 +30,8 @@ def _margins(negative_distance, negative_relation, positive_distance, positive_r
     [
         # Cross-sector negatives always receive the fixed legacy margins.
         ((99.0, 99), (0.5, 1), (15.0, 10.0)),
+        # The relation label marks a cross-sector negative, whatever its distance.
+        ((10.0, 99), (2.0, 2), (15.0, 10.0)),
         # Farther relation at an equal distance receives the fixed equal-distance margin.
         ((2.0, 3), (2.0, 2), (1.0, 0.3333)),
         # The -0.5 lineal adjustment receives its fixed margin when the relation is farther.

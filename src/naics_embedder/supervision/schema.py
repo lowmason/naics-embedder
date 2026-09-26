@@ -34,6 +34,9 @@ MINING_CONTRACT_VERSION = 'negative-selection-v1'
 # -------------------------------------------------------------------------------------------------
 
 CROSS_SECTOR_DISTANCE = 99.0
+# The relation label cross-sector pairs carry: every reader finds them by it, not by a distance
+CROSS_SECTOR_RELATION_ID = 99
+CROSS_SECTOR_RELATION_NAME = 'cross_sector'
 CROSS_SECTOR_RELATION_MARGIN = 15.0
 CROSS_SECTOR_DISTANCE_MARGIN = 10.0
 EQUAL_DISTANCE_MARGIN = 0.3333

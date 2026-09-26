@@ -2,6 +2,8 @@ import polars as pl
 import pytest
 
 from naics_embedder.data.create_triplets import (
+    _anchor_view,
+    _positive_pairs,
     _structural_margins,
     _validate_training_pairs,
     build_training_pairs,
@@ -34,8 +36,8 @@ def _triples(pairs: pl.DataFrame) -> list[tuple[int, int, int]]:
     return pairs.select('anchor_code_id', 'positive_code_id', 'negative_code_id').rows()
 
 def test_fixture_triples_match_the_legacy_combinatorics(pair_facts_fixture):
-    # Positives are canonical, non-maximal, non-exclusion pairs: (0, 1) and (1, 2); (0, 2) is an
-    # exclusion. A negative j needs rows positive -> j and anchor -> j.
+    # Positives are canonical, within-sector, non-exclusion pairs: (0, 1) and (1, 2); (0, 2) is
+    # an exclusion. A negative j needs rows positive -> j and anchor -> j.
     pairs = build_training_pairs(pair_facts_fixture)
 
     assert _triples(pairs) == [(0, 1, 2), (0, 1, 3), (0, 1, 4), (1, 2, 3), (1, 2, 4)]
@@ -97,6 +99,52 @@ def test_reversed_rows_map_exclusion_directions_into_the_anchor_view(cross_prefi
     assert reverse['negative_is_explicit_exclusion'] is True
     assert reverse['negative_semantic_target'] == 'unrelated'
     assert reverse['negative_structural_distance'] == 99.0
+
+@pytest.fixture
+def labelled_cross_sector_pair_facts() -> pl.DataFrame:
+    # Codes 0 '111111' and 1 '111112' are siblings; 2 '22' is another sector and 3 '222222' its
+    # six-digit descendant. The cross-sector pairs carry D* (6 or 10), not a sentinel, so only
+    # their relation label, 99, marks them.
+    return pl.DataFrame(
+        {
+            'code_i_id': [0, 0, 0, 1, 1, 2],
+            'code_j_id': [1, 2, 3, 2, 3, 3],
+            'code_i': ['111111', '111111', '111111', '111112', '111112', '22'],
+            'code_j': ['111112', '22', '222222', '22', '222222', '222222'],
+            'structural_distance': [2.0, 6.0, 10.0, 6.0, 10.0, 4.0],
+            'structural_relation_id': [2, 99, 99, 99, 99, 6],
+            'structural_relation_name': [
+                'sibling',
+                'cross_sector',
+                'cross_sector',
+                'cross_sector',
+                'cross_sector',
+                'great-great-grandchild',
+            ],
+            'code_i_excludes_code_j': [False] * 6,
+            'code_j_excludes_code_i': [False] * 6,
+            'is_explicit_exclusion': [False] * 6,
+        },
+        schema_overrides={
+            'code_i_id': pl.Int32,
+            'code_j_id': pl.Int32,
+            'structural_distance': pl.Float32,
+            'structural_relation_id': pl.Int16,
+        },
+    )
+
+def test_cross_sector_pairs_are_read_from_their_relation_label(labelled_cross_sector_pair_facts):
+    positives = _positive_pairs(_anchor_view(labelled_cross_sector_pair_facts))
+    pairs = build_training_pairs(labelled_cross_sector_pair_facts)
+    capped = build_training_pairs(labelled_cross_sector_pair_facts, cross_sector_cap=1)
+
+    # A cross-sector pair is never a positive, whatever its distance
+    assert positives.select('anchor_code_id', 'positive_code_id').rows() == [(0, 1), (2, 3)]
+    assert _triples(pairs) == [(0, 1, 2), (0, 1, 3)]
+    assert pairs.get_column('relation_margin').to_list() == [15.0, 15.0]
+    assert pairs.get_column('distance_margin').to_list() == [10.0, 10.0]
+    assert pairs.get_column('unrelated').to_list() == [True, True]
+    assert capped.height == 1
 
 # -------------------------------------------------------------------------------------------------
 # Deterministic cross-sector cap
