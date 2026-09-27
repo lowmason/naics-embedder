@@ -172,7 +172,7 @@ coordinates at the origin for a hyperbolic arm):
 
 ``` bash
 uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \
-  --codebook data/supervision/stage3-supervision-v1/<bundle-id>/naics_codebook.parquet
+  --codebook data/supervision/stage3-supervision-v2/<bundle-id>/naics_codebook.parquet
 ```
 
 The report covers sector separation, within-sector rank correlation, MAP over ancestors, NDCG
@@ -281,8 +281,8 @@ uv run naics-embedder data all
 ```
 
 `data supervision` prints `Supervision manifest: <path>`. The former `data relations`,
-`data distances`, and `data triplets` commands now print a migration notice and build the same
-bundle.
+`data distances`, and `data triplets` commands now print a migration notice and exit with status
+1 without building anything.
 
 ### 8.2 Training the Contrastive Model
 

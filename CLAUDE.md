@@ -61,6 +61,7 @@ naics-embedder/
 │   │   └── __init__.py       # Top-level Typer app
 │   ├── data/                 # Data preprocessing and generation
 │   │   ├── download_data.py  # Download and preprocess NAICS data
+│   │   ├── redirections.py   # The redirection table (Req 8) and the exclusion channel
 │   │   ├── index_role_table.py    # Draw the frozen index-entry role table (data roles)
 │   │   ├── regressor_group_table.py  # Draw the regressor held-out groups (data regressor-groups)
 │   │   ├── compute_relations.py   # Compute relationship measures
@@ -132,6 +133,8 @@ naics-embedder/
 │       ├── config.py         # Pydantic config models ⭐
 │       ├── console.py        # Rich console logging, table formatting
 │       ├── hyperbolic.py     # LorentzManifold, CurvatureManager, ManifoldAdapter
+│       ├── input_window.py   # The backbone's trained input window (Req 9)
+│       ├── naics_hierarchy.py  # Code lineage, the tree metric D* (Req 7), unary pairs
 │       ├── training.py       # Hardware detection, checkpoint resolution
 │       ├── validation.py     # Data & config validation system
 │       ├── warnings.py       # Centralized warning management
@@ -284,7 +287,7 @@ The `NAICSContrastiveModel` is decomposed into **functional mixins** for maintai
 hierarchical structure of NAICS codes:
 
 - Dynamically adjusts training difficulty based on code relationships
-- Leverages tree distance and exclusion relationships
+- Leverages the tree metric D*; an explicit exclusion is never a negative (Req 8)
 - Adapts negative sampling strategy based on training progress
 - Three-phase system with dynamic transitions
 
@@ -428,7 +431,7 @@ uv run naics-embedder --help
 uv run naics-embedder data preprocess  # Download and preprocess NAICS data
 uv run naics-embedder data supervision # Build the immutable Stage-3 supervision bundle
 uv run naics-embedder data all         # Run all data preparation steps
-# (data relations / distances / triplets are deprecated and build the same bundle)
+# (data relations / distances / triplets are deprecated and build nothing)
 # (data roles drew conf/data/index_roles.csv once; it is committed, and preprocess applies it)
 # (data regressor-groups drew conf/data/regressor_heldout_groups.csv once; it is committed)
 

@@ -17,16 +17,24 @@ from naics_embedder.text_model.dataloader.streaming_dataset import (
 )
 from naics_embedder.utils.config import SansStaticConfig
 
-def _index(size: int, anchor_code_id: int, exclusion_code_ids: tuple[int, ...]) -> SupervisionIndex:
+def _index(
+    size: int, anchor_code_id: int, positive_code_id: int, exclusion_code_ids: tuple[int, ...]
+) -> SupervisionIndex:
     directed = torch.zeros((size, size), dtype=torch.bool)
     for code_id in exclusion_code_ids:
         directed[anchor_code_id, code_id] = True
+    # Every pair is cross-sector (D* 10) except the anchor and its sibling positive (D* 2)
+    distance = torch.full((size, size), 10.0)
+    relation = torch.full((size, size), 99, dtype=torch.int16)
+    for code_i, code_j in ((anchor_code_id, positive_code_id), (positive_code_id, anchor_code_id)):
+        distance[code_i, code_j] = 2.0
+        relation[code_i, code_j] = 2
     return SupervisionIndex(
         code_to_id={str(code_id): code_id
                     for code_id in range(size)},
         id_to_code=tuple(str(code_id) for code_id in range(size)),
-        structural_distance=torch.full((size, size), 99.0),
-        structural_relation_id=torch.full((size, size), 99, dtype=torch.int16),
+        structural_distance=distance,
+        structural_relation_id=relation,
         directed_exclusion=directed,
     )
 
@@ -48,7 +56,7 @@ def pool_builder():
             *raw_candidate_code_ids,
             *exclusion_code_ids,
         ) + 4
-        index = _index(size, anchor_code_id, exclusion_code_ids)
+        index = _index(size, anchor_code_id, positive_code_id, exclusion_code_ids)
         raw = [
             {
                 'negative_code_id': code_id,
@@ -71,7 +79,7 @@ def pool_builder():
 
     return build
 
-def test_candidate_pool_contains_every_exclusion_and_unique_ordinary_codes(pool_builder):
+def test_candidate_pool_holds_unique_codes_and_no_exclusion(pool_builder):
     pool = pool_builder(
         anchor_code_id=10,
         positive_code_id=11,
@@ -80,9 +88,11 @@ def test_candidate_pool_contains_every_exclusion_and_unique_ordinary_codes(pool_
         n_candidates=4,
         epoch=2,
     )
+    codes = [item['negative_code_id'] for item in pool]
 
-    assert {20, 21, 22} <= {item['negative_code_id'] for item in pool}
-    assert len({item['negative_code_id'] for item in pool}) == len(pool)
+    assert len(set(codes)) == len(codes) == 4
+    assert not set(codes) & {20, 21, 22}
+    assert not any(item['negative_is_explicit_exclusion'] for item in pool)
 
 def test_candidate_pool_backfills_to_final_selection_capacity(pool_builder):
     pool = pool_builder(
@@ -97,17 +107,12 @@ def test_candidate_pool_backfills_to_final_selection_capacity(pool_builder):
     assert len({item['negative_code_id'] for item in pool}) >= 3
 
 # -------------------------------------------------------------------------------------------------
-# Candidate-pool capacity under the one-slot exclusion quota
+# Candidate-pool capacity: no exclusion fills a slot
 # -------------------------------------------------------------------------------------------------
 
-def _selection_capacity(pool: list[dict[str, Any]]) -> int:
-    exclusions = sum(item['negative_is_explicit_exclusion'] for item in pool)
-    ordinary = len(pool) - exclusions
-    return ordinary + min(exclusions, 1)
-
-def test_pool_supports_k_selections_when_several_exclusions_exist(pool_builder):
-    # Three exclusions and K = 4: selection takes exactly one exclusion, so the pool needs at least
-    # three ordinary codes; sizing by max(n, K, E) alone would leave only one.
+def test_exclusions_never_count_toward_pool_capacity(pool_builder):
+    # Three exclusions and K = 4: none may fill a slot, so backfill supplies the two codes the raw
+    # candidates lack.
     pool = pool_builder(
         anchor_code_id=10,
         positive_code_id=11,
@@ -116,8 +121,11 @@ def test_pool_supports_k_selections_when_several_exclusions_exist(pool_builder):
         n_candidates=4,
         epoch=0,
     )
+    codes = {item['negative_code_id'] for item in pool}
 
-    assert _selection_capacity(pool) >= 4
+    assert len(codes) == 4
+    assert {12, 13} <= codes
+    assert not codes & {20, 21, 22}
 
 def test_pool_feeds_the_coordinator_for_k_selections(pool_builder):
     from naics_embedder.supervision.candidates import NegativeCandidateBatch
@@ -159,12 +167,12 @@ def test_pool_feeds_the_coordinator_for_k_selections(pool_builder):
         anchor_code_ids=torch.tensor([10]),
         positive_code_ids=torch.tensor([11]),
         k=4,
-        epoch=1,
-        global_seed=7,
         proposals=(),
     )
+    selected = batch.select(selection)
 
-    assert batch.select(selection).is_explicit_exclusion.sum().item() == 1
+    assert selected.code_id.unique().numel() == 4
+    assert not selected.is_explicit_exclusion.any()
 
 def test_pool_never_contains_anchor_or_positive(pool_builder):
     pool = pool_builder(
@@ -177,10 +185,9 @@ def test_pool_never_contains_anchor_or_positive(pool_builder):
     )
 
     codes = {item['negative_code_id'] for item in pool}
-    assert not codes & {10, 11}
-    assert 20 in codes
+    assert not codes & {10, 11, 20}
 
-def test_pool_marks_exclusions_and_backfill_provenance(pool_builder):
+def test_pool_marks_backfill_provenance_and_holds_no_exclusion(pool_builder):
     pool = pool_builder(
         anchor_code_id=10,
         positive_code_id=11,
@@ -191,12 +198,24 @@ def test_pool_marks_exclusions_and_backfill_provenance(pool_builder):
     )
     by_code = {item['negative_code_id']: item for item in pool}
 
-    assert by_code[20]['negative_is_explicit_exclusion'] is True
-    assert by_code[12]['negative_is_explicit_exclusion'] is False
+    assert 20 not in by_code
+    assert not any(item['negative_is_explicit_exclusion'] for item in pool)
     assert by_code[12]['sampling_provenance_id'] == 2
     assert all(
         item['sampling_provenance_id'] == 5 for code, item in by_code.items() if code not in (12, )
     )
+
+def test_pool_rejects_a_raw_candidate_that_is_an_exclusion(pool_builder):
+    # Generated training pairs hold no exclusion negative, so a raw candidate that is one is corrupt
+    with pytest.raises(ValueError, match='raw candidate code ID 20 is an explicit exclusion'):
+        pool_builder(
+            anchor_code_id=10,
+            positive_code_id=11,
+            raw_candidate_code_ids=[12, 20],
+            exclusion_code_ids=(20, ),
+            n_candidates=3,
+            epoch=0,
+        )
 
 def test_pool_is_reproducible_for_one_epoch(pool_builder):
     kwargs = {
@@ -227,27 +246,19 @@ def test_pool_fails_when_the_universe_cannot_supply_k(pool_builder):
 # -------------------------------------------------------------------------------------------------
 # Structural eligibility on a production-shaped hierarchy
 #
-# For anchor '311111' (4) with its grandparent '3111' (2; grandchild relation, distance 1.5) as the
-# positive, only the parent '31111' (3; child relation, distance 0.5) is structurally closer. Every
-# other non-forbidden code is farther: ancestors '31'/'311' (0, 1), the collateral codes 5-10, the
-# exclusion '321111' (11), and the cross-sector '44' family (12-16).
+# For anchor '311111' (4) with its grandparent '3111' (2; D* 2) as the positive, only the parent
+# '31111' (3; D* 1) is structurally closer. Every other non-forbidden code is farther: ancestors
+# '31'/'311' (0, 1), the collateral codes 5-10 and the cross-sector '44' family (12-16). So is the
+# exclusion '321111' (11), which is nonetheless never a negative.
 # -------------------------------------------------------------------------------------------------
 
-HIERARCHY_ELIGIBLE_ORDINARY = {0, 1, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16}
+HIERARCHY_ELIGIBLE = {0, 1, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16}
 
 @pytest.fixture
-def hierarchy_index(tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+def hierarchy_index(hierarchy_manifest):
     from naics_embedder.supervision.artifacts import load_validated_bundle
-    from naics_embedder.utils.config import SupervisionBuildConfig
 
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
-    return SupervisionIndex.from_bundle(load_validated_bundle(manifest))
+    return SupervisionIndex.from_bundle(load_validated_bundle(hierarchy_manifest))
 
 def _raw(index, code_ids):
     return [
@@ -286,24 +297,19 @@ def test_pool_backfills_only_structurally_eligible_codes(hierarchy_index):
     )
 
     codes = [candidate['negative_code_id'] for candidate in pool]
-    ordinary = {
-        candidate['negative_code_id']
-        for candidate in pool if not candidate['negative_is_explicit_exclusion']
-    }
-    # The universe is exhausted, yet the parent is never backfilled.
-    assert 3 not in codes
-    assert ordinary == HIERARCHY_ELIGIBLE_ORDINARY
-    assert codes[0] == 11
+    # The universe is exhausted, yet neither the parent nor the exclusion is backfilled.
+    assert sorted(codes) == sorted(HIERARCHY_ELIGIBLE)
 
-def test_pool_capacity_counts_only_structurally_eligible_codes(hierarchy_index):
-    with pytest.raises(ValueError, match='requires 15 .* structurally farther'):
+def test_pool_capacity_counts_only_eligible_non_exclusion_codes(hierarchy_index):
+    # Thirteen codes are eligible, and the exclusion no longer adds a fourteenth slot
+    with pytest.raises(ValueError, match='requires 14 .* only 13 exist'):
         build_candidate_pool(
             anchor_code_id=4,
             positive_code_id=2,
             raw_candidates=[],
             supervision_index=hierarchy_index,
-            n_candidates=15,
-            final_k=15,
+            n_candidates=14,
+            final_k=14,
             epoch=0,
             seed=0,
         )

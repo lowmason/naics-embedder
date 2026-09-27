@@ -5,13 +5,22 @@ Expected values in these fixtures are written by hand; tests must never use prod
 code as their oracle.
 '''
 
+from pathlib import Path
+from typing import List
+
 import polars as pl
 import pytest
 import torch
 
-from naics_embedder.data.supervision_bundle import generate_supervision_bundle_from_frames
+from naics_embedder.data.redirections import REDIRECTIONS_SCHEMA
+from naics_embedder.data.supervision_bundle import (
+    generate_supervision_bundle,
+    generate_supervision_bundle_from_frames,
+)
 from naics_embedder.supervision.artifacts import load_validated_bundle
 from naics_embedder.supervision.candidates import NegativeCandidateBatch
+from naics_embedder.supervision.schema import InputWindowRecord
+from naics_embedder.utils.config import SupervisionBuildConfig
 
 @pytest.fixture
 def descriptions_fixture() -> pl.DataFrame:
@@ -56,16 +65,16 @@ def structural_frames_fixture() -> tuple[pl.DataFrame, pl.DataFrame]:
     distances = pl.DataFrame(
         pair_columns
         | {'structural_distance': [
-            0.5,
             2.0,
-            99.0,
-            99.0,
-            3.0,
-            99.0,
-            99.0,
-            99.0,
-            99.0,
-            99.0,
+            2.0,
+            10.0,
+            10.0,
+            2.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
+            10.0,
         ]}
     )
     relations = pl.DataFrame(
@@ -119,16 +128,16 @@ def pair_facts_fixture() -> pl.DataFrame:
                 '333333',
             ],
             'structural_distance': [
-                0.5,
                 2.0,
-                99.0,
-                99.0,
-                3.0,
-                99.0,
-                99.0,
-                99.0,
-                99.0,
-                99.0,
+                2.0,
+                10.0,
+                10.0,
+                2.0,
+                10.0,
+                10.0,
+                10.0,
+                10.0,
+                10.0,
             ],
             'structural_relation_id': [1, 2, 99, 99, 3, 99, 99, 99, 99, 99],
             'structural_relation_name': [
@@ -152,29 +161,13 @@ def pair_facts_fixture() -> pl.DataFrame:
             'is_explicit_exclusion': [
                 False, True, False, False, False, True, False, False, False, False
             ],
+            # No five-digit code, so no unary pair
+            'unary_pair': [False] * 10,
         }
     )
 
-@pytest.fixture
-def generated_bundle(tmp_path, descriptions_fixture, pair_facts_fixture):
-    return generate_supervision_bundle_from_frames(
-        output_root=tmp_path,
-        bundle_id='bundle-a',
-        generator_revision='revision-a',
-        naics_vintage=2022,
-        descriptions=descriptions_fixture,
-        pair_facts=pair_facts_fixture,
-    )
-
-@pytest.fixture
-def validated_bundle(generated_bundle):
-    return load_validated_bundle(
-        generated_bundle,
-        expected_contract='stage3-supervision-v1',
-    )
-
 # -------------------------------------------------------------------------------------------------
-# Index-entry roles: the optional bundle member
+# The five-code bundle, with the index-roles and redirections members every bundle carries
 # -------------------------------------------------------------------------------------------------
 
 INDEX_ROLE_ROWS = [
@@ -191,30 +184,117 @@ INDEX_ROLE_SCHEMA = {'entry_id': pl.Int64, 'code': pl.Utf8, 'text': pl.Utf8, 'ro
 def index_roles_fixture() -> pl.DataFrame:
     return pl.DataFrame(INDEX_ROLE_ROWS, schema=INDEX_ROLE_SCHEMA, orient='row')
 
+# One cross-reference row per exclusion of the pair facts: '111111' sends peanut growing to
+# '111113', and '222222' sends canola crushing to '111112'
+REDIRECTION_ROWS = [
+    (
+        0,
+        'cross_reference',
+        '111111',
+        'Growing peanuts--are classified in Industry 111113.',
+        'Growing peanuts',
+        ['111113'],
+        [],
+        False,
+    ),
+    (
+        1,
+        'cross_reference',
+        '222222',
+        'Canola crushing--are classified in Industry 111112.',
+        'Canola crushing',
+        ['111112'],
+        [],
+        False,
+    ),
+]
+
+# The five codes' texts are short, so none exceeds the window
+FIVE_CODE_INPUT_WINDOW = {
+    'backbone': 'sentence-transformers/all-MiniLM-L6-v2',
+    'window': 128,
+    'channels': {
+        'title': {
+            'present': 5,
+            'over': 0,
+            'share': 0.0
+        },
+        'description': {
+            'present': 5,
+            'over': 0,
+            'share': 0.0
+        },
+        'examples': {
+            'present': 3,
+            'over': 0,
+            'share': 0.0
+        },
+        'excluded': {
+            'present': 2,
+            'over': 0,
+            'share': 0.0
+        },
+    },
+}
+
+@pytest.fixture
+def redirections_fixture() -> pl.DataFrame:
+    return pl.DataFrame(REDIRECTION_ROWS, schema=REDIRECTIONS_SCHEMA, orient='row')
+
 @pytest.fixture
 def text_descriptions_fixture(descriptions_fixture) -> pl.DataFrame:
-    '''The five-code descriptions with text channels; examples hold examples-role entries only.'''
+    '''
+    The five-code descriptions with text channels.
+
+    Examples hold examples-role entries only, and each exclusion channel is its code's one
+    redirection row.
+    '''
 
     examples = {'111111': 'Soybean farming', '111112': 'Canola farming', '222222': 'Coal mining'}
+    excluded = {row[2]: row[3] for row in REDIRECTION_ROWS}
     return descriptions_fixture.with_columns(
         title=pl.concat_str(pl.lit('Industry '), pl.col('code')),
         description=pl.lit('This industry comprises establishments.'),
         examples=pl.col('code').replace_strict(examples, default=None),
-        excluded=pl.lit(None, pl.Utf8),
+        excluded=pl.col('code').replace_strict(excluded, default=None),
     )
 
 @pytest.fixture
-def generated_bundle_with_roles(
-    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture
+def build_bundle(
+    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture,
+    redirections_fixture
 ):
-    return generate_supervision_bundle_from_frames(
-        output_root=tmp_path,
-        bundle_id='bundle-roles',
-        generator_revision='revision-a',
-        naics_vintage=2022,
-        descriptions=text_descriptions_fixture,
-        pair_facts=pair_facts_fixture,
-        index_roles=index_roles_fixture,
+    '''
+    Build the five-code bundle with ``generate_supervision_bundle_from_frames``.
+
+    The bundle is ``bundle-a`` under ``tmp_path``; keyword arguments override single inputs.
+    '''
+
+    def build(**overrides) -> Path:
+        inputs = {
+            'output_root': tmp_path,
+            'bundle_id': 'bundle-a',
+            'generator_revision': 'revision-a',
+            'naics_vintage': 2022,
+            'descriptions': text_descriptions_fixture,
+            'pair_facts': pair_facts_fixture,
+            'index_roles': index_roles_fixture,
+            'redirections': redirections_fixture,
+            'input_window': InputWindowRecord.model_validate(FIVE_CODE_INPUT_WINDOW),
+        }
+        return generate_supervision_bundle_from_frames(**{**inputs, **overrides})
+
+    return build
+
+@pytest.fixture
+def generated_bundle(build_bundle):
+    return build_bundle()
+
+@pytest.fixture
+def validated_bundle(generated_bundle):
+    return load_validated_bundle(
+        generated_bundle,
+        expected_contract='stage3-supervision-v2',
     )
 
 # -------------------------------------------------------------------------------------------------
@@ -300,23 +380,53 @@ HIERARCHY_CODES = (
     '441111',
 )
 
+# '311111' sends sawmilling to '321111' in a cross-reference row, and an "Excluded" paragraph of
+# '441111' names '311211': the hierarchy's two exclusions
+HIERARCHY_REDIRECTION_ROWS = [
+    (
+        0,
+        'cross_reference',
+        '311111',
+        'Sawmilling--are classified in Industry 321111.',
+        'Sawmilling',
+        ['321111'],
+        [],
+        False,
+    ),
+    (
+        1,
+        'description',
+        '441111',
+        'Flour milling is classified in Industry 311211.',
+        None,
+        ['311211'],
+        [],
+        False,
+    ),
+]
+
 @pytest.fixture
 def hierarchy_descriptions() -> pl.DataFrame:
     excluded_codes = {
         '311111': ['321111'],
         '441111': ['311211'],
     }
+    excluded = {row[2]: row[3] for row in HIERARCHY_REDIRECTION_ROWS}
     return pl.DataFrame(
         {
             'index': list(range(len(HIERARCHY_CODES))),
             'level': [len(code) for code in HIERARCHY_CODES],
             'code': list(HIERARCHY_CODES),
             'title': [f'Industry {code}' for code in HIERARCHY_CODES],
+            'description': ['This industry comprises establishments.'] * len(HIERARCHY_CODES),
+            'examples': [None] * len(HIERARCHY_CODES),
+            'excluded': [excluded.get(code) for code in HIERARCHY_CODES],
             'excluded_codes': [excluded_codes.get(code) for code in HIERARCHY_CODES],
         },
         schema_overrides={
             'index': pl.UInt32,
             'level': pl.UInt8,
+            'examples': pl.Utf8,
             'excluded_codes': pl.List(pl.Utf8),
         },
     )
@@ -326,3 +436,43 @@ def hierarchy_descriptions_parquet(tmp_path, hierarchy_descriptions) -> str:
     path = tmp_path / 'hierarchy_descriptions.parquet'
     hierarchy_descriptions.write_parquet(path)
     return str(path)
+
+@pytest.fixture
+def hierarchy_redirections() -> pl.DataFrame:
+    return pl.DataFrame(HIERARCHY_REDIRECTION_ROWS, schema=REDIRECTIONS_SCHEMA, orient='row')
+
+def _count_words(texts: List[str]) -> List[int]:
+    return [len(text.split()) + 2 for text in texts]
+
+@pytest.fixture
+def count_words():
+    '''Token counts for tests: one token per word, plus two for [CLS] and [SEP].'''
+
+    return _count_words
+
+@pytest.fixture
+def hierarchy_build_config(
+    tmp_path, hierarchy_descriptions_parquet, hierarchy_redirections
+) -> SupervisionBuildConfig:
+    '''
+    The build configuration of the hierarchy's bundle, its inputs written under ``tmp_path``.
+
+    The hierarchy has no index entries, so its role table is empty.
+    '''
+
+    roles_path = tmp_path / 'hierarchy_index_roles.parquet'
+    redirections_path = tmp_path / 'hierarchy_redirections.parquet'
+    pl.DataFrame(schema=INDEX_ROLE_SCHEMA).write_parquet(roles_path)
+    hierarchy_redirections.write_parquet(redirections_path)
+    return SupervisionBuildConfig(
+        descriptions_parquet=hierarchy_descriptions_parquet,
+        index_roles_parquet=str(roles_path),
+        redirections_parquet=str(redirections_path),
+        output_root=str(tmp_path / 'bundles'),
+    )
+
+@pytest.fixture
+def hierarchy_manifest(hierarchy_build_config) -> Path:
+    '''The manifest of the bundle that the production path builds from the hierarchy.'''
+
+    return generate_supervision_bundle(hierarchy_build_config, count_tokens=_count_words)

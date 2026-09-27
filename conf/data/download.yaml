@@ -2,6 +2,7 @@
 
 output_parquet: ./data/naics_descriptions.parquet
 index_roles_parquet: ./data/naics_index_roles.parquet
+redirections_parquet: ./data/naics_redirections.parquet
 
 # The frozen index-entry role table (data roles writes it once) and the index file it is keyed to
 index_roles_csv: ./conf/data/index_roles.csv

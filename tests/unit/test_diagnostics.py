@@ -23,6 +23,7 @@ from naics_embedder.metrics.diagnostics import (
     sector_separation,
     within_sector_rank_correlation,
 )
+from naics_embedder.utils.naics_hierarchy import tree_distance_matrix
 from tests.fixtures.regressor_panel import CODEBOOK, coordinate_table
 
 pytestmark = pytest.mark.unit
@@ -231,3 +232,7 @@ def test_the_report_refuses_a_table_that_is_not_the_codebook():
     lorentz = pl.DataFrame({'code': ['11', '111'], 'x0': [1.0, 2.0], 'x1': [0.0, 3.0**0.5]})
     with pytest.raises(ValueError, match='Lorentz points'):
         diagnostics_report(lorentz, 'hyperbolic')
+
+def test_d_star_is_the_one_tree_distance_function(tree):
+    # The supervision bundle's distances call the same function (Stage 5)
+    assert np.array_equal(tree_distance_matrix(CODES), _target(tree))

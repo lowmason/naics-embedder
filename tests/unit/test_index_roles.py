@@ -411,3 +411,15 @@ def test_role_leakage_fails_on_a_held_out_query_in_training_text(role_rows):
 
     with pytest.raises(ValueError, match='held-out queries match training text'):
         verify_role_leakage(descriptions, leaky)
+
+def test_role_leakage_covers_the_extra_texts(role_rows):
+    descriptions = _descriptions(
+        {
+            '111110': 'Soybeans, organic; Soybean seed',
+            '111120': 'Oilseed farming'
+        }
+    )
+
+    # The validation query 'Edamame' occurs in an activity phrase
+    with pytest.raises(ValueError, match='held-out queries match training text'):
+        verify_role_leakage(descriptions, role_rows, extra_texts=['Growing edamame'])

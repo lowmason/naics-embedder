@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.utils.input_window import check_window, trained_window
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,10 @@ class DownloadConfig(BaseModel):
     index_roles_parquet: str = Field(
         default='./data/naics_index_roles.parquet',
         description='Output path for every index entry with its text and role',
+    )
+    redirections_parquet: str = Field(
+        default='./data/naics_redirections.parquet',
+        description='Output path for the redirection table: every cross-reference once (Req 8)',
     )
     index_roles_csv: str = Field(
         default='./conf/data/index_roles.csv',
@@ -210,7 +215,7 @@ class DownloadConfig(BaseModel):
         description='Column renames for exclusions',
     )
 
-    @field_validator('output_parquet', 'index_roles_parquet')
+    @field_validator('output_parquet', 'index_roles_parquet', 'redirections_parquet')
     @classmethod
     def validate_output_parquet(cls, value: str) -> str:
         path = Path(value)
@@ -380,15 +385,20 @@ class SupervisionBuildConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     descriptions_parquet: str = './data/naics_descriptions.parquet'
-    index_roles_parquet: Optional[str] = Field(
-        default=None,
-        description=(
-            'Index entries with their roles, from `data preprocess`; when set, the bundle carries '
-            'them as its optional index_roles member'
-        ),
+    index_roles_parquet: str = Field(
+        default='./data/naics_index_roles.parquet',
+        description='The index_roles member: index entries and roles from `data preprocess`',
     )
-    output_root: str = './data/supervision/stage3-supervision-v1'
-    contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
+    redirections_parquet: str = Field(
+        default='./data/naics_redirections.parquet',
+        description='The redirections member: the redirection table from `data preprocess`',
+    )
+    backbone: str = Field(
+        default='sentence-transformers/all-MiniLM-L6-v2',
+        description="The arm's backbone (model.base_model_name); the manifest records its window",
+    )
+    output_root: str = './data/supervision/stage3-supervision-v2'
+    contract_version: Literal['stage3-supervision-v2'] = CONTRACT_VERSION
     naics_vintage: int = 2022
     relation_id: Dict[str, int] = Field(
         default_factory=lambda: {
@@ -409,6 +419,14 @@ class SupervisionBuildConfig(BaseModel):
             'cross_sector': 99,
         }
     )
+
+    @field_validator('backbone')
+    @classmethod
+    def has_a_recorded_window(cls, value: str) -> str:
+        '''Refuse a backbone whose trained input window is not recorded (Req 9).'''
+
+        trained_window(value)
+        return value
 
 class OutcomePanelConfig(BaseModel):
     '''How the outcome panel's index-entry roles are drawn (roadmap D4), and its selection log.'''
@@ -477,11 +495,18 @@ class TextOnlyConfig(BaseModel):
         description="The arm's backbone (model.base_model_name), read from the local cache",
     )
     max_length: int = Field(
-        default=512,
+        default=128,
         ge=1,
         description="Tokens kept per channel text: the arm's data_loader max_length",
     )
     batch_size: int = Field(default=32, ge=1, description='Texts per forward pass')
+
+    @model_validator(mode='after')
+    def fit_the_trained_window(self) -> 'TextOnlyConfig':
+        '''Refuse a max_length beyond the backbone's trained window (Req 9).'''
+
+        check_window(self.backbone, self.max_length)
+        return self
 
 class RegressorBranchRecord(BaseModel):
     '''
@@ -580,7 +605,7 @@ class SupervisionRuntimeConfig(BaseModel):
             'before repaired training'
         ),
     )
-    contract_version: Literal['stage3-supervision-v1'] = CONTRACT_VERSION
+    contract_version: Literal['stage3-supervision-v2'] = CONTRACT_VERSION
 
 class CheckpointLoadMode(str, Enum):
     '''How a training run may use a checkpoint.'''
@@ -605,11 +630,20 @@ class TokenizationConfig(BaseModel):
         default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace tokenizer name'
     )
     max_length: Optional[int] = Field(
-        default=None, description='Maximum sequence length (None = use model default)'
+        default=None,
+        ge=1,
+        description="Tokens kept per channel text; None is the backbone's trained window",
     )
     output_path: str = Field(
         default='./data/token_cache/token_cache.pt', description='Path to save tokenization cache'
     )
+
+    @model_validator(mode='after')
+    def fit_the_trained_window(self) -> 'TokenizationConfig':
+        '''Resolve a null max_length to the trained window, and refuse a longer one (Req 9).'''
+
+        self.max_length = check_window(self.tokenizer_name, self.max_length)
+        return self
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'TokenizationConfig':
@@ -653,7 +687,11 @@ class StreamingConfig(BaseModel):
     tokenizer_name: str = Field(
         default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace tokenizer name'
     )
-    max_length: int = Field(default=512, description='Maximum sequence length for tokenization')
+    max_length: int = Field(
+        default=128,
+        ge=1,
+        description="Tokens kept per channel text, at most the backbone's trained window",
+    )
     seed: int = Field(default=42, ge=0, description='Random seed for sampling')
 
     # Sampling parameters
@@ -666,7 +704,7 @@ class StreamingConfig(BaseModel):
         default=True,
         description=(
             'Use Phase 1 tree-distance based sampling '
-            '(inverse weighting, sibling masking, exclusion mining)'
+            '(inverse weighting and sibling masking)'
         ),
     )
     phase1_alpha: float = Field(
@@ -679,7 +717,7 @@ class StreamingConfig(BaseModel):
         gt=0.0,
         description=(
             'Legacy-containment only: constant sampling weight for excluded codes. Repaired '
-            'Stage-3 training rejects it; the one-slot exclusion quota owns representation.'
+            'Stage-3 training rejects it: an explicit exclusion is never a negative.'
         ),
     )
 
@@ -744,6 +782,13 @@ class StreamingConfig(BaseModel):
                 f'n_negatives_phase1 ({self.n_negatives_phase1}) must be <= '
                 f'n_candidates ({self.n_candidates})'
             )
+        return self
+
+    @model_validator(mode='after')
+    def fit_the_trained_window(self) -> 'StreamingConfig':
+        '''Refuse a max_length beyond the backbone's trained window (Req 9).'''
+
+        check_window(self.tokenizer_name, self.max_length)
         return self
 
 class SansStaticConfig(BaseModel):
@@ -1348,6 +1393,15 @@ class GraphConfig(BaseModel):
 # Main Configuration
 # -------------------------------------------------------------------------------------------------
 
+# Streaming paths that only legacy containment reads. Repaired training reads structural facts
+# and training pairs from the supervision bundle.
+LEGACY_STREAMING_PATHS = (
+    'distances_parquet',
+    'distance_matrix_parquet',
+    'relations_parquet',
+    'triplets_parquet',
+)
+
 class Config(BaseModel):
     '''Main configuration for NAICS training.'''
 
@@ -1396,8 +1450,18 @@ class Config(BaseModel):
             if self.data_loader.streaming.phase1_exclusion_weight is not None:
                 raise ValueError(
                     'data_loader.streaming.phase1_exclusion_weight is invalid in repaired mode; '
-                    'the one-slot exclusion quota owns representation'
+                    'an explicit exclusion is never a negative'
                 )
+            for name in LEGACY_STREAMING_PATHS:
+                if getattr(self.data_loader.streaming, name) != (
+                    StreamingConfig.model_fields[name].default
+                ):
+                    raise ValueError(
+                        f'data_loader.streaming.{name} is a legacy path, which repaired training '
+                        'never reads: structural facts and training pairs come from the bundle '
+                        'at supervision.manifest_path. Remove the key, or set supervision.mode '
+                        'to legacy_containment'
+                    )
         return self
 
     @classmethod

@@ -23,6 +23,7 @@ from naics_embedder.panels.text_only import (
     provenance_path,
     text_only_fingerprint,
 )
+from naics_embedder.utils.input_window import TRAINED_WINDOWS
 
 pytestmark = pytest.mark.unit
 
@@ -116,7 +117,8 @@ def test_the_backbone_stays_frozen(model, tokenizer):
     assert all(torch.equal(before[name], value) for name, value in model.state_dict().items())
     assert all(parameter.grad is None for parameter in model.parameters())
 
-def test_the_table_and_its_provenance_are_written(tmp_path, model, tokenizer):
+def test_the_table_and_its_provenance_are_written(tmp_path, monkeypatch, model, tokenizer):
+    monkeypatch.setitem(TRAINED_WINDOWS, 'tiny-bert', 16)
     descriptions = tmp_path / 'naics_descriptions.parquet'
     _descriptions(
         [
@@ -153,6 +155,22 @@ def test_the_table_and_its_provenance_are_written(tmp_path, model, tokenizer):
     assert set(provenance['library_versions']) == {'torch', 'transformers', 'polars'}
     # The name a regressor read logs the table by, so a logged read matches this file
     assert provenance['matrix_fingerprint'] == text_only_fingerprint(table)
+
+def test_a_max_length_beyond_the_trained_window_is_refused(tmp_path, monkeypatch, model, tokenizer):
+    monkeypatch.setitem(TRAINED_WINDOWS, 'tiny-bert', 8)
+    output = tmp_path / 'text_only.parquet'
+
+    # The window is checked before the descriptions are read
+    with pytest.raises(ValueError, match='trained input window'):
+        build_text_only_table(
+            tmp_path / 'naics_descriptions.parquet',
+            output,
+            backbone='tiny-bert',
+            max_length=16,
+            model=model,
+            tokenizer=tokenizer,
+        )
+    assert not output.exists()
 
 def test_the_backbone_is_read_from_the_local_cache_only(monkeypatch, model, tokenizer):
     import transformers

@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 import torch
 import torch.distributed as dist
@@ -141,7 +139,6 @@ class _DistributedSelectionHost(DistributedMixin, CurriculumMixin):
         self.current_curriculum_flags = {'enable_hard_negative_mining': True}
         self.current_schedule_scalars = {}
         self.current_epoch = 0
-        self.hparams = SimpleNamespace(selection_seed=0)
         self.hard_negative_miner = LorentzianHardNegativeMiner()
         self.router_guided_miner = RouterGuidedNegativeMiner()
         self.selection_coordinator = NegativeSelectionCoordinator()
@@ -214,32 +211,30 @@ def _selection_worker(rank, world_size, init_file, manifest, queue):
 
 @pytest.mark.integration
 def test_two_rank_selection_mines_the_global_pool_under_local_eligibility(
-    tmp_path, hierarchy_descriptions_parquet
+    tmp_path, hierarchy_manifest
 ):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
-    from naics_embedder.utils.config import SupervisionBuildConfig
-
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
     init_file = tmp_path / 'gloo-init'
     queue = mp.get_context('spawn').SimpleQueue()
-    mp.spawn(_selection_worker, args=(2, init_file, str(manifest), queue), nprocs=2, join=True)
+    mp.spawn(
+        _selection_worker,
+        args=(2, init_file, str(hierarchy_manifest), queue),
+        nprocs=2,
+        join=True,
+    )
     rank0, rank1 = sorted(queue.get() for _ in range(2))
 
-    # Rank 0: its exclusion by quota, then the two geometrically nearest eligible codes, both
-    # remote. Its parent (3) is nearest of all but structurally closer than the grandparent
-    # positive, so it is ineligible for this anchor and never selected.
-    assert rank0[1] == [11, 1, 0]
-    assert rank0[2] == [0, 1, 1]
-    assert rank0[3] == [True, False, False]
-    assert rank0[5] >= 1
-    # Rank 1: its exclusion by quota, then the nearest eligible codes, both from rank 0.
-    assert rank1[1] == [7, 13, 12]
-    assert rank1[2] == [1, 0, 0]
-    assert rank1[3] == [True, False, False]
+    # Rank 0: the three geometrically nearest eligible codes, all remote. Its parent (3) is nearest
+    # of all but structurally closer than the grandparent positive, and its exclusion (11) is never
+    # a negative: both are ineligible for this anchor. Rank 1's exclusion (7) is an ordinary code
+    # here, since exclusions belong to an anchor.
+    assert rank0[1] == [1, 0, 7]
+    assert rank0[2] == [1, 1, 1]
+    assert rank0[3] == [False, False, False]
+    assert rank0[5] == 2
+    # Rank 1: the nearest eligible codes, all from rank 0 and rank 0's exclusion among them; its
+    # own exclusion (7) is never selected.
+    assert rank1[1] == [13, 12, 11]
+    assert rank1[2] == [0, 0, 0]
+    assert rank1[3] == [False, False, False]
     # Every selected field stays on one occurrence identity.
     assert rank0[4] and rank1[4]

@@ -5,15 +5,17 @@
 import hashlib
 import json
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Dict, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import unquote, urlparse
 
 import polars as pl
 import yaml
 
+from naics_embedder.data.redirections import build_redirections, exclusion_channel
 from naics_embedder.panels.index_roles import (
     attach_role_text,
     read_role_table,
@@ -23,6 +25,7 @@ from naics_embedder.panels.index_roles import (
 from naics_embedder.supervision.artifacts import sha256_file, validate_index_role_table
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.utils.config import DownloadConfig, load_config
+from naics_embedder.utils.naics_hierarchy import naics_parent_code
 from naics_embedder.utils.utilities import download_with_retry as _download_with_retry
 from naics_embedder.utils.utilities import make_directories
 from naics_embedder.utils.utilities import parquet_stats as _parquet_stats
@@ -280,36 +283,16 @@ def _get_descriptions_1(descriptions_df: pl.DataFrame) -> Tuple[pl.DataFrame, pl
 # NAICS exclusions
 # -------------------------------------------------------------------------------------------------
 
-def _get_exclusions(exclusions_df: pl.DataFrame, descriptions_3: pl.DataFrame,
-                    codes: Set[str]) -> Tuple[pl.DataFrame, pl.DataFrame]:
+def _exclusion_paragraphs(descriptions_3: pl.DataFrame) -> pl.DataFrame:
+    '''
+    Each code's "Excluded" paragraph (``code``, ``description_id``, ``description``).
 
-    # Load descriptions from cross-reference file
-    # yapf: disable
-    exclusions_1 = (
-        exclusions_df
-        .filter(
-            pl.col('excluded').str.contains(r' \d{2,6}'),
-        )
-    )
-    # yapf: enable
+    The paragraph is a code's last description block, when that block mentions an exclusion and
+    names a code. It leaves the description and joins the redirection table (Req 8).
+    '''
 
-    # Aggregate exclusions by code
     # yapf: disable
-    exclusions_2 = (
-        exclusions_1
-        .group_by('code', maintain_order=True)
-        .agg(excluded=pl.col('excluded'))
-        .select(
-            code=pl.col('code'),
-            description_id=pl.lit(1, pl.UInt32),
-            description=pl.col('excluded').list.join(' ')
-        )
-    )
-    # yapf: enable
-
-    # Extract excluded activities (typically last description block for a code)
-    # yapf: disable
-    exclusions_3 = (
+    return (
         descriptions_3
         .filter(
             pl.col('description_id').max().over('code').eq(pl.col('description_id')),
@@ -323,70 +306,6 @@ def _get_exclusions(exclusions_df: pl.DataFrame, descriptions_3: pl.DataFrame,
         )
     )
     # yapf: enable
-
-    # Exclusions for cleaning descriptions
-    descriptions_exclusions = exclusions_3.select('code', 'description_id')
-
-    # Combine and extract excluded codes
-    # yapf: disable
-    exclusions_4 = (
-        pl.concat([exclusions_2, exclusions_3])
-        .filter(pl.col('description').is_not_null())
-        .with_columns(
-            digit=pl.col('description')
-                    .str.extract_all(r' \d{2,6}')
-                    .list.eval(pl.element().str.strip_prefix(' '))
-                    .list.set_intersection(codes)
-                    .list.drop_nulls()
-                    .list.set_intersection(codes)
-                    .list.drop_nulls()
-        )
-        .filter(pl.col('digit').list.len().gt(0))
-    )
-    # yapf: enable
-
-    # Final exclusions DataFrame
-    # yapf: disable
-    exclusions = (
-        exclusions_4
-        .explode('digit')
-        .select(
-            level=pl.col('code').str.len_chars().cast(pl.UInt8),
-            code=pl.col('code'),
-            excluded=pl.col('description'),
-            excluded_codes=pl.col('digit'),
-        )
-        .sort('level', 'code')
-        .group_by('level', 'code', maintain_order=True)
-        .agg(
-            excluded=pl.col('excluded'),
-            excluded_codes=pl.col('excluded_codes')
-        )
-        .with_columns(
-            excluded=pl.col('excluded').list.join(' ')
-        )
-    )
-    # yapf: enable
-
-    # yapf: disable
-    exclusions_cnt = (
-        exclusions
-        .with_columns(
-            excluded_count=pl.col('excluded_codes').list.len()
-        )
-        .get_column('excluded_count')
-        .sum()
-    )
-    # yapf: enable
-
-    logger.info('Exclusions:')
-    logger.info('  Reference codes:')
-    logger.info(f'    Cross-references: {exclusions_2.height: ,}')
-    logger.info(f'    Extracted from descriptions: {exclusions_3.height: ,}')
-    logger.info(f'    Final: {exclusions.height: ,}')
-    logger.info(f'  Excluded codes: {exclusions_cnt: ,}\n')
-
-    return exclusions, descriptions_exclusions
 
 # -------------------------------------------------------------------------------------------------
 # NAICS examples
@@ -502,11 +421,38 @@ def _get_examples(
 # NAICS description 2 (cleaned descriptions)
 # -------------------------------------------------------------------------------------------------
 
+def _inherited_wording(text: str, level: int) -> str:
+    '''A child's description in its parent's wording, as the Census pointer texts read.'''
+
+    if level == 5:
+        return text.replace('This industry', 'This NAICS industry', 1)
+    if level == 4:
+        return text.replace('This industry', 'This industry group',
+                            1).replace('This NAICS industry', 'This industry group', 1)
+    return text
+
 def _get_descriptions_2(
     descriptions_3: pl.DataFrame,
     descriptions_exclusions: pl.DataFrame,
     descriptions_examples: pl.DataFrame,
+    codes: Set[str],
 ) -> pl.DataFrame:
+    '''
+    Each code's description, and the code whose official text it is (Req 9, "Inheritance").
+
+    A code's official text is its description blocks less its exclusion paragraph and its
+    illustrative examples. A code without official text inherits its only child's description,
+    recursively, in its own level's wording: "This NAICS industry" for a five-digit code and
+    "This industry group" for a four-digit one. This rule covers the 522 five-digit codes whose
+    Census text points to their six-digit child and the 140 four-digit codes with one child. A
+    code with several children and no official text keeps a null description: the 14 four-digit
+    codes 2111, 3231, 3241, 4561, 4931, 5192, 7121, 9211, 9221, 9231, 9241, 9251, 9261 and 9281.
+
+    Returns:
+        One row per code of ``codes``, sorted: ``code``, ``description`` and
+        ``description_source``, the code whose official text the description is (null exactly
+        when the description is).
+    '''
 
     # descriptions: exclude exclusion and example description blocks
     # yapf: disable
@@ -538,107 +484,46 @@ def _get_descriptions_2(
     )
     # yapf: enable
 
-    # Separate complete descriptions from missing ones
-    # yapf: disable
-    description_complete_1 = (
-        descriptions_4
-        .filter(
-            pl.col('description').ne('')
-        )
+    official = dict(
+        descriptions_4.filter(pl.col('description').ne('')).select('code', 'description').rows()
     )
-    # yapf: enable
+    children: Dict[str, List[str]] = defaultdict(list)
+    for code in codes:
+        parent = naics_parent_code(code)
+        if parent in codes:
+            children[parent].append(code)
 
-    # Find 4-digit codes missing descriptions
-    description_4_missing = descriptions_4.filter(
-        pl.col('code').str.len_chars().eq(4),
-        pl.col('description').eq('')
-    ).select(
-        code1=pl.col('code').str.pad_end(5, '1'),
-        code2=pl.col('code').str.pad_end(5, '2'),
-        code3=pl.col('code').str.pad_end(5, '3'),
-        code4=pl.col('code').str.pad_end(5, '4'),
-        code9=pl.col('code').str.pad_end(5, '9'),
-    )
+    resolved: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
 
-    # Find 5-digit codes missing descriptions
-    description_5_missing = descriptions_4.filter(
-        pl.col('code').str.len_chars().eq(5),
-        pl.col('description').eq('')
-    ).select(code=pl.col('code').str.pad_end(6, '0'))
+    def resolve(code: str) -> Tuple[Optional[str], Optional[str]]:
+        if code not in resolved:
+            if code in official:
+                resolved[code] = (official[code], code)
+            elif len(children[code]) == 1:
+                text, source = resolve(children[code][0])
+                wording = None if text is None else _inherited_wording(text, len(code))
+                resolved[code] = (wording, source)
+            else:
+                resolved[code] = (None, None)
+        return resolved[code]
 
-    logger.info('NAICS missing descriptions:')
-    logger.info(f'  Total: {descriptions_4.height: ,}')
-    logger.info(f'  Complete: {description_complete_1.height: ,}')
-    logger.info(f'  Missing (level 4): {description_4_missing.height: ,}')
-    logger.info(f'  Missing (level 5): {description_5_missing.height: ,}\n')
-
-    # Fill missing 5-digit descriptions from 6-digit children
-    # yapf: disable
-    description_5_complete = (
-        description_5_missing.join(description_complete_1, how='inner', on='code')
-        .with_columns(code=pl.col('code').str.slice(0, 5))
-        .select(
-            code=pl.col('code'),
-            description=pl.col('description').str.replace(
-                'This industry', 'This NAICS industry', literal=True
-            ),
-        )
-    )
-    # yapf: enable
-
-    description_complete_2 = pl.concat([description_complete_1, description_5_complete])
-
-    # Fill missing 4-digit descriptions from 5-digit children (try multiple suffixes)
-    description_4_complete_1 = description_4_missing.join(
-        description_complete_2, how='inner', right_on='code', left_on='code1'
+    descriptions = pl.DataFrame(
+        [(code, *resolve(code)) for code in sorted(codes)],
+        schema={
+            'code': pl.Utf8,
+            'description': pl.Utf8,
+            'description_source': pl.Utf8
+        },
+        orient='row',
     )
 
-    description_4_complete_2 = description_4_missing.join(
-        description_complete_2, how='inner', right_on='code', left_on='code2'
-    )
-
-    description_4_complete_3 = description_4_missing.join(
-        description_complete_2, how='inner', right_on='code', left_on='code3'
-    )
-
-    description_4_complete_4 = description_4_missing.join(
-        description_complete_2, how='inner', right_on='code', left_on='code4'
-    )
-
-    description_4_complete_9 = description_4_missing.join(
-        description_complete_2, how='inner', right_on='code', left_on='code9'
-    )
-
-    # yapf: disable
-    description_4_complete = (
-        pl.concat(
-            [
-                description_4_complete_1,
-                description_4_complete_2,
-                description_4_complete_3,
-                description_4_complete_4,
-                description_4_complete_9,
-            ]
-        )
-        .select(
-            code=pl.col('code1').str.slice(0, 4),
-            description=pl.col('description')
-            .str.replace('This industry', 'This industry group', literal=True)
-            .str.replace('This NAICS industry', 'This industry group', literal=True),
-        )
-        .unique(subset=['code'])
-    )
-    # yapf: enable
-
-    # Combine all descriptions
-    descriptions = pl.concat([description_complete_2, description_4_complete])
-
-    logger.info('NAICS completed descriptions:')
-    logger.info(f'  Missing (level 4): {description_4_missing.height: ,}')
-    logger.info(f'  Filled missing (level 4): {description_4_complete.height: ,}')
-    logger.info(f'  Missing (level 5): {description_5_missing.height: ,}')
-    logger.info(f'  Filled missing (level 5): {description_5_complete.height: ,}')
-    logger.info(f'  Complete: {descriptions.height: ,}')
+    sources = descriptions.get_column('description_source')
+    inherited = int((sources.is_not_null() & sources.ne(descriptions.get_column('code'))).sum())
+    absent = int(sources.is_null().sum())
+    logger.info('NAICS descriptions:')
+    logger.info(f'  Official: {descriptions.height - inherited - absent: ,}')
+    logger.info(f'  Inherited from an only child: {inherited: ,}')
+    logger.info(f'  Absent (several children, no official text): {absent: ,}\n')
 
     return descriptions
 
@@ -670,21 +555,48 @@ def naics_index_entries(sources: NaicsSources) -> pl.DataFrame:
     logger.info(f'  Codes with entries: {entries.get_column("code").n_unique(): ,}\n')
     return entries
 
-def build_descriptions(sources: NaicsSources, examples_entries: pl.DataFrame) -> pl.DataFrame:
+def naics_redirections(
+    sources: NaicsSources,
+    held_out_queries: Sequence[str] = (),
+) -> pl.DataFrame:
     '''
-    One row per code: title, description, examples channel and exclusions.
+    The redirection table of the Census files (``redirections.build_redirections``).
+
+    Rows are the cross-reference file's rows in file order, then the "Excluded" paragraphs
+    harvested from descriptions in code order. A row that one of ``held_out_queries`` leaks into
+    is withheld.
+    '''
+
+    _, codes = _get_titles(sources.titles)
+    _, descriptions_3 = _get_descriptions_1(sources.descriptions)
+    references = sources.exclusions.select('code', text=pl.col('excluded'))
+    paragraphs = _exclusion_paragraphs(descriptions_3).select('code', text=pl.col('description'))
+    return build_redirections(references, paragraphs.sort('code'), codes, held_out_queries)
+
+def build_descriptions(
+    sources: NaicsSources,
+    examples_entries: pl.DataFrame,
+    redirections: Optional[pl.DataFrame] = None,
+) -> pl.DataFrame:
+    '''
+    One row per code: title, description and its source, examples channel and exclusion channel.
 
     Args:
         sources: The four Census files.
         examples_entries: The index entries that form examples channels (``entry_id``,
             ``code``, ``text``); every other entry of a code with index entries is a query.
+        redirections: The redirection table whose rows form the exclusion channel
+            (``redirections.exclusion_channel``); built from ``sources`` with no row withheld
+            when omitted.
     '''
 
     titles, codes = _get_titles(sources.titles)
 
     descriptions_2, descriptions_3 = _get_descriptions_1(sources.descriptions)
 
-    exclusions, descriptions_exclusions = _get_exclusions(sources.exclusions, descriptions_3, codes)
+    if redirections is None:
+        redirections = naics_redirections(sources)
+    exclusions = exclusion_channel(redirections)
 
     index_codes = set(_get_index_entries(sources.index, codes).get_column('code').to_list())
     examples, descriptions_examples = _get_examples(
@@ -692,7 +604,10 @@ def build_descriptions(sources: NaicsSources, examples_entries: pl.DataFrame) ->
     )
 
     descriptions = _get_descriptions_2(
-        descriptions_3, descriptions_exclusions, descriptions_examples
+        descriptions_3,
+        _exclusion_paragraphs(descriptions_3).select('code', 'description_id'),
+        descriptions_examples,
+        codes,
     )
 
     # yapf: disable
@@ -706,6 +621,7 @@ def build_descriptions(sources: NaicsSources, examples_entries: pl.DataFrame) ->
             code=pl.col('code'),
             title=pl.col('title'),
             description=pl.col('description'),
+            description_source=pl.col('description_source'),
             examples=pl.col('examples'),
             excluded=pl.col('excluded'),
             excluded_codes=pl.col('excluded_codes'),
@@ -713,6 +629,47 @@ def build_descriptions(sources: NaicsSources, examples_entries: pl.DataFrame) ->
         .sort('index')
     )
     # yapf: enable
+
+TEXT_CHANNELS = ('title', 'description', 'examples', 'excluded')
+PLACEHOLDER_TEXT = '[EMPTY]'
+
+def verify_text_channels(descriptions: pl.DataFrame) -> Dict[str, int]:
+    '''
+    Fail unless every channel holds real text or is null (Req 9, "Masking").
+
+    No channel may be an empty or blank string, since an absent channel is null, and none may
+    contain the placeholder the tokenizer once substituted. A description's
+    ``description_source`` must be set exactly when the description is.
+
+    Returns:
+        The number of present texts per channel.
+    '''
+
+    for channel in TEXT_CHANNELS:
+        column = pl.col(channel)
+        blank = descriptions.filter(column.is_not_null() & column.str.strip_chars().eq('')).height
+        if blank:
+            raise ValueError(f'{blank:,} {channel} texts are blank; an absent channel is null')
+        placeholder = descriptions.filter(column.str.contains(PLACEHOLDER_TEXT, literal=True))
+        if placeholder.height:
+            raise ValueError(
+                f'{placeholder.height:,} {channel} texts contain the placeholder '
+                f'{PLACEHOLDER_TEXT!r}'
+            )
+    if descriptions.filter(pl.col('title').is_null()).height:
+        raise ValueError('every code needs a title')
+    mismatched = descriptions.filter(
+        pl.col('description').is_null() != pl.col('description_source').is_null()
+    )
+    if mismatched.height:
+        raise ValueError(
+            f'{mismatched.height:,} codes have a description_source without a description, or '
+            'the reverse'
+        )
+    return {
+        channel: int(descriptions.get_column(channel).is_not_null().sum())
+        for channel in TEXT_CHANNELS
+    }
 
 # -------------------------------------------------------------------------------------------------
 # Guard the descriptions file a supervision bundle pins
@@ -790,11 +747,13 @@ def download_preprocess_data(
     force: bool = False,
 ) -> pl.DataFrame:
     '''
-    Build the descriptions parquet and the index-roles parquet from the Census files.
+    Build the descriptions, index-roles and redirection parquets from the Census files.
 
     Every index entry takes its role from the frozen role table (``cfg.index_roles_csv``). A
-    code's examples channel holds its examples-role entries only, and no validation or test query
-    may match any training text (Req 3); both are checked before anything is written.
+    code's examples channel holds its examples-role entries only. A redirection row that a
+    validation or test query leaks into is withheld from the exclusion channel, and no held-out
+    query may match any training text or activity phrase (Req 3). Everything is checked before
+    anything is written.
 
     Args:
         cfg: Download configuration; ``conf/data/download.yaml`` when omitted.
@@ -824,16 +783,22 @@ def download_preprocess_data(
     sources = load_naics_sources(cfg)
 
     role_rows = attach_role_text(read_role_table(roles_csv), naics_index_entries(sources))
+    held_out = role_rows.filter(
+        pl.col('role').is_in([IndexRole.VALIDATION.value, IndexRole.TEST.value])
+    )
+    redirections = naics_redirections(sources, held_out.get_column('text').to_list())
 
     naics_final = build_descriptions(
-        sources, role_rows.filter(pl.col('role') == IndexRole.EXAMPLES.value)
+        sources, role_rows.filter(pl.col('role') == IndexRole.EXAMPLES.value), redirections
     )
 
     six_digit_codes = naics_final.filter(pl.col('level') == 6).get_column('code').to_list()
     validate_index_role_table(role_rows, six_digit_codes)
     verify_examples_channel(naics_final, role_rows)
-    leakage = verify_role_leakage(naics_final, role_rows)
-    logger.info(f'Held-out queries matching training text: {leakage}\n')
+    logger.info(f'Present texts per channel: {verify_text_channels(naics_final)}')
+    activities = redirections.get_column('activity').drop_nulls().to_list()
+    leakage = verify_role_leakage(naics_final, role_rows, extra_texts=activities)
+    logger.info(f'Held-out queries matching training text or activity phrases: {leakage}\n')
 
     (naics_final.write_parquet(cfg.output_parquet))
 
@@ -851,6 +816,16 @@ def download_preprocess_data(
         parquet_df=role_rows,
         message='NAICS index entries and their roles written to',
         output_parquet=cfg.index_roles_parquet,
+        logger=logger,
+    )
+
+    Path(cfg.redirections_parquet).parent.mkdir(parents=True, exist_ok=True)
+    redirections.write_parquet(cfg.redirections_parquet)
+
+    _parquet_stats(
+        parquet_df=redirections,
+        message='NAICS redirection table written to',
+        output_parquet=cfg.redirections_parquet,
         logger=logger,
     )
 

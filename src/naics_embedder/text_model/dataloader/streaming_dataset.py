@@ -160,8 +160,7 @@ def _compute_phase1_weights(
         code_to_idx: Mapping from code to index
         alpha: Exponent for inverse tree distance weighting
         exclusion_weight: Legacy-containment constant weight for excluded codes. ``None`` gives
-            exclusions no special weight (repaired training reserves exactly one exclusion slot
-            at selection time instead).
+            exclusions no special weight: repaired training never uses an exclusion as a negative.
 
     Returns:
         Array of sampling weights (unnormalized)
@@ -1003,17 +1002,17 @@ def build_candidate_pool(
     '''
     Build one canonical candidate pool for an (anchor, positive) pair.
 
-    The pool contains every explicit exclusion of the anchor (either direction) and unique
-    ordinary codes: the raw candidates in a stable, epoch-dependent shuffle, backfilled from the
-    remaining non-exclusion universe when needed. Because final selection admits exactly one
-    exclusion, the pool keeps at least ``final_k - 1`` ordinary codes when any exclusion exists (or
-    ``final_k`` when none does), and at least ``n_candidates - exclusions``. The anchor and positive
-    codes never appear. Ordinary codes are structurally farther than the positive, the rule every
-    generated training negative satisfies; backfill draws only such codes.
+    The pool holds unique codes: the raw candidates in a stable, epoch-dependent shuffle,
+    backfilled from the remaining universe when needed, at least ``max(n_candidates, final_k)`` of
+    them. The anchor and positive codes never appear, and neither does an explicit exclusion of
+    the anchor in either direction: an exclusion pair is never a code-code negative (Req 8). Every
+    code is structurally farther than the positive, the rule every generated training negative
+    satisfies; backfill draws only such codes.
 
     Raises:
-        ValueError: If ``final_k < 1``, a raw ordinary candidate is not structurally farther than
-            the positive, or the universe cannot supply ``final_k`` selectable codes.
+        ValueError: If ``final_k < 1``, a raw candidate is an explicit exclusion of the anchor or
+            is not structurally farther than the positive, or the universe cannot supply
+            ``final_k`` selectable codes.
     '''
 
     if final_k < 1:
@@ -1035,8 +1034,7 @@ def build_candidate_pool(
     def normalized_candidate(item: Dict[str, Any]) -> Dict[str, Any]:
         normalized = {key: item[key] for key in RAW_CANDIDATE_KEYS if key in item}
         normalized['negative_code_id'] = int(item['negative_code_id'])
-        normalized['negative_is_explicit_exclusion'] = normalized['negative_code_id'
-                                                                  ] in exclusion_set
+        normalized['negative_is_explicit_exclusion'] = False
         return normalized
 
     def backfill_candidate(code_id: int) -> Dict[str, Any]:
@@ -1046,7 +1044,7 @@ def build_candidate_pool(
             'negative_structural_distance': float(
                 supervision_index.structural_distance[anchor_code_id, code_id]
             ),
-            'negative_is_explicit_exclusion': code_id in exclusion_set,
+            'negative_is_explicit_exclusion': False,
             'sampling_role_id': NEGATIVE_ROLE_ID,
             'sampling_provenance_id': int(SamplingProvenance.BACKFILL),
         }
@@ -1056,40 +1054,42 @@ def build_candidate_pool(
         code_id = int(item['negative_code_id'])
         if code_id in forbidden:
             continue
-        if code_id not in exclusion_set and not eligible_codes[code_id]:
+        if code_id in exclusion_set:
+            raise ValueError(
+                f'raw candidate code ID {code_id} is an explicit exclusion of anchor code ID '
+                f'{anchor_code_id}; an exclusion is never a negative'
+            )
+        if not eligible_codes[code_id]:
             raise ValueError(
                 f'raw candidate code ID {code_id} for anchor code ID {anchor_code_id} is not '
                 f'structurally farther than positive code ID {positive_code_id}'
             )
         by_code.setdefault(code_id, normalized_candidate(item))
-    for code_id in exclusion_ids:
-        by_code.setdefault(code_id, backfill_candidate(code_id))
 
-    exclusion_slots = min(len(exclusion_ids), 1)
-    ordinary_target = max(n_candidates - len(exclusion_ids), final_k - exclusion_slots, 0)
+    target = max(n_candidates, final_k)
     rng = np.random.default_rng((stable_hash(seed, anchor_code_id) + epoch) % (2**63))
-    ordinary_ids = sorted(code_id for code_id in by_code if code_id not in exclusion_set)
-    rng.shuffle(ordinary_ids)
-    kept_ordinary = ordinary_ids[:ordinary_target]
+    kept = sorted(by_code)
+    rng.shuffle(kept)
+    kept = kept[:target]
 
-    if len(kept_ordinary) < ordinary_target:
+    if len(kept) < target:
         universe = [
             code_id for code_id in range(len(supervision_index.id_to_code))
             if eligible_codes[code_id] and code_id not in forbidden and code_id not in exclusion_set
             and code_id not in by_code
         ]
         rng.shuffle(universe)
-        for code_id in universe[:ordinary_target - len(kept_ordinary)]:
+        for code_id in universe[:target - len(kept)]:
             by_code[code_id] = backfill_candidate(code_id)
-            kept_ordinary.append(code_id)
+            kept.append(code_id)
 
-    if len(kept_ordinary) + exclusion_slots < final_k:
+    if len(kept) < final_k:
         raise ValueError(
             f'anchor code ID {anchor_code_id} requires {final_k} selectable candidates; only '
-            f'{len(kept_ordinary) + exclusion_slots} exist (one exclusion slot plus unique '
-            'non-exclusion codes structurally farther than the positive)'
+            f'{len(kept)} exist (unique non-exclusion codes structurally farther than the '
+            'positive)'
         )
-    return [by_code[code_id] for code_id in (*exclusion_ids, *kept_ordinary)]
+    return [by_code[code_id] for code_id in kept]
 
 def _validate_streaming_cache_envelope(
     envelope: Any,
@@ -1244,8 +1244,8 @@ def sample_raw_candidates(
     '''
     Apply the configured raw sampling strategy without any exclusion weighting.
 
-    Exclusion representation belongs to the candidate pool (every exclusion) and the selection
-    quota (exactly one), never to a sampling weight.
+    An explicit exclusion is never a negative (Req 8): no sampling weight, candidate pool or
+    selection admits one.
     '''
 
     metadata: Optional[Dict[str, Any]] = None

@@ -16,6 +16,7 @@ nav:
               - Relationship Measures: api/compute_relations.md
               - Graph Distance Measures: api/compute_distances.md
           - Create Contrastive Training Triplets: api/create_triplets.md
+          - Redirection Table: api/redirections.md
       - Training:
           - Text Training:
               - Data Loading:
@@ -51,6 +52,8 @@ nav:
           - Console: api/console.md
           - Configuration: api/config.md
           - General Utilities: api/utilities.md
+          - Input Window: api/input_window.md
+          - NAICS Hierarchy: api/naics_hierarchy.md
           - Training Utilities: api/training_utils.md
           - Validation: api/validation.md
           - Warnings: api/warnings.md

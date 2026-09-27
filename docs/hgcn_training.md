@@ -123,7 +123,7 @@ Report Req 6's structural diagnostics on a table before and after refinement:
 
 ```bash
 uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \
-  --codebook data/supervision/stage3-supervision-v1/<bundle-id>/naics_codebook.parquet
+  --codebook data/supervision/stage3-supervision-v2/<bundle-id>/naics_codebook.parquet
 ```
 
 `--table` takes a 2,125-code table in the export form: tangent coordinates at the origin for a

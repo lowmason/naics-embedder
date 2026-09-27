@@ -113,10 +113,8 @@ class OutcomePanel:
         '''
         The panel from a validated supervision bundle's ``index_roles`` member and codebook.
 
-        The bundle checked the roles against its descriptions when it was built.
-
-        Raises:
-            ValueError: If the bundle has no ``index_roles`` member.
+        Every loadable bundle carries the member, whose roles its build checked against its
+        descriptions.
         '''
 
         roles = pl.read_parquet(bundle.artifact_path(INDEX_ROLES_ARTIFACT))

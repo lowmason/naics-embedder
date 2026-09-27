@@ -12,12 +12,25 @@ from naics_embedder.data.supervision_bundle import (
     codebook_fingerprint,
     distance_matrix_from_pair_facts,
     generate_supervision_bundle,
-    generate_supervision_bundle_from_frames,
+    input_window_record,
     relation_matrix_from_pair_facts,
 )
-from naics_embedder.supervision.artifacts import load_validated_bundle, sha256_file
-from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.panels.index_roles import verify_role_leakage
+from naics_embedder.supervision.artifacts import (
+    REDIRECTIONS_SCHEMA,
+    REQUIRED_VALIDATION_RESULTS,
+    load_validated_bundle,
+    sha256_file,
+    validate_redirection_table,
+    validate_training_pairs_members,
+)
+from naics_embedder.supervision.schema import (
+    CONTRACT_VERSION,
+    ChannelOverflow,
+    InputWindowRecord,
+)
 from naics_embedder.utils.config import SupervisionBuildConfig
+from tests.fixtures.supervision import FIVE_CODE_INPUT_WINDOW
 
 def test_exclusion_provenance_does_not_mutate_structure(
     descriptions_fixture, structural_frames_fixture
@@ -69,8 +82,8 @@ def test_matrices_reconcile_with_pair_facts_and_codebook_order(
     distance_matrix = distance_matrix_from_pair_facts(facts, codebook)
     relation_matrix = relation_matrix_from_pair_facts(facts, codebook)
 
-    assert distance_matrix.row(0)[1] == 0.5
-    assert distance_matrix.row(1)[0] == 0.5
+    assert distance_matrix.row(0)[1] == 2.0
+    assert distance_matrix.row(1)[0] == 2.0
     assert relation_matrix.row(0)[1] == 1
     assert relation_matrix.row(1)[0] == 1
     assert codebook_fingerprint(codebook) == codebook_fingerprint(codebook.clone())
@@ -142,7 +155,7 @@ def depth_first_frames() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
         'code_i': ['311', '311', '311', '3111', '3111', '3112'],
         'code_j': ['3111', '31111', '3112', '31111', '3112', '31111'],
     }
-    distances = pl.DataFrame(pairs | {'structural_distance': [0.5, 1.5, 0.5, 0.5, 2.0, 3.0]})
+    distances = pl.DataFrame(pairs | {'structural_distance': [1.0, 2.0, 1.0, 1.0, 2.0, 3.0]})
     relations = pl.DataFrame(
         pairs
         | {
@@ -200,15 +213,15 @@ def test_pair_facts_reject_a_deeper_first_row(depth_first_frames):
 def test_pair_facts_reject_a_reversed_duplicate_pair(depth_first_frames):
     descriptions, distances, relations = depth_first_frames
     reversed_key = {'idx_i': [3], 'idx_j': [1], 'code_i': ['3112'], 'code_j': ['3111']}
-    distances = pl.concat([distances, pl.DataFrame(reversed_key | {'structural_distance': [99.0]})])
+    distances = pl.concat([distances, pl.DataFrame(reversed_key | {'structural_distance': [2.0]})])
     relations = pl.concat(
         [
             relations,
             pl.DataFrame(
                 reversed_key
                 | {
-                    'structural_relation_id': [99],
-                    'structural_relation_name': ['cross_sector'],
+                    'structural_relation_id': [2],
+                    'structural_relation_name': ['sibling'],
                 }
             ),
         ]
@@ -236,20 +249,64 @@ def test_pair_facts_reject_ids_that_disagree_with_the_codebook(depth_first_frame
         build_pair_facts(distances, relations, mislabeled, build_codebook(mislabeled))
 
 # -------------------------------------------------------------------------------------------------
+# D* (Req 7): every stored distance is checked
+# -------------------------------------------------------------------------------------------------
+
+def _set_pair(frame: pl.DataFrame, code_i: str, code_j: str, column: str, value) -> pl.DataFrame:
+    chosen = pl.col('code_i').eq(code_i) & pl.col('code_j').eq(code_j)
+    return frame.with_columns(
+        pl.when(chosen).then(pl.lit(value)).otherwise(pl.col(column)).alias(column)
+    )
+
+@pytest.mark.parametrize(
+    ('code_i', 'code_j', 'value', 'message'),
+    [
+        # D* has no half-step for a lineal pair
+        ('311', '3111', 0.5, 'no half-step'),
+        # 3112 and 31111 are 3 apart; at 4 they would be farther than through 311 (1 + 2)
+        ('3112', '31111', 4.0, 'triangle inequality'),
+        # A parent and its child are 1 apart; 2 keeps the triangle inequality but is not D*
+        ('311', '3111', 2.0, 'differs from D\\*'),
+    ],
+)
+def test_pair_facts_reject_a_distance_that_is_not_d_star(
+    depth_first_frames, code_i, code_j, value, message
+):
+    descriptions, distances, relations = depth_first_frames
+    distances = _set_pair(distances, code_i, code_j, 'structural_distance', value)
+
+    with pytest.raises(ValueError, match=message):
+        build_pair_facts(distances, relations, descriptions, build_codebook(descriptions))
+
+def test_pair_facts_reject_a_cross_sector_label_inside_a_sector(depth_first_frames):
+    descriptions, distances, relations = depth_first_frames
+    relations = _set_pair(relations, '3111', '3112', 'structural_relation_id', 99)
+
+    with pytest.raises(ValueError, match='cross_sector relation label'):
+        build_pair_facts(distances, relations, descriptions, build_codebook(descriptions))
+
+@pytest.mark.parametrize(
+    ('value', 'message'),
+    [(99.0, 'retired cross-sector constant 99'), (9.0, 'cross-sector distances must equal')],
+)
+def test_pair_facts_reject_a_cross_sector_distance_off_the_formula(
+    descriptions_fixture, structural_frames_fixture, value, message
+):
+    # '111111' and '222222' meet only at the virtual root: 6 + 6 - 2 = 10
+    distances, relations = structural_frames_fixture
+    distances = _set_pair(distances, '111111', '222222', 'structural_distance', value)
+
+    with pytest.raises(ValueError, match=message):
+        build_pair_facts(
+            distances, relations, descriptions_fixture, build_codebook(descriptions_fixture)
+        )
+
+# -------------------------------------------------------------------------------------------------
 # Immutable bundle publication
 # -------------------------------------------------------------------------------------------------
 
-def test_bundle_writes_manifest_last_with_matching_parquet_metadata(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
-    manifest_path = generate_supervision_bundle_from_frames(
-        output_root=tmp_path,
-        bundle_id='bundle-a',
-        generator_revision='revision-a',
-        naics_vintage=2022,
-        descriptions=descriptions_fixture,
-        pair_facts=pair_facts_fixture,
-    )
+def test_bundle_writes_manifest_last_with_matching_parquet_metadata(build_bundle):
+    manifest_path = build_bundle()
 
     manifest = json.loads(manifest_path.read_text())
     codebook_path = manifest_path.parent / manifest['artifacts']['codebook']['path']
@@ -261,52 +318,22 @@ def test_bundle_writes_manifest_last_with_matching_parquet_metadata(
     assert metadata[b'naics_embedder.bundle_id'].decode() == 'bundle-a'
     assert metadata[b'naics_embedder.schema_version'].decode() == 'codebook-v1'
 
-def test_bundle_never_overwrites_an_existing_generation(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
-    kwargs = {
-        'output_root': tmp_path,
-        'bundle_id': 'bundle-a',
-        'generator_revision': 'revision-a',
-        'naics_vintage': 2022,
-        'descriptions': descriptions_fixture,
-        'pair_facts': pair_facts_fixture,
-    }
-    generate_supervision_bundle_from_frames(**kwargs)
+def test_bundle_never_overwrites_an_existing_generation(build_bundle):
+    build_bundle()
 
     with pytest.raises(FileExistsError, match='bundle-a'):
-        generate_supervision_bundle_from_frames(**kwargs)
+        build_bundle()
 
-def test_failed_validation_publishes_no_manifest(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
+def test_failed_validation_publishes_no_manifest(tmp_path, build_bundle, pair_facts_fixture):
     inconsistent = pair_facts_fixture.with_columns(is_explicit_exclusion=pl.lit(False))
 
     with pytest.raises(ValueError, match='exclusion derivation'):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id='broken',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=descriptions_fixture,
-            pair_facts=inconsistent,
-        )
+        build_bundle(bundle_id='broken', pair_facts=inconsistent)
 
     assert not (tmp_path / 'broken' / 'manifest.json').exists()
 
-def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
-    manifests = [
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id=bundle_id,
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=descriptions_fixture,
-            pair_facts=pair_facts_fixture,
-        ) for bundle_id in ('bundle-a', 'bundle-b')
-    ]
+def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(build_bundle):
+    manifests = [build_bundle(bundle_id=bundle_id) for bundle_id in ('bundle-a', 'bundle-b')]
     loaded = [json.loads(path.read_text()) for path in manifests]
     frames = [
         pl.read_parquet(path.parent / manifest['artifacts']['pair_facts']['path'])
@@ -317,16 +344,9 @@ def test_two_generated_bundles_have_equal_logical_frames_but_distinct_ids(
     assert frames[0].equals(frames[1])
 
 def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
-    tmp_path, descriptions_fixture, pair_facts_fixture
+    tmp_path, build_bundle
 ):
-    manifest_path = generate_supervision_bundle_from_frames(
-        output_root=tmp_path,
-        bundle_id='bundle-a',
-        generator_revision='revision-a',
-        naics_vintage=2022,
-        descriptions=descriptions_fixture,
-        pair_facts=pair_facts_fixture,
-    )
+    manifest_path = build_bundle()
     manifest = json.loads(manifest_path.read_text())
     artifacts = manifest['artifacts']
 
@@ -339,13 +359,24 @@ def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
         'relation_matrix',
         'training_pairs',
         'difficulty_thresholds',
+        'index_roles',
+        'redirections',
     }
     assert manifest['codebook_order'] == ['111111', '111112', '111113', '222222', '333333']
     assert artifacts['pair_facts']['row_count'] == 10
     assert artifacts['pair_facts']['exclusion_count'] == 2
-    assert artifacts['training_pairs']['row_count'] == 5
-    assert artifacts['training_pairs']['exclusion_count'] == 2
+    # Two of the five triples ran through an exclusion pair, which is never a negative
+    assert artifacts['training_pairs']['row_count'] == 3
+    assert artifacts['training_pairs']['exclusion_count'] == 0
+    assert manifest['validation_results']['no_exclusion_negatives'] is True
     assert all(manifest['validation_results'].values())
+    for check in (
+        'distance_is_d_star',
+        'cross_sector_distance_formula',
+        'cross_sector_relation_label',
+        'distance_triangle_inequality',
+    ):
+        assert manifest['validation_results'][check] is True
     for record in artifacts.values():
         assert sum(member['row_count'] for member in record['files']) == record['row_count']
         for member in record['files']:
@@ -359,38 +390,65 @@ def test_bundle_records_every_artifact_member_with_hash_and_contract_metadata(
                 )
     assert not list(tmp_path.glob('.*staging*'))
 
-def test_failed_generation_leaves_no_staging_directory(
-    tmp_path, descriptions_fixture, pair_facts_fixture
-):
+def test_failed_generation_leaves_no_staging_directory(tmp_path, build_bundle, pair_facts_fixture):
     with pytest.raises(ValueError):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
+        build_bundle(
             bundle_id='broken',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=descriptions_fixture,
             pair_facts=pair_facts_fixture.with_columns(structural_distance=pl.lit(0.0)),
         )
 
     assert list(tmp_path.iterdir()) == []
 
 def test_production_bundle_uses_a_uuid_and_the_descriptions_file_hash(
-    tmp_path, hierarchy_descriptions_parquet
+    hierarchy_manifest, hierarchy_descriptions_parquet
 ):
-    cfg = SupervisionBuildConfig(
-        descriptions_parquet=hierarchy_descriptions_parquet,
-        output_root=str(tmp_path / 'bundles'),
-    )
-
-    manifest_path = generate_supervision_bundle(cfg)
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(hierarchy_manifest.read_text())
 
     assert str(uuid.UUID(manifest['bundle_id'])) == manifest['bundle_id']
-    assert manifest_path.parent.name == manifest['bundle_id']
+    assert hierarchy_manifest.parent.name == manifest['bundle_id']
     assert manifest['description_fingerprint'] == sha256_file(hierarchy_descriptions_parquet)
     assert manifest['structural_relation_ids']['cross_sector'] == 99
     assert manifest['artifacts']['pair_facts']['row_count'] == 17 * 16 // 2
     assert manifest['artifacts']['pair_facts']['exclusion_count'] == 2
+
+def test_the_unary_pairs_are_flagged_and_never_generated_positives(hierarchy_manifest):
+    bundle = load_validated_bundle(hierarchy_manifest)
+    facts = pl.read_parquet(bundle.artifact_path('pair_facts'))
+    pairs = pl.read_parquet(list(bundle.member_paths('training_pairs')))
+
+    unary = facts.filter(pl.col('unary_pair')).select('code_i', 'code_j').rows()
+    positives = set(pairs.select('anchor_code', 'positive_code').unique().rows())
+    # Each five-digit code in the hierarchy has one six-digit child
+    assert unary == [
+        ('31111', '311111'),
+        ('31121', '311211'),
+        ('32111', '321111'),
+        ('44111', '441111'),
+    ]
+    assert not positives & set(unary)
+    assert bundle.manifest.artifacts['pair_facts'].schema_version == 'pair-facts-v2'
+    assert bundle.manifest.validation_results['unary_pairs_flagged'] is True
+    assert bundle.manifest.validation_results['no_unary_positives'] is True
+
+def test_pair_facts_refuse_a_unary_flag_the_codes_do_not_support(build_bundle, pair_facts_fixture):
+    # '111111' and '111112' are six-digit siblings, not a five-digit code and its only child
+    flagged = pair_facts_fixture.with_columns(
+        unary_pair=pl.col('code_i_id').eq(0) & pl.col('code_j_id').eq(1)
+    )
+
+    with pytest.raises(ValueError, match='unary_pair is wrong on 1 pairs, e.g. 111111/111112'):
+        build_bundle(pair_facts=flagged)
+
+def test_training_pairs_refuse_a_unary_positive(tmp_path, pair_facts_fixture):
+    # Rows generated while (0, 1) was unflagged keep it as a positive; the flagged facts refuse them
+    path = tmp_path / 'training_pairs.parquet'
+    build_training_pairs(pair_facts_fixture).write_parquet(path)
+    flagged = pair_facts_fixture.with_columns(
+        unary_pair=pl.col('code_i_id').eq(0) & pl.col('code_j_id').eq(1)
+    )
+
+    with pytest.raises(ValueError, match='a training positive is a unary pair'):
+        validate_training_pairs_members([path], flagged, n_codes=5)
 
 # -------------------------------------------------------------------------------------------------
 # Fail-closed bundle loading
@@ -420,8 +478,8 @@ def test_loader_accepts_a_generated_bundle(generated_bundle):
         bundle.artifact_path('missing_artifact')
 
 def test_loader_rejects_another_contract_version(generated_bundle):
-    with pytest.raises(ValueError, match='expected supervision contract stage3-supervision-v2'):
-        load_validated_bundle(generated_bundle, expected_contract='stage3-supervision-v2')
+    with pytest.raises(ValueError, match='expected supervision contract stage3-supervision-v1'):
+        load_validated_bundle(generated_bundle, expected_contract='stage3-supervision-v1')
 
 def test_loader_rejects_bytes_that_do_not_match_the_manifest_hash(generated_bundle):
     manifest = json.loads(generated_bundle.read_text())
@@ -463,6 +521,20 @@ def test_loader_rejects_a_rehashed_structural_sentinel(generated_bundle):
     with pytest.raises(ValueError, match='pair_facts.*bundle-a.*structural distance zero'):
         load_validated_bundle(generated_bundle)
 
+def test_loader_rejects_a_rehashed_legacy_cross_sector_distance(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'pair_facts',
+        lambda frame: frame.with_columns(
+            structural_distance=pl.when(pl.col('structural_relation_id').eq(99)).then(
+                pl.lit(99.0, dtype=pl.Float32)
+            ).otherwise(pl.col('structural_distance'))
+        ),
+    )
+
+    with pytest.raises(ValueError, match='pair_facts.*bundle-a.*retired cross-sector constant'):
+        load_validated_bundle(generated_bundle)
+
 def test_loader_rejects_a_rehashed_matrix_that_drifts_from_pair_facts(generated_bundle):
     _rewrite_member(
         generated_bundle,
@@ -484,29 +556,53 @@ def test_loader_rejects_a_rehashed_excluded_direct_positive(generated_bundle):
         load_validated_bundle(generated_bundle)
 
 def test_loader_rejects_training_exclusions_that_disagree_with_pair_facts(generated_bundle):
+    # Anchor 0's negatives become code 2, its exclusion, with every exclusion flag still false
     _rewrite_member(
         generated_bundle,
         'training_pairs',
         lambda frame: frame.with_columns(
-            anchor_excludes_negative=pl.lit(False),
-            negative_excludes_anchor=pl.lit(False),
-            negative_is_explicit_exclusion=pl.lit(False),
-            negative_semantic_target=pl.lit('unknown'),
-            negative_semantic_source=pl.lit('unlabeled'),
+            negative_code_id=pl.when(pl.col('anchor_code_id').eq(0)).then(
+                pl.lit(2).cast(frame.schema['negative_code_id'])
+            ).otherwise(pl.col('negative_code_id'))
         ),
     )
 
     with pytest.raises(ValueError, match='training_pairs.*bundle-a.*pair facts'):
         load_validated_bundle(generated_bundle)
 
+def test_loader_rejects_a_rehashed_unary_flag(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'pair_facts',
+        lambda frame: frame.with_columns(
+            unary_pair=pl.col('code_i_id').eq(0) & pl.col('code_j_id').eq(1)
+        ),
+    )
+
+    with pytest.raises(ValueError, match='pair_facts.*bundle-a.*unary_pair is wrong'):
+        load_validated_bundle(generated_bundle)
+
+def test_loader_rejects_a_rehashed_exclusion_negative(generated_bundle):
+    _rewrite_member(
+        generated_bundle,
+        'training_pairs',
+        lambda frame: frame.with_columns(
+            anchor_excludes_negative=pl.lit(True),
+            negative_is_explicit_exclusion=pl.lit(True),
+            negative_semantic_target=pl.lit('unrelated'),
+            negative_semantic_source=pl.lit('explicit_exclusion'),
+        ),
+    )
+
+    with pytest.raises(ValueError, match='training_pairs.*bundle-a.*explicit exclusions of'):
+        load_validated_bundle(generated_bundle)
+
 # -------------------------------------------------------------------------------------------------
-# The optional index-roles member
+# The index-roles and redirections members
 # -------------------------------------------------------------------------------------------------
 
-def test_bundle_carries_the_index_roles_after_checking_them(
-    generated_bundle_with_roles, index_roles_fixture
-):
-    manifest = json.loads(generated_bundle_with_roles.read_text())
+def test_bundle_carries_the_index_roles_after_checking_them(generated_bundle, index_roles_fixture):
+    manifest = json.loads(generated_bundle.read_text())
     record = manifest['artifacts']['index_roles']
 
     assert record['path'] == 'naics_index_roles.parquet'
@@ -518,11 +614,29 @@ def test_bundle_carries_the_index_roles_after_checking_them(
         'index_roles_no_leakage',
     ):
         assert manifest['validation_results'][check] is True
-    bundle = load_validated_bundle(generated_bundle_with_roles)
+    bundle = load_validated_bundle(generated_bundle)
     assert pl.read_parquet(bundle.artifact_path('index_roles')).equals(index_roles_fixture)
 
+def test_bundle_carries_the_redirection_table_after_checking_it(
+    generated_bundle, redirections_fixture
+):
+    manifest = json.loads(generated_bundle.read_text())
+    record = manifest['artifacts']['redirections']
+
+    assert record['path'] == 'naics_redirections.parquet'
+    assert record['schema_version'] == 'redirections-v1'
+    assert record['row_count'] == 2
+    for check in (
+        'redirections_well_formed',
+        'redirections_match_exclusion_channel',
+        'redirections_match_pair_facts',
+    ):
+        assert manifest['validation_results'][check] is True
+    bundle = load_validated_bundle(generated_bundle)
+    assert pl.read_parquet(bundle.artifact_path('redirections')).equals(redirections_fixture)
+
 def test_bundle_refuses_an_examples_channel_holding_queries(
-    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture
+    tmp_path, build_bundle, text_descriptions_fixture
 ):
     stale = text_descriptions_fixture.with_columns(
         examples=pl.when(pl.col('code') == '111111').then(
@@ -531,47 +645,174 @@ def test_bundle_refuses_an_examples_channel_holding_queries(
     )
 
     with pytest.raises(ValueError, match='examples channel other than'):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id='stale',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=stale,
-            pair_facts=pair_facts_fixture,
-            index_roles=index_roles_fixture,
-        )
+        build_bundle(bundle_id='stale', descriptions=stale)
     assert list(tmp_path.iterdir()) == []
 
-def test_bundle_refuses_a_held_out_query_matching_training_text(
-    tmp_path, text_descriptions_fixture, pair_facts_fixture, index_roles_fixture
-):
+def test_bundle_refuses_a_held_out_query_matching_training_text(build_bundle, index_roles_fixture):
     # Entry 1 (validation) becomes another code's title
     leaky = index_roles_fixture.with_columns(
         text=pl.when(pl.col('entry_id') == 1).then(pl.lit('Industry 222222')).otherwise('text')
     )
 
     with pytest.raises(ValueError, match='held-out queries match training text'):
-        generate_supervision_bundle_from_frames(
-            output_root=tmp_path,
-            bundle_id='leaky',
-            generator_revision='revision-a',
-            naics_vintage=2022,
-            descriptions=text_descriptions_fixture,
-            pair_facts=pair_facts_fixture,
-            index_roles=leaky,
+        build_bundle(bundle_id='leaky', index_roles=leaky)
+
+def test_the_leakage_check_reads_the_activity_phrases(monkeypatch, build_bundle):
+    # Stage 7 trains on the activity phrases as queries, so no held-out query may match one
+    seen = []
+
+    def spy(descriptions, role_rows, *args, extra_texts=(), **kwargs):
+        seen.append(list(extra_texts))
+        return verify_role_leakage(
+            descriptions, role_rows, *args, extra_texts=extra_texts, **kwargs
         )
 
-def test_loader_rejects_an_index_entry_with_two_roles(generated_bundle_with_roles):
+    monkeypatch.setattr('naics_embedder.data.supervision_bundle.verify_role_leakage', spy)
+    build_bundle()
+
+    assert seen == [['Growing peanuts', 'Canola crushing']]
+
+def test_bundle_refuses_an_exclusion_channel_the_table_does_not_build(
+    tmp_path, build_bundle, text_descriptions_fixture
+):
+    # Code 111111's channel repeats its one cross-reference, which must appear once
+    doubled = text_descriptions_fixture.with_columns(
+        excluded=pl.when(pl.col('code') == '111111').then(
+            pl.concat_str('excluded', pl.lit(' '), 'excluded')
+        ).otherwise('excluded')
+    )
+
+    with pytest.raises(ValueError, match='exclusion channel other than the redirection table'):
+        build_bundle(bundle_id='doubled', descriptions=doubled)
+    assert list(tmp_path.iterdir()) == []
+
+# A well-formed table over the codes '11111', '111111', '111112' and '222222': a cross-reference,
+# a cross-reference naming its code's parent, and a withheld "Excluded" paragraph
+WELL_FORMED_REDIRECTIONS = [
+    (
+        0,
+        'cross_reference',
+        '111111',
+        'Growing peanuts--are classified in Industry 111112.',
+        'Growing peanuts',
+        ['111112'],
+        [],
+        False,
+    ),
+    (
+        1,
+        'cross_reference',
+        '111112',
+        'Mixed farming--are classified in Industry 11111.',
+        'Mixed farming',
+        ['11111'],
+        ['11111'],
+        False,
+    ),
+    (
+        2,
+        'description',
+        '222222',
+        'Farm supplies are classified in Industry 111111.',
+        None,
+        ['111111'],
+        [],
+        True,
+    ),
+]
+REDIRECTION_CODES = ['11111', '111111', '111112', '222222']
+
+def _redirections(rows) -> pl.DataFrame:
+    return pl.DataFrame(rows, schema=REDIRECTIONS_SCHEMA, orient='row')
+
+def test_redirection_table_accepts_a_well_formed_table():
+    validate_redirection_table(_redirections(WELL_FORMED_REDIRECTIONS), REDIRECTION_CODES)
+
+@pytest.mark.parametrize(
+    ('row', 'column', 'value', 'message'),
+    [
+        (0, 'reference_id', 5, 'reference IDs must run from zero'),
+        (0, 'source', 'index', 'unknown redirection sources'),
+        (0, 'named_codes', ['999999'], 'names a code outside the codebook'),
+        (0, 'named_codes', ['111111'], 'names its own code'),
+        (1, 'lineal_codes', [], 'lineal_codes must be'),
+        (2, 'activity', 'Farm supplies', 'activity phrase'),
+    ],
+)
+def test_redirection_table_refuses_a_malformed_row(row, column, value, message):
+    rows = [list(values) for values in WELL_FORMED_REDIRECTIONS]
+    rows[row][list(REDIRECTIONS_SCHEMA).index(column)] = value
+
+    with pytest.raises(ValueError, match=message):
+        validate_redirection_table(_redirections(rows), REDIRECTION_CODES)
+
+def test_redirection_table_refuses_other_columns():
+    table = _redirections(WELL_FORMED_REDIRECTIONS).drop('withheld')
+
+    with pytest.raises(ValueError, match='redirection columns must be'):
+        validate_redirection_table(table, REDIRECTION_CODES)
+
+def test_loader_rejects_an_index_entry_with_two_roles(generated_bundle):
     _rewrite_member(
-        generated_bundle_with_roles,
+        generated_bundle,
         'index_roles',
         lambda frame: frame.with_columns(entry_id=pl.lit(0, pl.Int64)),
     )
 
     with pytest.raises(ValueError, match='index_roles .*more than one role'):
-        load_validated_bundle(generated_bundle_with_roles)
+        load_validated_bundle(generated_bundle)
 
-def test_production_bundle_takes_the_index_roles_from_its_config(tmp_path, hierarchy_descriptions):
+def test_loader_rejects_a_rehashed_redirection_naming_another_code(generated_bundle):
+    # Row 1 now sends canola crushing to '333333', which '222222' does not exclude
+    _rewrite_member(
+        generated_bundle,
+        'redirections',
+        lambda frame: frame.with_columns(
+            named_codes=pl.Series([['111113'], ['333333']], dtype=pl.List(pl.Utf8))
+        ),
+    )
+
+    with pytest.raises(
+        ValueError, match='redirections .*bundle-a.*1 named pairs are not exclusions'
+    ):
+        load_validated_bundle(generated_bundle)
+
+@pytest.mark.parametrize('member', ['index_roles', 'redirections'])
+def test_loader_requires_both_members(generated_bundle, member):
+    manifest = json.loads(generated_bundle.read_text())
+    del manifest['artifacts'][member]
+    generated_bundle.write_text(json.dumps(manifest, indent=2))
+
+    with pytest.raises(ValueError, match=rf"lacks required artifacts: \['{member}'\]"):
+        load_validated_bundle(generated_bundle)
+
+def test_a_build_records_exactly_the_required_validation_results(generated_bundle):
+    recorded = json.loads(generated_bundle.read_text())['validation_results']
+
+    assert set(recorded) == set(REQUIRED_VALIDATION_RESULTS)
+    # The member checks are among them, Req 3's leakage check included
+    assert {
+        'index_roles_one_role_per_entry',
+        'index_roles_examples_channel',
+        'index_roles_no_leakage',
+        'redirections_well_formed',
+        'redirections_match_exclusion_channel',
+        'redirections_match_pair_facts',
+    } <= set(REQUIRED_VALIDATION_RESULTS)
+
+def test_loader_rejects_a_manifest_missing_a_required_validation_result(generated_bundle):
+    manifest = json.loads(generated_bundle.read_text())
+    del manifest['validation_results']['index_roles_no_leakage']
+    generated_bundle.write_text(json.dumps(manifest, indent=2))
+
+    with pytest.raises(
+        ValueError, match=r"lacks required validation results: \['index_roles_no_leakage'\]"
+    ):
+        load_validated_bundle(generated_bundle)
+
+def test_production_bundle_takes_its_members_from_its_config(
+    tmp_path, hierarchy_descriptions, hierarchy_redirections, count_words
+):
     roles = pl.DataFrame(
         [
             (0, '311111', 'Dog food manufacturing', 'examples'),
@@ -588,21 +829,133 @@ def test_production_bundle_takes_the_index_roles_from_its_config(tmp_path, hiera
     )
     examples = {'311111': 'Dog food manufacturing', '441111': 'New car dealers'}
     descriptions = hierarchy_descriptions.with_columns(
-        description=pl.lit('This industry comprises establishments.'),
-        examples=pl.col('code').replace_strict(examples, default=None),
-        excluded=pl.lit(None, pl.Utf8),
+        examples=pl.col('code').replace_strict(examples, default=None)
     )
     descriptions_path = tmp_path / 'naics_descriptions.parquet'
     roles_path = tmp_path / 'naics_index_roles.parquet'
+    redirections_path = tmp_path / 'naics_redirections.parquet'
     descriptions.write_parquet(descriptions_path)
     roles.write_parquet(roles_path)
+    hierarchy_redirections.write_parquet(redirections_path)
     cfg = SupervisionBuildConfig(
         descriptions_parquet=str(descriptions_path),
         index_roles_parquet=str(roles_path),
+        redirections_parquet=str(redirections_path),
         output_root=str(tmp_path / 'bundles'),
     )
 
-    manifest = json.loads(generate_supervision_bundle(cfg).read_text())
+    manifest = json.loads(generate_supervision_bundle(cfg, count_tokens=count_words).read_text())
 
     assert manifest['artifacts']['index_roles']['row_count'] == 3
-    assert manifest['generation_parameters']['index_roles_parquet'] == str(roles_path.resolve())
+    assert manifest['artifacts']['redirections']['row_count'] == 2
+    parameters = manifest['generation_parameters']
+    assert parameters['index_roles_parquet'] == str(roles_path.resolve())
+    assert parameters['redirections_parquet'] == str(redirections_path.resolve())
+
+# -------------------------------------------------------------------------------------------------
+# The input-window record
+# -------------------------------------------------------------------------------------------------
+
+def _five_code_record(examples: int = 3, **changes) -> InputWindowRecord:
+    '''The five-code record, counting ``examples`` present examples texts, with fields changed.'''
+
+    channels = dict(FIVE_CODE_INPUT_WINDOW['channels'])
+    channels['examples'] = {'present': examples, 'over': 0, 'share': 0.0}
+    fields = {**FIVE_CODE_INPUT_WINDOW, 'channels': channels, **changes}
+    return InputWindowRecord.model_validate(fields)
+
+def test_the_input_window_record_counts_each_channels_texts_beyond_the_window(
+    text_descriptions_fixture, count_words
+):
+    # Under the word count, 127 words make 129 tokens, one beyond the window; 126 words fit it
+    texts = {'111111': ' '.join(['farming'] * 127), '111112': ' '.join(['farming'] * 126)}
+    descriptions = text_descriptions_fixture.with_columns(
+        description=pl.col('code').replace_strict(texts, default=pl.col('description'))
+    )
+
+    record = input_window_record(
+        descriptions, 'sentence-transformers/all-MiniLM-L6-v2', count_words
+    )
+
+    assert record.window == 128
+    assert record.channels['description'] == ChannelOverflow(present=5, over=1, share=0.2)
+    assert record.channels['examples'] == ChannelOverflow(present=3, over=0, share=0.0)
+    assert record.channels['excluded'] == ChannelOverflow(present=2, over=0, share=0.0)
+
+def test_a_bundle_records_its_input_window(generated_bundle):
+    manifest = json.loads(generated_bundle.read_text())
+
+    assert manifest['input_window'] == FIVE_CODE_INPUT_WINDOW
+    assert load_validated_bundle(generated_bundle).manifest.input_window == _five_code_record()
+
+@pytest.mark.parametrize(
+    ('record', 'message'),
+    [
+        (_five_code_record(window=256), 'all-MiniLM-L6-v2 is 128 tokens, not 256'),
+        (_five_code_record(channels={}), 'must cover the channels'),
+        (_five_code_record(examples=4), 'counts 4 examples texts, but the descriptions hold 3'),
+    ],
+)
+def test_bundle_refuses_an_input_window_record_that_does_not_fit(
+    tmp_path, build_bundle, record, message
+):
+    with pytest.raises(ValueError, match=message):
+        build_bundle(input_window=record)
+    assert list(tmp_path.iterdir()) == []
+
+def test_production_bundle_counts_tokens_with_the_backbones_cached_tokenizer(
+    monkeypatch, hierarchy_build_config
+):
+    import transformers
+
+    calls = []
+
+    def from_pretrained(name, **kwargs):
+        calls.append((name, kwargs))
+        # Every text is 130 tokens, beyond the window
+        return lambda texts, truncation: {'input_ids': [[0] * 130 for _ in texts]}
+
+    monkeypatch.setattr(transformers.AutoTokenizer, 'from_pretrained', from_pretrained)
+
+    manifest = json.loads(generate_supervision_bundle(hierarchy_build_config).read_text())
+
+    assert calls == [('sentence-transformers/all-MiniLM-L6-v2', {'local_files_only': True})]
+    assert manifest['input_window'] == {
+        'backbone': 'sentence-transformers/all-MiniLM-L6-v2',
+        'window': 128,
+        'channels': {
+            'title': {
+                'present': 17,
+                'over': 17,
+                'share': 1.0
+            },
+            'description': {
+                'present': 17,
+                'over': 17,
+                'share': 1.0
+            },
+            'examples': {
+                'present': 0,
+                'over': 0,
+                'share': 0.0
+            },
+            'excluded': {
+                'present': 2,
+                'over': 2,
+                'share': 1.0
+            },
+        },
+    }
+
+def test_loader_names_the_contract_of_a_manifest_it_cannot_parse(generated_bundle):
+    # A v1 manifest predates the input-window record, so it does not parse as a v2 one
+    manifest = json.loads(generated_bundle.read_text())
+    manifest['contract_version'] = 'stage3-supervision-v1'
+    del manifest['input_window']
+    generated_bundle.write_text(json.dumps(manifest, indent=2))
+
+    with pytest.raises(
+        ValueError,
+        match='expected supervision contract stage3-supervision-v2, found stage3-supervision-v1',
+    ):
+        load_validated_bundle(generated_bundle)

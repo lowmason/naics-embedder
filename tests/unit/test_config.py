@@ -24,9 +24,12 @@ from naics_embedder.utils.config import (
     RegressorPanelConfig,
     SamplingConfig,
     SansStaticConfig,
+    StreamingConfig,
     StructuralPreferenceConfig,
     SupervisionBuildConfig,
     SupervisionRuntimeConfig,
+    TextOnlyConfig,
+    TokenizationConfig,
     load_config,
 )
 from tests.fixtures.regressor_panel import BRANCH_RECORD
@@ -110,6 +113,8 @@ class TestDownloadConfig:
             DownloadConfig(output_parquet='./data/output.csv')
         with pytest.raises(ValidationError):
             DownloadConfig(index_roles_parquet='./data/roles.csv')
+        with pytest.raises(ValidationError):
+            DownloadConfig(redirections_parquet='./data/redirections.csv')
 
     def test_yaml_matches_defaults(self):
         '''The shipped YAML pins the index file and names the committed role table.'''
@@ -499,15 +504,24 @@ class TestSupervisionBuildConfig:
     def test_yaml_matches_defaults(self):
         cfg = load_config(SupervisionBuildConfig, 'data/supervision.yaml')
 
-        # The shipped build carries the index roles; the default (for fixtures) does not
-        assert cfg == SupervisionBuildConfig(index_roles_parquet='./data/naics_index_roles.parquet')
-        assert cfg.contract_version == 'stage3-supervision-v1'
+        assert cfg == SupervisionBuildConfig()
+        assert cfg.index_roles_parquet == './data/naics_index_roles.parquet'
+        assert cfg.redirections_parquet == './data/naics_redirections.parquet'
+        assert cfg.contract_version == 'stage3-supervision-v2'
         assert cfg.relation_id['cross_sector'] == 99
-        assert cfg.output_root == './data/supervision/stage3-supervision-v1'
+        assert cfg.output_root == './data/supervision/stage3-supervision-v2'
 
     def test_rejects_other_contract_versions(self):
         with pytest.raises(ValidationError):
             SupervisionBuildConfig(contract_version='legacy')
+
+    def test_backbone_is_the_training_backbone(self, valid_config_dict):
+        # The manifest records the window of the backbone that training reads
+        assert SupervisionBuildConfig().backbone == valid_config_dict['model']['base_model_name']
+
+    def test_rejects_a_backbone_without_a_recorded_window(self):
+        with pytest.raises(ValidationError, match='no trained input window is recorded'):
+            SupervisionBuildConfig(backbone='bert-base-uncased')
 
     def test_rejects_unknown_keys(self):
         with pytest.raises(ValidationError):
@@ -583,6 +597,7 @@ class TestRegressorPanelConfig:
 
         assert text_only.backbone == arm['model']['base_model_name']
         assert text_only.max_length == arm['data_loader']['tokenization']['max_length']
+        assert text_only.max_length == arm['data_loader']['streaming']['max_length']
 
     @pytest.mark.parametrize('fraction', [0.0, 1.0])
     def test_the_held_out_fraction_lies_strictly_between_zero_and_one(self, fraction):
@@ -635,7 +650,7 @@ def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
 
     assert cfg.supervision.mode == 'repaired'
     assert cfg.supervision.manifest_path is None
-    assert cfg.supervision.contract_version == 'stage3-supervision-v1'
+    assert cfg.supervision.contract_version == 'stage3-supervision-v2'
     assert cfg.loss.structural_preference == StructuralPreferenceConfig()
     assert cfg.loss.rank_order_weight is None
     assert cfg.data_loader.streaming.phase1_exclusion_weight is None
@@ -662,7 +677,7 @@ def test_repaired_config_rejects_high_exclusion_weight(valid_config_dict):
 
     with pytest.raises(
         ValidationError,
-        match='phase1_exclusion_weight.*one-slot exclusion quota',
+        match='phase1_exclusion_weight.*an explicit exclusion is never a negative',
     ):
         Config.model_validate(valid_config_dict)
 
@@ -670,15 +685,34 @@ def test_overrides_cannot_reintroduce_legacy_keys_in_repaired_mode():
     with pytest.raises(ValidationError, match='rank_order_weight'):
         Config().override({'loss.rank_order_weight': 0.35})
 
+@pytest.mark.parametrize(
+    'name',
+    ['distances_parquet', 'distance_matrix_parquet', 'relations_parquet', 'triplets_parquet'],
+)
+def test_repaired_config_rejects_a_legacy_streaming_path(valid_config_dict, name):
+    # Repaired training reads structure and training pairs from the bundle only
+    valid_config_dict['data_loader']['streaming'][name] = './data/elsewhere'
+
+    with pytest.raises(
+        ValidationError, match=f'data_loader.streaming.{name} is a legacy path.*manifest_path'
+    ):
+        Config.model_validate(valid_config_dict)
+
+def test_overrides_cannot_point_repaired_training_at_a_legacy_path():
+    with pytest.raises(ValidationError, match='data_loader.streaming.relations_parquet'):
+        Config().override({'data_loader.streaming.relations_parquet': './data/other.parquet'})
+
 def test_legacy_containment_is_the_only_mode_accepting_legacy_keys(valid_config_dict):
     valid_config_dict['supervision'] = {'mode': 'legacy_containment'}
     valid_config_dict['loss']['rank_order_weight'] = 0.35
     valid_config_dict['data_loader']['streaming']['phase1_exclusion_weight'] = 100.0
+    valid_config_dict['data_loader']['streaming']['relations_parquet'] = './data/other.parquet'
 
     cfg = Config.model_validate(valid_config_dict)
 
     assert cfg.supervision.mode == 'legacy_containment'
     assert cfg.loss.rank_order_weight == 0.35
+    assert cfg.data_loader.streaming.relations_parquet == './data/other.parquet'
 
 @pytest.mark.parametrize(
     'supervision',
@@ -750,3 +784,19 @@ class TestGraphConfig:
         cfg = GraphConfig.from_yaml('conf/graph.yaml')
 
         assert cfg.model_fields_set == set(yaml.safe_load(Path('conf/graph.yaml').read_text()))
+
+# -------------------------------------------------------------------------------------------------
+# The backbone's trained input window (Req 9)
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_every_tokenizing_config_defaults_to_the_trained_window():
+    assert TokenizationConfig().max_length == 128
+    assert StreamingConfig().max_length == 128
+    assert TextOnlyConfig().max_length == 128
+
+@pytest.mark.unit
+@pytest.mark.parametrize('config_class', [TokenizationConfig, StreamingConfig, TextOnlyConfig])
+def test_a_max_length_beyond_the_trained_window_is_refused(config_class):
+    with pytest.raises(ValidationError, match='trained input window'):
+        config_class(max_length=512)

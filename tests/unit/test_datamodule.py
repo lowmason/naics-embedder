@@ -224,19 +224,11 @@ def test_collate_rejects_an_unknown_mode(make_repaired_batch_item):
 # -------------------------------------------------------------------------------------------------
 
 @pytest.fixture
-def hierarchy_bundle(tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+def hierarchy_bundle(hierarchy_manifest):
     from naics_embedder.supervision.artifacts import load_validated_bundle
     from naics_embedder.supervision.index import SupervisionIndex
-    from naics_embedder.utils.config import SupervisionBuildConfig
 
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
-    bundle = load_validated_bundle(manifest)
+    bundle = load_validated_bundle(hierarchy_manifest)
     return bundle, SupervisionIndex.from_bundle(bundle)
 
 @pytest.fixture

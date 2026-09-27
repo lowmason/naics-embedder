@@ -2,8 +2,11 @@
 Training-pair projection from canonical supervision pair facts.
 
 Positive/negative combinatorics reproduce the legacy generator: a positive is a canonical,
-non-maximal, non-exclusion pair; a negative ``j`` for (anchor ``a``, positive ``p``) requires the
+within-sector pair that is neither an exclusion nor a unary pair (Req 9: a five-digit code and its
+only six-digit child); a negative ``j`` for (anchor ``a``, positive ``p``) requires the
 directed rows ``p -> j`` and ``a -> j``; cross-sector negatives are capped per (anchor, positive).
+A pair is cross-sector when it carries the ``cross_sector`` relation label. An explicit exclusion
+of the anchor, in either direction, is never a negative (Req 8).
 Semantics are explicit columns: structural values are never overloaded to carry exclusion meaning.
 '''
 
@@ -18,12 +21,9 @@ import numpy as np
 import polars as pl
 
 from naics_embedder.supervision.schema import (
-    CROSS_SECTOR_DISTANCE,
-    CROSS_SECTOR_DISTANCE_MARGIN,
+    CROSS_SECTOR_RELATION_ID,
     CROSS_SECTOR_RELATION_MARGIN,
     EQUAL_DISTANCE_MARGIN,
-    LINEAL_ADJUSTED_DISTANCE_MARGIN,
-    LINEAL_DISTANCE_DELTA,
     SamplingRole,
     SemanticSource,
     SemanticTarget,
@@ -39,8 +39,8 @@ CROSS_SECTOR_NEGATIVE_CAP = 100
 CROSS_SECTOR_CAP_SEED = 0
 MAX_PAIRS_PER_BATCH = 4_000
 
-# Legacy margin weights, preserved for graph-model compatibility. The structural margin special
-# cases live in supervision.schema so the runtime eligibility rule shares them.
+# Legacy margin weights, preserved for graph-model compatibility. The structural margin constants
+# live in supervision.schema so the runtime eligibility rule shares them.
 RELATION_MARGIN_WEIGHT = 0.3333
 DISTANCE_MARGIN_WEIGHT = 0.6667
 
@@ -56,6 +56,7 @@ _SHARED_PAIR_COLUMNS = (
     'structural_relation_id',
     'structural_relation_name',
     'is_explicit_exclusion',
+    'unary_pair',
 )
 
 def _anchor_view(pair_facts: pl.DataFrame) -> pl.DataFrame:
@@ -93,14 +94,18 @@ def _anchor_view(pair_facts: pl.DataFrame) -> pl.DataFrame:
     )
     return pl.concat([canonical, reversed_rows])
 
-def _positive_pairs(anchor_view: pl.DataFrame, max_distance: float) -> pl.DataFrame:
-    '''Canonical, non-maximal, non-exclusion pairs; reversed rows never become positives.'''
+def _positive_pairs(anchor_view: pl.DataFrame) -> pl.DataFrame:
+    '''
+    Canonical, within-sector pairs that are neither exclusions nor unary pairs; reversed rows never
+    become positives.
+    '''
 
     return anchor_view.filter(
         ~pl.col('is_reversed'),
         pl.col('structural_distance').gt(0.0),
-        pl.col('structural_distance').ne(max_distance),
+        pl.col('structural_relation_id').ne(CROSS_SECTOR_RELATION_ID),
         ~pl.col('is_explicit_exclusion'),
+        ~pl.col('unary_pair'),
     ).select(
         pl.col('anchor_code_id'),
         pl.col('candidate_code_id').alias('positive_code_id'),
@@ -113,7 +118,9 @@ def _positive_pairs(anchor_view: pl.DataFrame, max_distance: float) -> pl.DataFr
     )
 
 def _negative_candidates(anchor_view: pl.DataFrame) -> pl.DataFrame:
-    return anchor_view.select(
+    '''Every candidate of an anchor except its explicit exclusions, in either direction.'''
+
+    return anchor_view.filter(~pl.col('is_explicit_exclusion')).select(
         pl.col('anchor_code_id'),
         pl.col('candidate_code_id').alias('negative_code_id'),
         pl.col('candidate_code').alias('negative_code'),
@@ -131,11 +138,11 @@ def _negative_candidates(anchor_view: pl.DataFrame) -> pl.DataFrame:
 
 def _structural_margins(frame: pl.DataFrame) -> pl.DataFrame:
     '''
-    Add relation/distance margins with the legacy special cases and keep ordered triplets.
+    Add relation/distance margins and keep ordered triplets.
 
-    Cross-sector negatives receive fixed margins; equal distances and the -0.5 lineal adjustment
-    receive fixed distance margins when the relation margin is positive. Triplets whose negative is
-    not structurally farther than the positive are dropped.
+    The distance margin is the difference in D*, except that an equal distance receives a fixed
+    margin when the relation margin is positive. Cross-sector negatives receive a fixed relation
+    margin. Triplets whose negative is not structurally farther than the positive are dropped.
     '''
 
     # yapf: disable
@@ -147,15 +154,13 @@ def _structural_margins(frame: pl.DataFrame) -> pl.DataFrame:
         pl.col('negative_structural_distance').cast(pl.Float64)
         - pl.col('positive_structural_distance').cast(pl.Float64)
     )
-    cross_sector = pl.col('negative_structural_distance').eq(CROSS_SECTOR_DISTANCE)
+    cross_sector = pl.col('negative_structural_relation_id').eq(CROSS_SECTOR_RELATION_ID)
     return frame.with_columns(
         relation_margin=pl.when(cross_sector).then(pl.lit(CROSS_SECTOR_RELATION_MARGIN)
                                                    ).otherwise(relation_delta),
         distance_margin=pl.when(relation_delta.gt(0) & distance_delta.eq(0.0)).then(
             pl.lit(EQUAL_DISTANCE_MARGIN)
-        ).when(relation_delta.gt(0) & distance_delta.eq(LINEAL_DISTANCE_DELTA)).then(
-            pl.lit(LINEAL_ADJUSTED_DISTANCE_MARGIN)
-        ).when(cross_sector).then(pl.lit(CROSS_SECTOR_DISTANCE_MARGIN)).otherwise(distance_delta),
+        ).otherwise(distance_delta),
     ).filter(
         pl.col('relation_margin').gt(0),
         pl.col('distance_margin').gt(0),
@@ -192,16 +197,13 @@ def _cap_keys(seed: int, *parts: np.ndarray) -> np.ndarray:
 
 def _cap_cross_sector(frame: pl.DataFrame, cap: int, seed: int) -> pl.DataFrame:
     '''
-    Keep at most ``cap`` cross-sector, non-exclusion negatives per (anchor, positive).
+    Keep at most ``cap`` cross-sector negatives per (anchor, positive).
 
     Rows are ranked by a stable hash of (seed, anchor, positive, negative), so the retained subset
-    is reproducible across processes and platforms. Explicit exclusions are never capped.
+    is reproducible across processes and platforms.
     '''
 
-    capped = (
-        pl.col('negative_structural_distance').eq(CROSS_SECTOR_DISTANCE)
-        & ~pl.col('negative_is_explicit_exclusion')
-    )
+    capped = pl.col('negative_structural_relation_id').eq(CROSS_SECTOR_RELATION_ID)
     eligible = frame.filter(capped)
     if eligible.is_empty():
         return frame
@@ -284,7 +286,7 @@ def _project(frame: pl.DataFrame) -> pl.DataFrame:
         pl.col('positive_structural_relation_id').alias('positive_relation'),
         pl.col('negative_structural_relation_id').alias('negative_relation'),
         pl.col('negative_is_explicit_exclusion').alias('excluded'),
-        pl.col('negative_structural_distance').eq(CROSS_SECTOR_DISTANCE).alias('unrelated'),
+        pl.col('negative_structural_relation_id').eq(CROSS_SECTOR_RELATION_ID).alias('unrelated'),
     )
 
 # -------------------------------------------------------------------------------------------------
@@ -296,6 +298,8 @@ def _validate_training_pairs(training_pairs: pl.DataFrame) -> None:
 
     if training_pairs.filter(pl.col('positive_is_explicit_exclusion')).height:
         raise ValueError('direct positive cannot be an explicit exclusion')
+    if training_pairs.filter(pl.col('negative_is_explicit_exclusion')).height:
+        raise ValueError('a training negative cannot be an explicit exclusion of its anchor')
     inconsistent = training_pairs.filter(
         pl.col('negative_is_explicit_exclusion').ne(
             pl.col('anchor_excludes_negative') | pl.col('negative_excludes_anchor')
@@ -370,8 +374,7 @@ def iter_training_pair_batches(
     if cross_sector_cap < 0 or cap_seed < 0:
         raise ValueError('cross-sector cap and cap seed must be nonnegative')
     anchor_view = _anchor_view(pair_facts)
-    max_distance = pair_facts.get_column('structural_distance').max()
-    positives = _positive_pairs(anchor_view, max_distance)
+    positives = _positive_pairs(anchor_view)
     via = anchor_view.select(
         pl.col('anchor_code_id').alias('positive_code_id'),
         pl.col('candidate_code_id').alias('negative_code_id'),
@@ -413,7 +416,7 @@ def build_training_pairs(
 
     Args:
         pair_facts: Canonical pair facts with directional exclusion provenance.
-        cross_sector_cap: Maximum cross-sector, non-exclusion negatives per (anchor, positive).
+        cross_sector_cap: Maximum cross-sector negatives per (anchor, positive).
         cap_seed: Seed for the stable ranking that chooses capped negatives.
 
     Returns:
@@ -431,7 +434,7 @@ def build_training_pairs(
         return pl.concat(batches)
     anchor_view = _anchor_view(pair_facts)
     return _triplets_for_positives(
-        _positive_pairs(anchor_view, 0.0).head(0),
+        _positive_pairs(anchor_view).head(0),
         anchor_view.select(
             pl.col('anchor_code_id').alias('positive_code_id'),
             pl.col('candidate_code_id').alias('negative_code_id'),

@@ -28,7 +28,7 @@ def training_env(monkeypatch, tmp_path):
     context.exact_resume_calls = []
     context.bundle = SimpleNamespace(
         manifest=SimpleNamespace(
-            contract_version='stage3-supervision-v1',
+            contract_version='stage3-supervision-v2',
             bundle_id='bundle-a',
             codebook_fingerprint='a' * 64,
         )
@@ -59,10 +59,7 @@ def training_env(monkeypatch, tmp_path):
         cfg.dirs.checkpoint_dir = str(checkpoints_dir)
         desc_path = tmp_path / 'descriptions.parquet'
         desc_path.write_text('data')
-        triplets_dir = tmp_path / 'triplets'
-        triplets_dir.mkdir(exist_ok=True)
         cfg.data_loader.streaming.descriptions_parquet = str(desc_path)
-        cfg.data_loader.streaming.triplets_parquet = str(triplets_dir)
         cfg.supervision.manifest_path = str(tmp_path / 'bundle' / 'manifest.json')
         cfg.training.trainer.max_epochs = 1
         cfg.training.trainer.devices = 1
@@ -357,7 +354,7 @@ def test_repaired_model_and_datamodule_receive_bundle_supervision(training_env):
     assert model_kwargs['supervision_bundle'] is training_env.bundle
     assert model_kwargs['checkpoint_contract'].bundle_id == 'bundle-a'
     assert model_kwargs['structural_preference_weight'] == 0.35
-    assert model_kwargs['selection_seed'] == 42
+    assert 'selection_seed' not in model_kwargs
     for legacy_key in ('rank_order_weight', 'distance_matrix_path', 'relations_parquet_path'):
         assert legacy_key not in model_kwargs
     assert datamodule_kwargs['supervision_mode'] == 'repaired'

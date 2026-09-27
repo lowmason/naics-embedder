@@ -9,6 +9,8 @@ from typing import Dict, List, Mapping, Optional, Tuple
 import networkx as nx
 import polars as pl
 
+from naics_embedder.supervision.schema import CROSS_SECTOR_RELATION_ID, CROSS_SECTOR_RELATION_NAME
+
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------------------------------
@@ -160,9 +162,6 @@ def _get_relations(i: str, j: str, depths: Dict[str, int], ancestors: Dict[str, 
 # -------------------------------------------------------------------------------------------------
 # Structural relations
 # -------------------------------------------------------------------------------------------------
-
-CROSS_SECTOR_RELATION_NAME = 'cross_sector'
-CROSS_SECTOR_RELATION_ID = 99
 
 def compute_structural_relations(
     input_parquet: str,

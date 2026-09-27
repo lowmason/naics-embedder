@@ -20,7 +20,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, Mapping, Optional
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 import polars as pl
@@ -32,17 +32,24 @@ from naics_embedder.data.create_triplets import (
     CROSS_SECTOR_NEGATIVE_CAP,
     iter_training_pair_batches,
 )
+from naics_embedder.data.download_data import TEXT_CHANNELS
+from naics_embedder.data.redirections import exclusion_channel
 from naics_embedder.panels.index_roles import verify_examples_channel, verify_role_leakage
 from naics_embedder.supervision.artifacts import (
     INDEX_ROLE_COLUMNS,
     INDEX_ROLES_ARTIFACT,
+    REDIRECTIONS_ARTIFACT,
     STRUCTURAL_PAIR_COLUMNS,
     codebook_fingerprint,
     sha256_file,
+    unary_pair_expression,
     validate_exclusion_derivation,
     validate_index_role_table,
     validate_matrix,
+    validate_redirection_exclusions,
+    validate_redirection_table,
     validate_structural_pairs,
+    validate_unary_pairs,
     write_versioned_dataset_batches,
     write_versioned_parquet,
 )
@@ -54,14 +61,17 @@ from naics_embedder.supervision.schema import (
     DISTANCES_SCHEMA_VERSION,
     INDEX_ROLES_SCHEMA_VERSION,
     PAIR_FACTS_SCHEMA_VERSION,
+    REDIRECTIONS_SCHEMA_VERSION,
     RELATION_MATRIX_SCHEMA_VERSION,
     RELATIONS_SCHEMA_VERSION,
     TRAINING_PAIRS_SCHEMA_VERSION,
     ArtifactFile,
     ArtifactRecord,
+    InputWindowRecord,
     SupervisionManifest,
 )
 from naics_embedder.utils.config import DistancesConfig, SupervisionBuildConfig
+from naics_embedder.utils.input_window import overflow_shares, token_counter, trained_window
 
 logger = logging.getLogger(__name__)
 
@@ -189,8 +199,8 @@ def build_pair_facts(
 
     Returns:
         One row per unordered pair of distinct codes in canonical orientation, with untouched
-        structural columns plus ``code_i_excludes_code_j``, ``code_j_excludes_code_i``, and
-        ``is_explicit_exclusion``.
+        structural columns plus ``code_i_excludes_code_j``, ``code_j_excludes_code_i``,
+        ``is_explicit_exclusion`` and ``unary_pair``.
     '''
 
     structural = distances.join(
@@ -215,7 +225,9 @@ def build_pair_facts(
     if structural.height != distances.height or structural.height != relations.height:
         raise ValueError('structural distance and relation frames describe different pairs')
     validate_structural_pairs(structural, codebook)
-    return attach_exclusion_provenance(structural, descriptions, codebook)
+    return attach_exclusion_provenance(structural, descriptions, codebook).with_columns(
+        unary_pair=unary_pair_expression(codebook.get_column('code').to_list())
+    )
 
 # -------------------------------------------------------------------------------------------------
 # Matrices
@@ -254,6 +266,56 @@ def relation_matrix_from_pair_facts(
     return _matrix(pair_facts, codebook, 'structural_relation_id', np.int16)
 
 # -------------------------------------------------------------------------------------------------
+# The input window
+# -------------------------------------------------------------------------------------------------
+
+def input_window_record(
+    descriptions: pl.DataFrame,
+    backbone: str,
+    count_tokens: Callable[[List[str]], List[int]],
+) -> InputWindowRecord:
+    '''
+    The backbone's trained window and each text channel's texts beyond it (Req 9).
+
+    Each code's text counts once per channel. The exclusion channel is already de-duplicated,
+    with each cross-reference in it once.
+
+    Args:
+        descriptions: Descriptions with the four text channels.
+        backbone: The backbone whose trained window applies (``utils/input_window.py``).
+        count_tokens: Token counts of a list of texts under the backbone's tokenizer, special
+            tokens included.
+    '''
+
+    window = trained_window(backbone)
+    texts = {channel: descriptions.get_column(channel).to_list() for channel in TEXT_CHANNELS}
+    return InputWindowRecord(
+        backbone=backbone,
+        window=window,
+        channels=overflow_shares(texts, count_tokens, window),
+    )
+
+def _validate_input_window(record: InputWindowRecord, descriptions: pl.DataFrame) -> None:
+    '''The record must hold the backbone's trained window and count these descriptions' texts.'''
+
+    window = trained_window(record.backbone)
+    if record.window != window:
+        raise ValueError(
+            f'the trained input window of {record.backbone} is {window} tokens, not '
+            f'{record.window}'
+        )
+    if sorted(record.channels) != sorted(TEXT_CHANNELS):
+        raise ValueError(f'the input-window record must cover the channels {list(TEXT_CHANNELS)}')
+    for channel in TEXT_CHANNELS:
+        texts = descriptions.get_column(channel).to_list()
+        present = sum(1 for text in texts if text is not None and text.strip())
+        if record.channels[channel].present != present:
+            raise ValueError(
+                f'the input-window record counts {record.channels[channel].present:,} {channel} '
+                f'texts, but the descriptions hold {present:,}'
+            )
+
+# -------------------------------------------------------------------------------------------------
 # Bundle layout
 # -------------------------------------------------------------------------------------------------
 
@@ -270,6 +332,7 @@ ARTIFACT_FILENAMES = {
     'training_pairs': 'naics_training_pairs',
     'difficulty_thresholds': 'curriculum_difficulty_thresholds.json',
     INDEX_ROLES_ARTIFACT: 'naics_index_roles.parquet',
+    REDIRECTIONS_ARTIFACT: 'naics_redirections.parquet',
 }
 
 ARTIFACT_SCHEMA_VERSIONS = {
@@ -282,6 +345,7 @@ ARTIFACT_SCHEMA_VERSIONS = {
     'training_pairs': TRAINING_PAIRS_SCHEMA_VERSION,
     'difficulty_thresholds': DIFFICULTY_THRESHOLDS_SCHEMA_VERSION,
     INDEX_ROLES_ARTIFACT: INDEX_ROLES_SCHEMA_VERSION,
+    REDIRECTIONS_ARTIFACT: REDIRECTIONS_SCHEMA_VERSION,
 }
 
 PAIR_FACT_SCHEMA = {
@@ -295,6 +359,7 @@ PAIR_FACT_SCHEMA = {
     'code_i_excludes_code_j': pl.Boolean,
     'code_j_excludes_code_i': pl.Boolean,
     'is_explicit_exclusion': pl.Boolean,
+    'unary_pair': pl.Boolean,
 }
 
 # -------------------------------------------------------------------------------------------------
@@ -374,6 +439,7 @@ def validate_pair_facts(
     flags = ['code_i_excludes_code_j', 'code_j_excludes_code_i', 'is_explicit_exclusion']
     if not published.select(flags).equals(pair_facts.select(flags)):
         raise ValueError('pair facts exclusion flags disagree with the published exclusions')
+    validate_unary_pairs(pair_facts, codebook)
 
     return {
         'codebook_contiguous_unique': True,
@@ -383,8 +449,13 @@ def validate_pair_facts(
         'pair_coverage': True,
         'nonzero_structural_distance': True,
         'no_structural_sentinel': True,
+        'distance_is_d_star': True,
+        'cross_sector_distance_formula': True,
+        'cross_sector_relation_label': True,
+        'distance_triangle_inequality': True,
         'exclusion_derivation': True,
         'exclusions_match_descriptions': True,
+        'unary_pairs_flagged': True,
     }
 
 def _validate_matrices(
@@ -406,17 +477,50 @@ def _validate_index_roles(
     index_roles: pl.DataFrame,
     descriptions: pl.DataFrame,
     codebook: pl.DataFrame,
+    activities: Sequence[str],
 ) -> Dict[str, bool]:
-    '''Check the optional index-roles member against the bundle's own descriptions and codes.'''
+    '''
+    Check the index-roles member against the bundle's descriptions, codes and activity phrases.
+
+    No held-out query may match training text, which includes the redirection table's activity
+    phrases, because Stage 7 trains on them as queries (Req 3).
+    '''
 
     six_digit_codes = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
     validate_index_role_table(index_roles, six_digit_codes.to_list())
     verify_examples_channel(descriptions, index_roles)
-    verify_role_leakage(descriptions, index_roles)
+    verify_role_leakage(descriptions, index_roles, extra_texts=activities)
     return {
         'index_roles_one_role_per_entry': True,
         'index_roles_examples_channel': True,
         'index_roles_no_leakage': True,
+    }
+
+def _validate_redirections(
+    redirections: pl.DataFrame,
+    descriptions: pl.DataFrame,
+    codebook: pl.DataFrame,
+    pair_facts: pl.DataFrame,
+) -> Dict[str, bool]:
+    '''
+    Check the redirections member against the codebook, the descriptions and the pair facts.
+
+    The descriptions' exclusion channel must be the one the table builds, so each cross-reference
+    appears in it once (Req 8(a)), and the table must name exactly the pair facts' exclusions.
+    '''
+
+    validate_redirection_table(redirections, codebook.get_column('code').to_list())
+    built = descriptions.select('code').join(exclusion_channel(redirections), on='code', how='left')
+    carried = descriptions.select('code', 'excluded', 'excluded_codes')
+    if not built.sort('code').equals(carried.sort('code')):
+        raise ValueError(
+            'descriptions carry an exclusion channel other than the redirection table builds'
+        )
+    validate_redirection_exclusions(redirections, pair_facts)
+    return {
+        'redirections_well_formed': True,
+        'redirections_match_exclusion_channel': True,
+        'redirections_match_pair_facts': True,
     }
 
 def _validate_training_identity(batch: pl.DataFrame, pair_keys: pl.DataFrame) -> None:
@@ -429,6 +533,16 @@ def _validate_training_identity(batch: pl.DataFrame, pair_keys: pl.DataFrame) ->
         )
         if keys.join(pair_keys, on=['low', 'high'], how='anti').height:
             raise ValueError(f'training pair {other} identities do not join to pair facts')
+
+def _validate_no_unary_positives(batch: pl.DataFrame, unary_keys: pl.DataFrame) -> None:
+    '''No generated positive may be a unary pair (Req 9).'''
+
+    keys = batch.select(
+        low=pl.min_horizontal('anchor_code_id', 'positive_code_id').cast(pl.Int32),
+        high=pl.max_horizontal('anchor_code_id', 'positive_code_id').cast(pl.Int32),
+    )
+    if keys.join(unary_keys, on=['low', 'high'], how='semi').height:
+        raise ValueError('a generated training positive is a unary pair')
 
 # -------------------------------------------------------------------------------------------------
 # Compatibility long-form artifacts
@@ -483,10 +597,12 @@ def _checked_training_batches(
         low=pl.min_horizontal('code_i_id', 'code_j_id'),
         high=pl.max_horizontal('code_i_id', 'code_j_id'),
     )
+    unary_keys = pair_keys.filter(pair_facts.get_column('unary_pair'))
     for batch in iter_training_pair_batches(
         pair_facts, cross_sector_cap=cross_sector_cap, cap_seed=cap_seed
     ):
         _validate_training_identity(batch, pair_keys)
+        _validate_no_unary_positives(batch, unary_keys)
         counts['rows'] += batch.height
         counts['exclusions'] += int(batch.get_column('negative_is_explicit_exclusion').sum())
         yield batch.with_columns(pl.col('anchor_code_id').alias(TRAINING_PAIRS_PARTITION_COLUMN))
@@ -515,7 +631,8 @@ def _write_bundle_artifacts(
     relation_matrix: pl.DataFrame,
     cross_sector_cap: int,
     cap_seed: int,
-    index_roles: Optional[pl.DataFrame] = None,
+    index_roles: pl.DataFrame,
+    redirections: pl.DataFrame,
 ) -> Dict[str, ArtifactRecord]:
     exclusions = int(pair_facts.get_column('is_explicit_exclusion').sum())
 
@@ -547,13 +664,15 @@ def _write_bundle_artifacts(
             exclusion_count=exclusions,
         ),
         'relation_matrix': _record('relation_matrix', parquet('relation_matrix', relation_matrix)),
-    }
-    if index_roles is not None:
-        records[INDEX_ROLES_ARTIFACT] = _record(
+        INDEX_ROLES_ARTIFACT: _record(
             INDEX_ROLES_ARTIFACT,
             parquet(INDEX_ROLES_ARTIFACT,
                     index_roles.select(INDEX_ROLE_COLUMNS).sort('entry_id')),
-        )
+        ),
+        REDIRECTIONS_ARTIFACT: _record(
+            REDIRECTIONS_ARTIFACT, parquet(REDIRECTIONS_ARTIFACT, redirections)
+        ),
+    }
 
     counts = {'rows': 0, 'exclusions': 0}
     training_files = write_versioned_dataset_batches(
@@ -603,20 +722,25 @@ def generate_supervision_bundle_from_frames(
     naics_vintage: int,
     descriptions: pl.DataFrame,
     pair_facts: pl.DataFrame,
+    index_roles: pl.DataFrame,
+    redirections: pl.DataFrame,
+    input_window: InputWindowRecord,
     description_fingerprint: Optional[str] = None,
     structural_relation_ids: Optional[Mapping[str, int]] = None,
     generation_parameters: Optional[Mapping[str, Any]] = None,
     cross_sector_cap: int = CROSS_SECTOR_NEGATIVE_CAP,
     cap_seed: int = CROSS_SECTOR_CAP_SEED,
-    index_roles: Optional[pl.DataFrame] = None,
 ) -> Path:
     '''
     Validate canonical frames and publish them as one immutable supervision bundle.
 
-    ``index_roles`` (every index entry with its text and role) becomes the optional
-    ``index_roles`` member after three checks against ``descriptions``: one known role per entry,
-    examples channels built from examples-role entries only, and no held-out query matching any
-    training text.
+    ``index_roles`` (every index entry with its text and role) and ``redirections`` (the
+    redirection table) become required members after checks against ``descriptions``. Each entry
+    holds one known role, examples channels hold examples-role entries only, and no held-out
+    query matches any training text or activity phrase. The table is well formed, the
+    descriptions' exclusion channel is the one it builds, and it names exactly the pair facts'
+    exclusions. ``input_window`` must hold the backbone's trained window and count the texts of
+    ``descriptions``.
 
     Artifacts are written to ``<output_root>/.<bundle_id>.staging``; the manifest is written only
     after every artifact validates, and the staging directory is then atomically renamed to
@@ -634,14 +758,20 @@ def generate_supervision_bundle_from_frames(
         raise FileExistsError(f'supervision bundle {bundle_id} already exists at {final}')
 
     codebook = build_codebook(descriptions)
+    _validate_input_window(input_window, descriptions)
     pair_facts = _normalize_pair_facts(pair_facts)
     validation_results = validate_pair_facts(pair_facts, descriptions, codebook)
     distance_matrix = distance_matrix_from_pair_facts(pair_facts, codebook)
     relation_matrix = relation_matrix_from_pair_facts(pair_facts, codebook)
     _validate_matrices(pair_facts, codebook, distance_matrix, relation_matrix)
     validation_results['matrix_reconciliation'] = True
-    if index_roles is not None:
-        validation_results.update(_validate_index_roles(index_roles, descriptions, codebook))
+    validation_results.update(
+        _validate_redirections(redirections, descriptions, codebook, pair_facts)
+    )
+    activities = redirections.get_column('activity').drop_nulls().to_list()
+    validation_results.update(
+        _validate_index_roles(index_roles, descriptions, codebook, activities)
+    )
 
     output_root.mkdir(parents=True, exist_ok=True)
     try:
@@ -662,10 +792,13 @@ def generate_supervision_bundle_from_frames(
             cross_sector_cap=cross_sector_cap,
             cap_seed=cap_seed,
             index_roles=index_roles,
+            redirections=redirections,
         )
         validation_results.update(
             {
                 'direct_positive_safety': True,
+                'no_exclusion_negatives': True,
+                'no_unary_positives': True,
                 'training_exclusion_derivation': True,
                 'training_identity_joins': True,
                 'artifact_hashes_recorded': True,
@@ -695,6 +828,7 @@ def generate_supervision_bundle_from_frames(
             ),
             artifacts=artifacts,
             validation_results=validation_results,
+            input_window=input_window,
         )
         (staging / MANIFEST_FILENAME).write_text(manifest.model_dump_json(indent=2))
         if final.exists():
@@ -711,34 +845,57 @@ def generate_supervision_bundle_from_frames(
     )
     return final / MANIFEST_FILENAME
 
-def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
+def generate_supervision_bundle(
+    cfg: SupervisionBuildConfig,
+    *,
+    count_tokens: Optional[Callable[[List[str]], List[int]]] = None,
+) -> Path:
     '''
-    Build and publish a new supervision bundle from the configured descriptions.
+    Build and publish a new supervision bundle from the files ``data preprocess`` writes.
 
-    The bundle ID is a fresh UUID4, and the description fingerprint is the SHA-256 of the exact
-    descriptions file, so training can later verify it runs against the same input.
+    It reads the configured descriptions, index roles and redirection table. The bundle ID is a
+    fresh UUID4, and the description fingerprint is the SHA-256 of the exact descriptions file,
+    so training can later verify it runs against the same input.
+
+    Args:
+        cfg: The build configuration.
+        count_tokens: Token counts of a list of texts, for the input-window record. By default
+            the backbone's own tokenizer counts them, read from the local cache only.
 
     Returns:
         Path to the published ``manifest.json``.
     '''
 
     descriptions_path = Path(cfg.descriptions_parquet)
+    index_roles_path = Path(cfg.index_roles_parquet)
+    redirections_path = Path(cfg.redirections_parquet)
     descriptions = pl.read_parquet(descriptions_path)
     parameters = {
         'descriptions_parquet': str(descriptions_path.resolve()),
+        'index_roles_parquet': str(index_roles_path.resolve()),
+        'redirections_parquet': str(redirections_path.resolve()),
         'output_root': str(Path(cfg.output_root).resolve()),
     }
-    index_roles = None
-    if cfg.index_roles_parquet is not None:
-        index_roles_path = Path(cfg.index_roles_parquet)
-        index_roles = pl.read_parquet(index_roles_path)
-        parameters['index_roles_parquet'] = str(index_roles_path.resolve())
     codebook = build_codebook(descriptions)
     distances = compute_structural_distances(
         str(descriptions_path), DistancesConfig(input_parquet=str(descriptions_path))
     )
     relations = compute_structural_relations(str(descriptions_path), cfg.relation_id)
     pair_facts = build_pair_facts(distances, relations, descriptions, codebook)
+    if count_tokens is None:
+        # Imported here: only a real build loads the tokenizer
+        from transformers import AutoTokenizer
+
+        count_tokens = token_counter(
+            AutoTokenizer.from_pretrained(cfg.backbone, local_files_only=True)
+        )
+    input_window = input_window_record(descriptions, cfg.backbone, count_tokens)
+    logger.info(f'Input window: {input_window.window} tokens ({input_window.backbone})')
+    for channel, overflow in input_window.channels.items():
+        logger.info(
+            f'  {channel}: {overflow.over:,} of {overflow.present:,} texts beyond it '
+            f'({overflow.share:.4f})'
+        )
     return generate_supervision_bundle_from_frames(
         output_root=Path(cfg.output_root),
         bundle_id=str(uuid.uuid4()),
@@ -746,8 +903,10 @@ def generate_supervision_bundle(cfg: SupervisionBuildConfig) -> Path:
         naics_vintage=cfg.naics_vintage,
         descriptions=descriptions,
         pair_facts=pair_facts,
+        index_roles=pl.read_parquet(index_roles_path),
+        redirections=pl.read_parquet(redirections_path),
+        input_window=input_window,
         description_fingerprint=sha256_file(descriptions_path),
         structural_relation_ids=cfg.relation_id,
         generation_parameters=parameters,
-        index_roles=index_roles,
     )

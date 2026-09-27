@@ -2,5 +2,5 @@
 
 descriptions_parquet: ./data/naics_descriptions.parquet
 tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
-max_length: null  # Use model default
+max_length: 128  # The backbone's trained window (utils/input_window.py)
 output_path: ./data/token_cache/token_cache.pt

@@ -9,7 +9,6 @@ import polars as pl
 import pytest
 import torch
 
-from naics_embedder.data.supervision_bundle import generate_supervision_bundle_from_frames
 from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
     compute_degree_centrality,
     compute_difficulty_thresholds,
@@ -435,20 +434,10 @@ class TestPreprocessCurriculumData:
 # -------------------------------------------------------------------------------------------------
 
 def test_graph_preprocessing_resolves_one_bundle_and_rejects_mixed_paths(
-    tmp_path,
-    generated_bundle,
-    descriptions_fixture,
-    pair_facts_fixture,
+    tmp_path, generated_bundle, build_bundle
 ):
     first = resolve_graph_supervision_paths(generated_bundle)
-    other_manifest = generate_supervision_bundle_from_frames(
-        output_root=tmp_path / 'other',
-        bundle_id='bundle-b',
-        generator_revision='revision-a',
-        naics_vintage=2022,
-        descriptions=descriptions_fixture,
-        pair_facts=pair_facts_fixture,
-    )
+    other_manifest = build_bundle(output_root=tmp_path / 'other', bundle_id='bundle-b')
     other_bundle = load_validated_bundle(other_manifest)
 
     assert first.distances == load_validated_bundle(generated_bundle).artifact_path('distances')
@@ -460,18 +449,6 @@ def test_graph_preprocessing_resolves_one_bundle_and_rejects_mixed_paths(
             generated_bundle,
             distances_path=other_bundle.artifact_path('distances'),
         )
-
-@pytest.fixture
-def hierarchy_manifest(tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
-    from naics_embedder.utils.config import SupervisionBuildConfig
-
-    return generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
 
 def test_graph_config_takes_every_structural_input_from_its_bundle(generated_bundle):
     bundle = load_validated_bundle(generated_bundle)

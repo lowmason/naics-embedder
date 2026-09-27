@@ -3,7 +3,6 @@ Unit tests for router-guided negative mining utilities.
 '''
 
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -63,7 +62,9 @@ def test_gathered_entity_is_rejoined_for_each_local_anchor(validated_bundle):
         valid_mask=active_valid,
     )
 
-    assert joined.structural_distance.tolist() == [[2.0], [3.0]]
+    # Both anchors are siblings of code 2 (D* 2), under different relation labels
+    assert joined.structural_distance.tolist() == [[2.0], [2.0]]
+    assert joined.structural_relation_id.tolist() == [[2], [3]]
     assert joined.is_explicit_exclusion.tolist() == [[True], [False]]
 
 # -------------------------------------------------------------------------------------------------
@@ -158,7 +159,6 @@ class _SelectionHost(DistributedMixin, CurriculumMixin):
         self.current_curriculum_flags = flags
         self.current_schedule_scalars = {}
         self.current_epoch = 0
-        self.hparams = SimpleNamespace(selection_seed=7)
         self.hard_negative_miner = LorentzianHardNegativeMiner()
         self.router_guided_miner = RouterGuidedNegativeMiner()
         self.selection_coordinator = NegativeSelectionCoordinator()
@@ -175,7 +175,7 @@ def _host_batch(pools: list[list[int]], anchor: int = 0, positive: int = 1) -> d
         'selection_k': 2,
         'anchor_code_id': torch.tensor([anchor] * len(pools)),
         'positive_code_id': torch.tensor([positive] * len(pools)),
-        'positive_structural_distance': torch.tensor([0.5] * len(pools)),
+        'positive_structural_distance': torch.tensor([2.0] * len(pools)),
         'positive_structural_relation_id': torch.tensor([1] * len(pools), dtype=torch.int16),
         'candidate_code_id': torch.tensor([pool + [-1] * (width - len(pool)) for pool in pools]),
         'candidate_valid_mask': torch.tensor(
@@ -230,9 +230,9 @@ def test_select_negative_batch_keeps_every_field_on_one_identity(validated_bundl
     )
 
     codes = selected.code_id.tolist()
-    assert selected.is_explicit_exclusion.tolist()[0].count(True) == 1
-    assert 2 in codes[0]
-    assert all(code >= 0 for row in codes for code in row)
+    # Code 2 fills a slot in neither row: it is anchor 0's exclusion, never a negative (Req 8)
+    assert not selected.is_explicit_exclusion.any()
+    assert [sorted(row) for row in codes] == [[3, 4], [3, 4]]
     assert torch.equal(selected.embedding[..., 1], selected.code_id.to(torch.float32) / 10.0)
     assert torch.equal(
         selected.router_gate_probs[..., 0],
@@ -240,13 +240,10 @@ def test_select_negative_batch_keeps_every_field_on_one_identity(validated_bundl
     )
     expected_distance = index.structural_distance[0][selected.code_id]
     assert torch.equal(selected.structural_distance, expected_distance)
-    # Positive: child at distance 0.5. Code 2 is the anchor's sibling exclusion (relation 2,
-    # distance 2.0 -> raw deltas); codes 3 and 4 are cross-sector (fixed 15 / 10 margins).
-    expected_margins = {2: (1.0, 1.5), 3: (15.0, 10.0), 4: (15.0, 10.0)}
-    for row in range(selected.code_id.shape[0]):
-        for slot, code in enumerate(selected.code_id[row].tolist()):
-            assert selected.relation_margin[row, slot].item() == expected_margins[code][0]
-            assert selected.distance_margin[row, slot].item() == expected_margins[code][1]
+    # Positive: code 1 at D* 2 (relation 1). Codes 3 and 4 are cross-sector: relation margin 15,
+    # distance margin 10 - 2.
+    assert selected.relation_margin.tolist() == [[15.0, 15.0], [15.0, 15.0]]
+    assert selected.distance_margin.tolist() == [[8.0, 8.0], [8.0, 8.0]]
     assert len(host.health) == 1
 
 # Production-shaped hierarchy (tests/fixtures/supervision.py HIERARCHY_CODES): code IDs follow
@@ -259,18 +256,10 @@ HIERARCHY_EXCLUSION = 11
 CROSS_SECTOR_CODES = [12, 13, 14, 15, 16]
 
 @pytest.fixture
-def hierarchy_index(tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+def hierarchy_index(hierarchy_manifest):
     from naics_embedder.supervision.artifacts import load_validated_bundle
-    from naics_embedder.utils.config import SupervisionBuildConfig
 
-    manifest = generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
-    return SupervisionIndex.from_bundle(load_validated_bundle(manifest))
+    return SupervisionIndex.from_bundle(load_validated_bundle(hierarchy_manifest))
 
 def _hierarchy_batch(index, pool, positive, selection_k):
     batch = _host_batch([pool], anchor=HIERARCHY_ANCHOR, positive=positive)
@@ -326,23 +315,20 @@ def test_miners_choose_negatives_before_the_difficulty_proposal(hierarchy_index)
         hierarchy_index, {}, pool, HIERARCHY_GRANDPARENT, 4, anchor_embedding
     )
 
-    # The difficulty proposal covers the whole pool, yet mining decides once it is enabled.
-    assert _reasons(mined) == [
-        SelectionReason.EXCLUSION_QUOTA,
-        SelectionReason.GEOMETRIC,
-        SelectionReason.GEOMETRIC,
-        SelectionReason.ROUTER,
-    ]
-    assert _reasons(unmined) == [SelectionReason.EXCLUSION_QUOTA] + [SelectionReason.DIFFICULTY] * 3
+    # The difficulty proposal covers the whole pool, yet mining decides once it is enabled. The
+    # exclusion takes no slot either way.
+    assert _reasons(mined) == [SelectionReason.GEOMETRIC] * 2 + [SelectionReason.ROUTER] * 2
+    assert _reasons(unmined) == [SelectionReason.DIFFICULTY] * 4
+    assert HIERARCHY_EXCLUSION not in mined.code_id[0].tolist() + unmined.code_id[0].tolist()
     # Geometric slots go to the codes nearest the anchor embedding (code 13's): on the hyperboloid
     # d(x, y) = |asinh(x) - asinh(y)| here, so 1.4 (code 14) is nearer 1.3 than 1.2 (code 12).
-    assert set(mined.code_id[0, 1:3].tolist()) == {13, 14}
+    assert set(mined.code_id[0, :2].tolist()) == {13, 14}
 
 @pytest.mark.parametrize(
     ('mix', 'expected'),
     [
-        (0.0, [SelectionReason.GEOMETRIC] * 3),
-        (1.0, [SelectionReason.ROUTER] * 3),
+        (0.0, [SelectionReason.GEOMETRIC] * 4),
+        (1.0, [SelectionReason.ROUTER] * 4),
     ],
 )
 def test_router_mix_ratio_splits_mined_slots(hierarchy_index, mix, expected):
@@ -354,7 +340,7 @@ def test_router_mix_ratio_splits_mined_slots(hierarchy_index, mix, expected):
         hierarchy_index, mining, pool, HIERARCHY_GRANDPARENT, 4, anchor_embedding, mix=mix
     )
 
-    assert _reasons(selected) == [SelectionReason.EXCLUSION_QUOTA] + expected
+    assert _reasons(selected) == expected
 
 def test_repeated_codes_cannot_crowd_distinct_codes_out_of_mining(hierarchy_index):
     # A global pool repeats codes across rows and ranks. Three copies of code 13 sit at the anchor
@@ -371,10 +357,10 @@ def test_repeated_codes_cannot_crowd_distinct_codes_out_of_mining(hierarchy_inde
         _code_embedding(13),
     )
 
-    assert _reasons(selected) == [SelectionReason.EXCLUSION_QUOTA] + [SelectionReason.GEOMETRIC] * 3
-    assert selected.code_id[0].tolist() == [HIERARCHY_EXCLUSION, 13, 14, 12]
+    assert _reasons(selected) == [SelectionReason.GEOMETRIC] * 4
+    assert selected.code_id[0].tolist() == [13, 14, 12, 15]
     # The duplicate code resolves to its smallest-UID occurrence (slot 1).
-    assert selected.candidate_uid[0, 1].tolist() == [0, 0, 1]
+    assert selected.candidate_uid[0, 0].tolist() == [0, 0, 1]
 
 def test_structurally_closer_relative_is_never_selected_even_when_nearest(hierarchy_index):
     # Positive: the grandparent. The parent is structurally closer than the positive, sits first
@@ -389,8 +375,22 @@ def test_structurally_closer_relative_is_never_selected_even_when_nearest(hierar
         candidates, _, entity_valid = host.health[0]
 
         assert HIERARCHY_PARENT not in selected.code_id[0].tolist()
-        assert HIERARCHY_EXCLUSION in selected.code_id[0].tolist()
-        assert (entity_valid & ~candidates.valid_mask)[0].tolist() == [True] + [False] * 6
+        # The parent fails the structural rule and the exclusion fails Req 8
+        assert (entity_valid & ~candidates.valid_mask)[0].tolist() == [True, True] + [False] * 5
+
+def test_an_exclusion_is_never_selected_even_when_nearest(hierarchy_index):
+    # The exclusion leads the difficulty proposal and sits at the anchor embedding, yet an
+    # exclusion pair is never a code-code negative (Req 8), so no path may select it.
+    pool = [HIERARCHY_EXCLUSION] + CROSS_SECTOR_CODES
+    anchor_embedding = _code_embedding(HIERARCHY_EXCLUSION)
+
+    for flags in ({}, {'enable_hard_negative_mining': True}):
+        _, selected = _select_with_flags(
+            hierarchy_index, flags, pool, HIERARCHY_GRANDPARENT, 4, anchor_embedding
+        )
+
+        assert HIERARCHY_EXCLUSION not in selected.code_id[0].tolist()
+        assert not selected.is_explicit_exclusion.any()
 
 def test_select_negative_batch_rejects_router_mining_without_gate_probs(validated_bundle):
     host = _SelectionHost(

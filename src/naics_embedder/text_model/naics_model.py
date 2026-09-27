@@ -159,7 +159,6 @@ class NAICSContrastiveModel(
         structural_preference_margin: Ordering margin for structural preference
         structural_preference_temperature: Softplus temperature for structural preference
         structural_preference_tie_tolerance: Structural distance tie tolerance
-        selection_seed: Global seed for deterministic exclusion rotation
         checkpoint_contract: Optional runtime contract; must match the loaded bundle
         supervision_bundle: Optional already-validated bundle for ``supervision_manifest_path``
             (not saved in hyperparameters)
@@ -209,7 +208,6 @@ class NAICSContrastiveModel(
         structural_preference_margin: float = 0.1,
         structural_preference_temperature: float = 1.0,
         structural_preference_tie_tolerance: float = 1e-6,
-        selection_seed: int = 0,
         checkpoint_contract: Optional[CheckpointContract] = None,
         supervision_bundle: Optional[ValidatedSupervisionBundle] = None,
     ):

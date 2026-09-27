@@ -2,7 +2,7 @@ import polars as pl
 import pytest
 import torch
 
-from naics_embedder.utils.config import Config, SupervisionBuildConfig, TokenizationConfig
+from naics_embedder.utils.config import Config, TokenizationConfig
 from naics_embedder.utils.validation import (
     ValidationError,
     require_valid_config,
@@ -126,15 +126,10 @@ def test_require_valid_config_raises_validation_error(tmp_path):
 # -------------------------------------------------------------------------------------------------
 
 @pytest.fixture
-def production_bundle(tmp_path, hierarchy_descriptions_parquet):
-    from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+def production_bundle(hierarchy_manifest):
+    '''The hierarchy's bundle, built by the production path.'''
 
-    return generate_supervision_bundle(
-        SupervisionBuildConfig(
-            descriptions_parquet=hierarchy_descriptions_parquet,
-            output_root=str(tmp_path / 'bundles'),
-        )
-    )
+    return hierarchy_manifest
 
 def _repaired_cfg(manifest_path, descriptions_path) -> Config:
     cfg = Config()
@@ -204,3 +199,20 @@ def test_repaired_data_paths_do_not_require_legacy_artifacts(tmp_path):
     result = validate_data_paths(cfg)
     assert result.valid is False
     assert any('Distances file not found' in err for err in result.errors)
+
+@pytest.mark.unit
+def test_missing_legacy_artifacts_name_no_command_that_cannot_build_them(tmp_path):
+    # `data triplets` builds nothing (M8) and `data all` builds only a bundle, so neither
+    # supplies a missing legacy artifact
+    cfg = Config.model_validate({'supervision': {'mode': 'legacy_containment'}})
+    streaming = cfg.data_loader.streaming
+    streaming.descriptions_parquet = _touch(tmp_path / 'descriptions.parquet')
+    for name in ('distances_parquet', 'distance_matrix_parquet', 'relations_parquet'):
+        setattr(streaming, name, str(tmp_path / f'missing_{name}'))
+    streaming.triplets_parquet = str(tmp_path / 'missing_triplets')
+
+    errors = validate_data_paths(cfg).errors
+
+    assert len(errors) == 4
+    assert all('naics-embedder data supervision' in error for error in errors)
+    assert not any('data triplets' in error or 'data all' in error for error in errors)

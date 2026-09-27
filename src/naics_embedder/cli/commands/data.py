@@ -102,6 +102,8 @@ def preprocess(
     Output:
         ``data/naics_descriptions.parquet`` - Unified NAICS taxonomy data.
         ``data/naics_index_roles.parquet`` - Every index entry with its role.
+        ``data/naics_redirections.parquet`` - Every cross-reference and harvested "Excluded"
+        paragraph, with the codes it names.
 
     Example:
         Download and preprocess NAICS data::
@@ -239,18 +241,22 @@ def supervision():
     '''
     Build one immutable, validated Stage-3 supervision bundle.
 
-    Computes structural distances and relations in canonical pair orientation, attaches both
-    directional exclusion flags, and derives the codebook, pair facts, compatibility
+    Computes structural distances (D*) and relations in canonical pair orientation, attaches
+    both directional exclusion flags, and derives the codebook, pair facts, compatibility
     distance/relation artifacts and matrices, training pairs, and curriculum difficulty
-    thresholds from those facts. Every artifact carries the bundle ID and schema version; the
-    manifest is written only after all artifacts validate, and an existing bundle is never
-    overwritten.
+    thresholds from those facts. The index roles and the redirection table become members, and
+    the manifest records the backbone's input window. Every artifact carries the bundle ID and
+    schema version; the manifest is written only after all artifacts validate, and an existing
+    bundle is never overwritten.
 
     Requires:
-        ``data/naics_descriptions.parquet`` - From the preprocess stage.
+        ``data/naics_descriptions.parquet``, ``data/naics_index_roles.parquet`` and
+        ``data/naics_redirections.parquet`` - From the preprocess stage.
+        The backbone's tokenizer in the local Hugging Face cache - To count each channel's texts
+        beyond the backbone's trained input window.
 
     Output:
-        ``data/supervision/stage3-supervision-v1/<bundle-id>/manifest.json`` and its artifacts.
+        ``data/supervision/stage3-supervision-v2/<bundle-id>/manifest.json`` and its artifacts.
         The manifest path is printed; configure it as ``supervision.manifest_path``.
 
     Example:
@@ -273,27 +279,26 @@ def supervision():
 
 def _migrate_stage(stage: str) -> None:
     typer.echo(
-        f'`data {stage}` no longer publishes a standalone artifact; relations, distances, and '
-        'triplets are generated together by `naics-embedder data supervision`. Building the '
-        'complete supervision bundle now.'
+        f'`data {stage}` builds nothing: relations, distances and training pairs are members of '
+        'one supervision bundle, which `naics-embedder data supervision` builds.'
     )
-    supervision()
+    raise typer.Exit(code=1)
 
 @app.command('relations')
 def relations():
-    '''Deprecated: builds the complete supervision bundle (see ``data supervision``).'''
+    '''Deprecated: builds nothing; ``data supervision`` builds the complete bundle.'''
 
     _migrate_stage('relations')
 
 @app.command('distances')
 def distances():
-    '''Deprecated: builds the complete supervision bundle (see ``data supervision``).'''
+    '''Deprecated: builds nothing; ``data supervision`` builds the complete bundle.'''
 
     _migrate_stage('distances')
 
 @app.command('triplets')
 def triplets():
-    '''Deprecated: builds the complete supervision bundle (see ``data supervision``).'''
+    '''Deprecated: builds nothing; ``data supervision`` builds the complete bundle.'''
 
     _migrate_stage('triplets')
 
@@ -310,7 +315,8 @@ def all_data():
     bundle build. This is the recommended way to prepare data for training from scratch.
 
     Output:
-        ``data/naics_descriptions.parquet`` and a new supervision bundle whose manifest path is
+        ``data/naics_descriptions.parquet``, ``data/naics_index_roles.parquet``,
+        ``data/naics_redirections.parquet`` and a new supervision bundle whose manifest path is
         printed.
 
     Example:

@@ -101,26 +101,20 @@ def test_data_supervision_prints_the_manifest_path(monkeypatch, runner, tmp_path
 
     assert result.exit_code == 0
     assert str(manifest) in result.output
-    assert configs[0].contract_version == 'stage3-supervision-v1'
+    assert configs[0].contract_version == 'stage3-supervision-v2'
     assert configs[0].relation_id['cross_sector'] == 99
 
 @pytest.mark.parametrize('command', ['relations', 'distances', 'triplets'])
-def test_legacy_stage_commands_build_the_complete_bundle(monkeypatch, runner, tmp_path, command):
-    manifest = tmp_path / 'bundle-id' / 'manifest.json'
+def test_legacy_stage_commands_build_nothing(monkeypatch, runner, command):
     calls = []
-
-    def fake_generate(cfg):
-        calls.append(cfg)
-        return manifest
-
-    monkeypatch.setattr(data_cli, 'generate_supervision_bundle', fake_generate)
+    monkeypatch.setattr(data_cli, 'generate_supervision_bundle', calls.append)
 
     result = runner.invoke(data_cli.app, [command])
 
-    assert result.exit_code == 0
-    assert 'data supervision' in result.output
-    assert len(calls) == 1
-    assert str(manifest) in result.output
+    # A script running the old three-step sequence stops at its first step
+    assert result.exit_code == 1
+    assert 'naics-embedder data supervision' in result.output.replace('\n', ' ')
+    assert calls == []
 
 def test_data_roles_draws_the_table_with_both_configs(monkeypatch, runner, tmp_path):
     calls = []
@@ -511,10 +505,27 @@ def test_text_only_table_embeds_with_the_regressor_configs_backbone(monkeypatch,
 
     assert result.exit_code == 0, result.output
     assert calls == [
-        (Path('descriptions.parquet'), output, 'sentence-transformers/all-MiniLM-L6-v2', 512, 32)
+        (Path('descriptions.parquet'), output, 'sentence-transformers/all-MiniLM-L6-v2', 128, 32)
     ]
     # Rich folds long paths at the terminal's width (80 columns on CI), wherever it falls
     assert 'text_only_provenance.json' in result.output.replace('\n', '')
+
+@pytest.mark.unit
+def test_text_only_table_refuses_a_backbone_without_a_recorded_window(runner, tmp_path):
+    output = tmp_path / 'text_only.parquet'
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'text-only-table', '--descriptions', 'descriptions.parquet', '--output',
+            str(output), '--backbone', 'some/other-backbone'
+        ],
+    )
+
+    assert result.exit_code == 1
+    # Rich may wrap the message at a space; compare with the whitespace collapsed
+    assert 'no trained input window' in ' '.join(result.output.split())
+    assert not output.exists()
 
 def _regressor_arguments(tmp_path, codes=CODEBOOK):
     coordinates = tmp_path / 'arm.parquet'

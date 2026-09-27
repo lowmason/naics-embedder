@@ -116,7 +116,7 @@ uv run naics-embedder tools --help
 | `data all` | Run complete data pipeline |
 | `data preprocess` | Download and preprocess NAICS files |
 | `data supervision` | Build the immutable Stage-3 supervision bundle |
-| `data relations` / `distances` / `triplets` | Deprecated; build the supervision bundle |
+| `data relations` / `distances` / `triplets` | Deprecated; build nothing and exit with status 1 |
 
 ### Training Commands
 

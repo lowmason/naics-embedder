@@ -17,14 +17,13 @@ code, 2 for a shared sector, 1 for the virtual root above the sectors).
 
 import math
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Callable, Dict, Optional, Sequence, Tuple, Union
 
 import polars as pl
 import torch
 import torch.nn.functional as F
 
-from naics_embedder.utils.naics_hierarchy import naics_parent_code
+from naics_embedder.utils.naics_hierarchy import code_lineage
 
 HIT_KS = (1, 5, 10)
 METRIC_NAMES = ('top1', 'mrr', *(f'hit_at_{k}' for k in HIT_KS), 'lca_level')
@@ -76,17 +75,6 @@ def resolve_distance(distance: Union[str, DistanceFn]) -> Tuple[str, DistanceFn]
 # -------------------------------------------------------------------------------------------------
 # Hierarchical partial credit
 # -------------------------------------------------------------------------------------------------
-
-@lru_cache(maxsize=None)
-def code_lineage(code: str) -> Tuple[str, ...]:
-    '''The code's ancestors from its sector down to the code itself.'''
-
-    chain = [code]
-    parent = naics_parent_code(code)
-    while parent is not None:
-        chain.append(parent)
-        parent = naics_parent_code(parent)
-    return tuple(reversed(chain))
 
 def lca_level(code_a: str, code_b: str) -> int:
     '''

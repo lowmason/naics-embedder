@@ -75,9 +75,10 @@ class HyperbolicInfoNCELoss(nn.Module):
         '''
         Compute Hyperbolic InfoNCE loss over selected negatives.
 
-        Explicit exclusions always stay in the contrastive denominator; only eligible pseudo-related
-        candidates (never exclusions) are removed; invalid padding never contributes to the loss or
-        its gradients. Anchors without any eligible negative are skipped.
+        Only eligible pseudo-related candidates leave the contrastive denominator, never a flagged
+        explicit exclusion, though training and validation now admit none (Req 8). Invalid padding
+        never contributes to the loss or its gradients. Anchors without any eligible negative are
+        skipped.
 
         Args:
             anchor_emb: Anchor hyperbolic embeddings (batch_size, embedding_dim+1)

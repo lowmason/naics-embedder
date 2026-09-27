@@ -32,6 +32,7 @@ import torch
 from sklearn.decomposition import PCA
 
 from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.utils.input_window import check_window
 
 logger = logging.getLogger(__name__)
 
@@ -174,8 +175,12 @@ def build_text_only_table(
 
     Returns:
         The table's path.
+
+    Raises:
+        ValueError: If ``max_length`` exceeds the backbone's trained input window (Req 9).
     '''
 
+    check_window(backbone, max_length)
     descriptions_path = Path(descriptions_path)
     descriptions = pl.read_parquet(descriptions_path).sort('code')
     if model is None or tokenizer is None:

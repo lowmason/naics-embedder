@@ -18,8 +18,9 @@ class CurriculumScheduler:
     Structure-Aware Dynamic Curriculum (SADC) scheduler that manages training phases.
 
     Sampling responsibilities:
-    - Data layer (streaming_dataset.py): performs Phase 1 tree-distance weighting,
-      sibling masking, and explicit exclusion mining before batches reach the model.
+    - Data layer (streaming_dataset.py): performs Phase 1 tree-distance weighting and
+      sibling masking before batches reach the model. Its pools never hold an explicit
+      exclusion (Req 8).
     - Model layer (naics_model.py): performs hard-negative mining (embedding/router-guided),
       adaptive margins, false-negative masking, and curriculum flag control.
 

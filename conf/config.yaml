@@ -8,7 +8,7 @@ seed: 42
 # structural facts, exclusions, and training pairs.
 supervision:
   mode: repaired  # Options: repaired, legacy_containment (explicit, tagged, never exact-resumes)
-  contract_version: stage3-supervision-v1
+  contract_version: stage3-supervision-v2
   manifest_path: null  # data supervision prints the exact immutable path to set before training
 
 # Curriculum scheduler configuration (Structure-Aware Dynamic Curriculum)
@@ -83,7 +83,7 @@ data_loader:
 
   tokenization:
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
-    max_length: 512
+    max_length: 128  # The backbone's trained window (utils/input_window.py)
 
   streaming:
     descriptions_parquet: ./data/naics_descriptions.parquet
@@ -92,14 +92,14 @@ data_loader:
     distance_matrix_parquet: ./data/naics_distance_matrix.parquet
     relations_parquet: ./data/naics_relations.parquet
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
-    max_length: 512
+    max_length: 128  # The backbone's trained window (utils/input_window.py)
     seed: 42
     # Negative sampling parameters
     n_negatives: 24  # Maximum number of negatives per positive
     # Phase 1 tree-distance based sampling
-    use_phase1_sampling: true  # Use inverse weighting, sibling masking, exclusion mining
+    use_phase1_sampling: true  # Use inverse weighting and sibling masking
     phase1_alpha: 1.5  # Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α
-    # Exclusions are represented by the one-slot exclusion quota at selection time
+    # An explicit exclusion is never a negative: pools and selection leave it out (Req 8(c))
     # On-the-fly sampling with oversampling and difficulty curriculum
     use_on_the_fly_sampling: false  # Use on-the-fly negative sampling instead of pre-computed cache
     n_candidates: 48  # Total candidate negatives to sample (for Phase 2+ HNM pool)

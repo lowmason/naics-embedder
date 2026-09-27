@@ -11,6 +11,7 @@ and row count.
 # -------------------------------------------------------------------------------------------------
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Collection, Iterable, List, Optional, Tuple
@@ -22,11 +23,13 @@ import pyarrow.parquet as pq
 
 from naics_embedder.supervision.schema import (
     CONTRACT_VERSION,
+    CROSS_SECTOR_RELATION_ID,
     ArtifactFile,
     IndexRole,
     SemanticTarget,
     SupervisionManifest,
 )
+from naics_embedder.utils.naics_hierarchy import code_lineage, tree_distance_matrix, unary_pairs
 
 # -------------------------------------------------------------------------------------------------
 # Contract metadata keys
@@ -172,6 +175,40 @@ REQUIRED_ARTIFACTS = (
     'relation_matrix',
     'training_pairs',
     'difficulty_thresholds',
+    'index_roles',
+    'redirections',
+)
+
+# Every check a bundle build records. The loader refuses a manifest that lacks one, so a bundle
+# built without a check never loads.
+REQUIRED_VALIDATION_RESULTS = (
+    'codebook_contiguous_unique',
+    'codebook_identity',
+    'pair_keys_unique',
+    'canonical_orientation',
+    'pair_coverage',
+    'nonzero_structural_distance',
+    'no_structural_sentinel',
+    'distance_is_d_star',
+    'cross_sector_distance_formula',
+    'cross_sector_relation_label',
+    'distance_triangle_inequality',
+    'exclusion_derivation',
+    'exclusions_match_descriptions',
+    'unary_pairs_flagged',
+    'matrix_reconciliation',
+    'redirections_well_formed',
+    'redirections_match_exclusion_channel',
+    'redirections_match_pair_facts',
+    'index_roles_one_role_per_entry',
+    'index_roles_examples_channel',
+    'index_roles_no_leakage',
+    'direct_positive_safety',
+    'no_exclusion_negatives',
+    'no_unary_positives',
+    'training_exclusion_derivation',
+    'training_identity_joins',
+    'artifact_hashes_recorded',
 )
 
 STRUCTURAL_PAIR_COLUMNS = (
@@ -193,7 +230,7 @@ def codebook_fingerprint(codebook: pl.DataFrame) -> str:
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 def validate_structural_pairs(structural: pl.DataFrame, codebook: pl.DataFrame) -> None:
-    '''Fail closed on identity, uniqueness, orientation, coverage, or sentinel violations.'''
+    '''Fail closed on identity, uniqueness, orientation, coverage, sentinel, or D* violations.'''
 
     identities = codebook.select(code_id=pl.col('code_id'), expected=pl.col('code'))
     for side in ('i', 'j'):
@@ -245,6 +282,64 @@ def validate_structural_pairs(structural: pl.DataFrame, codebook: pl.DataFrame) 
         | pl.col('structural_relation_name').eq('excluded')
     ).height:
         raise ValueError('structural relation fields contain an exclusion sentinel')
+    validate_tree_distances(structural)
+
+def validate_tree_distances(structural: pl.DataFrame) -> None:
+    '''
+    Fail closed unless every structural distance is D* (Req 7).
+
+    D* is an integer, never the retired cross-sector constant 99. A pair across sectors, whose
+    lowest common ancestor is the virtual root, has λ(i) + λ(j) − 2, where λ is the number of
+    digits, and carries the ``cross_sector`` relation label, which no other pair carries. The
+    stored distances satisfy the triangle inequality over every ordered triple of codes, and each
+    equals :func:`~naics_embedder.utils.naics_hierarchy.tree_distance_matrix` on its pair: the path
+    length through the pair's lowest common ancestor.
+    '''
+
+    distance = structural.get_column('structural_distance').to_numpy().astype(np.float64)
+    if (distance != np.round(distance)).any():
+        raise ValueError('structural distances must be integers: D* has no half-step')
+    if (distance == 99.0).any():
+        raise ValueError('structural distances contain the retired cross-sector constant 99')
+
+    codes = sorted(
+        set(structural.get_column('code_i').to_list())
+        | set(structural.get_column('code_j').to_list())
+    )
+    position = {code: row for row, code in enumerate(codes)}
+    rows, columns = (
+        structural.get_column(name).replace_strict(position, return_dtype=pl.Int64).to_numpy()
+        for name in ('code_i', 'code_j')
+    )
+
+    sectors = np.array([code_lineage(code)[0] for code in codes])
+    digits = np.array([len(code) for code in codes])
+    across = sectors[rows] != sectors[columns]
+    if not np.array_equal(distance[across], (digits[rows] + digits[columns] - 2)[across]):
+        raise ValueError('cross-sector distances must equal λ(i) + λ(j) − 2')
+    labelled = structural.get_column('structural_relation_id').to_numpy() == CROSS_SECTOR_RELATION_ID
+    if not np.array_equal(labelled, across):
+        raise ValueError(
+            'the cross_sector relation label must mark exactly the pairs across sectors: '
+            f'{int((labelled != across).sum()):,} pairs disagree'
+        )
+
+    matrix = np.zeros((len(codes), len(codes)), dtype=np.int16)
+    matrix[rows, columns] = distance
+    matrix[columns, rows] = distance
+    for middle in range(len(codes)):
+        if (matrix[:, middle, None] + matrix[None, middle, :] < matrix).any():
+            raise ValueError(f'D* violates the triangle inequality through {codes[middle]}')
+
+    expected = tree_distance_matrix(codes)[rows, columns]
+    if not np.array_equal(distance, expected):
+        wrong = np.flatnonzero(distance != expected)
+        first = wrong[0]
+        raise ValueError(
+            f'structural distance differs from D* on {wrong.size:,} pairs, e.g. '
+            f'{codes[rows[first]]}/{codes[columns[first]]}: {distance[first]:g} != '
+            f'{expected[first]}'
+        )
 
 def validate_exclusion_derivation(pair_facts: pl.DataFrame) -> None:
     '''The symmetric exclusion flag must equal the OR of both directional flags.'''
@@ -254,6 +349,34 @@ def validate_exclusion_derivation(pair_facts: pl.DataFrame) -> None:
         raise ValueError(
             'pair facts exclusion derivation is inconsistent: is_explicit_exclusion must equal '
             'code_i_excludes_code_j OR code_j_excludes_code_i'
+        )
+
+def unary_pair_expression(codes: Iterable[str]) -> pl.Expr:
+    '''
+    Whether a canonical pair is a unary pair among ``codes`` (Req 9): a five-digit code and its
+    only six-digit child. Canonical orientation puts the five-digit code in ``code_i``.
+    '''
+
+    children = [child for _, child in unary_pairs(codes)]
+    return pl.col('code_j').is_in(children) & pl.col('code_i').eq(pl.col('code_j').str.slice(0, 5))
+
+def validate_unary_pairs(pair_facts: pl.DataFrame, codebook: pl.DataFrame) -> None:
+    '''
+    ``unary_pair`` must mark exactly the unary pairs among the codebook's codes (Req 9).
+
+    Raises:
+        ValueError: If the column is missing, or wrong or null on any pair.
+    '''
+
+    if 'unary_pair' not in pair_facts.columns:
+        raise ValueError('pair facts lack the unary_pair column')
+    expected = unary_pair_expression(codebook.get_column('code').to_list())
+    wrong = pair_facts.filter(pl.col('unary_pair').ne_missing(expected))
+    if wrong.height:
+        code_i, code_j = wrong.select('code_i', 'code_j').row(0)
+        raise ValueError(
+            f'unary_pair is wrong on {wrong.height:,} pairs, e.g. {code_i}/{code_j}: a unary pair '
+            'is a five-digit code and its only six-digit child'
         )
 
 INDEX_ROLES_ARTIFACT = 'index_roles'
@@ -299,6 +422,95 @@ def validate_index_role_table(
             f'{short.height:,} codes have fewer than {min_examples_per_code} examples-role entries'
         )
 
+REDIRECTIONS_ARTIFACT = 'redirections'
+CROSS_REFERENCE_SOURCE = 'cross_reference'
+DESCRIPTION_SOURCE = 'description'
+REDIRECTIONS_SCHEMA = {
+    'reference_id': pl.Int64,
+    'source': pl.Utf8,
+    'code': pl.Utf8,
+    'text': pl.Utf8,
+    'activity': pl.Utf8,
+    'named_codes': pl.List(pl.Utf8),
+    'lineal_codes': pl.List(pl.Utf8),
+    'withheld': pl.Boolean,
+}
+
+def validate_redirection_table(redirections: pl.DataFrame, codes: Collection[str]) -> None:
+    '''
+    Fail closed unless the redirection table is well formed (Req 8).
+
+    Its columns are ``REDIRECTIONS_SCHEMA``'s, in order, and ``reference_id`` runs from zero in
+    table order. Every row comes from a known source and names codebook codes other than its
+    own, and ``lineal_codes`` holds exactly the named codes that are the row's code's ancestors
+    or descendants. Only a cross-reference row that names a code and is not withheld may carry
+    an activity phrase.
+    '''
+
+    if redirections.schema != pl.Schema(REDIRECTIONS_SCHEMA):
+        raise ValueError(f'redirection columns must be {list(REDIRECTIONS_SCHEMA)}, as typed there')
+    required = [name for name in REDIRECTIONS_SCHEMA if name != 'activity']
+    if redirections.select(pl.any_horizontal(pl.col(required).is_null()).any()).item():
+        raise ValueError('a redirection row lacks a required value')
+    if redirections.get_column('reference_id').to_list() != list(range(redirections.height)):
+        raise ValueError('reference IDs must run from zero in table order')
+    sources = set(redirections.get_column('source').to_list())
+    unknown = sorted(sources - {CROSS_REFERENCE_SOURCE, DESCRIPTION_SOURCE})
+    if unknown:
+        raise ValueError(f'unknown redirection sources: {unknown}')
+    known = set(codes)
+    for row in redirections.iter_rows(named=True):
+        code, named = row['code'], row['named_codes']
+        where = f'redirection {row["reference_id"]} ({code})'
+        if code not in known or not set(named) <= known:
+            raise ValueError(f'{where} names a code outside the codebook')
+        if code in named:
+            raise ValueError(f'{where} names its own code')
+        lineal = [
+            other for other in named if other in code_lineage(code) or code in code_lineage(other)
+        ]
+        if row['lineal_codes'] != lineal:
+            raise ValueError(
+                f'{where}: lineal_codes must be the named ancestors and descendants, {lineal}'
+            )
+        redirects = row['source'] == CROSS_REFERENCE_SOURCE and bool(named)
+        if row['activity'] is not None and (row['withheld'] or not redirects):
+            raise ValueError(
+                f'{where} carries an activity phrase, which only a cross-reference row that '
+                'names a code and is not withheld may carry'
+            )
+
+def validate_redirection_exclusions(redirections: pl.DataFrame, pair_facts: pl.DataFrame) -> None:
+    '''
+    Fail closed unless the redirection table names exactly the pair facts' explicit exclusions.
+
+    Every (code, named code) pair of the table, withheld rows included, must be a directed
+    exclusion of the pair facts, and every directed exclusion must be named by some row.
+    '''
+
+    # yapf: disable
+    named = (
+        redirections
+        .select('code', other=pl.col('named_codes'))
+        .explode('other')
+        .drop_nulls()
+        .unique()
+    )
+    # yapf: enable
+    excluded = pl.concat(
+        [
+            pair_facts.filter('code_i_excludes_code_j').select(code='code_i', other='code_j'),
+            pair_facts.filter('code_j_excludes_code_i').select(code='code_j', other='code_i'),
+        ]
+    ).unique()
+    unmatched = named.join(excluded, on=['code', 'other'], how='anti').height
+    unnamed = excluded.join(named, on=['code', 'other'], how='anti').height
+    if unmatched or unnamed:
+        raise ValueError(
+            f'the redirection table and the pair facts disagree: {unmatched:,} named pairs are '
+            f'not exclusions, and {unnamed:,} exclusions are named by no row'
+        )
+
 def validate_matrix(
     matrix: pl.DataFrame,
     pair_facts: pl.DataFrame,
@@ -336,6 +548,7 @@ def _directed_pair_facts(pair_facts: pl.DataFrame) -> pl.DataFrame:
                 fact_other_excludes=pl.col('code_j_excludes_code_i'),
                 fact_distance=pl.col('structural_distance').cast(pl.Float32),
                 fact_relation=pl.col('structural_relation_id').cast(pl.Int16),
+                fact_unary=pl.col('unary_pair'),
             ),
             pair_facts.select(
                 anchor=pl.col('code_j_id').cast(pl.Int32),
@@ -344,6 +557,7 @@ def _directed_pair_facts(pair_facts: pl.DataFrame) -> pl.DataFrame:
                 fact_other_excludes=pl.col('code_i_excludes_code_j'),
                 fact_distance=pl.col('structural_distance').cast(pl.Float32),
                 fact_relation=pl.col('structural_relation_id').cast(pl.Int16),
+                fact_unary=pl.col('unary_pair'),
             ),
         ]
     )
@@ -358,11 +572,12 @@ def validate_training_pairs_members(
     '''
     Validate training-pair member files against the codebook and canonical pair facts.
 
-    Every identity must be a known code ID, no direct positive may be an explicit exclusion,
-    exclusion and semantic columns must be internally consistent, and every anchor/positive and
-    anchor/negative view must match the pair facts (structure and both exclusion directions).
-    Members are checked in bounded chunks of files, which is exact because every row check is
-    row-local and every uniqueness check is a join against the pair facts.
+    Every identity must be a known code ID, no direct positive or negative may be an explicit
+    exclusion of its anchor, no positive may be a unary pair, exclusion and semantic columns must
+    be internally consistent, and every anchor/positive and anchor/negative view must match the
+    pair facts (structure and both exclusion directions). Members are checked in bounded chunks
+    of files, which is exact because every row check is row-local and every uniqueness check is a
+    join against the pair facts.
     '''
 
     if not paths:
@@ -387,6 +602,7 @@ def _validate_training_chunk(paths: List[Path], directed: pl.DataFrame, n_codes:
             ]
         ).sum(),
         excluded_positives=pl.col('positive_is_explicit_exclusion').sum(),
+        excluded_negatives=pl.col('negative_is_explicit_exclusion').sum(),
         derivation=pl.col('negative_is_explicit_exclusion').ne(
             pl.col('anchor_excludes_negative') | pl.col('negative_excludes_anchor')
         ).sum(),
@@ -400,6 +616,11 @@ def _validate_training_chunk(paths: List[Path], directed: pl.DataFrame, n_codes:
         raise ValueError(f'{summary["unmapped"]:,} rows contain an unmapped code identity')
     if summary['excluded_positives']:
         raise ValueError('a direct positive is an explicit exclusion')
+    if summary['excluded_negatives']:
+        raise ValueError(
+            f'{summary["excluded_negatives"]:,} training negatives are explicit exclusions of '
+            'their anchors'
+        )
     if summary['derivation']:
         raise ValueError('negative exclusion derivation is inconsistent')
     if summary['semantic']:
@@ -415,6 +636,8 @@ def _validate_training_chunk(paths: List[Path], directed: pl.DataFrame, n_codes:
     ).unique().collect().join(directed, on=['anchor', 'other'], how='left')
     if positives.filter(pl.col('fact_distance').is_null()).height:
         raise ValueError('positive identities do not join to pair facts')
+    if positives.filter(pl.col('fact_unary')).height:
+        raise ValueError('a training positive is a unary pair')
     if positives.filter(
         pl.col('distance').ne(pl.col('fact_distance'))
         | pl.col('relation').ne(pl.col('fact_relation'))
@@ -540,6 +763,7 @@ def _validate_relations(root: Path, manifest: SupervisionManifest) -> None:
     def check_pair_facts() -> None:
         validate_structural_pairs(pair_facts.select(STRUCTURAL_PAIR_COLUMNS), codebook)
         validate_exclusion_derivation(pair_facts)
+        validate_unary_pairs(pair_facts, codebook)
 
     _in_context('pair_facts', bundle_id, check_pair_facts)
 
@@ -597,15 +821,21 @@ def _validate_relations(root: Path, manifest: SupervisionManifest) -> None:
         lambda: validate_training_pairs_members(training_paths, pair_facts, codebook.height),
     )
 
-    # Optional under stage3-supervision-v1: bundles built before the outcome panel lack it
-    if INDEX_ROLES_ARTIFACT in manifest.artifacts:
-        roles = read(INDEX_ROLES_ARTIFACT)
-        six_digit_codes = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
-        _in_context(
-            INDEX_ROLES_ARTIFACT,
-            bundle_id,
-            lambda: validate_index_role_table(roles, six_digit_codes.to_list()),
-        )
+    roles = read(INDEX_ROLES_ARTIFACT)
+    six_digit_codes = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
+    _in_context(
+        INDEX_ROLES_ARTIFACT,
+        bundle_id,
+        lambda: validate_index_role_table(roles, six_digit_codes.to_list()),
+    )
+
+    redirections = read(REDIRECTIONS_ARTIFACT)
+
+    def check_redirections() -> None:
+        validate_redirection_table(redirections, codebook.get_column('code').to_list())
+        validate_redirection_exclusions(redirections, pair_facts)
+
+    _in_context(REDIRECTIONS_ARTIFACT, bundle_id, check_redirections)
 
 def load_validated_bundle(
     manifest_path: str | Path,
@@ -614,12 +844,15 @@ def load_validated_bundle(
     '''
     Load a supervision bundle, failing closed on any contract, integrity, or relational violation.
 
-    Checks the contract version, every member's existence, hash, row count, and Parquet contract
-    metadata, the recorded validation results, and then re-runs the relational checks: codebook
-    order and fingerprint, pair-fact identity/orientation/coverage/sentinels/exclusion derivation,
-    long-form and matrix reconciliation, training-pair identity, exclusion, and structure, and,
-    when the bundle carries one, the index-entry role table (one known role per entry, six-digit
-    codes only, the examples-channel floor).
+    Reads the contract version from the raw manifest before parsing it, so an older contract's
+    bundle fails with the contract message rather than a parse error. Then checks every member's
+    existence, hash, row count, and Parquet contract metadata, and that every required
+    validation result is recorded as passed. It then re-runs
+    the relational checks: codebook order and fingerprint; pair-fact identity, orientation,
+    coverage, sentinels and exclusion derivation; long-form and matrix reconciliation;
+    training-pair identity, exclusion, and structure; the index-entry role table (one known role
+    per entry, six-digit codes only, the examples-channel floor); and the redirection table (well
+    formed, naming exactly the pair facts' exclusions).
 
     Raises:
         FileNotFoundError: If the manifest does not exist.
@@ -629,15 +862,21 @@ def load_validated_bundle(
     path = Path(manifest_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f'supervision manifest not found: {path}')
-    manifest = SupervisionManifest.model_validate_json(path.read_text())
-    if manifest.contract_version != expected_contract:
+    raw = json.loads(path.read_text())
+    found = raw.get('contract_version') if isinstance(raw, dict) else None
+    if found != expected_contract:
         raise ValueError(
-            f'expected supervision contract {expected_contract}, '
-            f'found {manifest.contract_version} in {path}'
+            f'expected supervision contract {expected_contract}, found {found} in {path}'
         )
+    manifest = SupervisionManifest.model_validate(raw)
 
     root = path.parent
     _validate_members(root, manifest)
+    missing = sorted(set(REQUIRED_VALIDATION_RESULTS) - set(manifest.validation_results))
+    if missing:
+        raise ValueError(
+            f'bundle {manifest.bundle_id} lacks required validation results: {missing}'
+        )
     if not all(manifest.validation_results.values()):
         failed = sorted(k for k, passed in manifest.validation_results.items() if not passed)
         raise ValueError(f'bundle manifest records failed validations: {failed}')

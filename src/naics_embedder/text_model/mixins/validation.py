@@ -109,8 +109,8 @@ class ValidationMixin:
                 batch['candidate_code_id'],
                 batch['candidate_valid_mask'],
             )
-            # The same eligibility as training selection: ordinary candidates must be
-            # structurally farther than the positive; explicit exclusions are exempt.
+            # The same eligibility as training selection: a candidate must be structurally
+            # farther than the positive and never an explicit exclusion of the anchor (Req 8).
             structurally_farther = structurally_eligible(
                 negative_distance=pair.structural_distance,
                 negative_relation_id=pair.structural_relation_id,
@@ -118,7 +118,7 @@ class ValidationMixin:
                 positive_relation_id=batch['positive_structural_relation_id'].unsqueeze(1),
             )
             explicit = pair.is_explicit_exclusion
-            valid_mask = batch['candidate_valid_mask'] & (explicit | structurally_farther)
+            valid_mask = batch['candidate_valid_mask'] & ~explicit & structurally_farther
 
         contrastive_loss = self.loss_fn(
             anchor_emb,

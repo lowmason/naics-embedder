@@ -6,7 +6,7 @@ from typing import Dict, Optional, Sequence
 import torch
 
 from naics_embedder.text_model.hyperbolic import compute_hyperbolic_radii
-from naics_embedder.utils.naics_hierarchy import NaicsHierarchy
+from naics_embedder.utils.naics_hierarchy import NaicsHierarchy, unary_pairs
 
 def compute_radius_structure_metrics(
     embeddings: torch.Tensor,
@@ -99,10 +99,12 @@ def compute_hierarchy_retrieval_metrics(
     code_to_idx = {code: idx for idx, code in enumerate(codes)}
     metrics: Dict[str, float] = {}
 
-    # Parent retrieval (child -> parent).
+    # Parent retrieval (child -> parent) skips the unary pairs (Req 9), as
+    # metrics.diagnostics.parent_retrieval does.
+    unary = set(unary_pairs(code for pair in hierarchy.parent_child_pairs for code in pair))
     parent_pairs = [
         (code_to_idx[parent], code_to_idx[child]) for parent, child in hierarchy.parent_child_pairs
-        if parent in code_to_idx and child in code_to_idx
+        if parent in code_to_idx and child in code_to_idx and (parent, child) not in unary
     ]
     if parent_pairs and parent_top_k > 0:
         hits = 0

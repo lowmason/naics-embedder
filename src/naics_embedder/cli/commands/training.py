@@ -131,7 +131,6 @@ def build_model_from_config(
         structural_preference_margin=structural_preference.margin,
         structural_preference_temperature=structural_preference.temperature,
         structural_preference_tie_tolerance=structural_preference.tie_tolerance,
-        selection_seed=cfg.seed,
         checkpoint_contract=runtime_contract,
         **supervision_inputs,
     )

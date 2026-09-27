@@ -560,7 +560,7 @@ The system monitors and logs VRAM usage for distributed operations:
 
 ## 13. Sampling Architecture
 
-- **Data Layer (Streaming Dataset):** Builds candidate pools, applies Phase 1 inverse tree-distance weighting, masks siblings, and prioritizes explicit exclusions. Negatives carry `explicit_exclusion` flags for downstream logging.
+- **Data Layer (Streaming Dataset):** Builds candidate pools that never admit an explicit exclusion of the anchor (Req 8(c)), applies Phase 1 inverse tree-distance weighting over D*, and masks siblings.
 - **Model Layer (NAICSContrastiveModel):** Performs Phase 2+ mining (embedding-based, router-guided), norm-adaptive margins, and Phase 3 false-negative masking. Curriculum flags control which mechanisms are active.
 - **Interface:** Data layer supplies pre-weighted negatives and metadata; model reshapes/reorders negatives for harder sampling and logs tree-distance and router confusion metrics.
 - See `docs/sampling_architecture.md` for full details.

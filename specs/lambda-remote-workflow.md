@@ -74,10 +74,12 @@ invariant would break.
 - **The canonical supervision bundle.** Build it once from the main checkout with
   `uv run naics-embedder data supervision` and set `supervision.manifest_path` to its manifest.
   The command prints a repo-relative path,
-  `data/supervision/stage3-supervision-v1/<bundle_id>/manifest.json`. The current bundle,
-  `18403d29-3b23-444e-9e81-371d0ca8b7ea`, was built on 2026-09-23 and is pinned to the
-  regenerated parquet. Rebuild it only when the parquet changes; a new bundle means older
-  checkpoints can only load with `--checkpoint-load-mode weights_only`.
+  `data/supervision/stage3-supervision-v2/<bundle_id>/manifest.json`. The current bundle,
+  `301cce28-539c-42ea-8781-496bbdcf511c`, was built on 2026-09-26 by roadmap Stage 5 (plan 7)
+  and is pinned to that stage's descriptions parquet (sha256 `fe8c54e3…`). It replaced bundle
+  `18403d29-3b23-444e-9e81-371d0ca8b7ea`, whose contract main no longer loads. Rebuild it only
+  when the parquet changes; a new bundle means older checkpoints can only load with
+  `--checkpoint-load-mode weights_only`.
 - SSH access with the user's existing key: `ssh ubuntu@IP` works without a password prompt.
 
 ## 5. Chosen approach and rejected alternatives

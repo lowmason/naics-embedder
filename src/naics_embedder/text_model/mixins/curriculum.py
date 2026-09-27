@@ -149,10 +149,6 @@ class CurriculumMixin:
                 on_epoch=True,
             )
 
-    def _selection_seed(self) -> int:
-        '''Global seed for deterministic exclusion rotation (the training seed).'''
-        return int(getattr(self.hparams, 'selection_seed', 0))
-
     def _select_negative_batch(
         self,
         *,
@@ -168,7 +164,7 @@ class CurriculumMixin:
         Flow: local candidate entities -> optional distributed entity gather -> anchor-relative
         supervision join and structural eligibility -> ``NegativeCandidateBatch`` ->
         geometric/router proposals, then the difficulty proposal as fallback -> coordinator
-        selection (exclusion quota, dedup, backfill) -> the single gather.
+        selection (dedup, backfill) -> the single gather.
 
         Args:
             batch: Repaired collated batch.
@@ -229,11 +225,11 @@ class CurriculumMixin:
             entities.code_id,
             entities.valid_mask,
         )
-        # Anchor-relative margins follow the generator's rule: an ordinary candidate must be
-        # structurally farther than the positive, exactly like every generated training negative.
-        # Explicit exclusions are exempt. Runtime-sourced candidates (universe backfill, remote
-        # ranks) that fail the rule are ineligible for this anchor, so no loss repels a relative
-        # the generated supervision would never treat as a negative.
+        # Anchor-relative margins follow the generator's rule: a candidate must be structurally
+        # farther than the positive, exactly like every generated training negative, and never an
+        # explicit exclusion of the anchor (Req 8). Runtime-sourced candidates (universe backfill,
+        # remote ranks) that fail either rule are ineligible for this anchor, so no loss repels a
+        # relative or an exclusion the generated supervision would never treat as a negative.
         relation_margin, distance_margin = structural_margins(
             negative_distance=pair.structural_distance,
             negative_relation_id=pair.structural_relation_id,
@@ -241,7 +237,7 @@ class CurriculumMixin:
             positive_relation_id=batch['positive_structural_relation_id'].unsqueeze(1),
         )
         structurally_farther = relation_margin.gt(0) & distance_margin.gt(0)
-        eligible = entities.valid_mask & (pair.is_explicit_exclusion | structurally_farther)
+        eligible = entities.valid_mask & ~pair.is_explicit_exclusion & structurally_farther
         candidates = NegativeCandidateBatch(
             candidate_uid=entities.candidate_uid,
             code_id=entities.code_id,
@@ -322,8 +318,6 @@ class CurriculumMixin:
             anchor_code_ids=batch['anchor_code_id'],
             positive_code_ids=batch['positive_code_id'],
             k=selection_k,
-            epoch=int(self.current_epoch),
-            global_seed=self._selection_seed(),
             proposals=tuple(proposals),
         )
         selected = candidates.select(selection)
