@@ -1,5 +1,7 @@
 # Supervision Target and Text Implementation Plan
 
+**Status: COMPLETE (2026-09-26)** — executed via executing-plans; deferred items in specs/deferred_items.md (six, all non-blocking findings of the final review: a late tokenizer load; no build-time re-check of the text channels; no runtime tie between the bundle's backbone and training's, for Stage 9; activity phrases checked by placement, not value, before Stage 7; a narrower leakage check in `data roles --force`; no tokenizer revision in the manifest, until the next rebuild)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -481,7 +483,7 @@ Stop, report, and wait for your human partner when any of these happens:
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
 
 Run: `git status --short --branch`
 Expected: `## claude/plan-7-supervision-target-and-text-c3a0baa0` and nothing else. If the line
@@ -499,7 +501,7 @@ the roadmap or `specs/deferred_items.md`, stop and ask.
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number.
@@ -507,14 +509,14 @@ Expected: `Python 3.12.` followed by a patch number.
 Run: `uv run python -c "import numpy, polars, scipy, sklearn, torch, transformers; print(numpy.__version__, polars.__version__, scipy.__version__, sklearn.__version__, torch.__version__, transformers.__version__)"`
 Expected: `2.3.4 1.35.1 1.16.3 1.9.1 2.9.1 4.57.1`. If they differ, stop and ask.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1629 passed, 1 skipped` (the skip needs CUDA). Each later full-suite count is this
 baseline plus the tests the plan has added by then, minus those it removed. The warnings count
 varies under xdist; ignore it.
 
-- [ ] **Step 4: Check the real inputs, read-only**
+- [x] **Step 4: Check the real inputs, read-only**
 
 Run: `shasum -a 256 ~/Downloads/Data/2-6\ digit_2022_Codes.xlsx ~/Downloads/Data/2022_NAICS_Descriptions.xlsx ~/Downloads/Data/2022_NAICS_Index_File.xlsx ~/Downloads/Data/2022_NAICS_Cross_References.xlsx conf/data/index_roles.csv`
 Expected: the five hashes of **Expected real-data results**, in that order.
@@ -522,7 +524,7 @@ Expected: the five hashes of **Expected real-data results**, in that order.
 Run: `cat ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/refs/main`
 Expected: `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`.
 
-- [ ] **Step 5: Route the tasks**
+- [x] **Step 5: Route the tasks**
 
 Under executing-plans, run every task inline, in order.
 
@@ -558,7 +560,7 @@ builder can use it.
     six-digit child)`, sorted.
 - `naics_embedder.panels.decoding.code_lineage` stays importable (re-exported).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_naics_hierarchy.py`, replace:
 
@@ -681,13 +683,13 @@ def test_d_star_is_the_one_tree_distance_function(tree):
     assert np.array_equal(tree_distance_matrix(CODES), _target(tree))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_naics_hierarchy.py tests/unit/test_diagnostics.py -q`
 Expected: collection fails with `ImportError: cannot import name 'code_lineage'` (and
 `tree_distance_matrix`).
 
-- [ ] **Step 3: Implement the functions**
+- [x] **Step 3: Implement the functions**
 
 In `src/naics_embedder/utils/naics_hierarchy.py`, replace:
 
@@ -908,7 +910,7 @@ with:
     target = tree_distance_matrix(codes)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_naics_hierarchy.py tests/unit/test_diagnostics.py tests/unit/test_outcome_decoding.py -q`
 Expected: all pass.
@@ -916,12 +918,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1637 passed, 1 skipped` (8 new tests).
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/utils/naics_hierarchy.py src/naics_embedder/panels/decoding.py src/naics_embedder/metrics/diagnostics.py tests/unit/test_naics_hierarchy.py tests/unit/test_diagnostics.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/utils/naics_hierarchy.py \
@@ -957,7 +959,7 @@ string exists in any channel" is checked where the file is written.
     channel; raises `ValueError` on a blank text, a placeholder, or provenance that does not
     match the description's presence.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_data_download.py`, replace:
 
@@ -1104,14 +1106,14 @@ def test_verify_text_channels_refuses_blanks_placeholders_and_missing_provenance
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_data_download.py -q`
 Expected: FAIL. The edited `_get_descriptions_2` calls raise `TypeError` (4 positional
 arguments given), and the new tests fail on `description_source` or with `AttributeError`
 (`verify_text_channels`).
 
-- [ ] **Step 3: Implement the rule, the column and the validator**
+- [x] **Step 3: Implement the rule, the column and the validator**
 
 In `src/naics_embedder/data/download_data.py`, replace:
 
@@ -1367,7 +1369,7 @@ with:
     leakage = verify_role_leakage(naics_final, role_rows)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_data_download.py -q`
 Expected: all pass.
@@ -1375,12 +1377,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1643 passed, 1 skipped` (6 new tests).
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/data/download_data.py tests/unit/test_data_download.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/data/download_data.py \
@@ -1437,7 +1439,7 @@ leak into.
   - `DownloadConfig.redirections_parquet`, default `./data/naics_redirections.parquet`, which
     `data preprocess` writes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_redirections.py`:
 
@@ -1813,13 +1815,13 @@ with:
     assert not Path(preprocess_cfg.redirections_parquet).exists()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_redirections.py tests/unit/test_outcome_leakage.py tests/unit/test_index_roles.py tests/unit/test_data_download.py tests/unit/test_config.py -q`
 Expected: collection fails with `ModuleNotFoundError: No module named
 'naics_embedder.data.redirections'` and `ImportError: cannot import name 'leaking_texts'`.
 
-- [ ] **Step 3: Implement the per-text leakage flags**
+- [x] **Step 3: Implement the per-text leakage flags**
 
 Append to the end of `src/naics_embedder/panels/leakage.py`:
 
@@ -1913,7 +1915,7 @@ def verify_role_leakage(
     )
 ```
 
-- [ ] **Step 4: Implement the redirection table**
+- [x] **Step 4: Implement the redirection table**
 
 Create `src/naics_embedder/data/redirections.py`:
 
@@ -2113,7 +2115,7 @@ def exclusion_channel(redirections: pl.DataFrame) -> pl.DataFrame:
 (`drop_nulls()` is needed because Polars explodes an empty list into a null. Without it, a code
 whose rows name nothing would carry `[None]`.)
 
-- [ ] **Step 5: Build the channel from the table in `data preprocess`**
+- [x] **Step 5: Build the channel from the table in `data preprocess`**
 
 In `src/naics_embedder/data/download_data.py`, replace:
 
@@ -2396,7 +2398,7 @@ redirections_parquet: ./data/naics_redirections.parquet
 `data/index_role_table.py` needs no edit: it calls `build_descriptions` without a table, so it
 checks eligibility against every row's text, none withheld.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_redirections.py tests/unit/test_outcome_leakage.py tests/unit/test_index_roles.py tests/unit/test_data_download.py tests/unit/test_config.py tests/unit/test_index_role_table.py -q`
 Expected: all pass.
@@ -2404,12 +2406,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1657 passed, 1 skipped` (14 new tests; one test replaced).
 
-- [ ] **Step 7: Check the formatting**
+- [x] **Step 7: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/data/redirections.py src/naics_embedder/panels/leakage.py src/naics_embedder/panels/index_roles.py src/naics_embedder/data/download_data.py src/naics_embedder/utils/config.py tests/unit/test_redirections.py tests/unit/test_outcome_leakage.py tests/unit/test_index_roles.py tests/unit/test_data_download.py tests/unit/test_config.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/naics_embedder/data/redirections.py \
@@ -2467,7 +2469,7 @@ config that tokenizes refuses a longer window.
 - Config defaults: `TokenizationConfig.max_length` None resolves to 128, and
   `StreamingConfig.max_length` and `TextOnlyConfig.max_length` default to 128.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_input_window.py`:
 
@@ -2821,13 +2823,13 @@ def test_text_only_table_refuses_a_backbone_without_a_recorded_window(runner, tm
     assert not output.exists()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_input_window.py tests/unit/test_config.py tests/unit/test_tokenization_cache.py tests/unit/test_text_only.py tests/unit/test_cli_commands.py -q`
 Expected: collection fails with `ModuleNotFoundError: No module named
 'naics_embedder.utils.input_window'`.
 
-- [ ] **Step 3: Record the window**
+- [x] **Step 3: Record the window**
 
 Create `src/naics_embedder/utils/input_window.py`:
 
@@ -3105,7 +3107,7 @@ with:
   max_length: 128
 ```
 
-- [ ] **Step 4: Tokenize every channel at the window, absent channels as the empty string**
+- [x] **Step 4: Tokenize every channel at the window, absent channels as the empty string**
 
 In `src/naics_embedder/text_model/dataloader/tokenization_cache.py`, replace:
 
@@ -3223,7 +3225,7 @@ with:
     }
 ```
 
-- [ ] **Step 5: The text-only builder refuses a longer window**
+- [x] **Step 5: The text-only builder refuses a longer window**
 
 In `src/naics_embedder/panels/text_only.py`, replace:
 
@@ -3269,7 +3271,7 @@ with:
 The `tools text-only-table` command needs no edit: it already reports a `ValueError` from the
 builder and exits with code 1, as its new test checks for a `--backbone` without a window.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_input_window.py tests/unit/test_config.py tests/unit/test_tokenization_cache.py tests/unit/test_text_only.py tests/unit/test_cli_commands.py tests/unit/test_datamodule.py -q`
 Expected: all pass.
@@ -3277,12 +3279,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1671 passed, 1 skipped` (14 new tests).
 
-- [ ] **Step 7: Check the formatting**
+- [x] **Step 7: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/utils/input_window.py src/naics_embedder/utils/config.py src/naics_embedder/text_model/dataloader/tokenization_cache.py src/naics_embedder/panels/text_only.py tests/unit/test_input_window.py tests/unit/test_config.py tests/unit/test_tokenization_cache.py tests/unit/test_text_only.py tests/unit/test_cli_commands.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/naics_embedder/utils/input_window.py \
@@ -3330,7 +3332,7 @@ D*-like distance, which only the label identifies.
   - `supervision.margins.structural_margins` and `structurally_eligible` keep their signatures
     and read cross-sector from `negative_relation_id`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_data_triplets.py`, replace:
 
@@ -3446,13 +3448,13 @@ with:
         ((10.0, 99), (2.0, 2), (15.0, 10.0)),
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_data_triplets.py tests/unit/test_structural_margins.py -q`
 Expected: FAIL. `_positive_pairs()` is missing its `max_distance` argument, and the new
 margins case gives `(97.0, 8.0)`.
 
-- [ ] **Step 3: Key every cross-sector test on the label**
+- [x] **Step 3: Key every cross-sector test on the label**
 
 In `src/naics_embedder/supervision/schema.py`, replace:
 
@@ -3697,7 +3699,7 @@ with:
     cross_sector = negative_relation_id.eq(CROSS_SECTOR_RELATION_ID)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_data_triplets.py tests/unit/test_structural_margins.py tests/unit/test_data_relations.py tests/unit/test_negative_selection.py -q`
 Expected: all pass.
@@ -3705,12 +3707,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1673 passed, 1 skipped` (2 new tests).
 
-- [ ] **Step 5: Check the formatting**
+- [x] **Step 5: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/supervision/schema.py src/naics_embedder/data/compute_relations.py src/naics_embedder/data/create_triplets.py src/naics_embedder/supervision/margins.py tests/unit/test_data_triplets.py tests/unit/test_structural_margins.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/schema.py \
@@ -3793,7 +3795,7 @@ D* of its codes: 2 between the three `1111xx` siblings and 10 across sectors.
     `LINEAL_ADJUSTED_DISTANCE_MARGIN` and `LINEAL_DISTANCE_DELTA` are removed.
   - `compute_structural_distances(input_parquet, cfg)` keeps its signature and columns.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Point every test at the new contract. `test_supervision_artifacts.py` is left out on purpose: it
 names v2 as the *wrong* version, which the next edit handles.
@@ -4496,7 +4498,7 @@ with:
     assert spy.structural_distances == [10.0, 2.0, 10.0]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_data_distances.py tests/unit/test_data_triplets.py tests/unit/test_structural_margins.py tests/unit/test_supervision_artifacts.py tests/unit/test_supervision_index.py tests/unit/test_streaming_sampling.py -q`
 Expected: FAIL. Among others: `test_values_follow_the_tree` (0.5 where 1.0 is expected), the new
@@ -4504,7 +4506,7 @@ Expected: FAIL. Among others: `test_values_follow_the_tree` (0.5 where 1.0 is ex
 margin 10 where the D* difference is expected), and every test on the `validated_bundle` fixture,
 which now expects contract `stage3-supervision-v2`.
 
-- [ ] **Step 3: Compute D* for every canonical pair**
+- [x] **Step 3: Compute D* for every canonical pair**
 
 Overwrite `src/naics_embedder/data/compute_distances.py` with:
 
@@ -4577,7 +4579,7 @@ def compute_structural_distances(input_parquet: str, cfg: DistancesConfig) -> pl
     ).sort('idx_i', 'idx_j')
 ```
 
-- [ ] **Step 4: Validate every stored distance**
+- [x] **Step 4: Validate every stored distance**
 
 In `src/naics_embedder/supervision/artifacts.py`, replace:
 
@@ -4713,7 +4715,7 @@ with:
         'distance_triangle_inequality': True,
 ```
 
-- [ ] **Step 5: Margins for integer D***
+- [x] **Step 5: Margins for integer D***
 
 In `src/naics_embedder/supervision/schema.py`, replace:
 
@@ -4914,7 +4916,7 @@ with:
         ).otherwise(distance_delta),
 ```
 
-- [ ] **Step 6: Move the contract to v2**
+- [x] **Step 6: Move the contract to v2**
 
 `supervision/artifacts.py` keeps its one mention of v1, a comment that Task 8 removes, so it is
 not in this list.
@@ -4924,7 +4926,7 @@ Run: `sed -i '' 's/stage3-supervision-v1/stage3-supervision-v2/g' src/naics_embe
 Run: `grep -rn 'stage3-supervision-v1' src conf`
 Expected: one line, the comment in `src/naics_embedder/supervision/artifacts.py`.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_data_distances.py tests/unit/test_data_triplets.py tests/unit/test_structural_margins.py tests/unit/test_supervision_artifacts.py tests/unit/test_supervision_index.py tests/unit/test_streaming_sampling.py tests/unit/test_hard_negative_mining.py tests/unit/test_hgcn_streaming_dataset.py tests/integration/test_stage3_training_step.py -q`
 Expected: all pass.
@@ -4933,12 +4935,12 @@ Run: `uv run pytest -n auto -q`
 Expected: `1653 passed, 1 skipped`. The networkx helper tests go with the helpers (34 tests in
 `test_data_distances.py` become 6), and the validator and margins add 8.
 
-- [ ] **Step 8: Check the formatting**
+- [x] **Step 8: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/data/compute_distances.py src/naics_embedder/supervision/artifacts.py src/naics_embedder/data/supervision_bundle.py src/naics_embedder/supervision/schema.py src/naics_embedder/supervision/margins.py src/naics_embedder/data/create_triplets.py src/naics_embedder/supervision/mode.py src/naics_embedder/utils/config.py src/naics_embedder/cli/commands/data.py tests/fixtures/supervision.py tests/unit/test_data_distances.py tests/unit/test_data_triplets.py tests/unit/test_structural_margins.py tests/unit/test_supervision_artifacts.py tests/unit/test_supervision_index.py tests/unit/test_hard_negative_mining.py tests/unit/test_hgcn_streaming_dataset.py tests/unit/test_streaming_sampling.py tests/integration/test_stage3_training_step.py tests/unit/test_checkpoint_contract.py tests/unit/test_cli_commands.py tests/unit/test_cli_training.py tests/unit/test_config.py tests/unit/test_streaming_dataset.py tests/unit/test_supervision_schema.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/naics_embedder/data/compute_distances.py \
@@ -5003,7 +5005,7 @@ exclusion, and anchor 1's through code 3, which excludes it.
   - The manifest's `validation_results` gain `no_exclusion_negatives`.
   - `_cap_cross_sector` caps every cross-sector negative, since no exclusion is left to exempt.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_data_triplets.py`, replace:
 
@@ -5291,14 +5293,14 @@ with:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_data_triplets.py tests/unit/test_supervision_artifacts.py tests/unit/test_hgcn_streaming_dataset.py -q`
 Expected: FAIL. The generator still emits the two exclusion triples: `_triples` returns five,
 `test_an_exclusion_negative_is_fatal` and the rehashed-exclusion loader test raise nothing, and
 the manifest has no `no_exclusion_negatives`.
 
-- [ ] **Step 3: Drop exclusions from the generated negatives**
+- [x] **Step 3: Drop exclusions from the generated negatives**
 
 In `src/naics_embedder/data/create_triplets.py`, replace:
 
@@ -5386,7 +5388,7 @@ with:
         cross_sector_cap: Maximum cross-sector negatives per (anchor, positive).
 ```
 
-- [ ] **Step 4: Refuse an exclusion negative at load and record the check**
+- [x] **Step 4: Refuse an exclusion negative at load and record the check**
 
 In `src/naics_embedder/supervision/artifacts.py`, replace:
 
@@ -5455,7 +5457,7 @@ with:
                 'training_exclusion_derivation': True,
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_data_triplets.py tests/unit/test_supervision_artifacts.py tests/unit/test_hgcn_streaming_dataset.py tests/unit/test_structural_margins.py -q`
 Expected: all pass.
@@ -5463,12 +5465,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1655 passed, 1 skipped` (2 new tests).
 
-- [ ] **Step 6: Check the formatting**
+- [x] **Step 6: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/data/create_triplets.py src/naics_embedder/supervision/artifacts.py src/naics_embedder/data/supervision_bundle.py tests/unit/test_data_triplets.py tests/unit/test_supervision_artifacts.py tests/unit/test_hgcn_streaming_dataset.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/data/create_triplets.py \
@@ -5535,7 +5537,7 @@ zero: Stage 7 deletes the quota machinery with the rest of the sampling rules.
   - `NAICSContrastiveModel.__init__` no longer accepts `selection_seed`.
   - `stable_hash` stays in `supervision/selection.py`; the candidate-pool shuffle still uses it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_negative_selection.py`, replace:
 
@@ -6501,7 +6503,7 @@ with:
     assert rank1[3] == [False, False, False]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_negative_selection.py tests/unit/test_streaming_sampling.py tests/unit/test_hard_negative_mining.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/unit/test_checkpoint_contract.py tests/unit/test_config.py tests/integration/test_stage3_training_step.py tests/integration/test_distributed_supervision.py -q`
 Expected: FAIL. `select` still requires `epoch` and `global_seed`, so every coordinator test
@@ -6509,7 +6511,7 @@ raises `TypeError`; the pool still carries the anchor's exclusions; the quota st
 validation still scores the exclusion; the model still takes `selection_seed`; and the mining
 contract is still `negative-selection-v1`.
 
-- [ ] **Step 3: Select without a reserved exclusion**
+- [x] **Step 3: Select without a reserved exclusion**
 
 In `src/naics_embedder/supervision/selection.py`, replace:
 
@@ -6700,7 +6702,7 @@ with:
 MINING_CONTRACT_VERSION = 'negative-selection-v2'
 ```
 
-- [ ] **Step 4: Build pools without exclusions**
+- [x] **Step 4: Build pools without exclusions**
 
 In `src/naics_embedder/text_model/dataloader/streaming_dataset.py`, replace:
 
@@ -6882,7 +6884,7 @@ with:
     selection admits one.
 ```
 
-- [ ] **Step 5: Drop exclusions from the model's eligibility**
+- [x] **Step 5: Drop exclusions from the model's eligibility**
 
 In `src/naics_embedder/text_model/mixins/curriculum.py`, replace:
 
@@ -7055,7 +7057,7 @@ with:
         checkpoint_contract=runtime_contract,
 ```
 
-- [ ] **Step 6: Reword what still describes the quota**
+- [x] **Step 6: Reword what still describes the quota**
 
 In `src/naics_embedder/supervision/margins.py`, replace:
 
@@ -7133,7 +7135,7 @@ Run: `grep -rn 'exclusion quota\|EXCLUSION_QUOTA\|selection_seed\|exempt' src/na
 Expected: two lines, both left for Stage 7: `supervision/schema.py`'s `EXCLUSION_QUOTA = 1` and
 `text_model/mixins/logging.py`'s `quota_selections` counter.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_negative_selection.py tests/unit/test_streaming_sampling.py tests/unit/test_hard_negative_mining.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/unit/test_checkpoint_contract.py tests/unit/test_config.py tests/integration/test_stage3_training_step.py tests/integration/test_distributed_supervision.py -q`
 Expected: all pass.
@@ -7141,12 +7143,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1658 passed, 1 skipped`. Five rotation and quota tests go, and eight tests are new.
 
-- [ ] **Step 8: Check the formatting**
+- [x] **Step 8: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/supervision/selection.py src/naics_embedder/supervision/schema.py src/naics_embedder/text_model/dataloader/streaming_dataset.py src/naics_embedder/text_model/mixins/curriculum.py src/naics_embedder/text_model/mixins/logging.py src/naics_embedder/text_model/mixins/validation.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/cli/commands/training.py src/naics_embedder/supervision/margins.py src/naics_embedder/utils/config.py src/naics_embedder/text_model/dataloader/difficulty_sampler.py src/naics_embedder/text_model/loss.py tests/unit/test_negative_selection.py tests/unit/test_streaming_sampling.py tests/unit/test_hard_negative_mining.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/unit/test_checkpoint_contract.py tests/unit/test_config.py tests/integration/test_stage3_training_step.py tests/integration/test_distributed_supervision.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/selection.py \
@@ -7222,7 +7224,7 @@ codebook; only these pairs lose their role as positives.
     `generate_supervision_bundle_from_frames` needs the `unary_pair` column.
   - `enumerate_positives` never returns a unary pair in either direction.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/supervision.py`, replace:
 
@@ -7469,14 +7471,14 @@ def test_parent_retrieval_skips_the_unary_pairs():
     assert metrics['parent_retrieval@1'] == pytest.approx(1.0)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_data_triplets.py tests/unit/test_supervision_artifacts.py tests/unit/test_positive_sampling.py tests/unit/test_hierarchy_metrics.py -q`
 Expected: FAIL. The generator and the bundle ignore `unary_pair`, so the flagged triples stay, no
 wrong flag is refused, the hierarchy bundle has no `unary_pair` column, the sampler still offers
 the three unary pairs, and parent retrieval scores 2/3.
 
-- [ ] **Step 3: Flag and check the unary pairs in the pair facts**
+- [x] **Step 3: Flag and check the unary pairs in the pair facts**
 
 In `src/naics_embedder/supervision/schema.py`, replace:
 
@@ -7736,7 +7738,7 @@ with:
                 'no_unary_positives': True,
 ```
 
-- [ ] **Step 4: Drop unary positives from generation and loading**
+- [x] **Step 4: Drop unary positives from generation and loading**
 
 In `src/naics_embedder/data/create_triplets.py`, replace:
 
@@ -7879,7 +7881,7 @@ with:
         raise ValueError('a training positive is a unary pair')
 ```
 
-- [ ] **Step 5: Keep unary pairs out of sampled positives and parent retrieval**
+- [x] **Step 5: Keep unary pairs out of sampled positives and parent retrieval**
 
 In `src/naics_embedder/data/positive_sampling.py`, replace:
 
@@ -7974,7 +7976,7 @@ with:
     ]
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_data_triplets.py tests/unit/test_supervision_artifacts.py tests/unit/test_positive_sampling.py tests/unit/test_hierarchy_metrics.py -q`
 Expected: all pass.
@@ -7982,12 +7984,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1665 passed, 1 skipped` (7 new tests).
 
-- [ ] **Step 7: Check the formatting**
+- [x] **Step 7: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/supervision/schema.py src/naics_embedder/supervision/artifacts.py src/naics_embedder/data/supervision_bundle.py src/naics_embedder/data/create_triplets.py src/naics_embedder/data/positive_sampling.py src/naics_embedder/metrics/hierarchy_structure.py tests/fixtures/supervision.py tests/unit/test_data_triplets.py tests/unit/test_supervision_artifacts.py tests/unit/test_positive_sampling.py tests/unit/test_hierarchy_metrics.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/schema.py \
@@ -8075,7 +8077,7 @@ redirections. `generated_bundle_with_roles` goes, since every bundle now carries
     - `hierarchy_manifest` is the production-path hierarchy bundle, with an empty role table.
     The hierarchy descriptions gain `description`, `examples` and `excluded` columns.
 
-- [ ] **Step 1: Share the bundle inputs in the fixtures**
+- [x] **Step 1: Share the bundle inputs in the fixtures**
 
 In `tests/fixtures/supervision.py`, replace:
 
@@ -8718,7 +8720,7 @@ def test_from_bundle_reads_the_member_and_the_codebook(generated_bundle, tmp_pat
     assert panel.validation_queries('check')['entry_id'].to_list() == [1]
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 In `tests/unit/test_supervision_artifacts.py`, replace:
 
@@ -9297,7 +9299,7 @@ with:
         assert cfg.redirections_parquet == './data/naics_redirections.parquet'
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py -q`
 Expected: `Interrupted: 1 error during collection`, with `ImportError: cannot import name
@@ -9309,7 +9311,7 @@ Expected: `1 failed, 77 passed, 1 error`.
 - The hierarchy test errors at setup in `hierarchy_manifest`: `redirections_parquet`, "Extra
   inputs are not permitted".
 
-- [ ] **Step 4: Move the redirection constants and add the member validators**
+- [x] **Step 4: Move the redirection constants and add the member validators**
 
 In `src/naics_embedder/supervision/schema.py`, replace:
 
@@ -9601,7 +9603,7 @@ from naics_embedder.utils.naics_hierarchy import code_lineage
 logger = logging.getLogger(__name__)
 ```
 
-- [ ] **Step 5: Build and require both members**
+- [x] **Step 5: Build and require both members**
 
 In `src/naics_embedder/data/supervision_bundle.py`, replace:
 
@@ -10040,7 +10042,7 @@ index_roles_parquet: ./data/naics_index_roles.parquet
 redirections_parquet: ./data/naics_redirections.parquet
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py tests/unit/test_config.py tests/unit/test_structural_margins.py tests/unit/test_redirections.py tests/unit/test_outcome_panel.py tests/unit/test_graph_preprocessing.py -q`
 Expected: all pass.
@@ -10048,12 +10050,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1680 passed, 1 skipped` (16 new tests, one removed).
 
-- [ ] **Step 7: Check the formatting**
+- [x] **Step 7: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/supervision/artifacts.py src/naics_embedder/supervision/schema.py src/naics_embedder/data/redirections.py src/naics_embedder/data/supervision_bundle.py src/naics_embedder/utils/config.py src/naics_embedder/panels/outcome.py tests/fixtures/supervision.py tests/unit/test_supervision_artifacts.py tests/unit/test_outcome_panel.py tests/unit/test_graph_preprocessing.py tests/unit/test_streaming_sampling.py tests/unit/test_hard_negative_mining.py tests/unit/test_utils_validation.py tests/unit/test_datamodule.py tests/unit/test_structural_margins.py tests/unit/test_config.py tests/integration/test_stage3_training_step.py tests/integration/test_distributed_supervision.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/artifacts.py \
@@ -10139,7 +10141,7 @@ contract message, not a missing-field error.
     - `hierarchy_manifest`, now built from `hierarchy_build_config` with `count_words`;
     - `FIVE_CODE_INPUT_WINDOW`, the five-code bundle's record, as a dict.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/supervision.py`, replace:
 
@@ -10567,14 +10569,14 @@ with:
             SupervisionBuildConfig(backbone='bert-base-uncased')
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_supervision_schema.py -q`
 Expected: the run stops before collecting anything, because the shared fixtures cannot import
 the record: `ImportError: Error importing plugin "tests.fixtures.supervision": cannot import
 name 'InputWindowRecord' from 'naics_embedder.supervision.schema'`.
 
-- [ ] **Step 3: Add the record to the manifest**
+- [x] **Step 3: Add the record to the manifest**
 
 In `src/naics_embedder/supervision/schema.py`, replace:
 
@@ -10700,7 +10702,7 @@ with:
     manifest = SupervisionManifest.model_validate(raw)
 ```
 
-- [ ] **Step 4: Count the texts beyond the window at build time**
+- [x] **Step 4: Count the texts beyond the window at build time**
 
 In `src/naics_embedder/data/supervision_bundle.py`, replace:
 
@@ -11034,7 +11036,7 @@ redirections_parquet: ./data/naics_redirections.parquet
 backbone: sentence-transformers/all-MiniLM-L6-v2
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_supervision_artifacts.py tests/unit/test_supervision_schema.py tests/unit/test_config.py -q`
 Expected: all pass.
@@ -11042,12 +11044,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1691 passed, 1 skipped` (11 new tests).
 
-- [ ] **Step 6: Check the formatting**
+- [x] **Step 6: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/supervision/schema.py src/naics_embedder/supervision/artifacts.py src/naics_embedder/data/supervision_bundle.py src/naics_embedder/utils/config.py tests/fixtures/supervision.py tests/unit/test_supervision_artifacts.py tests/unit/test_supervision_schema.py tests/unit/test_config.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/schema.py \
@@ -11096,7 +11098,7 @@ descriptions, index roles and redirection table, plus the backbone's cached toke
   - `naics-embedder data relations|distances|triplets` print a notice naming
     `naics-embedder data supervision` and exit with status 1 without building.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_config.py`, replace:
 
@@ -11213,14 +11215,14 @@ with:
         cfg.supervision.manifest_path = str(tmp_path / 'bundle' / 'manifest.json')
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_config.py tests/unit/test_cli_commands.py -q`
 Expected: `8 failed, 102 passed`. The four `test_repaired_config_rejects_a_legacy_streaming_path` cases and
 `test_overrides_cannot_point_repaired_training_at_a_legacy_path` fail with `DID NOT RAISE`. The
 three `test_legacy_stage_commands_build_nothing` cases fail on `assert 0 == 1`.
 
-- [ ] **Step 3: Reject a legacy path in repaired mode**
+- [x] **Step 3: Reject a legacy path in repaired mode**
 
 In `src/naics_embedder/utils/config.py`, replace:
 
@@ -11277,7 +11279,7 @@ with:
         return self
 ```
 
-- [ ] **Step 4: Make the deprecated commands build nothing**
+- [x] **Step 4: Make the deprecated commands build nothing**
 
 In `src/naics_embedder/cli/commands/data.py`, replace:
 
@@ -11405,7 +11407,7 @@ with:
         printed.
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_config.py tests/unit/test_cli_commands.py tests/unit/test_utils_validation.py tests/unit/test_cli_training.py -q`
 Expected: all pass.
@@ -11413,12 +11415,12 @@ Expected: all pass.
 Run: `uv run pytest -n auto -q`
 Expected: `1696 passed, 1 skipped` (5 new tests; the deprecated-command test is rewritten).
 
-- [ ] **Step 6: Check the formatting**
+- [x] **Step 6: Check the formatting**
 
 Run: `./scripts/format_code.sh --check src/naics_embedder/utils/config.py src/naics_embedder/cli/commands/data.py tests/unit/test_config.py tests/unit/test_cli_commands.py tests/unit/test_cli_training.py`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/utils/config.py \
@@ -11452,7 +11454,7 @@ PR CI never runs the strict docs build, so this task runs it.
 - Produces: documentation, one docstring and one field description. No behavior changes, so the
   full suite count stays at 1696.
 
-- [ ] **Step 1: Add the API pages and their navigation**
+- [x] **Step 1: Add the API pages and their navigation**
 
 Create `docs/api/redirections.md` with:
 
@@ -11517,7 +11519,7 @@ with:
           - NAICS Hierarchy: api/naics_hierarchy.md
 ```
 
-- [ ] **Step 2: Update the training guide**
+- [x] **Step 2: Update the training guide**
 
 In `docs/text_training.md`, replace:
 
@@ -11780,7 +11782,7 @@ with:
   - Difficulty proposals over the pool.
 ```
 
-- [ ] **Step 3: Update the other pages, CLAUDE.md and two config comments**
+- [x] **Step 3: Update the other pages, CLAUDE.md and two config comments**
 
 In `docs/usage.md`, replace:
 
@@ -12061,7 +12063,7 @@ with:
     # An explicit exclusion is never a negative: pools and selection leave it out (Req 8(c))
 ```
 
-- [ ] **Step 4: Build the docs and check for stale statements**
+- [x] **Step 4: Build the docs and check for stale statements**
 
 Run: `uv run mkdocs build --strict -d /tmp/stage5-docs-site`
 Expected: exit 0 with no `WARNING` lines.
@@ -12077,7 +12079,7 @@ Expected: `Clean: no lint issues and no formatting changes.`
 Run: `uv run pytest -n auto -q`
 Expected: `1696 passed, 1 skipped`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/api/redirections.md \
@@ -12116,7 +12118,7 @@ a number differs from **Expected real-data results**, or a command fails a check
   (`utils/naics_hierarchy.py`).
 - Produces: the real bundle, whose ID Plan completion quotes, and the finding.
 
-- [ ] **Step 1: Check the workspace**
+- [x] **Step 1: Check the workspace**
 
 Run: `pwd`
 Expected: `/Users/lowell/Projects/naics-embedder/.claude/worktrees/plan-7-supervision-target-and-text`.
@@ -12129,7 +12131,7 @@ directory that tests leave is fine, and so is `ls` reporting that `data` does no
 
 Run: `mkdir -p /tmp/stage5-supervision-c3a0baa0`
 
-- [ ] **Step 2: Preprocess the Census files**
+- [x] **Step 2: Preprocess the Census files**
 
 Run: `COLUMNS=200 uv run naics-embedder data preprocess --source-dir ~/Downloads/Data`
 Expected: about 25 s, ending `Preprocessing complete.` Among the lines it prints:
@@ -12170,7 +12172,7 @@ b5a1221b6a8a3413a9d8126b7e40b5c04cebbd2f900ae2dc62801dda58c993b3  data/naics_ind
 Two independent runs produced these bytes while this plan was written: under the pinned
 versions the three files are deterministic.
 
-- [ ] **Step 3: Build the bundle**
+- [x] **Step 3: Build the bundle**
 
 Run: `COLUMNS=200 HF_HUB_OFFLINE=1 uv run naics-embedder data supervision`
 Expected: about 50 s, at a peak of about 7 GB of memory. It prints
@@ -12203,7 +12205,7 @@ Supervision manifest: data/supervision/stage3-supervision-v2/<bundle-id>/manifes
 
 `<bundle-id>` is a fresh UUID. Note it: the finding and Plan completion quote it.
 
-- [ ] **Step 4: Recount the bundle**
+- [x] **Step 4: Recount the bundle**
 
 Create `/tmp/stage5-supervision-c3a0baa0/check_bundle.py` with the Write tool:
 
@@ -12346,14 +12348,16 @@ window: {'backbone': 'sentence-transformers/all-MiniLM-L6-v2', 'window': 128, 'c
 thresholds: {'phase1_max_distance': 7.0, 'phase2_max_distance': 9.0, 'phase3_max_distance': 10.0, 'phase4_max_distance': 10.0}
 ```
 
-- [ ] **Step 5: Compare with Expected real-data results**
+- [x] **Step 5: Compare with Expected real-data results**
 
 Compare every number of Steps 2–4 with **Expected real-data results** and with the blocks above.
 They must match exactly: the computation is deterministic under the pinned versions. If any
 differs, stop and ask. Keep the bundle, and keep the scratch directory until Final verification
 Step 8.
 
-- [ ] **Step 6: Write the finding**
+- [x] **Step 6: Write the finding**
+
+> Deviation: the bundle ID lengthened two of the finding's lines past 100 columns, the opening list's bundle bullet and section 6's "The bundle." bullet; both were reflowed.
 
 Create `specs/findings/supervision-target-and-text.md` with the content below. Replace every
 `<bundle-id>` with the ID Step 3 printed, and `YYYY-MM-DD` with today's date.
@@ -12545,7 +12549,7 @@ Task 14 script recounts it.
 Run: `grep -n '<bundle-id>\|YYYY-MM-DD' specs/findings/supervision-target-and-text.md`
 Expected: no output.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add specs/findings/supervision-target-and-text.md
@@ -12554,12 +12558,16 @@ git commit -m "docs(findings): record Stage 5's real-data bundle"
 
 ## Final verification (controller, inline)
 
-- [ ] **Step 1: Full suite on Python 3.12**
+- [x] **Step 1: Full suite on Python 3.12**
+
+> Deviation: 1697 passed, 1 skipped: the final review's fix (025de2a) added `test_missing_legacy_artifacts_name_no_command_that_cannot_build_them`.
 
 Run: `uv run pytest -n auto -q`
 Expected: `1696 passed, 1 skipped`.
 
-- [ ] **Step 2: Full suite on Python 3.10, CI's other leg**
+- [x] **Step 2: Full suite on Python 3.10, CI's other leg**
+
+> Deviation: 1697 passed, 1 skipped, as in Step 1. The only warnings 3.10 adds are the spurious matmul RuntimeWarnings, at 15 locations in `panels/ridge.py` and `decision/resampling.py`.
 
 Run: `UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310-c3a0baa0 uv run pytest -n auto -q`
 Expected: `1696 passed, 1 skipped`, the same as Step 1. The warnings count runs far higher than
@@ -12568,19 +12576,21 @@ matmul" RuntimeWarnings with Accelerate on this Mac. CI's Linux wheels are unaff
 
 Run: `rm -rf /tmp/naics-py310-c3a0baa0`
 
-- [ ] **Step 3: The CI lint job**
+- [x] **Step 3: The CI lint job**
 
 Run: `./scripts/format_code.sh --check --all`
 Expected: exit 0 with `Clean: no lint issues and no formatting changes.`
 
-- [ ] **Step 4: The docs build**
+- [x] **Step 4: The docs build**
 
 Run: `uv run mkdocs build --strict -q -d /tmp/stage5-docs-c3a0baa0`, then
 `rm -rf /tmp/stage5-docs-c3a0baa0`
 Expected: no output and exit 0. PR CI never runs the docs workflow, so this build stands in for
 it. After the merge, check the first docs run on `main`.
 
-- [ ] **Step 5: The branch carries only this plan's commits**
+- [x] **Step 5: The branch carries only this plan's commits**
+
+> Deviation: 87 paths: the review fix (025de2a) adds `docs/quickstart.md` and `src/naics_embedder/utils/validation.py`. The grep also prints `conf/graph.yaml:9`, a comment unchanged from origin/main.
 
 Run: `git log --oneline origin/main..HEAD`
 Expected, read bottom up, because `git log` prints the newest commit first:
@@ -12693,7 +12703,7 @@ conf/config.yaml:12:  manifest_path: null  # data supervision prints the exact i
 conf/graph.yaml:15:supervision_manifest_path: null
 ```
 
-- [ ] **Step 6: The roadmap's Stage 5 Exit, outcome by outcome**
+- [x] **Step 6: The roadmap's Stage 5 Exit, outcome by outcome**
 
 Check each row against the evidence that backs it. Test names are given as `file::test`, and a
 `::test` alone continues the file before it.
@@ -12713,13 +12723,13 @@ Check each row against the evidence that backs it. Test names are given as `file
 Run: `uv run pytest -n auto -q tests/unit/test_naics_hierarchy.py tests/unit/test_diagnostics.py tests/unit/test_data_distances.py tests/unit/test_supervision_artifacts.py tests/unit/test_redirections.py tests/unit/test_data_download.py tests/unit/test_index_roles.py tests/unit/test_data_triplets.py tests/unit/test_tokenization_cache.py tests/unit/test_positive_sampling.py tests/unit/test_hierarchy_metrics.py tests/unit/test_input_window.py tests/unit/test_config.py tests/unit/test_text_only.py tests/unit/test_cli_commands.py tests/unit/test_hard_negative_mining.py tests/unit/test_negative_selection.py tests/unit/test_streaming_sampling.py tests/unit/test_naics_model.py tests/integration/test_stage3_training_step.py tests/unit/test_checkpoint_contract.py`
 Expected: `566 passed`.
 
-- [ ] **Step 7: No panel was read and no selection log was written**
+- [x] **Step 7: No panel was read and no selection log was written**
 
 Run: `uv run python -c "import glob; print(sorted(glob.glob('logs/*.jsonl') + glob.glob('/tmp/stage5-supervision-c3a0baa0/*.jsonl')))"`
 Expected: `[]`. Tests write their selection logs under pytest's temporary directories, and Task 14
 reads no panel. If a `.jsonl` file appears, stop and ask.
 
-- [ ] **Step 8: Remove the scratch directory**
+- [x] **Step 8: Remove the scratch directory**
 
 Run: `rm -rf /tmp/stage5-supervision-c3a0baa0`
 
@@ -12736,7 +12746,9 @@ one is, hold both edits and hand your human partner the exact text below.
 In every step below, replace `<bundle-id>` with the ID Task 14 Step 3 printed, and `YYYY-MM-DD`
 with the completion date.
 
-- [ ] **Step 1: Tick the roadmap stage and add the rollout note and the stamp**
+- [x] **Step 1: Tick the roadmap stage and add the rollout note and the stamp**
+
+> Deviation: the bundle ID lengthened the rollout note's third line past 100 columns; the note was reflowed through its withheld-rows sentence.
 
 In `specs/naics-embedding-roadmap.md`, replace:
 
@@ -12788,7 +12800,9 @@ with:
 - [ ] Stage 6: Shared encoder and low-dimensional projection
 ```
 
-- [ ] **Step 2: Re-validate the later stages against what shipped**
+- [x] **Step 2: Re-validate the later stages against what shipped**
+
+> Deviation: the bundle ID lengthened one line of `specs/lambda-remote-workflow.md` past 100 columns; it was reflowed.
 
 Four later entries consume what Stage 5 shipped in ways their text does not yet say. Each edit's
 Replace text occurs exactly once in the roadmap.
@@ -12918,7 +12932,9 @@ Keep `<bundle_id>`, with an underscore, as written: it is the path's placeholder
 
 Commit these edits with the plan markup in Step 3's commit.
 
-- [ ] **Step 3: Mark up this plan and resolve the gate**
+- [x] **Step 3: Mark up this plan and resolve the gate**
+
+> Deviation: the gate asked two batched questions. The user kept the threshold item open for Stage 11, deferred the final review's non-blocking findings 4–9 as six entries and dropped finding 3 (the loader's triangle loop: 1.4 s per load, and exact equality with D* implies it); finding 10 found no overlap. The bundle ID lengthened the entry-text item's note past 100 columns; it was reflowed. The backlog stands at 19 open, under the triage threshold.
 
 Follow the protocol:
 
@@ -13061,7 +13077,7 @@ git add specs/naics-embedding-roadmap.md \
 git commit -m "docs(roadmap): complete Stage 5 and re-validate Stages 6, 7, 9 and 10"
 ```
 
-- [ ] **Step 4: Retire the plan**
+- [x] **Step 4: Retire the plan**
 
 ```bash
 git mv specs/plans/7-supervision-target-and-text.md specs/plans/completed/7-supervision-target-and-text.md
@@ -13071,7 +13087,7 @@ git commit -m "chore(specs): retire plan 7"
 This plan has no relative links to re-point, and no spec file retires with it: Stage 5 has no
 stage spec.
 
-- [ ] **Step 5: Hand over the switch**
+- [x] **Step 5: Hand over the switch**
 
 User decision 1 makes the switch at merge, and the edits below are your human partner's, on this
 machine, after the merge. Do not run them yourself. Give your human partner this step's text,
@@ -13136,7 +13152,7 @@ done.
    bundle 18403d29 (v1) stays on disk, but main no longer loads it; the "config" and "graph
    config" commits that set the path stay local and are never pushed.
 
-- [ ] **Step 6: Integrate**
+- [x] **Step 6: Integrate**
 
 Hand over to finishing-a-development-branch. Before opening any PR, check two things:
 

@@ -17,19 +17,23 @@
       vectorized coordinator (reusing `canonical_occurrence_mask`), checked by a randomized
       equivalence test against the current coordinator, brings world-8 selection under 20 ms.
       Revisit if: multi-GPU training with mining is run.
-- [ ] Review M6: in repaired mode, explicitly set legacy
+- [x] Review M6: in repaired mode, explicitly set legacy
       `data_loader.streaming.{distances,distance_matrix,relations,triplets}_parquet` values are
       ignored rather than rejected (spec §12). Full enforcement needs `Config.override`
       (src/naics_embedder/utils/config.py) to preserve fields-set, because it re-validates a full
       `model_dump`. A cheap interim: reject (or warn) when one of those paths differs from its
       default in repaired mode. Size: quick-fix. Done when: a repaired config that sets any of
       those paths to a non-default value fails validation with a migration message.
-- [ ] Review M8: `data relations`, `data distances`, and `data triplets` each build a complete
+      → done in plan 7 (Task 12: `validate_supervision_contract` rejects a legacy streaming path
+      set to anything but its default, with a migration message, also after `Config.override`).
+- [x] Review M8: `data relations`, `data distances`, and `data triplets` each build a complete
       bundle (src/naics_embedder/cli/commands/data.py), so the old three-step sequence leaves
       three bundles; the per-stage stats PDFs were removed with the legacy wrappers (D8).
       Size: quick-fix. Revisit if: the stats reports are still wanted (restore as one
       bundle-level report) or users keep running the legacy sequence (make those commands print
       the notice and exit without building).
+      → done in plan 7 (Task 12: each prints the migration notice and exits with status 1
+      without building).
 - [ ] Review M9 (pre-existing): `_update_pseudo_labels`
       (src/naics_embedder/text_model/mixins/curriculum.py) wraps clustering in a broad
       `except Exception` that logs and continues with stale pseudo-labels. Size: quick-fix.
@@ -52,6 +56,8 @@
       legacy. See `compute_difficulty_thresholds` in
       src/naics_embedder/graph_model/curriculum/preprocess_curriculum.py. Size: design.
       Revisit if: HGCN curriculum phases are tuned or thresholds gate training.
+      Note, plan 7: under D* the thresholds are 7, 9 and 10, so they now gate HGCN's phases 1
+      and 2. Still open: roadmap Stage 11 removes them.
 - [x] Pre-existing: tests/unit/test_data_download.py::test_get_descriptions_filters_cross_references
       fails on main and on this branch (cause not investigated; outside the Stage-3 scope).
       Size: quick-fix. Done when: the test passes.
@@ -82,14 +88,16 @@
       document the two keys as frozen with the table. Size: quick-fix. Done when: every
       index-roles check uses the threshold and floor the table was drawn with, or the config
       documents them as frozen.
-- [ ] Review Minor: when a bundle carries the `index_roles` member, `load_validated_bundle`
+- [x] Review Minor: when a bundle carries the `index_roles` member, `load_validated_bundle`
       (src/naics_embedder/supervision/artifacts.py) re-validates the table but does not require
       the build's `index_roles_one_role_per_entry`, `index_roles_examples_channel` and
       `index_roles_no_leakage` entries in `validation_results`, and it cannot re-run the leakage
       check itself. Deferred to roadmap Stage 5, whose contract version makes the member
       required. Size: quick-fix. Done when: the Stage 5 contract rejects a bundle whose
       `index_roles` member lacks those three validation results.
-- [ ] Review Minor: nothing pins the index-entry text until a bundle carries `index_roles`.
+      → done in plan 7 (Task 10: every bundle carries the member, and the loader requires all 27
+      validation results a build records, the three `index_roles_*` among them).
+- [x] Review Minor: nothing pins the index-entry text until a bundle carries `index_roles`.
       conf/data/index_roles.csv pins (entry_id, code, role) and `DownloadConfig.index_sha256`
       pins the index file, but `entry_id` and the text come from `pl.read_excel` (calamine via
       fastexcel) in `_read_xlsx_bytes` (src/naics_embedder/data/download_data.py). A parser
@@ -97,6 +105,8 @@
       entries that move to another code. Stage 5's bundle member carries the text under its
       artifact hash. Size: quick-fix. Revisit if: polars or fastexcel is upgraded in uv.lock
       before Stage 5 builds the first bundle with the `index_roles` member.
+      → done in plan 7 (Task 14's bundle `301cce28-539c-42ea-8781-496bbdcf511c` carries the
+      member, entry text included, under its artifact hash).
 - [ ] Review Minor: the scorer's `lorentz` distance (`lorentz_distances` in
       src/naics_embedder/panels/decoding.py) assumes curvature −1, while the text model's
       curvature is learnable. Roadmap Stage 6 must pass a curvature-aware callable to
@@ -235,3 +245,47 @@
       fixes the text stage's curvature at 1 with no parameter. Fix: acosh(clamp(−c⟨u,v⟩, 1))/√c,
       with a test at c ≠ 1. Size: quick-fix. Revisit if: any run sets curvature ≠ 1, or HGCN's
       layer curvature starts receiving gradient (Stages 10–11).
+
+## 7-supervision-target-and-text — 2026-09-26
+- [ ] Review Minor: the bundle build loads its tokenizer last. `generate_supervision_bundle`
+      (src/naics_embedder/data/supervision_bundle.py:885-890) loads the backbone's tokenizer
+      (`local_files_only=True`) only after distances, relations and pair facts are built, so a
+      missing Hugging Face cache fails late, with transformers' `OSError`. Deferred from plan 7's
+      final review: no bundle change, and bundle 301cce28 built. Fix: resolve the tokenizer
+      before any artifact and name the cache fix in the error. Size: quick-fix. Done when: a
+      build without the cached backbone fails before building its first artifact.
+- [ ] Review Minor: the bundle build does not re-check the text channels.
+      `verify_text_channels` (src/naics_embedder/data/download_data.py:636: no blanks, no
+      `[EMPTY]`, provenance present) runs only in preprocess, not on the descriptions a bundle
+      pins. Deferred from plan 7's final review. Fix: call it in
+      `generate_supervision_bundle_from_frames` as a raising check only, since a new key in
+      `REQUIRED_VALIDATION_RESULTS` would make bundle 301cce28 unloadable; the five-code fixtures
+      in tests/fixtures/supervision.py then need `description_source`. Size: quick-fix. Done
+      when: a build refuses descriptions that fail `verify_text_channels`.
+- [ ] Review Minor: nothing ties the bundle's backbone to training at runtime.
+      `manifest.input_window.backbone` (src/naics_embedder/supervision/schema.py:178) is never
+      compared with `model.base_model_name` or `data_loader.tokenization.tokenizer_name`; only
+      the static tests/unit/test_config.py::test_backbone_is_the_training_backbone links them.
+      Deferred from plan 7's final review: whether a bundle's recorded window binds the training
+      backbone is Stage 9's question, since Stage 9 trains several backbones. Size: design. Done
+      when: Stage 9's plan decides whether training refuses a backbone other than the bundle's,
+      and lands the check it chooses, verified against bundle 301cce28.
+- [ ] Review Minor: the loader checks where each activity phrase sits, not its value.
+      `validate_redirection_table` (src/naics_embedder/supervision/artifacts.py:439) would accept
+      a rehashed table with a wrong phrase. Deferred from plan 7's final review. Fix: move
+      `activity_phrase` (src/naics_embedder/data/redirections.py:62) to a torch-free module, since
+      `supervision/` must not import `data/`, and recompute each row's phrase, skipping withheld
+      rows. Size: quick-fix. Done when: the loader refuses a table whose phrase differs from its
+      text's, verified against bundle 301cce28, before Stage 7 trains on the phrases as queries.
+- [ ] Review Minor: a forced redraw of the role table skips the activity phrases.
+      src/naics_embedder/data/index_role_table.py:103 calls `verify_role_leakage` without
+      `extra_texts`, so `data roles --force` checks less than preprocess does. Nothing leaks:
+      preprocess withholds a leaking row or fails closed. Deferred from plan 7's final review.
+      Fix: pass the redirection table's activity phrases as `extra_texts`. Size: quick-fix.
+      Revisit if: the role table is redrawn with `data roles --force`.
+- [ ] Review Minor: the manifest omits the tokenizer revision behind its overflow counts.
+      `InputWindowRecord` (src/naics_embedder/supervision/schema.py:178) records the backbone
+      and window only. Bundle 301cce28's counts came from revision 1110a243, which
+      specs/findings/supervision-target-and-text.md records. Deferred from plan 7's final review
+      because the field changes bundle output. Size: quick-fix. Revisit if: a later stage
+      rebuilds the bundle or bumps its contract.

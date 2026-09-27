@@ -196,7 +196,7 @@ third resume checkpoint. Stage 4 builds both into its tooling, through which Sta
 | 5 | missing | `conf/config.yaml:5`, `conf/graph.yaml:100` (single seed); no seeds, pairing, interval, dominance or record code in `src/`, `tests/`, `conf/`, `scripts/`; `tools/embeddings_verification.py:33-35` (the fixed thresholds Req 5 replaces) | Only the mechanism to be replaced exists. The one retained run holds three metric records (`outputs/sadc_default/version_0/evaluation_metrics.json`). |
 | 6 | implemented-differently | `metrics/core.py:341` (`cophenetic_correlation`; Pearson at `:389`), `:508` (continuous NDCG grades); `metrics/structural_spearman.py:16` (global, unstratified); `metrics/hierarchy_structure.py:103-106` (parent retrieval over every pair, unary pairs included); `text_model/mixins/validation.py:406-408` (cophenetic on the progress bar); `tools/metrics_tools.py:104-106` (headline table); no sector AUC or within-sector statistic in `src/` | The statistics exist but are global, keep the cophenetic name, grade NDCG continuously, score unary pairs, and headline or gate. |
 | 7 | implemented-differently | `data/compute_distances.py:160-164` (−0.5 on lineal pairs), `:244` (`fill_null(99)`); `supervision/schema.py:36`, `:41`; `tests/unit/test_data_distances.py:280`, `:492` pin both; no information-content code anywhere | The collateral term matches D*; the half-step and the 99 constant do not; no virtual root. The prior spec kept 99 deliberately (`specs/completed/stage-3-supervision-integrity.md:117-118`) and scoped out hierarchy changes (`:42-48`). 87.9 % of the bundle's pair facts are 99. |
-| 8 | implemented-differently | `data/download_data.py:352`, `:366` (exclusion text exploded per referenced code, so repeated); `data/create_triplets.py:227-229` (exclusion pairs generated as `UNRELATED` negatives); `supervision/selection.py:184-192` (rotating one-slot exclusion quota); `text_model/mixins/curriculum.py:244` (exclusions exempt from eligibility); `text_model/loss.py:78` (always in the denominator); `supervision/index.py:102-104` (symmetric, so the nine lineal references act as negatives); `graph_model/hgcn.py:1173-1178` (edges from structural relations only) | (a) repeated, not once; (b) absent; (c) inverted for negatives (a protected negative was a deliverable of the prior spec, `:270-271`, `:503-505`) and as specified for edges; lineal references untreated. |
+| 8 | implemented-differently | `data/download_data.py:352`, `:366` (exclusion text exploded per referenced code, so repeated); `data/create_triplets.py:227-229` (exclusion pairs generated as `UNRELATED` negatives); `supervision/selection.py:184-192` (rotating one-slot exclusion quota); `text_model/mixins/curriculum.py:244` (exclusions exempt from eligibility); `text_model/loss.py:78` (always in the denominator); `supervision/index.py:102-104` (symmetric, so the nine lineal references act as negatives); `graph_model/hgcn.py:1157-1162` (edges from structural relations only) | (a) repeated, not once; (b) absent; (c) inverted for negatives (a protected negative was a deliverable of the prior spec, `:270-271`, `:503-505`) and as specified for edges; lineal references untreated. |
 | 9 | implemented-differently | `text_model/dataloader/tokenization_cache.py:39-40` (`'[EMPTY]'` placeholder), `text_model/encoder.py:140` (all four channels concatenated, no presence mask); `data/download_data.py:556-560`, `:629` (`.unique` picks an arbitrary child for the 14 four-digit codes), `:567`, `:582-584` (a five-digit code copies its lone child); no provenance column; `data/positive_sampling.py:78-81` (five-digit anchors get their lone child as positive); `metrics/hierarchy_structure.py:103-106`; `conf/config.yaml:95` (`max_length: 512`), `tokenization_cache.py:74` (title fixed at 24) | Placeholder instead of masking; arbitrary inheritance unrecorded; unary pairs in supervision and scoring; the rejected 512 window. The backbone's own files disagree (`sentence_bert_config.json` 256, `tokenizer_config.json` 512), so the (open) item stands. |
 | 10 | implemented-differently | `data/compute_distances.py:230-231`, `data/create_triplets.py:100`, `data/supervision_bundle.py:676` (canonical orientation: 35 six-digit codes are never anchors; no ancestor positives); `text_model/naics_model.py:516-519`, `datamodule.py:656-665`, `conf/config.yaml:98` (pools of 24 pre-drawn negatives per pair; manifest `training_pairs` has 45,373,918 rows); `supervision/margins.py:84` (eligibility rule); `text_model/dataloader/streaming_dataset.py:197-199`, `conf/config.yaml:100-101` (inverse-distance draws); `text_model/mixins/curriculum.py:445-456` (hyperbolic k-means pseudo-labels) | Every removed mechanism is present; the 4,675 sibling-positive, grandchild-negative rows reproduce in the live bundle; no per-epoch cache of all code points. |
 | 11 | implemented-differently | `text_model/mixins/loss.py:485-488` (six-term sum); `text_model/loss.py:47-128` (DCL), `:134-227` (distance matching, batch-normalized at `:221-222`), `:329-400` (pairwise preference); `mixins/loss.py:207-209` (radius penalty, zero by construction since r ≤ 2 < 10), `:318` (load balancing); `losses/level_radius.py:26-29` (level term; gradient ≈ 1e-7 under the cap, by probe); `naics_model.py:560-561` (margin logged only); `loss.py:58` (fixed float temperature); `text_model/mixins/optimizer.py:165-174`, `text_model/curriculum.py:107-115` (scheduler always built; mining active in epochs 6–9 of the shipped 10); no query term in `src/` | No task term; no learned scales; two code–code terms, neither listwise over all codes; every term Req 11 removes is present. Verification "No inert terms" fails today. |
@@ -423,7 +423,7 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       Stage 4: COMPLETE (2026-09-25) — implemented by plan 6
       (specs/plans/completed/6-decision-rule-and-diagnostics.md). Next: resume the roadmap.
 
-- [ ] Stage 5: Supervision target and text
+- [x] Stage 5: Supervision target and text
       Objective: Rebuild the supervision bundle around the tree metric D*, directed
       redirections and Req 9's text-construction rules.
       Spec: Req 7 (D*; the IC ablation waits for Stage 9); Req 8(a), 8(c) generation side,
@@ -468,6 +468,27 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       backbone's trained window is recorded with the share of each channel's texts that
       exceeded it, and no input exceeds it, the text-only builder's included.
       ROUTING: writing-plans
+      Rollout note: the switch happens at merge. Main then loads only `stage3-supervision-v2`
+      bundles, and a checkpoint trained on bundle 18403d29 loads weights-only. Bundle
+      `301cce28-539c-42ea-8781-496bbdcf511c`, built from a fresh `data preprocess` (descriptions
+      sha256 `fe8c54e3…`), is copied to the main checkout and to every Lambda instance, never
+      rebuilt. Held-out queries leak into five cross-references, which are withheld from the
+      exclusion text (user decision 2), so "each cross-reference appears once" holds for the
+      other 4,596. Until Stage 7, the
+      relation margin axis keeps its cross-sector margin, keyed on the `cross_sector` label; the
+      `quota_selections` counter stays at zero; and Phase 1's sibling mask masks every candidate
+      at D* 2, grandparents and grandchildren included. HGCN's curriculum thresholds, 7, 9 and 10
+      under D*, bind until Stage 11 removes them.
+      Realized: D* takes integers 1–10 over 2,256,750 pairs, equals `metrics/diagnostics.py`'s on
+      every pair and passes the triangle inequality over all 2,125³ ordered triples; 522 unary
+      pairs; 4,623 redirection rows (4,601 cross-references and 22 harvested paragraphs; 4,529
+      activity phrases; 9 lineal references), with the spec's 43 and the old 68 reconciled; no
+      held-out leakage, activity phrases included; 45,163,632 training pairs, none with an
+      exclusion or lineal reference as its negative or a unary pair as its positive; a 128-token
+      window, beyond which lie 0.0000 of titles, 0.0725 of descriptions, 0.0977 of examples and
+      0.4154 of exclusion texts (`specs/findings/supervision-target-and-text.md`).
+      Stage 5: COMPLETE (2026-09-26) — implemented by plan 7
+      (specs/plans/completed/7-supervision-target-and-text.md). Next: resume the roadmap.
 
 - [ ] Stage 6: Shared encoder and low-dimensional projection
       Objective: Replace the four-copy LoRA encoder and mixture-of-experts fusion with one
@@ -480,7 +501,10 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       fusion).
       Gap closed: Req 14 (encoder half); Req 12 (projection and dimension half); Req 9 (model-
       side mask); Req 16 (export half).
-      Consumes: Stage 5's bundle (null channels, window policy). The current objective and
+      Consumes: Stage 5's bundle (null channels, window policy) and its tokenization cache,
+      which encodes an absent channel as the empty string with a per-channel `present` flag for
+      the mask and tokenizes every channel at the 128-token window `utils/input_window.py`
+      records. The current objective and
       dataloader, unchanged, as an interim training harness only. Stage 2's `QueryCodeEncoder`
       protocol and `OutcomePanel.score` for a first live validation-split reading (finding,
       section 6). The scorer's `lorentz` distance assumes curvature −1, but the interim harness
@@ -519,7 +543,8 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       Gap closed: Req 11; Req 10; Req 13; Req 8 (b, training side of c); Req 4 (monitors);
       Req 5 (reference configuration and δ).
       Consumes: Stage 6's encoder and query path; Stage 5's D*, redirection table and unary
-      flags; Stage 2's query splits, scorer and selection log (the log's path is
+      flags (the table's `activity` phrases with their referencing `code`; its five withheld rows
+      carry none); Stage 2's query splits, scorer and selection log (the log's path is
       `OutcomePanelConfig.selection_log`, `logs/selection_log.jsonl`: gitignored, so a
       worktree's log goes with the worktree, and Stage 4's decision records keep its records).
       The test split stays sealed: Stage 12 opens it, as the finding's section 6 erratum says.
@@ -540,7 +565,10 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       place of the cap, one radial coordinate, curvature fixed at 1 with no parameter; deleted:
       radius penalty, distance matching, pairwise preference, curriculum and mining rules,
       false-negative clustering, the logged margin, pre-drawn tuples, eligibility rules,
-      inverse-distance draws, the exclusion quota, the relation margin axis (D5), and legacy
+      inverse-distance draws and Phase 1's sibling mask (at D* 2 it also masks grandparents),
+      what remains of the exclusion quota (Stage 5 removed its slot; the `quota_selections`
+      counter and `SelectionReason.EXCLUSION_QUOTA` remain), the relation margin axis (D5), and
+      legacy
       containment (D2); monitors for checkpointing, early stopping and learning rate reading
       the validation query split's MRR (D6); a decision record fixing δ for each of D8's three
       panels from at least 5 seeds; the legacy structural statistics removed from the text
@@ -591,7 +619,10 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       ablation).
       Consumes: Stage 8's selected cell; Stage 6's fusion options; Stage 4's tooling.
       Produces: A decision record per factor; the selected text stage (arm A for Stage 10); the
-      trained window recorded per candidate with each channel's overflow share; if IC is
+      trained window recorded per candidate with each channel's overflow share (a window enters
+      `TRAINED_WINDOWS` in `utils/input_window.py` from the candidate's own documentation, since
+      no config accepts a backbone without one, and `input_window_record` computes the shares);
+      if IC is
       adopted, the bundle's target and the diagnostics' relevance grades (lowest-common-ancestor
       depths in `metrics/diagnostics.py`, Stage 4) switched to it.
       Exit: Each factor has a Req 5 record with at least 5 seeds per arm, and the frozen-encoder
@@ -607,7 +638,9 @@ the coverage script's checks, so plan 3's rounding fix stays standalone.
       "Deliverable"; D3; D8.
       Gap closed: Req 15; Req 16 (composition and deliverable); Req 4 (graph-stage rows).
       Consumes: Stage 9's selected text stage; Stage 4's tooling and seed-sweep driver; Stage
-      6's export command; Stage 5's bundle as the graph stage's structural input.
+      6's export command; Stage 5's bundle as the graph stage's structural input. Under D* its
+      curriculum thresholds bind (phase-1 negatives at D* ≤ 7, phase-2 at D* ≤ 9), and arm D runs
+      with them, since only Stage 11 removes them.
       Produces: Arm B (matched-compute continuation of the text stage); arm C (parameter-free
       smoothing toward the parent-and-children mean, α tuned on validation); arm D (the graph
       stage at the text stage's dimension, exponential and logarithmic maps per the selected
