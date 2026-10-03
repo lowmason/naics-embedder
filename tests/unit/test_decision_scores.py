@@ -122,6 +122,30 @@ def test_a_row_without_every_repeat_is_refused():
     with pytest.raises(ValueError, match='missing entirely'):
         regressor_scores(missing_comparator, repeats=1)
 
+def test_a_duplicated_repeat_beside_a_missing_one_is_refused():
+    # Repeat 0 twice and repeat 1 never: the two predictions asked for, from one repeat
+    predictions = _predictions(
+        [
+            _prediction('regressor_seen', 'covariates+embedding', 0, '111111', 2023, 1.0),
+            _prediction('regressor_seen', 'covariates+embedding', 0, '111111', 2023, 2.0),
+        ]
+    )
+
+    with pytest.raises(ValueError, match='do not have 2 predictions'):
+        regressor_scores(predictions, repeats=2)
+
+def test_a_repeat_counted_twice_beside_every_other_one_is_refused():
+    # Repeats 0, 1 and 1: every repeat, but three predictions (both counts are checked)
+    predictions = _predictions(
+        [
+            _prediction('regressor_seen', 'covariates+embedding', repeat, '111111', 2023, 1.0)
+            for repeat in (0, 1, 1)
+        ]
+    )
+
+    with pytest.raises(ValueError, match='do not have 2 predictions'):
+        regressor_scores(predictions, repeats=2)
+
 @pytest.mark.parametrize(
     'column, value', [('split', 'test'), ('level', 5), ('panel', 'regressor_other')]
 )

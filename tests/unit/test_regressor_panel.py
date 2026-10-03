@@ -655,6 +655,26 @@ def test_lorentz_points_are_refused_and_the_export_form_is_read():
     assert read_codes == tuple(codes)
     np.testing.assert_array_equal(matrix, tangent)
 
+def test_the_lorentz_refusal_names_the_export_form_alone():
+    # tools diagnostics raises it too, so it names no panel
+    tangent = np.random.default_rng(1).normal(size=(4, 3))
+    time = np.sqrt(1.0 + (tangent**2).sum(axis=1))
+    lorentz = pl.DataFrame(
+        {
+            'code': ['11', '21', '22', '23'],
+            'x0': time,
+            **{
+                f'x{i + 1}': tangent[:, i]
+                for i in range(3)
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match='hyperboloid, not the export form') as excinfo:
+        coordinate_matrix(lorentz)
+
+    assert 'regressor panel' not in str(excinfo.value)
+
 def _float32_lorentz_export(radius, dimension, curvature, rng):
     '''Points at these radii, computed in float32 and stored in Float64 columns, as exported.'''
 
