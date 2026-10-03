@@ -3,6 +3,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+import torch
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
@@ -753,3 +754,73 @@ def test_export_table_refuses_an_override_without_a_value(runner, tmp_path, defa
 
     assert result.exit_code == 1
     assert 'key=value' in ' '.join(result.output.split())
+
+class FakeArm:
+    '''Stands in for ArmEncoder: points on the hyperboloid's spatial axes, and the logged names.'''
+
+    distance = 'lorentz'
+    table_fingerprint = 't' * 64
+    checkpoint_sha256 = 'c' * 64
+
+    def encode_queries(self, texts):
+        return torch.zeros(len(texts), 3, dtype=torch.float64)
+
+    def encode_codes(self, codes):
+        return torch.tensor(
+            [[0.0, float(row), 0.0] for row in range(len(codes))], dtype=torch.float64
+        )
+
+@pytest.mark.unit
+def test_outcome_panel_reads_validation_and_logs_the_table(
+    monkeypatch, runner, tmp_path, default_config, validated_bundle
+):
+    calls = []
+
+    def fake_from_files(checkpoint, table, bundle, token_config, *, device):
+        calls.append((checkpoint, table, bundle, token_config.max_length, device))
+        return FakeArm()
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle)
+    monkeypatch.setattr(tools_cli.ArmEncoder, 'from_files', staticmethod(fake_from_files))
+    monkeypatch.setattr(tools_cli, 'pick_device', lambda *_args: 'cpu')
+    log = tmp_path / 'selection_log.jsonl'
+    output = tmp_path / 'read.json'
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'outcome-panel', '--checkpoint', 'arm.ckpt', '--table', 'arm.parquet', '--purpose',
+            'first live read', '--log',
+            str(log), '--output',
+            str(output)
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [('arm.ckpt', 'arm.parquet', validated_bundle, 128, 'cpu')]
+    [record] = SelectionLog(log).records()
+    assert (record['split'], record['purpose']) == ('validation', 'first live read')
+    assert record['detail'] == {
+        'encoder': 'FakeArm',
+        'distance': 'lorentz',
+        'table': 't' * 64,
+        'checkpoint': 'c' * 64,
+    }
+    payload = json.loads(output.read_text())
+    assert (payload['table'], payload['checkpoint']) == ('t' * 64, 'c' * 64)
+    assert payload['summary']['n_queries'] == 1
+
+@pytest.mark.unit
+def test_outcome_panel_needs_a_purpose(runner, tmp_path, default_config):
+    log = tmp_path / 'selection_log.jsonl'
+
+    result = runner.invoke(
+        tools_cli.app,
+        ['outcome-panel', '--checkpoint', 'arm.ckpt', '--table', 'arm.parquet', '--log',
+         str(log)],
+    )
+
+    # Click's usage error: the option is required
+    assert result.exit_code == 2
+    assert "Missing option '--purpose'" in result.output.replace('\n', '')
+    assert SelectionLog(log).records() == []

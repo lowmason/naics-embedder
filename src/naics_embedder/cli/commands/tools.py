@@ -18,6 +18,7 @@ Commands:
     decide: Decide among arms under Req 5's rule over D8's three panels.
     diagnostics: Report Req 6's structural diagnostics over every codebook code.
     export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
+    outcome-panel: Score an arm on the outcome panel's validation split (Stage 6).
 '''
 
 import json
@@ -52,6 +53,7 @@ from naics_embedder.panels.regressor import (
 from naics_embedder.panels.text_only import build_text_only_table, provenance_path
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.schema import IndexRole
+from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
 from naics_embedder.text_model.export import code_token_config, export_code_table
 from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
@@ -904,3 +906,84 @@ def export_table(
 
     console.print(f'Code table: {table}')
     console.print(f'Provenance: {provenance_path(table)}')
+
+@app.command('outcome-panel')
+def outcome_panel(
+    checkpoint: Annotated[
+        str,
+        typer.Option('--checkpoint', help='The arm checkpoint the table was exported from'),
+    ],
+    table: Annotated[
+        str,
+        typer.Option('--table', help='The table tools export-table wrote from the checkpoint'),
+    ],
+    purpose: Annotated[
+        str,
+        typer.Option('--purpose', help='Why this read happens; recorded in the selection log'),
+    ],
+    config_file: Annotated[
+        str,
+        typer.Option('--config', help='Config YAML naming the bundle and the token cache'),
+    ] = 'conf/config.yaml',
+    log: Annotated[
+        Optional[str],
+        typer.Option('--log', help='Selection log (default: the outcome-panel config)'),
+    ] = None,
+    output: Annotated[
+        Optional[str],
+        typer.Option('--output', help='Also write the summary as JSON to this path'),
+    ] = None,
+    overrides: Annotated[
+        Optional[List[str]],
+        typer.Argument(help="Config overrides, as train takes them (e.g., 'model.dimension=8')"),
+    ] = None,
+):
+    '''
+    Score an arm on the outcome panel's validation split under its own distance (Stage 6).
+
+    Queries go through the checkpoint's model; codes are decoded from the table exported from it.
+    The read is logged with the table's ``matrix_fingerprint`` and the checkpoint's SHA-256. The
+    test split stays sealed: this command never opens it.
+
+    Example:
+        Read the validation split for an exported table::
+
+            $ uv run naics-embedder tools outcome-panel \\
+                --checkpoint checkpoints/sadc_default/last.ckpt \\
+                --table data/plan8/arm_table.parquet --purpose 'Stage 6 Exit reading' \\
+                supervision.manifest_path=PATH
+    '''
+
+    configure_logging('tools_outcome_panel.log')
+
+    panel_cfg = load_config(OutcomePanelConfig, 'data/outcome_panel.yaml')
+    try:
+        # A bad output path fails before the read is logged
+        if output:
+            _require_writable(Path(output))
+        cfg = _run_config(config_file, overrides)
+        bundle = _run_bundle(cfg)
+        encoder = ArmEncoder.from_files(
+            checkpoint, table, bundle, code_token_config(cfg), device=pick_device('auto')
+        )
+        panel = OutcomePanel.from_bundle(bundle, log or panel_cfg.selection_log)
+        result = read_outcome_validation(encoder, panel, purpose)
+    except (OSError, ValueError, ValidationError) as exc:
+        console.print(f'[bold red]Outcome panel failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print('\n[bold cyan]Outcome panel: arm, validation split[/bold cyan]\n')
+    for key, value in result.summary.items():
+        formatted = f'{value:.4f}' if isinstance(value, float) else str(value)
+        console.print(f'  • {key}: {formatted}')
+    console.print(f'\nRead logged to {panel.log.path} (table {encoder.table_fingerprint})\n')
+
+    if output:
+        path = Path(output)
+        payload = {
+            'fingerprint': panel.fingerprint,
+            'table': encoder.table_fingerprint,
+            'checkpoint': encoder.checkpoint_sha256,
+            'summary': result.summary,
+        }
+        path.write_text(json.dumps(payload, indent=2) + '\n')

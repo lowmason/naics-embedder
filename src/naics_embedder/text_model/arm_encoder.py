@@ -25,9 +25,12 @@ import polars as pl
 import torch
 from transformers import AutoTokenizer
 
+from naics_embedder.panels.decoding import DecodingResult
+from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.regressor import coordinate_matrix
 from naics_embedder.panels.text_only import matrix_fingerprint, provenance_path
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
+from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.text_model.export import encode_token_rows, load_arm_model
 from naics_embedder.text_model.fields import QUERY, tokenize_field
 from naics_embedder.utils.config import TokenizationConfig
@@ -172,3 +175,39 @@ class ArmEncoder:
         if unknown:
             raise ValueError(f'the table has no row for {unknown[:5]} ({len(unknown)} codes)')
         return exp_map_origin(self._tangent[[self._rows[code] for code in codes]])
+
+# -------------------------------------------------------------------------------------------------
+# The outcome read
+# -------------------------------------------------------------------------------------------------
+
+def read_outcome_validation(
+    encoder: ArmEncoder,
+    panel: OutcomePanel,
+    purpose: str,
+) -> DecodingResult:
+    '''
+    Score the arm on the outcome panel's validation split under its own distance.
+
+    The read is logged. Its detail names the table the codes were decoded from (``table``, the
+    key Stage 4's sweep logs) and the checkpoint the queries went through (``checkpoint``). There
+    is no test-split path here: Stage 12 opens that split.
+
+    Args:
+        encoder: The arm.
+        panel: The outcome panel of the arm's bundle.
+        purpose: Why the read happens; the selection log records it.
+
+    Returns:
+        The decoding scores.
+    '''
+
+    return panel.score(
+        encoder,
+        IndexRole.VALIDATION,
+        purpose,
+        distance=encoder.distance,
+        detail={
+            'table': encoder.table_fingerprint,
+            'checkpoint': encoder.checkpoint_sha256
+        },
+    )

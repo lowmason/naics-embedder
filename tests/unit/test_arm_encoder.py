@@ -10,10 +10,16 @@ import pytest
 import torch
 
 from naics_embedder.panels.decoding import lorentz_distances
+from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.regressor import table_fingerprint
+from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
-from naics_embedder.text_model.arm_encoder import ArmEncoder, exp_map_origin
+from naics_embedder.text_model.arm_encoder import (
+    ArmEncoder,
+    exp_map_origin,
+    read_outcome_validation,
+)
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.export import encode_token_rows
 from naics_embedder.text_model.fields import QUERY, tokenize_field
@@ -181,3 +187,29 @@ def test_queries_and_codes_on_mps_come_back_float64_on_the_cpu(
         assert vectors.device.type == 'cpu'
     assert torch.allclose(queries, arm.encode_queries(QUERIES), atol=1e-4)
     assert torch.equal(codes, arm.encode_codes(list(FIVE_CODES)))
+
+# -------------------------------------------------------------------------------------------------
+# The outcome read
+# -------------------------------------------------------------------------------------------------
+
+def test_a_validation_read_logs_the_table_it_decodes_against(
+    tmp_path, arm, exported_table, validated_bundle
+):
+    '''Spec §6: a read on a fixture panel logs table equal to the table's matrix_fingerprint.'''
+
+    log_path = tmp_path / 'selection_log.jsonl'
+    panel = OutcomePanel.from_bundle(validated_bundle, log_path)
+
+    result = read_outcome_validation(arm, panel, 'plan 8 fixture read')
+
+    # The five-code bundle's one validation entry: 'Edamame farming', for 111111
+    [record] = SelectionLog(log_path).records()
+    assert (record['event'], record['split'], record['n_queries']) == ('read', 'validation', 1)
+    assert record['purpose'] == 'plan 8 fixture read'
+    assert record['detail'] == {
+        'encoder': 'ArmEncoder',
+        'distance': 'lorentz',
+        'table': table_fingerprint(pl.read_parquet(exported_table)),
+        'checkpoint': arm.checkpoint_sha256,
+    }
+    assert (result.summary['n_queries'], result.summary['n_candidates']) == (1, 5)
