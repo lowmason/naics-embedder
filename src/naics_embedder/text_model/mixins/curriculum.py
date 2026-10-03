@@ -91,6 +91,7 @@ class CurriculumMixin:
     - curriculum_scheduler: Optional[CurriculumScheduler]
     - current_curriculum_flags: Dict[str, bool]
     - current_schedule_scalars: Dict[str, float]
+    - fusion: str (router mining runs only under ``moe``)
     - previous_phase: Optional[int]
     - current_epoch: int
     - device: torch.device
@@ -149,6 +150,19 @@ class CurriculumMixin:
                 on_epoch=True,
             )
 
+    def _router_mining_enabled(self) -> bool:
+        '''
+        Whether the router-guided miner takes part in this step's selection.
+
+        Only the MoE fusion has experts and gates, so router mining runs only under ``moe`` with
+        the phase flag on (R10). Under any other fusion the geometric miner takes every mining
+        slot.
+        '''
+
+        return self.fusion == 'moe' and bool(
+            self.current_curriculum_flags.get('enable_router_guided_sampling', False)
+        )
+
     def _select_negative_batch(
         self,
         *,
@@ -190,7 +204,7 @@ class CurriculumMixin:
         )
 
         enable_geometric = self.current_curriculum_flags.get('enable_hard_negative_mining', False)
-        enable_router = self.current_curriculum_flags.get('enable_router_guided_sampling', False)
+        enable_router = self._router_mining_enabled()
         if self._should_use_global_batch(enable_geometric, enable_router):
             gathered = gather_candidate_entities(local_entities)
             entities = CandidateEntityBatch(

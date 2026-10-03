@@ -44,6 +44,7 @@ from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.supervision.selection import NegativeSelectionCoordinator
 from naics_embedder.text_model.curriculum import CurriculumScheduler
 from naics_embedder.text_model.encoder import MultiChannelEncoder
+from naics_embedder.text_model.fusion import FUSIONS
 from naics_embedder.text_model.hard_negative_mining import (
     LorentzianHardNegativeMiner,
     NormAdaptiveMargin,
@@ -117,6 +118,8 @@ class NAICSContrastiveModel(
         lora_r: LoRA rank
         lora_alpha: LoRA alpha scaling factor
         lora_dropout: LoRA dropout rate
+        fusion: Channel fusion: ``masked_mean`` (default), ``attention`` or ``moe``. Router
+            mining and the load-balancing term run only under ``moe`` (R10, R11)
         num_experts: Number of MoE experts
         top_k: Number of experts to select per token
         moe_hidden_dim: Hidden dimension of MoE layers
@@ -129,7 +132,7 @@ class NAICSContrastiveModel(
         weight_decay: AdamW weight decay
         warmup_steps: Number of warmup steps
         use_warmup_cosine: Use warmup + cosine decay scheduler
-        load_balancing_coef: MoE load balancing coefficient
+        load_balancing_coef: MoE load balancing coefficient (the term exists only under ``moe``)
         fn_curriculum_start_epoch: Epoch to start false negative curriculum
         fn_cluster_every_n_epochs: Clustering frequency for pseudo-labels
         fn_num_clusters: Number of clusters for pseudo-labeling
@@ -170,6 +173,7 @@ class NAICSContrastiveModel(
         lora_r: int = 8,
         lora_alpha: int = 16,
         lora_dropout: float = 0.1,
+        fusion: str = 'masked_mean',
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
@@ -212,6 +216,11 @@ class NAICSContrastiveModel(
         supervision_bundle: Optional[ValidatedSupervisionBundle] = None,
     ):
         super().__init__()
+
+        if fusion not in FUSIONS:
+            raise ValueError(f'unknown fusion {fusion!r}; expected one of {list(FUSIONS)}')
+        # The one switch for the MoE-only machinery: router mining and load balancing (R10, R11)
+        self.fusion = fusion
 
         self.supervision_policy = SupervisionModePolicy.from_name(supervision_mode)
         if self.supervision_policy.require_bundle:
@@ -573,21 +582,24 @@ class NAICSContrastiveModel(
             batch_size,
         )
 
-        # MoE load balancing over anchors, positives, and valid candidate rows only
-        valid_candidates = batch['candidate_valid_mask'].reshape(-1)
-        valid_candidate_output = {
-            name: candidate_output[name][valid_candidates]
-            for name in ('gate_probs', 'top_k_indices') if name in candidate_output
-        }
-        gate_probs_list, topk_indices_list = self._collect_gate_outputs(
-            [anchor_output, positive_output, valid_candidate_output]
-        )
-        self._log_router_diversity(gate_probs_list, batch_size)
-        raw_load_balancing_loss = self._compute_load_balancing_loss(
-            gate_probs_list,
-            topk_indices_list,
-            batch_size,
-        )
+        # MoE load balancing over anchors, positives, and valid candidate rows only. Only the MoE
+        # fusion has experts, so only it computes, adds and logs the term (R11).
+        raw_load_balancing_loss = None
+        if self.fusion == 'moe':
+            valid_candidates = batch['candidate_valid_mask'].reshape(-1)
+            valid_candidate_output = {
+                name: candidate_output[name][valid_candidates]
+                for name in ('gate_probs', 'top_k_indices') if name in candidate_output
+            }
+            gate_probs_list, topk_indices_list = self._collect_gate_outputs(
+                [anchor_output, positive_output, valid_candidate_output]
+            )
+            self._log_router_diversity(gate_probs_list, batch_size)
+            raw_load_balancing_loss = self._compute_load_balancing_loss(
+                gate_probs_list,
+                topk_indices_list,
+                batch_size,
+            )
 
         # Combine losses
         total_loss, scaled_load_balancing_loss = self._combine_loss_terms(
@@ -642,14 +654,16 @@ class NAICSContrastiveModel(
             is_explicit_exclusion=explicit,
             pseudo_related_mask=None,
         )
-        gate_probs, topk_indices = self._collect_gate_outputs(
-            [anchor_output, positive_output, negative_output]
-        )
-        load_balancing = self._compute_load_balancing_loss(
-            gate_probs,
-            topk_indices,
-            batch_size,
-        )
+        load_balancing = None
+        if self.fusion == 'moe':
+            gate_probs, topk_indices = self._collect_gate_outputs(
+                [anchor_output, positive_output, negative_output]
+            )
+            load_balancing = self._compute_load_balancing_loss(
+                gate_probs,
+                topk_indices,
+                batch_size,
+            )
         radius = self._compute_radius_regularization(
             anchor_output['embedding'],
             positive_output['embedding'],

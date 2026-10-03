@@ -461,30 +461,35 @@ class LossMixin:
     def _combine_loss_terms(
         self,
         contrastive_loss: torch.Tensor,
-        load_balancing_loss: torch.Tensor,
+        load_balancing_loss: Optional[torch.Tensor],
         hierarchy_loss: torch.Tensor,
         structural_preference_loss: torch.Tensor,
         radius_reg_loss: torch.Tensor,
         level_radius_loss_value: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         '''
         Combine individual loss components into the final optimization target.
 
         Args:
             contrastive_loss: Main contrastive loss
-            load_balancing_loss: MoE load balancing loss
+            load_balancing_loss: MoE load balancing loss, or None outside the MoE fusion (R11)
             hierarchy_loss: Hierarchy preservation loss
             structural_preference_loss: Structural preference loss over selected candidates
             radius_reg_loss: Radius regularization loss
             level_radius_loss_value: Level-aware radius alignment loss
 
         Returns:
-            Tuple containing the total loss and the scaled load balancing term.
+            Tuple containing the total loss and the scaled load balancing term (None when there
+            is no term).
         '''
-        scaled_load_balancing_loss = self.load_balancing_coef * load_balancing_loss
+        scaled_load_balancing_loss = None
+        total_loss = contrastive_loss
+        if load_balancing_loss is not None:
+            scaled_load_balancing_loss = self.load_balancing_coef * load_balancing_loss
+            total_loss = total_loss + scaled_load_balancing_loss
         total_loss = (
-            contrastive_loss + scaled_load_balancing_loss + hierarchy_loss
-            + structural_preference_loss + radius_reg_loss + level_radius_loss_value
+            total_loss + hierarchy_loss + structural_preference_loss + radius_reg_loss
+            + level_radius_loss_value
         )
         return total_loss, scaled_load_balancing_loss
 

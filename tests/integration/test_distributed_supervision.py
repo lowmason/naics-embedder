@@ -137,6 +137,7 @@ class _DistributedSelectionHost(DistributedMixin, CurriculumMixin):
     def __init__(self, index: SupervisionIndex):
         self.supervision_index = index
         self.current_curriculum_flags = {'enable_hard_negative_mining': True}
+        self.fusion = 'masked_mean'
         self.current_schedule_scalars = {}
         self.current_epoch = 0
         self.hard_negative_miner = LorentzianHardNegativeMiner()

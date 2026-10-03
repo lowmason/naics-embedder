@@ -290,6 +290,14 @@ class TestModelInitialization:
         with pytest.raises(ValueError, match='supervision mode'):
             NAICSContrastiveModel(**model_config, supervision_mode='mystery')
 
+    def test_fusion_defaults_to_masked_mean_and_an_unknown_one_is_refused(
+        self, naics_model, model_config
+    ):
+        assert naics_model.fusion == 'masked_mean'
+        assert naics_model.hparams['fusion'] == 'masked_mean'
+        with pytest.raises(ValueError, match='unknown fusion'):
+            NAICSContrastiveModel(**model_config, fusion='concatenate')
+
 # -------------------------------------------------------------------------------------------------
 # Test: Forward Pass
 # -------------------------------------------------------------------------------------------------
@@ -464,17 +472,23 @@ class TestTrainingStep:
         assert 'train/structural_preference_loss' in keys
         assert not any('lambdarank' in key for key in keys)
 
-    def test_training_step_load_balancing_loss(self, naics_model, repaired_training_batch):
-        '''Test that load balancing loss is computed.'''
+    @pytest.mark.parametrize(('fusion', 'logged'), [('masked_mean', False), ('moe', True)])
+    def test_load_balancing_is_computed_and_logged_only_under_moe(
+        self, model_config, repaired_training_batch, monkeypatch, fusion, logged
+    ):
+        '''R11: only the MoE fusion has experts, so only it has a load-balancing term.'''
 
-        naics_model.train()
-        naics_model.load_balancing_coef = 0.01
+        model = NAICSContrastiveModel(**model_config, fusion=fusion)
+        log = Mock()
+        monkeypatch.setattr(model, 'log', log)
+        model.train()
 
-        loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
+        loss = model.training_step(repaired_training_batch, batch_idx=0)
 
-        # Loss should include load balancing component
-        assert isinstance(loss, torch.Tensor)
-        assert loss.item() > 0
+        keys = {call.args[0] for call in log.call_args_list}
+        assert ('train/load_balancing_loss' in keys) is logged
+        assert any(key.startswith('train/moe/') for key in keys) is logged
+        assert torch.isfinite(loss)
 
     def test_combine_loss_terms_scales_load_balancing(self, naics_model):
         '''Ensure load balancing term is scaled before contributing to total loss.'''
@@ -505,6 +519,21 @@ class TestTrainingStep:
 
         assert torch.isclose(scaled_load_balancing, expected_scaled)
         assert torch.isclose(total_loss, expected_total)
+
+    def test_combine_loss_terms_without_a_load_balancing_term(self, naics_model):
+        '''Outside the MoE fusion there is no term to scale or add (R11).'''
+
+        total_loss, scaled_load_balancing = naics_model._combine_loss_terms(
+            torch.tensor(1.0),
+            None,
+            torch.tensor(0.3),
+            torch.tensor(0.2),
+            torch.tensor(0.1),
+            torch.tensor(0.05),
+        )
+
+        assert scaled_load_balancing is None
+        assert torch.isclose(total_loss, torch.tensor(1.65))
 
 # -------------------------------------------------------------------------------------------------
 # Test: Validation Step
@@ -766,6 +795,29 @@ class TestCurriculumIntegration:
         # Previous phase should be updated
         current_phase = naics_model.curriculum_scheduler.get_phase(naics_model.current_epoch)
         assert naics_model.previous_phase == current_phase
+
+    def test_phase_two_selection_under_masked_mean_fills_no_router_slot(
+        self, naics_model, repaired_training_batch, monkeypatch
+    ):
+        '''Spec §6: a phase-2 step under the default fusion neither raises nor routes (R10).'''
+
+        log = Mock()
+        monkeypatch.setattr(naics_model, 'log', log)
+        monkeypatch.setattr(naics_model, '_update_curriculum_state', lambda *_args: None)
+        naics_model.current_curriculum_flags = {
+            'enable_hard_negative_mining': True,
+            'enable_router_guided_sampling': True,
+        }
+        naics_model.train()
+
+        naics_model.training_step(repaired_training_batch, batch_idx=1)
+
+        counters = {
+            call.args[0]: call.args[1].item()
+            for call in log.call_args_list if call.args[0].startswith('train/integrity/')
+        }
+        assert counters['train/integrity/router_selections'] == 0.0
+        assert counters['train/integrity/geometric_selections'] > 0.0
 
 # -------------------------------------------------------------------------------------------------
 # Test: Checkpoint Loading

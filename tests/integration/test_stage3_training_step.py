@@ -150,6 +150,8 @@ def tiny_repaired_model(monkeypatch, generated_bundle):
     monkeypatch.setattr(model_module, 'MultiChannelEncoder', StubMultiChannelEncoder)
     model = model_module.NAICSContrastiveModel(
         base_model_name='test-stub',
+        # MoE fusion: the selection carries the stub's gates, which the forced-order spy reads
+        fusion='moe',
         num_experts=2,
         top_k=1,
         moe_hidden_dim=4,
@@ -244,23 +246,28 @@ def test_a_selection_naming_an_exclusion_is_refused(
 HIERARCHY_POOL = [3, 11, 12, 13, 14, 15, 16]
 
 @pytest.fixture
-def hierarchy_model(monkeypatch, hierarchy_manifest):
+def make_hierarchy_model(monkeypatch, hierarchy_manifest):
     monkeypatch.setattr(model_module, 'MultiChannelEncoder', StubMultiChannelEncoder)
-    model = model_module.NAICSContrastiveModel(
-        base_model_name='test-stub',
-        num_experts=2,
-        top_k=1,
-        moe_hidden_dim=4,
-        hierarchy_weight=0.0,
-        radius_reg_weight=0.0,
-        level_radius_weight=0.0,
-        load_balancing_coef=0.0,
-        supervision_manifest_path=str(hierarchy_manifest),
-    )
-    model.current_schedule_scalars = {'router_mix_ratio': 0.5}
-    monkeypatch.setattr(model, '_update_curriculum_state', lambda *_args: None)
-    monkeypatch.setattr(model, 'log', Mock())
-    return model
+
+    def make(fusion: str):
+        model = model_module.NAICSContrastiveModel(
+            base_model_name='test-stub',
+            fusion=fusion,
+            num_experts=2,
+            top_k=1,
+            moe_hidden_dim=4,
+            hierarchy_weight=0.0,
+            radius_reg_weight=0.0,
+            level_radius_weight=0.0,
+            load_balancing_coef=0.0,
+            supervision_manifest_path=str(hierarchy_manifest),
+        )
+        model.current_schedule_scalars = {'router_mix_ratio': 0.5}
+        monkeypatch.setattr(model, '_update_curriculum_state', lambda *_args: None)
+        monkeypatch.setattr(model, 'log', Mock())
+        return model
+
+    return make
 
 def _hierarchy_batch(model):
     index = model.supervision_index
@@ -280,22 +287,21 @@ def _hierarchy_batch(model):
         candidate['negative_code'] = index.id_to_code[candidate['negative_code_id']]
     return collate_fn([item], supervision_mode='repaired')
 
+MINING = {'enable_hard_negative_mining': True, 'enable_router_guided_sampling': True}
+
 @pytest.mark.parametrize(
-    ('flags', 'expected'),
+    ('fusion', 'flags', 'expected'),
     [
-        (
-            {
-                'enable_hard_negative_mining': True,
-                'enable_router_guided_sampling': True
-            },
-            [SelectionReason.GEOMETRIC] * 2 + [SelectionReason.ROUTER] * 2,
-        ),
-        ({}, [SelectionReason.DIFFICULTY] * 4),
+        ('moe', MINING, [SelectionReason.GEOMETRIC] * 2 + [SelectionReason.ROUTER] * 2),
+        # R10: without the MoE fusion the router is never consulted, so geometry takes every slot
+        ('masked_mean', MINING, [SelectionReason.GEOMETRIC] * 4),
+        ('masked_mean', {}, [SelectionReason.DIFFICULTY] * 4),
     ],
 )
 def test_real_coordinator_step_mines_when_enabled_and_respects_eligibility(
-    hierarchy_model, monkeypatch, flags, expected
+    make_hierarchy_model, monkeypatch, fusion, flags, expected
 ):
+    hierarchy_model = make_hierarchy_model(fusion)
     hierarchy_model.current_curriculum_flags = flags
     captured = {}
     original = hierarchy_model._compute_contrastive_loss
