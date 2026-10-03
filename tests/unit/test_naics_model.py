@@ -33,6 +33,7 @@ from naics_embedder.text_model.naics_model import (
     gather_embeddings_global,
 )
 from naics_embedder.text_model.shared_encoder import SharedEncoder
+from tests.fixtures.shared_encoder import lightning_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -893,15 +894,6 @@ class TestCheckpointLoading:
 # Test: Supervision checkpoint contract
 # -------------------------------------------------------------------------------------------------
 
-def _lightning_checkpoint(model) -> dict:
-    checkpoint = {
-        'state_dict': model.state_dict(),
-        'hyper_parameters': dict(model.hparams),
-        'pytorch-lightning_version': pyl.__version__,
-    }
-    model.on_save_checkpoint(checkpoint)
-    return checkpoint
-
 @pytest.mark.unit
 class TestCheckpointContract:
     '''The supervision contract travels with checkpoints and gates every restore.'''
@@ -983,7 +975,7 @@ class TestCheckpointContract:
 
     def test_load_from_checkpoint_round_trips_the_contract(self, naics_model, tmp_path):
         path = tmp_path / 'repaired.ckpt'
-        torch.save(_lightning_checkpoint(naics_model), path)
+        torch.save(lightning_checkpoint(naics_model), path)
 
         restored = NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
 
@@ -992,7 +984,7 @@ class TestCheckpointContract:
         assert restored.encoder.dimension == 16
 
     def test_load_from_checkpoint_rejects_a_legacy_checkpoint(self, naics_model, tmp_path):
-        checkpoint = _lightning_checkpoint(naics_model)
+        checkpoint = lightning_checkpoint(naics_model)
         del checkpoint['stage3_supervision']
         path = tmp_path / 'legacy.ckpt'
         torch.save(checkpoint, path)
@@ -1005,7 +997,7 @@ class TestCheckpointContract:
     ):
         '''Spec 4.4: a pre-Stage-6 checkpoint meets the D2 refusal, never a state-dict key error.'''
 
-        checkpoint = _lightning_checkpoint(naics_model)
+        checkpoint = lightning_checkpoint(naics_model)
         # Contracts saved before Stage 6 carry no encoder record, and their hyperparameters
         # predate fusion and dimension
         del checkpoint['stage3_supervision']['encoder']
@@ -1024,7 +1016,7 @@ class TestCheckpointContract:
 
     def test_load_from_checkpoint_refuses_another_dimension(self, naics_model, tmp_path):
         path = tmp_path / 'shared.ckpt'
-        torch.save(_lightning_checkpoint(naics_model), path)
+        torch.save(lightning_checkpoint(naics_model), path)
 
         with pytest.raises(ValueError, match='D2'):
             NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu', dimension=8)
