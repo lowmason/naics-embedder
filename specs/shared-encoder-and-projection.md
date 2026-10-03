@@ -69,8 +69,13 @@ From the brainstorm, the user's answers on 2026-10-03:
 - **R8. Curvature.** A guard on c = 1: the export and the arm encoder refuse a checkpoint whose
   curvature is not 1, and the scorer's `lorentz` distance stays c = 1 only. Plan 4's scorer item
   retires.
-- **R9. Compute.** The Exit's training run is a short local run on MPS (1–2 epochs). The Lambda
-  workflow is planned in Stage 7's spec.
+- **R9. Compute.** The Exit's training run is one full epoch, locally on MPS. Measured on
+  2026-10-03 on an M4 Max, that is about 1.5 hours with validation:
+  - 5,958 rows from 1,273 anchors, so 373 steps at batch 16;
+  - about 9.5 s of backbone work per training step;
+  - about 19 minutes for the validation pass.
+
+  The Lambda workflow is planned in Stage 7's spec.
 - **R10. Router-guided mining** runs only under MoE fusion. Otherwise the geometric miner takes
   every mining slot.
 - **R11. The load-balancing term** is computed and logged only under MoE (follows from R3).
@@ -199,7 +204,8 @@ Per code, the path is:
 
 - **Export command:** `tools export-table --checkpoint <ckpt> --output <table.parquet>`.
   - **Bundle.** It resolves the bundle as `train` does (`--config` plus `key=value` overrides).
-    The checkpoint's supervision contract must match that bundle.
+    The checkpoint's supervision fields must match that bundle. Its encoder record is never
+    compared with the config (4.4), so a d = 8 checkpoint exports under a d = 16 config.
   - **Loading.** The checkpoint loads with `load_from_checkpoint`. Its saved hyperparameters
     rebuild its own fusion and dimension, so the contract's architecture refusal fires only on a
     four-copy checkpoint (4.4).
@@ -268,7 +274,16 @@ Per code, the path is:
 - **Runtime side.**
   - `contract_for_bundle` (`:65`) and `containment_contract` (`:75`) take the encoder record.
   - The model builds its record from its hyperparameters, and `runtime_contract_for`
-    (`cli/commands/training.py:149`) builds one from the config.
+    (`cli/commands/training.py:149`) builds one from the config. One helper builds both, so the
+    two paths cannot drift; a backbone string spelled two ways would otherwise make the model
+    refuse its own contract.
+  - Only training's exact resume compares the encoder record with the config.
+  - Export and reads take the encoder record from the checkpoint. `load_from_checkpoint`
+    rebuilds the model from its saved hyperparameters, so they compare only the supervision
+    fields with the configured bundle.
+  - HGCN's feeder (`generate_embeddings_from_checkpoint`) keeps its config-matched check
+    (`validate_exact_resume`). The train prompt calls it on the run it just trained, so the
+    config always matches there.
   - `contract_version` is still copied from the manifest, so bundle 301cce28 stays valid.
 - **No revision field.** The state dict carries the backbone's base weights, so a resumed run
   restores them whatever the local snapshot is. The export's provenance records the revision
@@ -319,7 +334,8 @@ Tests are written red to green.
 - **Same encoder.**
   - A one-field batch `{F: [T]}` and a one-code batch whose only present channel is F, with text
     T, give identical outputs.
-  - `encode_queries([T])` equals the model's forward on `{'query': [T]}`.
+  - `encode_queries([T])` equals the float64 exp map of the `tangent` that the model's forward
+    gives for `{'query': [T]}`.
   - The model holds exactly one backbone.
 - **Masking.** Perturbing an absent channel's `input_ids` and `attention_mask` leaves the output
   bit-identical, under each fusion option.
@@ -365,8 +381,8 @@ This runs locally on MPS. Off CUDA the trainer picks `32-true` (`utils/backend.p
    checkout into the worktree's `data/` with `cp -cR`. Never symlink or rebuild them.
 2. Point `supervision.manifest_path` at the clone with a `key=value` override on every command.
    Never commit it: the pin test fails on a committed path.
-3. Train at d = 16 with `masked_mean`:
-   `uv run naics-embedder train training.trainer.max_epochs=2 supervision.manifest_path=…`.
+3. Train one full epoch at d = 16 with `masked_mean`, about 1.5 hours (R9):
+   `uv run naics-embedder train training.trainer.max_epochs=1 supervision.manifest_path=…`.
 4. Export `last.ckpt` with `tools export-table`. No checkpoint selection happens here: the
    harness's monitor reads the in-sample validation loss, which selects nothing (Req 4), and
    Stage 7 wires selection to the validation query split (D6).
@@ -410,7 +426,8 @@ This runs locally on MPS. Off CUDA the trainer picks `32-true` (`utils/backend.p
 - **Default fusion.**
   - Chosen: masked mean. It has no parameters and makes "no absent channel contributes" exact.
     It is also the D9 comparator's pooling (`panels/text_only.py`, the mean over present
-    channels), so an arm and its comparator differ only by training and the projection.
+    channels), so an arm and its comparator share pooling and fusion. They differ by training,
+    the projection and the field markers, since the comparator reads unmarked text (4.2).
   - Attention pooling stays an option.
 - **MoE layout.**
   - Chosen: the masked mean, then the experts.
@@ -433,9 +450,12 @@ This runs locally on MPS. Off CUDA the trainer picks `32-true` (`utils/backend.p
   - Rejected: leaving it, since the default run would raise at epoch 6.
   - Rejected: pinning phase 1 in config, which silently changes the curriculum.
 - **Compute.**
-  - Chosen: a local MPS run for the Exit, with Lambda planned in Stage 7.
+  - Chosen: one full local epoch on MPS for the Exit, with Lambda planned in Stage 7.
   - Rejected: specifying the Lambda workflow here, infrastructure this Exit doesn't use.
   - Rejected: a hand-prepared Lambda run, which a run with no quality bar doesn't need.
+  - Rejected: two epochs (about 3 hours), which adds little to a run with no quality bar.
+  - Rejected: declared batch caps for a minutes-long run. They add a config knob, and the run
+    would cover only a slice of an epoch.
 - **Code side of a read.**
   - Chosen: decode from the exported table, so the logged fingerprint names the decoded vectors.
   - Rejected: decoding from a live forward, which leaves that fingerprint a label only.
