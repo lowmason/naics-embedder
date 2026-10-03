@@ -3,12 +3,21 @@ import torch
 from torch import nn
 
 from naics_embedder.supervision.checkpoints import (
+    D2_REFUSAL,
+    LEGACY_ENCODER,
     CheckpointContract,
+    EncoderArchitecture,
     contract_for_bundle,
     load_weights_only,
+    saved_encoder,
+    shared_encoder_architecture,
     validate_checkpoint_contract,
     validate_exact_resume,
+    validate_supervision_contract,
 )
+
+MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
+SHARED = shared_encoder_architecture(fusion='masked_mean', dimension=16, backbone=MINILM)
 
 @pytest.fixture
 def runtime_contract() -> CheckpointContract:
@@ -16,6 +25,7 @@ def runtime_contract() -> CheckpointContract:
         supervision_mode='repaired',
         bundle_id='bundle-a',
         codebook_fingerprint='a' * 64,
+        encoder=SHARED,
     )
 
 @pytest.fixture
@@ -25,11 +35,20 @@ def tiny_repaired_model() -> nn.Module:
     model.current_curriculum_flags = {}
     return model
 
-def test_matching_new_checkpoint_can_exact_resume(tmp_path, runtime_contract):
-    path = tmp_path / 'new.ckpt'
-    torch.save({'stage3_supervision': runtime_contract.model_dump()}, path)
+def _save(path, contract=None, **payload):
+    '''Save a checkpoint holding ``payload``, under ``contract`` when one is given.'''
 
-    validate_exact_resume(path, runtime_contract)
+    if contract is not None:
+        payload['stage3_supervision'] = contract.model_dump()
+    torch.save(payload, path)
+    return path
+
+# -------------------------------------------------------------------------------------------------
+# Exact resume
+# -------------------------------------------------------------------------------------------------
+
+def test_matching_new_checkpoint_can_exact_resume(tmp_path, runtime_contract):
+    validate_exact_resume(_save(tmp_path / 'new.ckpt', runtime_contract), runtime_contract)
 
 @pytest.mark.parametrize(
     'checkpoint_metadata',
@@ -74,94 +93,8 @@ def test_in_memory_contract_check_names_every_mismatched_field(runtime_contract)
         validate_checkpoint_contract(saved, runtime_contract)
 
     assert 'supervision_mode' in str(excinfo.value)
-
-def test_contract_for_bundle_reads_manifest_identity(validated_bundle):
-    contract = contract_for_bundle(validated_bundle.manifest)
-
-    assert contract.supervision_mode == 'repaired'
-    assert contract.bundle_id == 'bundle-a'
-    assert contract.contract_version == 'stage3-supervision-v2'
-    assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
-
-def test_weights_only_loads_allowlisted_encoder_and_resets_training_state(
-    tmp_path, tiny_repaired_model
-):
-    path = tmp_path / 'legacy.ckpt'
-    encoder_key = next(
-        name for name in tiny_repaired_model.state_dict() if name.startswith('encoder.')
-    )
-    state = {
-        encoder_key: torch.ones_like(tiny_repaired_model.state_dict()[encoder_key]),
-        'lambdarank_loss_fn.tree_distances': torch.ones((3, 3)),
-        'unexpected.weight': torch.ones(1),
-    }
-    torch.save(
-        {
-            'state_dict': state,
-            'optimizer_states': [{
-                'state': {
-                    'x': 1
-                }
-            }],
-            'epoch': 9,
-            'global_step': 123,
-        },
-        path,
-    )
-
-    with pytest.raises(ValueError, match='unexpected.weight'):
-        load_weights_only(tiny_repaired_model, path)
-
-def test_weights_only_reports_loaded_skipped_and_missing_without_restoring_state(
-    tmp_path, tiny_repaired_model
-):
-    path = tmp_path / 'legacy.ckpt'
-    target = tiny_repaired_model.state_dict()
-    encoder_keys = sorted(name for name in target if name.startswith('encoder.'))
-    loaded_key = encoder_keys[0]
-    initial_flags = dict(tiny_repaired_model.current_curriculum_flags)
-    torch.save(
-        {
-            'state_dict': {
-                loaded_key: torch.full_like(target[loaded_key], 0.25),
-                'loss_fn.legacy_buffer': torch.ones(1),
-            },
-            'optimizer_states': [{
-                'state': {
-                    'legacy': 1
-                }
-            }],
-            'epoch': 9,
-            'global_step': 123,
-        },
-        path,
-    )
-
-    report = load_weights_only(tiny_repaired_model, path)
-
-    assert report.loaded == (loaded_key, )
-    assert report.skipped == ('loss_fn.legacy_buffer', )
-    assert report.missing == tuple(encoder_keys[1:])
-    assert report.unexpected == ()
-    assert tiny_repaired_model.current_curriculum_flags == initial_flags
-    assert torch.equal(
-        tiny_repaired_model.state_dict()[loaded_key],
-        torch.full_like(target[loaded_key], 0.25),
-    )
-
-def test_weights_only_rejects_a_checkpoint_with_no_encoder_weights(tmp_path, tiny_repaired_model):
-    path = tmp_path / 'loss_only.ckpt'
-    torch.save({'state_dict': {'loss_fn.legacy_buffer': torch.ones(1)}}, path)
-
-    with pytest.raises(ValueError, match='no allowlisted encoder parameters'):
-        load_weights_only(tiny_repaired_model, path)
-
-def test_weights_only_rejects_shape_mismatched_encoder_weights(tmp_path, tiny_repaired_model):
-    path = tmp_path / 'legacy.ckpt'
-    torch.save({'state_dict': {'encoder.0.weight': torch.ones((5, 5))}}, path)
-
-    with pytest.raises(ValueError, match='encoder.0.weight'):
-        load_weights_only(tiny_repaired_model, path)
+    # A supervision mismatch is not the architecture refusal
+    assert D2_REFUSAL not in str(excinfo.value)
 
 def test_a_checkpoint_trained_under_the_exclusion_quota_cannot_exact_resume(
     tmp_path, runtime_contract
@@ -174,3 +107,253 @@ def test_a_checkpoint_trained_under_the_exclusion_quota_cannot_exact_resume(
     assert runtime_contract.mining_contract_version == 'negative-selection-v2'
     with pytest.raises(ValueError, match='exact resume'):
         validate_exact_resume(path, runtime_contract)
+
+def test_contract_for_bundle_reads_manifest_identity(validated_bundle):
+    contract = contract_for_bundle(validated_bundle.manifest, encoder=SHARED)
+
+    assert contract.supervision_mode == 'repaired'
+    assert contract.bundle_id == 'bundle-a'
+    assert contract.contract_version == 'stage3-supervision-v2'
+    assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
+    assert contract.encoder == SHARED
+
+# -------------------------------------------------------------------------------------------------
+# The encoder record (spec 4.4)
+# -------------------------------------------------------------------------------------------------
+
+def test_an_absent_encoder_record_reads_as_the_legacy_four_copy_layout(runtime_contract):
+    saved = runtime_contract.model_dump()
+    del saved['encoder']
+
+    assert CheckpointContract.model_validate(saved).encoder == LEGACY_ENCODER
+    assert LEGACY_ENCODER == EncoderArchitecture(layout='four-copy')
+    assert saved_encoder(saved) == LEGACY_ENCODER
+    assert saved_encoder(None) == LEGACY_ENCODER
+
+@pytest.mark.parametrize(
+    'record',
+    [
+        {
+            'layout': 'shared',
+            'fusion': 'masked_mean',
+            'dimension': 16
+        },
+        {
+            'layout': 'four-copy',
+            'dimension': 16
+        },
+        {
+            'layout': 'concatenated'
+        },
+        {
+            'layout': 'shared',
+            'fusion': 'masked_mean',
+            'dimension': 16,
+            'backbone': MINILM,
+            'x': 1
+        },
+    ],
+)
+def test_a_malformed_encoder_record_is_refused(record):
+    with pytest.raises(ValueError):
+        EncoderArchitecture(**record)
+
+def test_the_encoder_record_survives_a_save_round_trip(tmp_path, runtime_contract):
+    path = _save(tmp_path / 'shared.ckpt', runtime_contract)
+
+    saved = torch.load(path, weights_only=False)['stage3_supervision']
+
+    assert saved['encoder'] == {
+        'layout': 'shared',
+        'fusion': 'masked_mean',
+        'dimension': 16,
+        'backbone': MINILM,
+    }
+    assert CheckpointContract.model_validate(saved) == runtime_contract
+
+@pytest.mark.parametrize(
+    'encoder',
+    [
+        LEGACY_ENCODER,
+        shared_encoder_architecture(fusion='masked_mean', dimension=8, backbone=MINILM),
+        shared_encoder_architecture(fusion='moe', dimension=16, backbone=MINILM),
+        shared_encoder_architecture(fusion='masked_mean', dimension=16, backbone='other/model'),
+    ],
+)
+def test_another_encoder_architecture_cannot_exact_resume(tmp_path, runtime_contract, encoder):
+    path = _save(tmp_path / 'other.ckpt', runtime_contract.model_copy(update={'encoder': encoder}))
+
+    with pytest.raises(ValueError, match='exact resume') as excinfo:
+        validate_exact_resume(path, runtime_contract)
+
+    assert 'encoder' in str(excinfo.value)
+    assert D2_REFUSAL in str(excinfo.value)
+
+def test_a_contract_saved_before_stage_6_meets_the_d2_refusal(tmp_path, runtime_contract):
+    saved = runtime_contract.model_dump()
+    del saved['encoder']
+    path = tmp_path / 'four-copy.ckpt'
+    torch.save({'stage3_supervision': saved}, path)
+
+    with pytest.raises(ValueError, match='four-copy') as excinfo:
+        validate_exact_resume(path, runtime_contract)
+
+    assert D2_REFUSAL in str(excinfo.value)
+
+def test_a_checkpoint_without_a_contract_cites_d2(tmp_path, runtime_contract):
+    with pytest.raises(ValueError, match='cannot exact resume') as excinfo:
+        validate_exact_resume(_save(tmp_path / 'legacy.ckpt'), runtime_contract)
+
+    assert D2_REFUSAL in str(excinfo.value)
+    assert 'weights_only' not in str(excinfo.value)
+
+# -------------------------------------------------------------------------------------------------
+# Export and reads compare the supervision fields only
+# -------------------------------------------------------------------------------------------------
+
+def test_the_supervision_check_takes_the_encoder_record_from_the_checkpoint(validated_bundle):
+    manifest = validated_bundle.manifest
+    other = shared_encoder_architecture(fusion='attention', dimension=8, backbone=MINILM)
+    saved = contract_for_bundle(manifest, encoder=other)
+
+    assert validate_supervision_contract(saved.model_dump(), manifest) == saved
+
+@pytest.mark.parametrize(
+    'update',
+    [
+        {
+            'bundle_id': 'other-bundle'
+        },
+        {
+            'codebook_fingerprint': 'f' * 64
+        },
+        {
+            'supervision_mode': 'legacy_containment'
+        },
+    ],
+)
+def test_the_supervision_check_refuses_another_bundle(validated_bundle, update):
+    manifest = validated_bundle.manifest
+    saved = contract_for_bundle(manifest, encoder=SHARED).model_copy(update=update)
+
+    with pytest.raises(ValueError, match='supervision contract mismatch'):
+        validate_supervision_contract(saved.model_dump(), manifest)
+
+def test_the_supervision_check_refuses_a_checkpoint_without_a_contract(validated_bundle):
+    with pytest.raises(ValueError, match='no Stage-3 contract') as excinfo:
+        validate_supervision_contract(None, validated_bundle.manifest)
+
+    assert D2_REFUSAL in str(excinfo.value)
+
+# -------------------------------------------------------------------------------------------------
+# Weights-only migration
+# -------------------------------------------------------------------------------------------------
+
+def test_weights_only_loads_allowlisted_encoder_and_resets_training_state(
+    tmp_path, runtime_contract, tiny_repaired_model
+):
+    encoder_key = next(
+        name for name in tiny_repaired_model.state_dict() if name.startswith('encoder.')
+    )
+    path = _save(
+        tmp_path / 'checkpoint.ckpt',
+        runtime_contract,
+        state_dict={
+            encoder_key: torch.ones_like(tiny_repaired_model.state_dict()[encoder_key]),
+            'lambdarank_loss_fn.tree_distances': torch.ones((3, 3)),
+            'unexpected.weight': torch.ones(1),
+        },
+        optimizer_states=[{
+            'state': {
+                'x': 1
+            }
+        }],
+        epoch=9,
+        global_step=123,
+    )
+
+    with pytest.raises(ValueError, match='unexpected.weight'):
+        load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+
+def test_weights_only_reports_loaded_skipped_and_missing_without_restoring_state(
+    tmp_path, runtime_contract, tiny_repaired_model
+):
+    target = tiny_repaired_model.state_dict()
+    encoder_keys = sorted(name for name in target if name.startswith('encoder.'))
+    loaded_key = encoder_keys[0]
+    initial_flags = dict(tiny_repaired_model.current_curriculum_flags)
+    # The same architecture under another bundle, which weights-only still serves (D2)
+    path = _save(
+        tmp_path / 'other-bundle.ckpt',
+        runtime_contract.model_copy(update={'bundle_id': 'bundle-b'}),
+        state_dict={
+            loaded_key: torch.full_like(target[loaded_key], 0.25),
+            'loss_fn.legacy_buffer': torch.ones(1),
+        },
+        optimizer_states=[{
+            'state': {
+                'legacy': 1
+            }
+        }],
+        epoch=9,
+        global_step=123,
+    )
+
+    report = load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+
+    assert report.loaded == (loaded_key, )
+    assert report.skipped == ('loss_fn.legacy_buffer', )
+    assert report.missing == tuple(encoder_keys[1:])
+    assert report.unexpected == ()
+    assert tiny_repaired_model.current_curriculum_flags == initial_flags
+    assert torch.equal(
+        tiny_repaired_model.state_dict()[loaded_key],
+        torch.full_like(target[loaded_key], 0.25),
+    )
+
+def test_weights_only_rejects_a_checkpoint_with_no_encoder_weights(
+    tmp_path, runtime_contract, tiny_repaired_model
+):
+    path = _save(
+        tmp_path / 'loss_only.ckpt',
+        runtime_contract,
+        state_dict={'loss_fn.legacy_buffer': torch.ones(1)},
+    )
+
+    with pytest.raises(ValueError, match='no allowlisted encoder parameters'):
+        load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+
+def test_weights_only_rejects_shape_mismatched_encoder_weights(
+    tmp_path, runtime_contract, tiny_repaired_model
+):
+    path = _save(
+        tmp_path / 'mismatched.ckpt',
+        runtime_contract,
+        state_dict={'encoder.0.weight': torch.ones((5, 5))},
+    )
+
+    with pytest.raises(ValueError, match='encoder.0.weight'):
+        load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+
+@pytest.mark.parametrize(
+    'saved',
+    [
+        None,
+        LEGACY_ENCODER,
+        shared_encoder_architecture(fusion='masked_mean', dimension=8, backbone=MINILM),
+    ],
+)
+def test_weights_only_refuses_another_encoder_before_reading_any_parameter(
+    tmp_path, runtime_contract, tiny_repaired_model, saved
+):
+    target = tiny_repaired_model.state_dict()
+    key = sorted(name for name in target if name.startswith('encoder.'))[0]
+    before = target[key].clone()
+    contract = None if saved is None else runtime_contract.model_copy(update={'encoder': saved})
+    path = _save(tmp_path / 'other.ckpt', contract, state_dict={key: torch.full_like(before, 0.25)})
+
+    with pytest.raises(ValueError, match='weights-only encoder mismatch') as excinfo:
+        load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+
+    assert D2_REFUSAL in str(excinfo.value)
+    assert torch.equal(tiny_repaired_model.state_dict()[key], before)

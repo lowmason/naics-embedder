@@ -26,6 +26,7 @@ import pytorch_lightning as pyl
 import torch
 from transformers import PreTrainedModel
 
+from naics_embedder.supervision.checkpoints import contract_for_bundle, shared_encoder_architecture
 from naics_embedder.text_model.dataloader.datamodule import collate_fn
 from naics_embedder.text_model.naics_model import (
     NAICSContrastiveModel,
@@ -911,6 +912,20 @@ class TestCheckpointContract:
         assert contract.supervision_mode == 'repaired'
         assert contract.bundle_id == validated_bundle.manifest.bundle_id
         assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
+        assert contract.encoder == shared_encoder_architecture(
+            fusion='masked_mean', dimension=16, backbone='sentence-transformers/all-MiniLM-L6-v2'
+        )
+
+    def test_a_runtime_contract_of_another_encoder_is_refused(self, model_config, validated_bundle):
+        other = contract_for_bundle(
+            validated_bundle.manifest,
+            encoder=shared_encoder_architecture(
+                fusion='masked_mean', dimension=8, backbone=model_config['base_model_name']
+            ),
+        )
+
+        with pytest.raises(ValueError, match='does not match'):
+            NAICSContrastiveModel(**model_config, checkpoint_contract=other)
 
     def test_on_save_checkpoint_writes_contract(self, naics_model):
         checkpoint = {}
@@ -973,6 +988,8 @@ class TestCheckpointContract:
         restored = NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
 
         assert restored.checkpoint_contract == naics_model.checkpoint_contract
+        assert restored.checkpoint_contract.encoder.layout == 'shared'
+        assert restored.encoder.dimension == 16
 
     def test_load_from_checkpoint_rejects_a_legacy_checkpoint(self, naics_model, tmp_path):
         checkpoint = _lightning_checkpoint(naics_model)
@@ -982,6 +999,35 @@ class TestCheckpointContract:
 
         with pytest.raises(ValueError, match='exact resume'):
             NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
+
+    def test_load_from_checkpoint_refuses_a_four_copy_checkpoint_before_its_weights(
+        self, naics_model, tmp_path
+    ):
+        '''Spec 4.4: a pre-Stage-6 checkpoint meets the D2 refusal, never a state-dict key error.'''
+
+        checkpoint = _lightning_checkpoint(naics_model)
+        # Contracts saved before Stage 6 carry no encoder record, and their hyperparameters
+        # predate fusion and dimension
+        del checkpoint['stage3_supervision']['encoder']
+        for name in ('fusion', 'dimension'):
+            del checkpoint['hyper_parameters'][name]
+        # The four-copy layout's keys, which a strict load_state_dict would reject
+        checkpoint['state_dict'] = {
+            'encoder.encoders.title.base_model.model.embeddings.word_embeddings.weight': torch
+            .zeros(1)
+        }
+        path = tmp_path / 'four-copy.ckpt'
+        torch.save(checkpoint, path)
+
+        with pytest.raises(ValueError, match='D2'):
+            NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
+
+    def test_load_from_checkpoint_refuses_another_dimension(self, naics_model, tmp_path):
+        path = tmp_path / 'shared.ckpt'
+        torch.save(_lightning_checkpoint(naics_model), path)
+
+        with pytest.raises(ValueError, match='D2'):
+            NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu', dimension=8)
 
 # -------------------------------------------------------------------------------------------------
 # Test: Explicit legacy containment

@@ -36,6 +36,7 @@ from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
     containment_contract,
     contract_for_bundle,
+    shared_encoder_architecture,
     validate_checkpoint_contract,
 )
 from naics_embedder.supervision.index import SupervisionIndex
@@ -246,6 +247,11 @@ class NAICSContrastiveModel(
         # identifiers, and a restored model re-validates its bundle from the manifest path.
         self.save_hyperparameters(ignore=['checkpoint_contract', 'supervision_bundle'])
         self.supervision_mode = supervision_mode
+        # The architecture this model's weights belong to; a checkpoint of any other is refused
+        # (spec 4.4, roadmap D2)
+        encoder_record = shared_encoder_architecture(
+            fusion=fusion, dimension=dimension, backbone=base_model_name
+        )
 
         self.supervision_index: Optional[SupervisionIndex] = None
         self.selection_coordinator: Optional[NegativeSelectionCoordinator] = None
@@ -275,7 +281,9 @@ class NAICSContrastiveModel(
                         f'{supervision_contract_version}'
                     )
                 bundle = supervision_bundle
-            runtime_contract = contract_for_bundle(bundle.manifest, supervision_mode)
+            runtime_contract = contract_for_bundle(
+                bundle.manifest, supervision_mode, encoder=encoder_record
+            )
             self.relation_id_to_name = {
                 relation_id: name
                 for name, relation_id in bundle.manifest.structural_relation_ids.items()
@@ -284,7 +292,7 @@ class NAICSContrastiveModel(
             self.selection_coordinator = NegativeSelectionCoordinator()
             self.naics_hierarchy = load_naics_hierarchy(str(bundle.artifact_path('relations')))
         else:
-            runtime_contract = containment_contract()
+            runtime_contract = containment_contract(encoder=encoder_record)
             logger.warning(
                 'LEGACY CONTAINMENT (%s): not contract-compliant Stage-3 training. Structural '
                 'ranking and hierarchy losses, negative reordering, and pseudo-related handling '
@@ -453,15 +461,16 @@ class NAICSContrastiveModel(
         return self.encoder(channel_inputs)
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-        '''Record the supervision contract this checkpoint was trained under.'''
+        '''Record the supervision contract and encoder architecture this checkpoint belongs to.'''
         checkpoint[CHECKPOINT_KEY] = self.checkpoint_contract.model_dump()
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         '''
-        Refuse to restore a checkpoint trained under any other supervision contract.
+        Refuse to restore a checkpoint of any other supervision contract or encoder architecture.
 
-        Runs for Lightning exact resume and ``load_from_checkpoint``; weights-only migration
-        never reaches this hook.
+        Runs for Lightning exact resume and ``load_from_checkpoint`` before the state dict loads,
+        so a four-copy checkpoint meets the D2 refusal, never a key mismatch. Weights-only
+        migration never reaches this hook; it checks the encoder record itself.
         '''
         validate_checkpoint_contract(checkpoint.get(CHECKPOINT_KEY), self.checkpoint_contract)
 

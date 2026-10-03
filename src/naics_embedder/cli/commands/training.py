@@ -27,10 +27,12 @@ from typing_extensions import Annotated
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
+    EncoderArchitecture,
     MigrationReport,
     containment_contract,
     contract_for_bundle,
     load_weights_only,
+    shared_encoder_architecture,
     validate_exact_resume,
 )
 from naics_embedder.text_model.dataloader.datamodule import (
@@ -148,18 +150,35 @@ def announce_legacy_containment() -> None:
     logger.warning(message)
     console.print(f'[bold red]{message}[/bold red]\n')
 
+def encoder_architecture_for(cfg: Config) -> EncoderArchitecture:
+    '''
+    The configured run's encoder record.
+
+    It comes from the same helper the model builds its own record with, so the two cannot drift
+    (spec 4.4).
+    '''
+
+    return shared_encoder_architecture(
+        fusion=cfg.model.fusion,
+        dimension=cfg.model.dimension,
+        backbone=cfg.model.base_model_name,
+    )
+
 def runtime_contract_for(
     cfg: Config, bundle: Optional[ValidatedSupervisionBundle]
 ) -> CheckpointContract:
     '''
-    The checkpoint contract of the configured run.
+    The checkpoint contract of the configured run, its encoder record included.
 
-    The supervision gate returns no bundle only for explicit legacy containment.
+    The supervision gate returns no bundle only for explicit legacy containment. Training's exact
+    resume and the HGCN feeder compare this whole contract with a checkpoint's; export and reads
+    take the encoder record from the checkpoint instead (spec 4.4).
     '''
 
+    encoder = encoder_architecture_for(cfg)
     if bundle is None:
-        return containment_contract()
-    return contract_for_bundle(bundle.manifest, cfg.supervision.mode)
+        return containment_contract(encoder=encoder)
+    return contract_for_bundle(bundle.manifest, cfg.supervision.mode, encoder=encoder)
 
 def log_migration_report(report: MigrationReport) -> None:
     '''Report what a weights-only migration loaded, skipped, and left freshly initialized.'''
@@ -411,7 +430,8 @@ def train(
             '--checkpoint-load-mode',
             help=(
                 'exact: resume optimizer/epoch/curriculum state (requires a matching supervision '
-                'contract); weights_only: load allowlisted encoder weights into a fresh run'
+                'contract); weights_only: load allowlisted encoder weights of the same encoder '
+                'architecture into a fresh run'
             ),
         ),
     ] = CheckpointLoadMode.EXACT,
@@ -448,7 +468,8 @@ def train(
             experiment. Specify a full path for cross-experiment resumption.
         checkpoint_load_mode: ``exact`` resumes full training state and requires the
             checkpoint's supervision contract to match the runtime bundle; ``weights_only``
-            loads allowlisted encoder weights into a fresh run starting at epoch zero.
+            loads allowlisted encoder weights of the same encoder architecture into a fresh run
+            starting at epoch zero.
         skip_validation: Skip advisory pre-flight checks for data files and tokenization
             cache. The mandatory supervision bundle gate is never skipped.
         overrides: Optional list of key-value override strings. Use dot notation
@@ -644,7 +665,7 @@ def train(
         model = build_model_from_config(cfg, runtime_contract, bundle)
 
         if checkpoint_path and not exact_resume:
-            report = load_weights_only(model, checkpoint_path)
+            report = load_weights_only(model, checkpoint_path, encoder=runtime_contract.encoder)
             log_migration_report(report)
 
         # Setup callbacks

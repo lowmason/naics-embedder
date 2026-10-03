@@ -6,11 +6,20 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli import app as cli_app
 from naics_embedder.cli.commands import training
-from naics_embedder.supervision.checkpoints import CheckpointContract, MigrationReport
+from naics_embedder.supervision.checkpoints import (
+    CheckpointContract,
+    MigrationReport,
+    shared_encoder_architecture,
+)
 from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
 from naics_embedder.utils.config import CheckpointLoadMode, Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
+
+# The record the default config builds
+CONFIGURED_ENCODER = shared_encoder_architecture(
+    fusion='masked_mean', dimension=16, backbone='sentence-transformers/all-MiniLM-L6-v2'
+)
 
 @pytest.fixture
 def cli_runner():
@@ -220,7 +229,18 @@ def test_training_checkpoint_resume_passes_ckpt(training_env):
         supervision_mode='repaired',
         bundle_id='bundle-a',
         codebook_fingerprint='a' * 64,
+        encoder=CONFIGURED_ENCODER,
     )
+
+@pytest.mark.unit
+def test_the_runtime_contract_records_the_configured_encoder(training_env):
+    training.train(skip_validation=True, overrides=['model.fusion=attention', 'model.dimension=8'])
+
+    model_kwargs = training_env.trainer.fit_calls[0]['model'].kwargs
+    assert model_kwargs['checkpoint_contract'].encoder == shared_encoder_architecture(
+        fusion='attention', dimension=8, backbone='sentence-transformers/all-MiniLM-L6-v2'
+    )
+    assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('attention', 8)
 
 @pytest.mark.unit
 def test_exact_resume_contract_mismatch_fails_before_training(training_env, monkeypatch):
@@ -246,8 +266,9 @@ def test_weights_only_never_passes_checkpoint_to_trainer(training_env, monkeypat
     )
     reports = []
 
-    def fake_load_weights_only(model, path):
+    def fake_load_weights_only(model, path, *, encoder):
         assert path == 'legacy.ckpt'
+        assert encoder == CONFIGURED_ENCODER
         report = MigrationReport(
             loaded=('encoder.weight', ),
             skipped=('loss_fn.buffer', ),
@@ -275,7 +296,7 @@ def test_weights_only_without_an_existing_checkpoint_is_fatal(training_env, monk
     monkeypatch.setattr(
         training,
         'load_weights_only',
-        lambda *_args: pytest.fail('nothing to migrate'),
+        lambda *_args, **_kwargs: pytest.fail('nothing to migrate'),
     )
 
     with pytest.raises(typer.Exit) as excinfo:
