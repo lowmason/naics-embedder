@@ -901,9 +901,17 @@ class ModelConfig(BaseModel):
     base_model_name: str = Field(
         default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace base model name'
     )
+    fusion: Literal['masked_mean', 'attention', 'moe'] = Field(
+        default='masked_mean',
+        description='Channel fusion: masked_mean (the default), attention, or moe (an ablation)',
+    )
+    dimension: Literal[8, 16, 32] = Field(
+        default=16, description='Embedding dimension: the one Linear(hidden -> d) before the head'
+    )
     lora: LoRAConfig = Field(default_factory=LoRAConfig, description='LoRA configuration')
     moe: MoEConfig = Field(
-        default_factory=MoEConfig, description='Mixture of Experts configuration'
+        default_factory=MoEConfig,
+        description='Mixture of Experts configuration, read only under fusion moe',
     )
     eval_sample_size: int = Field(
         default=500, gt=0, le=2125, description='Number of codes to sample for evaluation'

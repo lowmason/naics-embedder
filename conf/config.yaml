@@ -115,13 +115,15 @@ data_loader:
 # Model configuration
 model:
   base_model_name: sentence-transformers/all-MiniLM-L6-v2
+  fusion: masked_mean  # masked_mean, attention, or moe (an ablation only)
+  dimension: 16  # 8, 16 or 32: the one Linear(384 -> d) before the geometry head
 
   lora:
     r: 8
     alpha: 16
     dropout: 0.1
 
-  moe:
+  moe:  # read only under fusion: moe
     num_experts: 4
     top_k: 2
     hidden_dim: 768

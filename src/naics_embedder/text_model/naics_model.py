@@ -3,7 +3,7 @@
 # -------------------------------------------------------------------------------------------------
 '''
 Main NAICS Contrastive Learning Model combining:
-- MultiChannelEncoder with LoRA fine-tuning and MoE
+- SharedEncoder: one LoRA-tuned backbone, masked fusion and one affine map to dimension d
 - Hyperbolic embeddings using the Lorentz model
 - Curriculum learning with structure-aware negative sampling
 - Multi-level supervision and false negative detection
@@ -43,7 +43,6 @@ from naics_embedder.supervision.mode import SupervisionModePolicy
 from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.supervision.selection import NegativeSelectionCoordinator
 from naics_embedder.text_model.curriculum import CurriculumScheduler
-from naics_embedder.text_model.encoder import MultiChannelEncoder
 from naics_embedder.text_model.fusion import FUSIONS
 from naics_embedder.text_model.hard_negative_mining import (
     LorentzianHardNegativeMiner,
@@ -64,6 +63,7 @@ from naics_embedder.text_model.mixins import (
     ValidationMixin,
     gather_embeddings_global,
 )
+from naics_embedder.text_model.shared_encoder import DIMENSIONS, SharedEncoder
 
 # Re-export distributed utilities for backward compatibility
 __all__ = [
@@ -96,7 +96,8 @@ class NAICSContrastiveModel(
     NAICS Contrastive Learning Model for learning hierarchical NAICS code embeddings.
 
     This model combines:
-    - MultiChannelEncoder: LoRA-tuned transformer with Mixture of Experts
+    - SharedEncoder: one LoRA-tuned backbone over field-marked channels, masked fusion, and one
+      affine map to the embedding dimension
     - Hyperbolic embeddings: Lorentz model for hierarchical representation
     - Curriculum learning: Structure-aware dynamic curriculum (SADC)
     - Multiple loss functions: Contrastive, hierarchy preservation, structural preference
@@ -120,9 +121,11 @@ class NAICSContrastiveModel(
         lora_dropout: LoRA dropout rate
         fusion: Channel fusion: ``masked_mean`` (default), ``attention`` or ``moe``. Router
             mining and the load-balancing term run only under ``moe`` (R10, R11)
-        num_experts: Number of MoE experts
-        top_k: Number of experts to select per token
-        moe_hidden_dim: Hidden dimension of MoE layers
+        dimension: Embedding dimension, one of 8, 16 or 32: the width of the one
+            ``Linear(hidden → d)`` before the geometry head
+        num_experts: Number of MoE experts (``moe`` only)
+        top_k: Number of experts to select per code (``moe`` only)
+        moe_hidden_dim: Hidden dimension of MoE layers (``moe`` only)
         temperature: Temperature for InfoNCE loss
         curvature: Hyperbolic space curvature
         hierarchy_weight: Weight for hierarchy preservation loss
@@ -174,6 +177,7 @@ class NAICSContrastiveModel(
         lora_alpha: int = 16,
         lora_dropout: float = 0.1,
         fusion: str = 'masked_mean',
+        dimension: int = 16,
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
@@ -219,6 +223,8 @@ class NAICSContrastiveModel(
 
         if fusion not in FUSIONS:
             raise ValueError(f'unknown fusion {fusion!r}; expected one of {list(FUSIONS)}')
+        if dimension not in DIMENSIONS:
+            raise ValueError(f'unknown dimension {dimension!r}; expected one of {list(DIMENSIONS)}')
         # The one switch for the MoE-only machinery: router mining and load balancing (R10, R11)
         self.fusion = fusion
 
@@ -303,12 +309,14 @@ class NAICSContrastiveModel(
         self.checkpoint_contract = runtime_contract
         self.supervision_bundle_id = runtime_contract.bundle_id
 
-        # Initialize encoder
-        self.encoder = MultiChannelEncoder(
+        # Initialize the shared encoder: one backbone, fusion, one affine map, the head
+        self.encoder = SharedEncoder(
             base_model_name=base_model_name,
             lora_r=lora_r,
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
+            fusion=fusion,
+            dimension=dimension,
             num_experts=num_experts,
             top_k=top_k,
             moe_hidden_dim=moe_hidden_dim,
@@ -317,7 +325,7 @@ class NAICSContrastiveModel(
 
         # Initialize loss function
         self.loss_fn = HyperbolicInfoNCELoss(
-            embedding_dim=self.encoder.embedding_dim,
+            embedding_dim=self.encoder.dimension,
             temperature=temperature,
             curvature=curvature,
         )
@@ -430,16 +438,17 @@ class NAICSContrastiveModel(
 
     def forward(self, channel_inputs: Dict[str, Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         '''
-        Forward pass through the encoder.
+        Forward pass through the shared encoder.
 
         Args:
-            channel_inputs: Dictionary of channel inputs with tokenized text
+            channel_inputs: Per field, tokenized text and a boolean ``present``, as
+                ``stack_text_inputs`` builds them: a code batch's four channels, or ``query``
 
         Returns:
             Dictionary containing:
-            - embedding: Hyperbolic embeddings (batch_size, embed_dim + 1)
-            - gate_probs: MoE gate probabilities (batch_size, num_experts)
-            - top_k_indices: Selected expert indices (batch_size, top_k)
+            - embedding: Lorentz points (batch_size, dimension + 1)
+            - tangent: Capped tangent vectors at the origin (batch_size, dimension)
+            - gate_probs, top_k_indices: The experts' gates, under ``moe`` fusion only
         '''
         return self.encoder(channel_inputs)
 

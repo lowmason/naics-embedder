@@ -465,6 +465,8 @@ def save_training_summary(
         'config_snapshot': {
             'model': {
                 'base_model': config.model.base_model_name,
+                'fusion': config.model.fusion,
+                'dimension': config.model.dimension,
                 'lora_rank': config.model.lora.r,
                 'num_experts': config.model.moe.num_experts,
             },

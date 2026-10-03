@@ -173,6 +173,15 @@ def test_the_train_banner_headlines_no_structural_statistic(cli_runner, training
     assert 'Structural statistics, for the record only' in output
 
 @pytest.mark.unit
+def test_the_train_banner_names_the_fusion_and_dimension(cli_runner, training_env):
+    result = cli_runner.invoke(cli_app, ['train', 'model.dimension=8'], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    output = result.output.replace('\n', '')
+    assert 'Fusion: masked_mean' in output
+    assert 'Dimension: 8' in output
+
+@pytest.mark.unit
 def test_cli_train_applies_overrides(cli_runner, training_env, monkeypatch):
     captured = {}
 
@@ -354,6 +363,7 @@ def test_repaired_model_and_datamodule_receive_bundle_supervision(training_env):
     assert model_kwargs['supervision_bundle'] is training_env.bundle
     assert model_kwargs['checkpoint_contract'].bundle_id == 'bundle-a'
     assert model_kwargs['structural_preference_weight'] == 0.35
+    assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('masked_mean', 16)
     assert 'selection_seed' not in model_kwargs
     for legacy_key in ('rank_order_weight', 'distance_matrix_path', 'relations_parquet_path'):
         assert legacy_key not in model_kwargs

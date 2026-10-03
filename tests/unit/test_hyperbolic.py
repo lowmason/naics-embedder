@@ -12,7 +12,6 @@ from hypothesis import strategies as st
 
 from naics_embedder.text_model.hyperbolic import (
     HyperbolicHead,
-    HyperbolicProjection,
     LorentzDistance,
     LorentzOps,
     check_lorentz_manifold_validity,
@@ -184,70 +183,6 @@ class TestHyperbolicHead:
         torch.testing.assert_close(embedding, LorentzOps.exp_map_zero(padded, c=curvature))
         is_valid, _, _ = check_lorentz_manifold_validity(embedding, curvature=curvature)
         assert is_valid
-
-# -------------------------------------------------------------------------------------------------
-# HyperbolicProjection Tests
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestHyperbolicProjection:
-    '''Test suite for HyperbolicProjection module.'''
-
-    def test_projection_output_shape(self, sample_euclidean_embeddings):
-        '''Test that projection increases dimension by 1.'''
-
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=1.0)
-
-        output = projection(sample_euclidean_embeddings)
-
-        assert output.shape == (sample_euclidean_embeddings.shape[0], input_dim + 1)
-
-    def test_projection_preserves_batch_size(self, sample_euclidean_embeddings):
-        '''Test that batch size is preserved through projection.'''
-
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=1.0)
-
-        output = projection(sample_euclidean_embeddings)
-
-        assert output.shape[0] == sample_euclidean_embeddings.shape[0]
-
-    def test_projection_output_on_manifold(self, sample_euclidean_embeddings):
-        '''Test that projected embeddings lie on Lorentz manifold.'''
-
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=1.0)
-
-        output = projection(sample_euclidean_embeddings)
-
-        is_valid, _, _ = check_lorentz_manifold_validity(output, curvature=1.0, tolerance=1e-3)
-        assert is_valid
-
-    @pytest.mark.parametrize('curvature', [0.1, 1.0, 5.0])
-    def test_projection_with_different_curvatures(self, sample_euclidean_embeddings, curvature):
-        '''Test projection works correctly for different curvature values.'''
-
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=curvature)
-
-        output = projection(sample_euclidean_embeddings)
-
-        is_valid, _, _ = check_lorentz_manifold_validity(
-            output, curvature=curvature, tolerance=1e-2
-        )
-        assert is_valid
-
-    def test_projection_no_nans_or_infs(self, sample_euclidean_embeddings):
-        '''Test that projection never produces NaN or Inf values.'''
-
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=1.0)
-
-        output = projection(sample_euclidean_embeddings)
-
-        assert not torch.any(torch.isnan(output))
-        assert not torch.any(torch.isinf(output))
 
 # -------------------------------------------------------------------------------------------------
 # LorentzDistance Tests

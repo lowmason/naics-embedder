@@ -83,15 +83,6 @@ def sample_lorentz_embeddings(test_device, random_seed):
     tangent = tangent / (torch.norm(tangent, dim=1, keepdim=True) + 1e-8) * 2.0
     return LorentzOps.exp_map_zero(tangent, c=1.0)
 
-@pytest.fixture
-def sample_euclidean_embeddings(test_device, random_seed):
-    '''Generate sample Euclidean embeddings.'''
-
-    torch.manual_seed(random_seed)
-    batch_size = 16
-    dim = 384
-    return torch.randn(batch_size, dim, device=test_device)
-
 @pytest.fixture(params=[0.1, 0.5, 1.0, 5.0, 10.0])
 def curvature_values(request):
     '''Parametrize tests across different curvature values.'''

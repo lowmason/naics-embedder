@@ -655,6 +655,33 @@ def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
     assert cfg.loss.rank_order_weight is None
     assert cfg.data_loader.streaming.phase1_exclusion_weight is None
 
+def test_the_model_fuses_by_masked_mean_at_dimension_16(valid_config_dict):
+    cfg = Config.model_validate(valid_config_dict)
+
+    assert (cfg.model.fusion, cfg.model.dimension) == ('masked_mean', 16)
+
+@pytest.mark.parametrize(
+    ('key', 'value'),
+    [
+        ('model.fusion', 'attention'),
+        ('model.fusion', 'moe'),
+        ('model.dimension', 8),
+        ('model.dimension', 32),
+    ],
+)
+def test_every_fusion_and_dimension_in_its_set_is_accepted(key, value):
+    cfg = Config().override({key: value})
+
+    assert getattr(cfg.model, key.split('.')[1]) == value
+
+@pytest.mark.parametrize(('key', 'value'), [('model.fusion', 'concat'), ('model.dimension', 12)])
+def test_a_fusion_or_dimension_outside_its_set_is_refused(key, value):
+    with pytest.raises(ValidationError) as excinfo:
+        Config().override({key: value})
+
+    # A Literal refusal: before the keys are declared, the same override fails as extra_forbidden
+    assert _error_locs_and_types(excinfo) == [(('model', key.split('.')[1]), 'literal_error')]
+
 def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
     valid_config_dict['supervision'] = {
         'mode': 'repaired',

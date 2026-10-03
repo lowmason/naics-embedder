@@ -1,3 +1,3 @@
-# Encoder API
+# Shared Encoder API
 
-::: naics_embedder.text_model.encoder
+::: naics_embedder.text_model.shared_encoder

@@ -24,12 +24,14 @@ import polars as pl
 import pytest
 import pytorch_lightning as pyl
 import torch
+from transformers import PreTrainedModel
 
 from naics_embedder.text_model.dataloader.datamodule import collate_fn
 from naics_embedder.text_model.naics_model import (
     NAICSContrastiveModel,
     gather_embeddings_global,
 )
+from naics_embedder.text_model.shared_encoder import SharedEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -197,12 +199,19 @@ class TestModelInitialization:
         assert naics_model.hparams['curvature'] == model_config['curvature']
 
     def test_encoder_configuration(self, naics_model, model_config):
-        '''Test that encoder is configured correctly.'''
+        '''One MiniLM backbone, masked-mean fusion and one Linear(384 -> 16) to the head.'''
 
         encoder = naics_model.encoder
+        assert isinstance(encoder, SharedEncoder)
         assert encoder.curvature == model_config['curvature']
-        assert encoder.moe.num_experts == model_config['num_experts']
-        assert encoder.moe.top_k == model_config['top_k']
+        assert sum(isinstance(module, PreTrainedModel) for module in naics_model.modules()) == 1
+        assert encoder.fusion_name == 'masked_mean'
+        assert (encoder.projection.in_features, encoder.projection.out_features) == (384, 16)
+        assert list(encoder.head.parameters()) == []
+
+    def test_an_unknown_dimension_is_refused(self, model_config):
+        with pytest.raises(ValueError, match='unknown dimension'):
+            NAICSContrastiveModel(**model_config, dimension=12)
 
     def test_loss_function_configuration(self, naics_model, model_config):
         '''Test that loss function is configured correctly.'''
@@ -307,29 +316,24 @@ class TestForwardPass:
     '''Test model forward pass.'''
 
     def test_forward_basic(self, naics_model, sample_training_batch):
-        '''Test basic forward pass through encoder.'''
+        '''The default fusion returns the point and its tangent, and no gates.'''
 
         with torch.no_grad():
             output = naics_model(sample_training_batch['anchor'])
 
-        assert 'embedding' in output
-        assert 'embedding_euc' in output
-        assert 'gate_probs' in output
-        assert 'top_k_indices' in output
+        assert set(output) == {'embedding', 'tangent'}
 
     def test_forward_output_shapes(self, naics_model, sample_training_batch):
-        '''Test forward pass output shapes.'''
+        '''The Lorentz point is (batch, 17) and its capped tangent (batch, 16).'''
 
         batch_size = sample_training_batch['batch_size']
 
         with torch.no_grad():
             output = naics_model(sample_training_batch['anchor'])
 
-        # Hyperbolic embedding: (batch_size, embedding_dim + 1)
-        assert output['embedding'].shape == (batch_size, naics_model.encoder.embedding_dim + 1)
-
-        # Euclidean embedding: (batch_size, embedding_dim)
-        assert output['embedding_euc'].shape == (batch_size, naics_model.encoder.embedding_dim)
+        assert naics_model.encoder.dimension == 16
+        assert output['embedding'].shape == (batch_size, 17)
+        assert output['tangent'].shape == (batch_size, 16)
 
 # -------------------------------------------------------------------------------------------------
 # Test: Training Step
@@ -361,6 +365,34 @@ class TestTrainingStep:
         grads = [p.grad for p in naics_model.parameters() if p.requires_grad]
         assert any(grad is not None for grad in grads)
         assert all(grad is None or torch.isfinite(grad).all() for grad in grads)
+
+    def test_a_step_at_dimension_16_trains_the_adapter_and_the_projection(
+        self, naics_model, repaired_training_batch, monkeypatch
+    ):
+        '''Spec §6: the step reaches LoRA and the projection, and logs no load-balancing term.'''
+
+        log = Mock()
+        monkeypatch.setattr(naics_model, 'log', log)
+        naics_model.train()
+
+        naics_model.training_step(repaired_training_batch, batch_idx=0).backward()
+
+        encoder = naics_model.encoder
+        assert encoder.dimension == 16
+        assert encoder.projection.weight.grad.abs().sum() > 0
+        # PEFT starts lora_B at zero, so lora_A's first gradient is exactly zero (P9); the
+        # pooler's adapter never gets one, since mean pooling never reads it (P8)
+        adapters = {
+            name: parameter
+            for name, parameter in encoder.backbone.named_parameters()
+            if 'lora_B' in name and '.pooler.' not in name
+        }
+        assert adapters
+        for name, parameter in adapters.items():
+            assert parameter.grad is not None and parameter.grad.abs().sum() > 0, name
+        keys = {call.args[0] for call in log.call_args_list}
+        assert 'train/load_balancing_loss' not in keys
+        assert not any(key.startswith('train/moe/') for key in keys)
 
     def test_forward_candidate_pool_encodes_only_valid_rows(
         self, naics_model, repaired_training_batch
@@ -614,7 +646,7 @@ class TestValidationStep:
         for code in naics_model.validation_codes:
             assert code in naics_model.validation_embeddings
             embedding = naics_model.validation_embeddings[code]
-            assert embedding.shape[0] == naics_model.encoder.embedding_dim + 1  # Lorentz
+            assert embedding.shape[0] == naics_model.encoder.dimension + 1  # Lorentz
 
     def test_validation_step_no_duplicate_codes(self, naics_model, repaired_training_batch):
         '''Test that validation step doesn\'t store duplicate codes.'''
