@@ -1,7 +1,6 @@
 # Shared encoder and low-dimensional projection — Design Spec
 
-**Status:** IN REVIEW (2026-10-03). Each design section was approved in the brainstorm; the written
-spec awaits the user's review.
+**Status:** APPROVED (2026-10-03). Ready for an implementation plan.
 
 **Roadmap:** `specs/naics-embedding-roadmap.md`, Stage 6 (ROUTING: brainstorming). Source spec
 `specs/naics-embedding.md` at d9126ce. Evidence read at origin/main ea2e09f. Paths are under
