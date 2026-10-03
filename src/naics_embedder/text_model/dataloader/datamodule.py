@@ -7,7 +7,7 @@ import os
 import pickle
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import polars as pl
@@ -45,28 +45,52 @@ from naics_embedder.text_model.dataloader.streaming_dataset import (
     sample_raw_candidates,
     sampled_positive_pairs,
 )
+from naics_embedder.text_model.fields import CHANNELS
 from naics_embedder.utils.config import SamplingConfig, StreamingConfig, TokenizationConfig
 from naics_embedder.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
 
 SUPERVISION_MODES = ('repaired', 'legacy_containment')
-CHANNELS = ('title', 'description', 'excluded', 'examples')
 
 # -------------------------------------------------------------------------------------------------
 # Collate function for DataLoader
 # -------------------------------------------------------------------------------------------------
 
-def _stack_text_inputs(embeddings: List[Dict[str, Dict[str, torch.Tensor]]]
-                       ) -> Dict[str, Dict[str, torch.Tensor]]:
+def stack_text_inputs(
+    embeddings: Sequence[Mapping[str, Mapping[str, Any]]],
+    fields: Sequence[str] = CHANNELS,
+) -> Dict[str, Dict[str, torch.Tensor]]:
+    '''
+    Stack token rows into one batch: per field, ``input_ids``, ``attention_mask`` and a boolean
+    ``present`` of shape (B,).
+
+    Every code batch is built here (the collates, the export and the HGCN feeder), and a query
+    batch too, under the field ``query``. The encoder reads presence from ``present``, never from
+    the attention mask.
+
+    Raises:
+        ValueError: If a row's field has no ``present`` flag.
+    '''
+
+    for embedding in embeddings:
+        for field in fields:
+            if 'present' not in embedding[field]:
+                raise ValueError(
+                    f'a {field!r} token row has no present flag; rebuild the tokenization cache'
+                )
     return {
-        channel: {
-            'input_ids': torch.stack([embedding[channel]['input_ids'] for embedding in embeddings]),
+        field: {
+            'input_ids': torch.stack([embedding[field]['input_ids'] for embedding in embeddings]),
             'attention_mask': torch.stack(
-                [embedding[channel]['attention_mask'] for embedding in embeddings]
+                [embedding[field]['attention_mask'] for embedding in embeddings]
+            ),
+            'present': torch.tensor(
+                [bool(embedding[field]['present']) for embedding in embeddings],
+                dtype=torch.bool,
             ),
         }
-        for channel in CHANNELS
+        for field in fields
     }
 
 def _accumulate_sampling_metadata(batch: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -122,9 +146,9 @@ def _collate_legacy(batch: List[Dict]) -> Dict:
         padded_negatives.append(negatives)
 
     result = {
-        'anchor': _stack_text_inputs([item['anchor_embedding'] for item in batch]),
-        'positive': _stack_text_inputs([item['positive_embedding'] for item in batch]),
-        'negatives': _stack_text_inputs(
+        'anchor': stack_text_inputs([item['anchor_embedding'] for item in batch]),
+        'positive': stack_text_inputs([item['positive_embedding'] for item in batch]),
+        'negatives': stack_text_inputs(
             [
                 negative['negative_embedding'] for negatives in padded_negatives
                 for negative in negatives
@@ -175,6 +199,7 @@ def _collate_repaired(batch: List[Dict]) -> Dict:
         channel: {
             'input_ids': torch.zeros_like(template[channel]['input_ids']),
             'attention_mask': torch.zeros_like(template[channel]['attention_mask']),
+            'present': False,
         }
         for channel in CHANNELS
     }
@@ -209,9 +234,9 @@ def _collate_repaired(batch: List[Dict]) -> Dict:
     ]
 
     result = {
-        'anchor': _stack_text_inputs([item['anchor_embedding'] for item in batch]),
-        'positive': _stack_text_inputs([item['positive_embedding'] for item in batch]),
-        'candidate_inputs': _stack_text_inputs(candidate_rows),
+        'anchor': stack_text_inputs([item['anchor_embedding'] for item in batch]),
+        'positive': stack_text_inputs([item['positive_embedding'] for item in batch]),
+        'candidate_inputs': stack_text_inputs(candidate_rows),
         'batch_size': len(batch),
         'k_candidates': max_candidates,
         'selection_k': selection_k,

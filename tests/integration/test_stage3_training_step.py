@@ -105,6 +105,7 @@ def _encoded(value: int) -> dict[str, dict[str, torch.Tensor]]:
         channel: {
             'input_ids': torch.tensor([value, value + 1], dtype=torch.long),
             'attention_mask': torch.ones(2, dtype=torch.long),
+            'present': True,
         }
         for channel in ('title', 'description', 'excluded', 'examples')
     }

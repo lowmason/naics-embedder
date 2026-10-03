@@ -87,6 +87,7 @@ def sample_training_batch(test_device, batch_size=4, k_negatives=8):
             channel: {
                 'input_ids': torch.randint(0, 1000, (batch_size, seq_length), device=test_device),
                 'attention_mask': torch.ones(batch_size, seq_length, device=test_device),
+                'present': torch.ones(batch_size, dtype=torch.bool, device=test_device),
             }
             for channel in channels
         }
@@ -118,6 +119,7 @@ def _tokens(code_id: int, seq_length: int = 32) -> dict:
         channel: {
             'input_ids': torch.randint(0, 1000, (seq_length, ), generator=generator),
             'attention_mask': torch.ones(seq_length, dtype=torch.long),
+            'present': True,
         }
         for channel in CHANNELS
     }
