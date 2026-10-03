@@ -13,7 +13,8 @@ Stage 12 (below); the third re-validated Stages 4–12 against Stage 3 and recor
 which settle the former Open questions. Stage 4's completion commit (9c028ae, 2026-09-25)
 re-validated the entries of Stages 5–12 against what Stage 4 shipped, and Stage 5's (768a2b0,
 2026-09-26) those of Stages 6, 7, 9 and 10; the fourth resume re-validated Stages 6–12 against
-both (below). Stage 6 is next, per its ROUTING line.
+both (below). Stage 6 is next, per its ROUTING line. Stage 6b, added on 2026-10-03 during Stage
+6's brainstorm (below), can be built beside it and lands before Stage 7.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
@@ -125,6 +126,14 @@ rows Stages 4 and 5 discharged stay as they were. Every verdict stands. Two gaps
   already exact. The entry now says so and leaves the scorer's distance to Stage 6's spec.
 - Plans 6 and 7 handed over eleven open entries that no stage routed. The Deferred items
   paragraph now routes them.
+
+**Stage 6b (2026-10-03).** During Stage 6's brainstorm the user ruled that channel texts beyond
+the backbone's trained window are summarized, not truncated (Req 9's input windows), as a stage of
+their own before Stage 7. Truncation falls hardest on the top levels: 16 of the 20 sector
+descriptions and 59 of the 96 subsector ones overflow the 128-token window. The stage is inserted
+as 6b, not renumbered, so Stage 6's stamp and every reference to Stages 7–12 stand. Stage 6's spec
+(`specs/shared-encoder-and-projection.md`, Rollout note) records the measurements and the three
+constraints the entry carries.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -256,7 +265,10 @@ graph-stage halves of Reqs 4 and 6 (private tail, last-epoch export, acceptance 
 Stages 4 and 10 instead of item 1, because the stage is untouched until Req 15 runs (user
 adjudication Q2); Stage 4 retires the gate's thresholds in the comparison tool, not in the stage.
 Stage 1 is the investigation the Rollout note puts first; its finding fixes Stage 3's parameters,
-so it stands alone although it produces no software.
+so it stands alone although it produces no software. Stage 6b, added on 2026-10-03, fixes the text
+every arm reads, so it lands before Stage 7 trains the reference configuration and fixes δ. Its
+only contact with Stage 6 is the tokenization cache, so the two can be built in parallel, and
+whichever lands second integrates with the other.
 
 **Deferred items.** `specs/deferred_items.md` was read, not edited, at derivation. I4 (selection
 coordinator cost), M9 and M10 (pseudo-label and provenance handling in the curriculum mixin) are
@@ -562,7 +574,8 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       fusion options masked mean, attention pooling and MoE (MoE ablation-only); a configurable
       embedding dimension in {8, 16, 32}; a standalone export command writing the 2,125-code
       table in Req 2's form; the per-channel adapter copies and the load-balancing term deleted
-      with the default fusion; an outcome read whose logged `table` names the code vectors the
+      with the default fusion; a `summaries` entry in the tokenization cache's identity, null
+      until Stage 6b; an outcome read whose logged `table` names the code vectors the
       encoder decodes against (Stage 4's sweep logs the runner's table as that label, which
       `decide` checks but cannot tie to the decoding).
       Exit: A query embeds through the same encoder as a code (test); masking an absent
@@ -571,6 +584,39 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       and the export command writes the 2,125-code table, which `tools regressor-panel` reads on
       its validation split; Stage 2's scorer returns live validation-split numbers under the
       harness's curvature.
+      ROUTING: brainstorming
+
+- [ ] Stage 6b: Window-fitting summaries
+      Objective: Replace the tail truncation of channel texts beyond the backbone's trained
+      window with frozen summaries that fit it, before Stage 7 trains the reference
+      configuration on them.
+      Spec: Req 9 (input windows), under the user's ruling of 2026-10-03 that over-long texts are
+      summarized, not truncated; Req 3 (leakage); D9 (the text-only comparator reads the arm's
+      text).
+      Gap closed: none in the Gap analysis; the stage carries out the 2026-10-03 ruling on Req 9's
+      input windows, and Stage 9 still records each candidate's window.
+      Consumes: Bundle 301cce28's descriptions (sha256 `fe8c54e3…`), unchanged, since summaries
+      written into them would change the description fingerprint the bundle records. The
+      overflow at the 128-token window under MiniLM's tokenizer, special tokens included,
+      measured on 2026-10-03 (`specs/shared-encoder-and-projection.md`, Rollout note):
+      description 153 of 2,111 texts (sectors 16 of 20, median 246 tokens, maximum 1,131;
+      subsectors 59 of 96), examples 105 of 1,075 (19 % of its tokens), excluded 464 of 1,117
+      (26 %). Stage 6's tokenization cache, whose sidecar carries a `summaries` entry that stays
+      null until this stage, and its field markers, about two tokens of each window. Stage 2's
+      leakage matcher (`panels/leakage.py`) and frozen role table: an abstractive summary can
+      contain a held-out query, and a fix rewrites the summary, never the table.
+      Produces: A frozen, committed summaries artifact with provenance, keyed by code, channel,
+      source-text sha256 and target window, and pinned by hash; the tokenization cache and the
+      text-only builder (`tools text-only-table`, D9) reading it; its hash in the text-only
+      provenance, `TextOnlyRef`, `ArmSpec` and `decide`'s D9 check. The stage spec settles which
+      channels it covers (the ruling names descriptions; examples carry the most leakage risk,
+      and excluded carries Req 8's redirections) and whether summaries are extractive, which
+      cannot add a match, or abstractive, which needs an audit against the validation and test
+      queries: a non-selecting read of sealed text that needs the user's explicit approval.
+      Exit: No covered channel's text is truncated: each text beyond the window reads as its
+      summary, which fits with its field marker (test); the leakage check finds no held-out
+      query in any summary; the artifact is committed under a pinned hash, and the cache, the
+      text-only table's provenance and the decision records name it.
       ROUTING: brainstorming
 
 - [ ] Stage 7: Objective, anchors and live radius (the reference configuration)
@@ -584,7 +630,8 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       "Selection hygiene" (validation half); D2, D5, D6, D8, D10.
       Gap closed: Req 11; Req 10; Req 13; Req 8 (b, training side of c); Req 4 (monitors);
       Req 5 (reference configuration and δ).
-      Consumes: Stage 6's encoder and query path; Stage 5's D*, redirection table and unary
+      Consumes: Stage 6's encoder and query path; Stage 6b's summaries, which the reference
+      configuration and its text-only table read; Stage 5's D*, redirection table and unary
       flags (the table's `activity` phrases with their referencing `code`; its five withheld rows
       carry none); Stage 2's query splits, scorer and selection log (the log's path is
       `OutcomePanelConfig.selection_log`, `logs/selection_log.jsonl`: gitignored, so a
@@ -659,7 +706,9 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       arm's backbone).
       Gap closed: Req 14 (backbone half); Req 9 (channel-presence ablation, window); Req 7 (IC
       ablation).
-      Consumes: Stage 8's selected cell; Stage 6's fusion options; Stage 4's tooling.
+      Consumes: Stage 8's selected cell; Stage 6's fusion options; Stage 6b's summaries, keyed by
+      target window, so a candidate with another window needs its own or none; Stage 4's
+      tooling.
       Produces: A decision record per factor; the selected text stage (arm A for Stage 10); the
       trained window recorded per candidate with each channel's overflow share (a window enters
       `TRAINED_WINDOWS` in `utils/input_window.py` from the candidate's own documentation, since
