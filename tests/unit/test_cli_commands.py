@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import click
 import polars as pl
 import pytest
 import torch
@@ -822,5 +823,5 @@ def test_outcome_panel_needs_a_purpose(runner, tmp_path, default_config):
 
     # Click's usage error: the option is required
     assert result.exit_code == 2
-    assert "Missing option '--purpose'" in result.output.replace('\n', '')
+    assert "Missing option '--purpose'" in click.unstyle(result.output).replace('\n', '')
     assert SelectionLog(log).records() == []
