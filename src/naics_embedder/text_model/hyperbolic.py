@@ -78,6 +78,51 @@ def _batched_lorentz_dot_compiled(uv: torch.Tensor) -> torch.Tensor:
     return torch.sum(uv[:, :, 1:], dim=2) - uv[:, :, 0]
 
 # -------------------------------------------------------------------------------------------------
+# Interim geometry head
+# -------------------------------------------------------------------------------------------------
+
+class HyperbolicHead(nn.Module):
+    '''
+    The interim hyperbolic head (spec 4.1). It has no parameters.
+
+    It rescales each tangent vector to norm at most ``max_norm``, the interim harness's cap
+    (Stage 7 removes it, Req 13), then maps it to the Lorentz hyperboloid by the exp map at the
+    origin. ``distance`` names the decoding distance for its points.
+
+    Args:
+        curvature: The hyperboloid's curvature c.
+        max_norm: The cap on a tangent vector's norm.
+    '''
+
+    distance = 'lorentz'
+
+    def __init__(self, curvature: float = 1.0, max_norm: float = 2.0):
+        super().__init__()
+        self.curvature = curvature
+        self.max_norm = max_norm
+
+    def forward(self, tangent: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        '''
+        Cap the tangent vectors, then map them to the hyperboloid.
+
+        Args:
+            tangent: Tangent vectors at the origin, (B, d), without a time coordinate.
+
+        Returns:
+            ``(tangent, embedding)``: the capped tangent (B, d), which the export writes, and the
+            Lorentz point (B, d + 1), which the interim loss reads.
+        '''
+
+        norm = torch.norm(tangent, p=2, dim=1, keepdim=True)
+        scale = torch.where(
+            norm > self.max_norm, self.max_norm / (norm + 1e-8), torch.ones_like(norm)
+        )
+        tangent = tangent * scale
+        curvature = torch.tensor(self.curvature, device=tangent.device, dtype=tangent.dtype)
+        _mark_cudagraph_step()
+        return tangent, _exp_map_zero_compiled(tangent, torch.sqrt(curvature))
+
+# -------------------------------------------------------------------------------------------------
 # Hyperbolic Projection to Lorentz Model
 # -------------------------------------------------------------------------------------------------
 

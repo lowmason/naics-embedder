@@ -11,6 +11,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from naics_embedder.text_model.hyperbolic import (
+    HyperbolicHead,
     HyperbolicProjection,
     LorentzDistance,
     LorentzOps,
@@ -144,6 +145,45 @@ class TestLorentzOps:
 
         assert not torch.any(torch.isnan(hyp_emb))
         assert not torch.any(torch.isinf(hyp_emb))
+
+# -------------------------------------------------------------------------------------------------
+# HyperbolicHead Tests
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestHyperbolicHead:
+    '''The interim geometry head: no parameters, the cap, then the exp map at the origin.'''
+
+    def test_the_head_has_no_parameters_and_names_its_distance(self):
+        head = HyperbolicHead(curvature=1.0)
+
+        assert list(head.parameters()) == []
+        assert head.distance == 'lorentz'
+
+    def test_a_tangent_inside_the_cap_passes_unchanged(self):
+        tangent = torch.tensor([[0.3, -0.4], [1.0, 1.0]])
+
+        capped, embedding = HyperbolicHead(curvature=1.0)(tangent)
+
+        assert torch.equal(capped, tangent)
+        assert embedding.shape == (2, 3)
+
+    def test_a_long_tangent_is_scaled_to_the_cap(self):
+        capped, _ = HyperbolicHead(curvature=1.0, max_norm=2.0)(torch.tensor([[3.0, 4.0]]))
+
+        torch.testing.assert_close(capped, torch.tensor([[1.2, 1.6]]))
+
+    @pytest.mark.parametrize('curvature', [0.5, 1.0, 2.0])
+    def test_the_point_is_the_exp_map_of_the_capped_tangent(self, curvature):
+        tangent = torch.tensor([[0.3, -0.4], [3.0, 4.0]])
+
+        capped, embedding = HyperbolicHead(curvature=curvature)(tangent)
+
+        # LorentzOps takes a (B, d + 1) tangent and ignores its time slot
+        padded = torch.cat([torch.zeros(2, 1), capped], dim=1)
+        torch.testing.assert_close(embedding, LorentzOps.exp_map_zero(padded, c=curvature))
+        is_valid, _, _ = check_lorentz_manifold_validity(embedding, curvature=curvature)
+        assert is_valid
 
 # -------------------------------------------------------------------------------------------------
 # HyperbolicProjection Tests

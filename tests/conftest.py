@@ -14,6 +14,7 @@ import torch
 pytest_plugins = (
     'tests.fixtures.naics_sources',
     'tests.fixtures.regressor_panel',
+    'tests.fixtures.shared_encoder',
     'tests.fixtures.supervision',
 )
 

@@ -1,508 +1,256 @@
 '''
-Unit tests for MultiChannelEncoder with LoRA adaptation.
+The shared encoder (Req 14; spec 4.1), on a one-layer BERT so these tests download nothing.
 
-Tests cover:
-- Model initialization and configuration
-- Multi-channel forward pass
-- LoRA parameter efficiency
-- MoE fusion and gating
-- Hyperbolic projection
-- Gradient checkpointing
-- Output shapes and manifold validity
+One backbone serves codes and queries; an absent channel never reaches the output; exactly one
+affine map sits between fusion and the point; and a step reaches every adapter and the projection.
 '''
 
-import logging
+from unittest.mock import Mock
 
 import pytest
 import torch
 import torch.nn as nn
+from peft.tuners.lora import LoraLayer
+from transformers import PreTrainedModel
 
-from naics_embedder.text_model.encoder import MultiChannelEncoder
-from naics_embedder.text_model.hyperbolic import check_lorentz_manifold_validity
+from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
+from naics_embedder.text_model.fields import CHANNELS, QUERY
+from naics_embedder.text_model.fusion import FUSIONS
+from naics_embedder.text_model.hyperbolic import HyperbolicHead, check_lorentz_manifold_validity
+from naics_embedder.text_model.shared_encoder import DIMENSIONS, SharedEncoder
+from tests.fixtures.shared_encoder import TINY_HIDDEN, tiny_bert
 
-logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.unit
 
-# -------------------------------------------------------------------------------------------------
-# Fixtures
-# -------------------------------------------------------------------------------------------------
+WIDTH = 8
 
-@pytest.fixture
-def encoder_config():
-    '''Minimal encoder configuration for fast testing.'''
+def _text(ids):
+    '''A present text: these token ids, right-padded to WIDTH.'''
+
+    input_ids = torch.zeros(WIDTH, dtype=torch.long)
+    input_ids[:len(ids)] = torch.tensor(ids)
+    attention_mask = torch.zeros(WIDTH, dtype=torch.long)
+    attention_mask[:len(ids)] = 1
+    return {'input_ids': input_ids, 'attention_mask': attention_mask, 'present': True}
+
+def _absent():
+    '''An absent channel as the cache stores it: ``[CLS] [SEP]`` with ``present`` False.'''
+
+    return {**_text([101, 102]), 'present': False}
+
+def _code(**texts):
+    '''A code whose named channels hold these token ids; its other channels are absent.'''
 
     return {
-        'base_model_name': 'sentence-transformers/all-MiniLM-L6-v2',  # Smaller model for testing
-        'lora_r': 4,
-        'lora_alpha': 8,
-        'lora_dropout': 0.1,
-        'num_experts': 4,
-        'top_k': 2,
-        'moe_hidden_dim': 512,
-        'use_gradient_checkpointing': False,  # Disabled for faster testing
-        'curvature': 1.0,
+        channel: _text(texts[channel]) if channel in texts else _absent()
+        for channel in CHANNELS
     }
 
-@pytest.fixture
-def encoder(encoder_config, test_device):
-    '''Create MultiChannelEncoder instance for testing.'''
-
-    model = MultiChannelEncoder(**encoder_config)
-    model.to(test_device)
-    model.eval()
-    return model
+# Code 0 has a title and examples; code 1 has a description only
+CODES = [
+    _code(title=[101, 2001, 2002, 102], examples=[101, 2003, 2004, 2005, 102]),
+    _code(description=[101, 2006, 2007, 102]),
+]
 
 @pytest.fixture
-def sample_tokenized_inputs(test_device, batch_size=4):
-    '''Create sample tokenized inputs for all 4 channels.'''
+def make_encoder(tiny_backbone):
+    '''Build a ``SharedEncoder`` on the tiny backbone, with these settings overridden.'''
 
-    seq_length = 32
-    channels = ['title', 'description', 'excluded', 'examples']
-
-    inputs = {}
-    for channel in channels:
-        inputs[channel] = {
-            'input_ids': torch.randint(0, 1000, (batch_size, seq_length), device=test_device),
-            'attention_mask': torch.ones(batch_size, seq_length, device=test_device),
+    def make(**overrides):
+        settings = {
+            'base_model_name': 'tiny-bert',
+            'lora_r': 2,
+            'lora_alpha': 4,
+            'lora_dropout': 0.0,
+            'fusion': 'masked_mean',
+            'dimension': 8,
+            'num_experts': 2,
+            'top_k': 1,
+            'moe_hidden_dim': 4,
+            'curvature': 1.0,
+            'use_gradient_checkpointing': False,
         }
+        return SharedEncoder(**{**settings, **overrides})
 
-    return inputs
-
-@pytest.fixture
-def sample_tokenized_inputs_variable_length(test_device, batch_size=4):
-    '''Create sample tokenized inputs with variable sequence lengths.'''
-
-    max_seq_length = 32
-    channels = ['title', 'description', 'excluded', 'examples']
-
-    inputs = {}
-    for channel in channels:
-        # Create variable length sequences
-        input_ids = torch.randint(0, 1000, (batch_size, max_seq_length), device=test_device)
-        attention_mask = torch.ones(batch_size, max_seq_length, device=test_device)
-
-        # Mask out some tokens to simulate variable length
-        for i in range(batch_size):
-            seq_len = torch.randint(max_seq_length // 2, max_seq_length, (1, )).item()
-            attention_mask[i, seq_len:] = 0
-
-        inputs[channel] = {'input_ids': input_ids, 'attention_mask': attention_mask}
-
-    return inputs
+    return make
 
 # -------------------------------------------------------------------------------------------------
-# Test: Initialization
+# Structure
 # -------------------------------------------------------------------------------------------------
 
-@pytest.mark.unit
-class TestEncoderInitialization:
-    '''Test MultiChannelEncoder initialization and configuration.'''
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_one_backbone_then_fusion_one_affine_map_and_a_parameter_free_head(make_encoder, fusion):
+    encoder = make_encoder(fusion=fusion, dimension=16)
 
-    def test_encoder_creation(self, encoder, encoder_config):
-        '''Test that encoder is created successfully with correct architecture.'''
+    # From the fused vector to the point: the projection, then the head
+    assert [name for name, _ in encoder.named_children()] == [
+        'backbone', 'fusion', 'projection', 'head'
+    ]
+    assert sum(isinstance(module, PreTrainedModel) for module in encoder.modules()) == 1
+    assert isinstance(encoder.projection, nn.Linear)
+    assert (encoder.projection.in_features, encoder.projection.out_features) == (TINY_HIDDEN, 16)
+    assert isinstance(encoder.head, HyperbolicHead)
+    assert list(encoder.head.parameters()) == []
+    assert encoder.fusion_name == fusion
 
-        assert isinstance(encoder, nn.Module)
-        assert encoder.channels == ['title', 'description', 'excluded', 'examples']
-        assert len(encoder.encoders) == 4  # type: ignore[arg-type]
-        assert encoder.embedding_dim == 384  # all-MiniLM-L6-v2 hidden size
-        assert encoder.curvature == encoder_config['curvature']
+def test_one_lora_adapter_wraps_every_linear_layer_of_the_backbone(make_encoder):
+    encoder = make_encoder()
+    linear_layers = [module for module in tiny_bert().modules() if isinstance(module, nn.Linear)]
+    adapted = [module for module in encoder.backbone.modules() if isinstance(module, LoraLayer)]
 
-    def test_lora_adapters_applied(self, encoder):
-        '''Test that LoRA adapters are applied to all channel encoders.'''
+    assert list(encoder.backbone.peft_config) == ['default']
+    # The pooler's dense layer too, which mean pooling never reads (P8)
+    assert len(adapted) == len(linear_layers) == 7
 
-        for channel in encoder.channels:
-            channel_encoder = encoder.encoders[channel]
-            # Check that PEFT model has the expected structure
-            assert hasattr(channel_encoder, 'base_model')
-            assert hasattr(channel_encoder, 'peft_config')
-
-    def test_moe_configuration(self, encoder, encoder_config):
-        '''Test MoE module configuration.'''
-
-        assert hasattr(encoder, 'moe')
-        assert encoder.moe.num_experts == encoder_config['num_experts']
-        assert encoder.moe.top_k == encoder_config['top_k']
-
-        # Check MoE projection layer
-        assert hasattr(encoder, 'moe_projection')
-        assert isinstance(encoder.moe_projection, nn.Linear)
-        # Input: concatenated 4 channels, Output: single embedding_dim
-        assert encoder.moe_projection.in_features == encoder.embedding_dim * 4
-        assert encoder.moe_projection.out_features == encoder.embedding_dim
-
-    def test_hyperbolic_projection(self, encoder):
-        '''Test hyperbolic projection layer exists and is configured.'''
-
-        assert hasattr(encoder, 'hyperbolic_proj')
-        assert encoder.hyperbolic_proj.input_dim == encoder.embedding_dim
-        assert encoder.hyperbolic_proj.c == encoder.curvature
-
-    def test_trainable_parameters(self, encoder):
-        '''Test that LoRA reduces trainable parameters significantly.'''
-
-        trainable_params = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
-        total_params = sum(p.numel() for p in encoder.parameters())
-
-        # With LoRA, trainable params should be much less than total
-        trainable_ratio = trainable_params / total_params
-        assert 0.0 < trainable_ratio < 0.5, (
-            f'LoRA should reduce trainable params to < 50%, got {trainable_ratio:.2%}'
-        )
-
-        logger.info(f'Trainable: {trainable_params:,} / {total_params:,} ({trainable_ratio:.2%})')
-
-    def test_different_curvatures(self, encoder_config, test_device):
-        '''Test encoder initialization with different curvature values.'''
-
-        for curvature in [0.1, 1.0, 5.0]:
-            encoder_config['curvature'] = curvature
-            encoder = MultiChannelEncoder(**encoder_config).to(test_device)
-            assert encoder.curvature == curvature
-            assert encoder.hyperbolic_proj.c == curvature
+def test_an_unknown_fusion_or_dimension_is_refused(make_encoder):
+    assert DIMENSIONS == (8, 16, 32)
+    with pytest.raises(ValueError, match='unknown fusion'):
+        make_encoder(fusion='concatenate')
+    with pytest.raises(ValueError, match='unknown dimension'):
+        make_encoder(dimension=12)
 
 # -------------------------------------------------------------------------------------------------
-# Test: Forward Pass
+# One encoder for codes and queries
 # -------------------------------------------------------------------------------------------------
 
-@pytest.mark.unit
-class TestEncoderForwardPass:
-    '''Test encoder forward pass with various inputs.'''
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_a_one_field_batch_encodes_as_a_code_with_only_that_channel(make_encoder, fusion):
+    encoder = make_encoder(fusion=fusion).eval()
+    text = [101, 2001, 2002, 2003, 102]
+    one_code = stack_text_inputs([_code(excluded=text)])
+    one_field = stack_text_inputs([{'excluded': _text(text)}], fields=('excluded', ))
+    query = stack_text_inputs([{QUERY: _text(text)}], fields=(QUERY, ))
 
-    def test_forward_basic(self, encoder, sample_tokenized_inputs):
-        '''Test basic forward pass produces correct output structure.'''
+    with torch.no_grad():
+        expected, *others = [encoder(batch) for batch in (one_code, one_field, query)]
 
-        with torch.no_grad():
-            output = encoder(sample_tokenized_inputs)
-
-        # Check output keys
-        assert 'embedding' in output
-        assert 'embedding_euc' in output
-        assert 'gate_probs' in output
-        assert 'top_k_indices' in output
-
-        # Check that all outputs are tensors
-        assert isinstance(output['embedding'], torch.Tensor)
-        assert isinstance(output['embedding_euc'], torch.Tensor)
-        assert isinstance(output['gate_probs'], torch.Tensor)
-        assert isinstance(output['top_k_indices'], torch.Tensor)
-
-    def test_output_shapes(self, encoder, sample_tokenized_inputs):
-        '''Test output tensor shapes are correct.'''
-
-        batch_size = sample_tokenized_inputs['title']['input_ids'].shape[0]
-
-        with torch.no_grad():
-            output = encoder(sample_tokenized_inputs)
-
-        # Hyperbolic embedding: (batch_size, embedding_dim + 1) for Lorentz model
-        assert output['embedding'].shape == (batch_size, encoder.embedding_dim + 1)
-
-        # Euclidean embedding: (batch_size, embedding_dim)
-        assert output['embedding_euc'].shape == (batch_size, encoder.embedding_dim)
-
-        # Gate probabilities: (batch_size, num_experts)
-        assert output['gate_probs'].shape == (batch_size, encoder.moe.num_experts)
-
-        # Top-k indices: (batch_size, top_k)
-        assert output['top_k_indices'].shape == (batch_size, encoder.moe.top_k)
-
-    def test_hyperbolic_manifold_validity(self, encoder, sample_tokenized_inputs):
-        '''Test that hyperbolic embeddings lie on the Lorentz manifold.'''
-
-        with torch.no_grad():
-            output = encoder(sample_tokenized_inputs)
-
-        embedding_hyp = output['embedding']
-        is_valid, _, _ = check_lorentz_manifold_validity(
-            embedding_hyp, curvature=encoder.curvature, tolerance=1e-4
-        )
-
-        assert is_valid, 'Hyperbolic embeddings not on Lorentz manifold'
-
-    def test_variable_length_sequences(self, encoder, sample_tokenized_inputs_variable_length):
-        '''Test forward pass with variable length sequences (using attention masks).'''
-
-        with torch.no_grad():
-            output = encoder(sample_tokenized_inputs_variable_length)
-
-        # Should still produce valid outputs
-        assert (
-            output['embedding'].shape[0] == (
-                sample_tokenized_inputs_variable_length['title']['input_ids'].shape[0]
-            )
-        )
-        assert not torch.isnan(output['embedding']).any()
-        assert not torch.isinf(output['embedding']).any()
-
-    def test_gate_probabilities_sum_to_one(self, encoder, sample_tokenized_inputs):
-        '''Test that MoE gate probabilities sum to 1 for each sample.'''
-
-        with torch.no_grad():
-            output = encoder(sample_tokenized_inputs)
-
-        gate_probs = output['gate_probs']
-        prob_sums = gate_probs.sum(dim=1)
-
-        torch.testing.assert_close(prob_sums, torch.ones_like(prob_sums), rtol=1e-5, atol=1e-5)
-
-    def test_top_k_indices_valid(self, encoder, sample_tokenized_inputs):
-        '''Test that top-k expert indices are valid and unique per sample.'''
-
-        with torch.no_grad():
-            output = encoder(sample_tokenized_inputs)
-
-        top_k_indices = output['top_k_indices']
-
-        # Indices should be in valid range [0, num_experts)
-        assert (top_k_indices >= 0).all()
-        assert (top_k_indices < encoder.moe.num_experts).all()
-
-        # Each row should have unique indices (no duplicate experts)
-        for i in range(top_k_indices.shape[0]):
-            indices = top_k_indices[i].tolist()
-            assert len(indices) == len(set(indices)), f'Duplicate experts in row {i}: {indices}'
-
-    def test_gradient_flow(self, encoder, sample_tokenized_inputs):
-        '''Test that gradients flow through the entire encoder.'''
-
-        encoder.train()
-        output = encoder(sample_tokenized_inputs)
-
-        # Compute a dummy loss and backprop
-        loss = output['embedding'].sum()
-        loss.backward()
-
-        # Check that gradients exist for key parameters
-        has_grad = False
-        for name, param in encoder.named_parameters():
-            if param.requires_grad and param.grad is not None:
-                has_grad = True
-                break
-
-        assert has_grad, 'No gradients computed during backprop'
-
-        encoder.eval()
-
-    def test_batch_size_one(self, encoder, test_device):
-        '''Test encoder handles batch size of 1.'''
-
-        single_sample_inputs = {}
-        for channel in encoder.channels:
-            single_sample_inputs[channel] = {
-                'input_ids': torch.randint(0, 1000, (1, 32), device=test_device),
-                'attention_mask': torch.ones(1, 32, device=test_device),
-            }
-
-        with torch.no_grad():
-            output = encoder(single_sample_inputs)
-
-        assert output['embedding'].shape[0] == 1
-        assert not torch.isnan(output['embedding']).any()
-
-    def test_large_batch_size(self, encoder, test_device):
-        '''Test encoder handles larger batch sizes.'''
-
-        large_batch_size = 32
-        large_batch_inputs = {}
-        for channel in encoder.channels:
-            large_batch_inputs[channel] = {
-                'input_ids': torch.randint(0, 1000, (large_batch_size, 32), device=test_device),
-                'attention_mask': torch.ones(large_batch_size, 32, device=test_device),
-            }
-
-        with torch.no_grad():
-            output = encoder(large_batch_inputs)
-
-        assert output['embedding'].shape[0] == large_batch_size
+    for output in others:
+        assert output.keys() == expected.keys()
+        for key in output:
+            assert torch.equal(output[key], expected[key])
 
 # -------------------------------------------------------------------------------------------------
-# Test: Mean Pooling
+# Masking
 # -------------------------------------------------------------------------------------------------
 
-@pytest.mark.unit
-class TestMeanPooling:
-    '''Test attention-mask-based mean pooling.'''
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_perturbing_an_absent_channel_leaves_the_output_bit_identical(make_encoder, fusion):
+    encoder = make_encoder(fusion=fusion).eval()
+    batch = stack_text_inputs(CODES)
+    perturbed = stack_text_inputs(CODES)
+    for channel in CHANNELS:
+        absent = ~perturbed[channel]['present']
+        perturbed[channel]['input_ids'][absent] = 2999
+        perturbed[channel]['attention_mask'][absent] = 1
 
-    def test_padding_ignored(self, encoder, test_device):
-        '''Test that padding tokens are properly masked during mean pooling.'''
+    with torch.no_grad():
+        clean, noisy = encoder(batch), encoder(perturbed)
 
-        # Create input with half padding
-        batch_size = 4
-        seq_length = 32
-        valid_length = seq_length // 2
+    assert clean.keys() == noisy.keys()
+    for key in clean:
+        assert torch.equal(clean[key], noisy[key])
 
-        inputs = {}
-        for channel in encoder.channels:
-            input_ids = torch.randint(0, 1000, (batch_size, seq_length), device=test_device)
-            attention_mask = torch.zeros(batch_size, seq_length, device=test_device)
-            attention_mask[:, :valid_length] = 1  # Only first half is valid
+def test_absent_texts_and_padding_never_enter_the_backbone(make_encoder, monkeypatch):
+    encoder = make_encoder().eval()
+    calls = []
+    forward = encoder.backbone.forward
 
-            inputs[channel] = {'input_ids': input_ids, 'attention_mask': attention_mask}
+    def spy(**inputs):
+        calls.append(inputs['input_ids'].clone())
+        return forward(**inputs)
 
-        with torch.no_grad():
-            output = encoder(inputs)
+    monkeypatch.setattr(encoder.backbone, 'forward', spy)
+    with torch.no_grad():
+        encoder(stack_text_inputs(CODES))
 
-        # Should produce valid embeddings (no NaN or Inf)
-        assert not torch.isnan(output['embedding']).any()
-        assert not torch.isinf(output['embedding']).any()
+    # The three present texts in one call, field by field, trimmed to the longest (five tokens)
+    [input_ids] = calls
+    assert input_ids.tolist() == [
+        [101, 2001, 2002, 102, 0],
+        [101, 2006, 2007, 102, 0],
+        [101, 2003, 2004, 2005, 102],
+    ]
 
-    def test_different_lengths_per_sample(self, encoder, test_device):
-        '''Test that different sequence lengths per sample are handled correctly.'''
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_a_code_with_no_present_channel_encodes_finitely(make_encoder, fusion):
+    encoder = make_encoder(fusion=fusion)
 
-        batch_size = 4
-        seq_length = 32
+    output = encoder(stack_text_inputs([CODES[0], _code()]))
+    output['embedding'].sum().backward()
 
-        inputs = {}
-        for channel in encoder.channels:
-            input_ids = torch.randint(0, 1000, (batch_size, seq_length), device=test_device)
-            attention_mask = torch.zeros(batch_size, seq_length, device=test_device)
+    assert torch.isfinite(output['embedding']).all()
+    assert all(
+        parameter.grad is None or torch.isfinite(parameter.grad).all()
+        for parameter in encoder.parameters()
+    )
 
-            # Each sample has different valid length
-            for i in range(batch_size):
-                valid_len = seq_length // (i + 1)
-                attention_mask[i, :valid_len] = 1
+def test_a_batch_with_no_present_text_never_calls_the_backbone(make_encoder, monkeypatch):
+    encoder = make_encoder().eval()
+    monkeypatch.setattr(encoder.backbone, 'forward', Mock(side_effect=AssertionError('backbone')))
 
-            inputs[channel] = {'input_ids': input_ids, 'attention_mask': attention_mask}
+    with torch.no_grad():
+        output = encoder(stack_text_inputs([_code(), _code()]))
 
-        with torch.no_grad():
-            output = encoder(inputs)
-
-        # All samples should produce different embeddings
-        embeddings = output['embedding_euc']
-        for i in range(batch_size - 1):
-            for j in range(i + 1, batch_size):
-                # Embeddings should be different (not exactly equal)
-                assert not torch.allclose(embeddings[i], embeddings[j], atol=1e-6)
-
-# -------------------------------------------------------------------------------------------------
-# Test: Gradient Checkpointing
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestGradientCheckpointing:
-    '''Test gradient checkpointing functionality.'''
-
-    def test_gradient_checkpointing_enabled(self, encoder_config, test_device):
-        '''Test encoder with gradient checkpointing enabled.'''
-
-        encoder_config['use_gradient_checkpointing'] = True
-        encoder = MultiChannelEncoder(**encoder_config).to(test_device)
-
-        # Check that gradient checkpointing is enabled (implicitly through training)
-        encoder.train()
-
-        inputs = {}
-        for channel in encoder.channels:
-            inputs[channel] = {
-                'input_ids': torch.randint(0, 1000, (4, 32), device=test_device),
-                'attention_mask': torch.ones(4, 32, device=test_device),
-            }
-
-        # Should work with gradient checkpointing
-        output = encoder(inputs)
-        loss = output['embedding'].sum()
-        loss.backward()
-
-        # Gradients should still flow
-        has_grad = any(p.grad is not None for p in encoder.parameters() if p.requires_grad)
-        assert has_grad
+    assert output['embedding'].shape == (2, 9)
+    assert torch.isfinite(output['embedding']).all()
 
 # -------------------------------------------------------------------------------------------------
-# Test: Numerical Stability
+# Outputs and refusals
 # -------------------------------------------------------------------------------------------------
 
-@pytest.mark.unit
-class TestNumericalStability:
-    '''Test encoder numerical stability.'''
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_only_the_moe_fusion_emits_gates(make_encoder, fusion):
+    with torch.no_grad():
+        output = make_encoder(fusion=fusion).eval()(stack_text_inputs(CODES))
 
-    def test_no_nan_or_inf(self, encoder, sample_tokenized_inputs):
-        '''Test that forward pass produces no NaN or Inf values.'''
+    gates = {'gate_probs', 'top_k_indices'} if fusion == 'moe' else set()
+    assert set(output) == {'embedding', 'tangent'} | gates
 
-        with torch.no_grad():
-            output = encoder(sample_tokenized_inputs)
+@pytest.mark.parametrize('dimension', DIMENSIONS)
+def test_the_point_is_the_head_of_the_capped_tangent(make_encoder, dimension):
+    with torch.no_grad():
+        output = make_encoder(dimension=dimension).eval()(stack_text_inputs(CODES))
 
-        for key, tensor in output.items():
-            if isinstance(tensor, torch.Tensor):
-                assert not torch.isnan(tensor).any(), f'{key} contains NaN'
-                assert not torch.isinf(tensor).any(), f'{key} contains Inf'
+    assert output['tangent'].shape == (2, dimension)
+    assert output['embedding'].shape == (2, dimension + 1)
+    assert (output['tangent'].norm(dim=1) <= 2.0 + 1e-6).all()
+    is_valid, _, _ = check_lorentz_manifold_validity(output['embedding'], curvature=1.0)
+    assert is_valid
+    _, expected = HyperbolicHead(curvature=1.0)(output['tangent'])
+    torch.testing.assert_close(output['embedding'], expected)
 
-    def test_extreme_curvature_values(self, encoder_config, test_device):
-        '''Test encoder with extreme curvature values.'''
+def test_a_malformed_batch_is_refused(make_encoder):
+    encoder = make_encoder()
+    batch = stack_text_inputs(CODES)
+    del batch['title']['present']
 
-        for curvature in [0.01, 100.0]:
-            encoder_config['curvature'] = curvature
-            encoder = MultiChannelEncoder(**encoder_config).to(test_device)
-
-            inputs = {}
-            for channel in encoder.channels:
-                inputs[channel] = {
-                    'input_ids': torch.randint(0, 1000, (4, 32), device=test_device),
-                    'attention_mask': torch.ones(4, 32, device=test_device),
-                }
-
-            with torch.no_grad():
-                output = encoder(inputs)
-
-            # Should still produce valid outputs
-            assert not torch.isnan(output['embedding']).any()
-            assert not torch.isinf(output['embedding']).any()
+    with pytest.raises(ValueError, match='no present flag'):
+        encoder(batch)
+    with pytest.raises(ValueError, match='unknown field'):
+        encoder({'summary': stack_text_inputs(CODES)['title']})
+    with pytest.raises(ValueError, match='at least one field'):
+        encoder({})
 
 # -------------------------------------------------------------------------------------------------
-# Test: Channel Independence
+# Training
 # -------------------------------------------------------------------------------------------------
 
-@pytest.mark.unit
-class TestChannelIndependence:
-    '''Test that channels are encoded independently.'''
+@pytest.mark.parametrize('checkpointing', [False, True])
+def test_a_step_reaches_every_adapter_and_the_projection(make_encoder, checkpointing):
+    encoder = make_encoder(use_gradient_checkpointing=checkpointing).train()
 
-    def test_different_inputs_per_channel(self, encoder, test_device):
-        '''Test that different channel inputs produce different embeddings.'''
+    encoder(stack_text_inputs(CODES))['embedding'].sum().backward()
 
-        batch_size = 4
-
-        # Create two different input sets
-        inputs_1 = {}
-        inputs_2 = {}
-
-        for channel in encoder.channels:
-            inputs_1[channel] = {
-                'input_ids': torch.randint(0, 1000, (batch_size, 32), device=test_device),
-                'attention_mask': torch.ones(batch_size, 32, device=test_device),
-            }
-            inputs_2[channel] = {
-                'input_ids': torch.randint(0, 1000, (batch_size, 32), device=test_device),
-                'attention_mask': torch.ones(batch_size, 32, device=test_device),
-            }
-
-        with torch.no_grad():
-            output_1 = encoder(inputs_1)
-            output_2 = encoder(inputs_2)
-
-        # Outputs should be different
-        assert not torch.allclose(output_1['embedding'], output_2['embedding'], atol=1e-4)
-
-    def test_single_channel_change(self, encoder, test_device):
-        '''Test that changing only one channel affects the output.'''
-
-        batch_size = 4
-
-        # Create base inputs
-        base_inputs = {}
-        for channel in encoder.channels:
-            base_inputs[channel] = {
-                'input_ids': torch.randint(0, 1000, (batch_size, 32), device=test_device),
-                'attention_mask': torch.ones(batch_size, 32, device=test_device),
-            }
-
-        # Create modified inputs (only change title channel)
-        modified_inputs = {k: v for k, v in base_inputs.items()}
-        modified_inputs['title'] = {
-            'input_ids': torch.randint(0, 1000, (batch_size, 32), device=test_device),
-            'attention_mask': torch.ones(batch_size, 32, device=test_device),
-        }
-
-        with torch.no_grad():
-            output_base = encoder(base_inputs)
-            output_modified = encoder(modified_inputs)
-
-        # Outputs should be different
-        assert not torch.allclose(output_base['embedding'], output_modified['embedding'], atol=1e-4)
+    assert encoder.projection.weight.grad.abs().sum() > 0
+    adapters = {
+        name: parameter
+        for name, parameter in encoder.backbone.named_parameters() if 'lora_B' in name
+    }
+    assert adapters
+    for name, parameter in adapters.items():
+        if '.pooler.' in name:
+            # Mean pooling never reads the pooler, so its adapter gets no gradient (P8)
+            assert parameter.grad is None, name
+        else:
+            # PEFT starts lora_B at zero, so lora_A's first gradient is exactly zero (P9)
+            assert parameter.grad is not None and parameter.grad.abs().sum() > 0, name
