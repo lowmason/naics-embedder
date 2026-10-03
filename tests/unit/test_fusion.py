@@ -28,6 +28,22 @@ def _vectors() -> torch.Tensor:
         ]
     )
 
+# What an absent slot may hold: finite junk, then the values a product with the mask would leak
+ABSENT_FILLS = [
+    pytest.param(-1000.0, id='finite'),
+    pytest.param(float('inf'), id='inf'),
+    pytest.param(float('nan'), id='nan'),
+]
+
+def _fusion(name: str) -> torch.nn.Module:
+    '''A small fusion; attention gets a live query, so its scores depend on the vectors.'''
+
+    fusion = build_fusion(name, hidden_size=2, num_experts=2, top_k=1, moe_hidden_dim=4)
+    if isinstance(fusion, AttentionFusion):
+        with torch.no_grad():
+            fusion.query.copy_(torch.tensor([0.5, -1.5]))
+    return fusion
+
 def test_masked_mean_averages_the_present_channels_only():
     fused = masked_mean(_vectors(), PRESENT)
 
@@ -55,26 +71,33 @@ def test_attention_starts_as_the_masked_mean():
 
     torch.testing.assert_close(fused, masked_mean(_vectors(), PRESENT))
 
+@pytest.mark.parametrize('fill', ABSENT_FILLS)
 @pytest.mark.parametrize('name', FUSIONS)
-def test_an_absent_channel_never_contributes(name):
+def test_an_absent_channel_never_contributes(name, fill):
     torch.manual_seed(0)
-    fusion = build_fusion(name, hidden_size=2, num_experts=2, top_k=1, moe_hidden_dim=4).eval()
+    fusion = _fusion(name).eval()
     perturbed = _vectors().clone()
-    perturbed[~PRESENT] = -1000.0
+    perturbed[~PRESENT] = fill
 
     assert torch.equal(fusion(_vectors(), PRESENT).vector, fusion(perturbed, PRESENT).vector)
 
+@pytest.mark.parametrize('fill', ABSENT_FILLS)
 @pytest.mark.parametrize('name', FUSIONS)
-def test_a_row_with_no_present_channel_fuses_finitely_with_a_finite_gradient(name):
+def test_a_row_with_no_present_channel_fuses_finitely_with_a_finite_gradient(name, fill):
     torch.manual_seed(0)
-    fusion = build_fusion(name, hidden_size=2, num_experts=2, top_k=1, moe_hidden_dim=4)
-    vectors = _vectors().requires_grad_(True)
+    fusion = _fusion(name).eval()
+    vectors = _vectors()
+    vectors[~PRESENT] = fill
+    vectors.requires_grad_(True)
 
     fused = fusion(vectors, PRESENT).vector
     fused.sum().backward()
 
     assert torch.isfinite(fused).all()
     assert torch.isfinite(vectors.grad).all()
+    if isinstance(fusion, AttentionFusion):
+        # Its score path reaches the learned vector; a missing gradient would pass the check below
+        assert fusion.query.grad is not None
     assert all(
         parameter.grad is None or torch.isfinite(parameter.grad).all()
         for parameter in fusion.parameters()

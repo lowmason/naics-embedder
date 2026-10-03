@@ -37,6 +37,16 @@ class FusionOutput:
     gate_probs: Optional[torch.Tensor] = None
     top_k_indices: Optional[torch.Tensor] = None
 
+def _zero_absent(vectors: torch.Tensor, present: torch.Tensor) -> torch.Tensor:
+    '''
+    The vectors with every absent slot set to zero, whatever it held.
+
+    A fill reads no absent value, an inf or NaN included, and its backward gives an absent slot a
+    zero gradient. A product with the mask would not: ``inf * 0`` is NaN, forward and backward.
+    '''
+
+    return vectors.masked_fill(~present.unsqueeze(-1), 0.0)
+
 def masked_mean(vectors: torch.Tensor, present: torch.Tensor) -> torch.Tensor:
     '''
     The mean over present channels, (B, F, H) and (B, F) to (B, H).
@@ -46,7 +56,7 @@ def masked_mean(vectors: torch.Tensor, present: torch.Tensor) -> torch.Tensor:
 
     weights = present.to(vectors.dtype).unsqueeze(-1)
     count = weights.sum(dim=1).clamp(min=1.0)
-    return (vectors * weights).sum(dim=1) / count
+    return _zero_absent(vectors, present).sum(dim=1) / count
 
 # -------------------------------------------------------------------------------------------------
 # Fusion options
@@ -62,8 +72,9 @@ class AttentionFusion(nn.Module):
     '''
     Attention pooling over the present channels.
 
-    The learned vector starts at zeros, so the pooling starts as the masked mean. An absent
-    channel scores the dtype's minimum and its weight is then zeroed, so a row with no present
+    The learned vector starts at zeros, so the pooling starts as the masked mean. Absent slots are
+    zeroed first, so what they hold reaches neither the scores nor their gradient. An absent
+    channel then scores the dtype's minimum and its weight is zeroed, so a row with no present
     channel has zero weights, a zero vector and a finite gradient.
 
     Args:
@@ -75,6 +86,8 @@ class AttentionFusion(nn.Module):
         self.query = nn.Parameter(torch.zeros(hidden_size))
 
     def forward(self, vectors: torch.Tensor, present: torch.Tensor) -> FusionOutput:
+        # Before the score matmul too: its backward multiplies each slot by the score gradient
+        vectors = _zero_absent(vectors, present)
         scores = vectors @ self.query
         # The score's own dtype bounds the fill: under autocast it can be narrower than the input
         scores = scores.masked_fill(~present, torch.finfo(scores.dtype).min)
