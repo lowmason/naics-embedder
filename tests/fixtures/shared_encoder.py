@@ -22,6 +22,7 @@ from transformers import BertConfig, BertModel
 
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
+from naics_embedder.text_model.export import export_code_table
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import TokenizationConfig
 
@@ -122,3 +123,11 @@ def shared_checkpoint(tmp_path, shared_model) -> Path:
     path = tmp_path / 'arm.ckpt'
     torch.save(lightning_checkpoint(shared_model), path)
     return path
+
+@pytest.fixture
+def exported_table(tmp_path, shared_checkpoint, validated_bundle, five_code_token_config) -> Path:
+    '''``shared_checkpoint``'s code table, exported on the CPU, with its provenance beside it.'''
+
+    return export_code_table(
+        shared_checkpoint, validated_bundle, five_code_token_config, tmp_path / 'arm_table.parquet'
+    )

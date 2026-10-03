@@ -3,14 +3,25 @@ Encoding token rows through an arm's model, the HGCN feeder built on it, and the
 export (spec 4.3).
 '''
 
+import json
+
 import numpy as np
 import polars as pl
 import pytest
 import torch
 
 from naics_embedder.cli.commands import training as training_cli
+from naics_embedder.panels.regressor import coordinate_matrix, table_fingerprint
+from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.supervision.checkpoints import contract_for_bundle, shared_encoder_architecture
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
-from naics_embedder.text_model.export import code_token_config, encode_token_rows
+from naics_embedder.text_model.export import (
+    code_token_config,
+    encode_token_rows,
+    export_code_table,
+    load_arm_model,
+)
 from naics_embedder.utils.config import Config
 from tests.fixtures.shared_encoder import (
     ARM_DIMENSION,
@@ -18,6 +29,7 @@ from tests.fixtures.shared_encoder import (
     MINILM,
     TOKEN_WINDOW,
     five_code_token_rows,
+    lightning_checkpoint,
 )
 
 pytestmark = pytest.mark.unit
@@ -109,3 +121,125 @@ def test_the_hgcn_feeder_writes_d_plus_one_lorentz_columns(
     points = table.select(columns).to_numpy()
     # Each row lies on the hyperboloid: -x0^2 + |x|^2 = -1
     assert np.allclose(-points[:, 0]**2 + (points[:, 1:]**2).sum(axis=1), -1.0, atol=1e-4)
+
+# -------------------------------------------------------------------------------------------------
+# The code-table export
+# -------------------------------------------------------------------------------------------------
+
+COORDINATE_COLUMNS = [f'e{index}' for index in range(ARM_DIMENSION)]
+
+def test_the_table_is_in_reqs_export_form(exported_table):
+    '''Spec §6: code, index, level and e0 … e15 as float64, readable by coordinate_matrix.'''
+
+    table = pl.read_parquet(exported_table)
+
+    assert table.columns == ['code', 'index', 'level', *COORDINATE_COLUMNS]
+    assert dict(table.schema) == {
+        'code': pl.Utf8,
+        'index': pl.Int64,
+        'level': pl.Int64,
+        **{
+            column: pl.Float64
+            for column in COORDINATE_COLUMNS
+        },
+    }
+    # The bundle's codebook order
+    assert table.get_column('code').to_list() == list(FIVE_CODES)
+    assert table.get_column('index').to_list() == [0, 1, 2, 3, 4]
+    codes, matrix = coordinate_matrix(table)
+    assert codes == FIVE_CODES
+    assert matrix.shape == (5, ARM_DIMENSION)
+
+def test_the_table_holds_each_codes_capped_tangent(
+    exported_table, shared_checkpoint, validated_bundle, five_code_token_config
+):
+    model, _ = load_arm_model(shared_checkpoint, validated_bundle)
+    rows = five_code_token_rows(five_code_token_config, validated_bundle)
+    tangent = encode_token_rows(model, rows)['tangent']
+
+    table = pl.read_parquet(exported_table)
+
+    assert np.array_equal(table.select(COORDINATE_COLUMNS).to_numpy(), tangent.numpy())
+    # The head caps the tangent at norm 2 before its exp map; the table keeps the capped vector
+    assert (np.linalg.norm(tangent.numpy(), axis=1) <= 2.0 + 1e-6).all()
+
+def test_the_provenance_names_the_table_and_the_checkpoint(
+    exported_table, shared_checkpoint, validated_bundle, five_code_descriptions_parquet
+):
+    provenance = json.loads(provenance_path(exported_table).read_text())
+
+    assert provenance['checkpoint'] == {
+        'path': str(shared_checkpoint),
+        'sha256': sha256_file(shared_checkpoint),
+    }
+    expected = contract_for_bundle(
+        validated_bundle.manifest,
+        encoder=shared_encoder_architecture(
+            fusion='masked_mean', dimension=ARM_DIMENSION, backbone=MINILM
+        ),
+    )
+    assert provenance['contract'] == expected.model_dump(mode='json')
+    assert provenance['backbone'] == MINILM
+    # The tiny backbone has no Hugging Face snapshot
+    assert provenance['revision'] is None
+    assert provenance['max_length'] == TOKEN_WINDOW
+    assert provenance['descriptions'] == {
+        'path': str(five_code_descriptions_parquet),
+        'sha256': sha256_file(five_code_descriptions_parquet),
+    }
+    assert provenance['summaries'] is None
+    assert (provenance['codes'], provenance['dimension']) == (5, ARM_DIMENSION)
+    assert provenance['table_sha256'] == sha256_file(exported_table)
+    assert provenance['matrix_fingerprint'] == table_fingerprint(pl.read_parquet(exported_table))
+    assert set(provenance['library_versions']) == {'peft', 'polars', 'torch', 'transformers'}
+
+def test_a_checkpoint_at_another_curvature_is_refused(
+    tmp_path, shared_model, validated_bundle, five_code_token_config
+):
+    checkpoint = lightning_checkpoint(shared_model)
+    checkpoint['hyper_parameters']['curvature'] = 2.0
+    path = tmp_path / 'curved.ckpt'
+    torch.save(checkpoint, path)
+    output = tmp_path / 'table.parquet'
+
+    with pytest.raises(ValueError, match='curvature 2'):
+        export_code_table(path, validated_bundle, five_code_token_config, output)
+    assert not output.exists()
+
+def test_a_checkpoint_of_another_bundle_is_refused(
+    tmp_path, shared_model, validated_bundle, five_code_token_config
+):
+    checkpoint = lightning_checkpoint(shared_model)
+    checkpoint['stage3_supervision']['bundle_id'] = 'bundle-b'
+    path = tmp_path / 'other-bundle.ckpt'
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match='supervision contract mismatch'):
+        export_code_table(path, validated_bundle, five_code_token_config, tmp_path / 't.parquet')
+
+def test_a_four_copy_checkpoint_is_refused_with_d2(
+    tmp_path, shared_model, validated_bundle, five_code_token_config
+):
+    checkpoint = lightning_checkpoint(shared_model)
+    # Contracts saved before Stage 6 carry no encoder record, and their hyperparameters predate
+    # fusion and dimension
+    del checkpoint['stage3_supervision']['encoder']
+    for name in ('fusion', 'dimension'):
+        del checkpoint['hyper_parameters'][name]
+    path = tmp_path / 'four-copy.ckpt'
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match='D2'):
+        export_code_table(path, validated_bundle, five_code_token_config, tmp_path / 't.parquet')
+
+def test_descriptions_that_are_not_the_codebook_are_refused(
+    tmp_path, shared_checkpoint, validated_bundle, five_code_token_config, text_descriptions_fixture
+):
+    other = tmp_path / 'other_descriptions.parquet'
+    text_descriptions_fixture.with_columns(
+        level=pl.lit(6), code=pl.col('code').str.replace('333333', '333334', literal=True)
+    ).write_parquet(other)
+    token_config = five_code_token_config.model_copy(update={'descriptions_parquet': str(other)})
+
+    with pytest.raises(ValueError, match='codebook'):
+        export_code_table(shared_checkpoint, validated_bundle, token_config, tmp_path / 't.parquet')

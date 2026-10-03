@@ -17,6 +17,7 @@ Commands:
     margins: Fix each panel's non-inferiority margin from a reference arm (Req 5).
     decide: Decide among arms under Req 5's rule over D8's three panels.
     diagnostics: Report Req 6's structural diagnostics over every codebook code.
+    export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
 '''
 
 import json
@@ -48,12 +49,14 @@ from naics_embedder.panels.regressor import (
     load_regressor_panel,
     summarize,
 )
-from naics_embedder.panels.text_only import build_text_only_table
-from naics_embedder.panels.text_only import provenance_path as text_only_provenance_path
+from naics_embedder.panels.text_only import build_text_only_table, provenance_path
+from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.schema import IndexRole
+from naics_embedder.text_model.export import code_token_config, export_code_table
 from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
 from naics_embedder.utils.config import (
+    Config,
     DecisionConfig,
     DownloadConfig,
     OutcomePanelConfig,
@@ -61,6 +64,9 @@ from naics_embedder.utils.config import (
     load_config,
 )
 from naics_embedder.utils.console import configure_logging
+from naics_embedder.utils.training import parse_config_overrides
+from naics_embedder.utils.utilities import pick_device
+from naics_embedder.utils.validation import ValidationError, require_valid_supervision_bundle
 
 # -------------------------------------------------------------------------------------------------
 # Tools Commands
@@ -384,7 +390,7 @@ def text_only_table(
         raise typer.Exit(code=1)
 
     console.print(f'Text-only table: {path}')
-    console.print(f'Provenance: {text_only_provenance_path(path)}')
+    console.print(f'Provenance: {provenance_path(path)}')
 
 def _require_writable(path: Path) -> None:
     '''
@@ -809,3 +815,92 @@ def diagnostics_command(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(report.model_dump_json(indent=2) + '\n')
         console.print(f'Report written to {path}')
+
+# -------------------------------------------------------------------------------------------------
+# Shared-encoder arms: export and the outcome read (roadmap Stage 6)
+# -------------------------------------------------------------------------------------------------
+
+def _run_config(config_file: str, overrides: Optional[List[str]]) -> Config:
+    '''
+    The run's config as ``train`` resolves it: the YAML file, then ``key=value`` overrides.
+
+    Raises:
+        ValueError: If an override has no ``=``. ``train`` skips one with a warning, but a logged
+            read must run on exactly the config it names (P18).
+    '''
+
+    cfg = Config.from_yaml(config_file)
+    override_dict, invalid = parse_config_overrides(overrides)
+    if invalid:
+        raise ValueError(f'overrides take the form key=value, not {invalid}')
+    return cfg.override(override_dict) if override_dict else cfg
+
+def _run_bundle(cfg: Config) -> ValidatedSupervisionBundle:
+    '''
+    The configured supervision bundle, through ``train``'s gate.
+
+    Raises:
+        ValueError: Under legacy containment, which has no bundle (P27).
+        ValidationError: As ``require_valid_supervision_bundle``.
+    '''
+
+    bundle = require_valid_supervision_bundle(cfg)
+    if bundle is None:
+        raise ValueError('export and reads need a supervision bundle; legacy containment has none')
+    return bundle
+
+@app.command('export-table')
+def export_table(
+    checkpoint: Annotated[
+        str,
+        typer.Option('--checkpoint', help="The arm's checkpoint: a training run's last.ckpt, say"),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='The table parquet; its provenance is written beside it'),
+    ],
+    config_file: Annotated[
+        str,
+        typer.Option('--config', help='Config YAML naming the bundle and the token cache'),
+    ] = 'conf/config.yaml',
+    overrides: Annotated[
+        Optional[List[str]],
+        typer.Argument(help="Config overrides, as train takes them (e.g., 'model.dimension=8')"),
+    ] = None,
+):
+    '''
+    Export an arm's code table in Req 2's form, with its provenance (roadmap Stage 6).
+
+    Every code goes through the checkpoint's model in eval mode. The table holds ``code``,
+    ``index``, ``level`` and ``e0 … e{d-1}``: each code's tangent vector at the origin, in the
+    bundle's codebook order. The checkpoint's supervision contract must match the configured
+    bundle. Its encoder record is its own, so a d = 8 checkpoint exports under a d = 16 config.
+
+    Example:
+        Export a run's last checkpoint::
+
+            $ uv run naics-embedder tools export-table \\
+                --checkpoint checkpoints/sadc_default/last.ckpt \\
+                --output data/plan8/arm_table.parquet supervision.manifest_path=PATH
+    '''
+
+    configure_logging('tools_export_table.log')
+
+    output_path = Path(output)
+    try:
+        # A bad output path fails before the whole codebook is encoded
+        _require_writable(output_path)
+        cfg = _run_config(config_file, overrides)
+        table = export_code_table(
+            checkpoint,
+            _run_bundle(cfg),
+            code_token_config(cfg),
+            output_path,
+            device=pick_device('auto'),
+        )
+    except (OSError, ValueError, ValidationError) as exc:
+        console.print(f'[bold red]Export failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(f'Code table: {table}')
+    console.print(f'Provenance: {provenance_path(table)}')

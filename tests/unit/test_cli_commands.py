@@ -12,6 +12,7 @@ from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.metrics.diagnostics import DiagnosticsReport
 from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.utils.config import Config
 from tests.fixtures.decision import spec, synthetic_arm
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
@@ -677,3 +678,78 @@ def test_regressor_panel_checks_the_arm_and_the_output_before_opening(
         assert result.exit_code == 1
         assert 'Regressor panel failed' in result.output
     assert log.records() == []
+
+# -------------------------------------------------------------------------------------------------
+# Shared-encoder arms: export and the outcome read
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def default_config(monkeypatch):
+    '''--config resolves to the default Config, whatever file it names.'''
+
+    monkeypatch.setattr(Config, 'from_yaml', classmethod(lambda cls, path: Config()))
+
+@pytest.mark.unit
+def test_export_table_exports_under_the_configured_bundle_and_cache(
+    monkeypatch, runner, tmp_path, default_config
+):
+    bundle = object()
+    calls = []
+
+    def fake_gate(cfg):
+        calls.append(('gate', cfg.data_loader.streaming.max_length))
+        return bundle
+
+    def fake_export(checkpoint, chosen, token_config, output, *, device):
+        calls.append(('export', checkpoint, chosen, token_config.max_length, output, device))
+        return output
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', fake_gate)
+    monkeypatch.setattr(tools_cli, 'export_code_table', fake_export)
+    monkeypatch.setattr(tools_cli, 'pick_device', lambda *_args: 'cpu')
+    output = tmp_path / 'arm.parquet'
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'export-table', '--checkpoint', 'arm.ckpt', '--output',
+            str(output), 'data_loader.streaming.max_length=64'
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [('gate', 64), ('export', 'arm.ckpt', bundle, 64, output, 'cpu')]
+    # Rich folds long paths at the terminal's width (80 columns on CI), wherever it falls
+    assert 'arm_provenance.json' in result.output.replace('\n', '')
+
+@pytest.mark.unit
+def test_export_table_refuses_legacy_containment(monkeypatch, runner, tmp_path, default_config):
+
+    def never(*_args, **_kwargs):
+        raise AssertionError('legacy containment reached the export')
+
+    monkeypatch.setattr(tools_cli, 'export_code_table', never)
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'export-table', '--checkpoint', 'arm.ckpt', '--output',
+            str(tmp_path / 'arm.parquet'), 'supervision.mode=legacy_containment'
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert 'legacy containment has none' in ' '.join(result.output.split())
+
+@pytest.mark.unit
+def test_export_table_refuses_an_override_without_a_value(runner, tmp_path, default_config):
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'export-table', '--checkpoint', 'arm.ckpt', '--output',
+            str(tmp_path / 'arm.parquet'), 'model.dimension'
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert 'key=value' in ' '.join(result.output.split())
