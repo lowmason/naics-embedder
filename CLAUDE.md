@@ -67,6 +67,7 @@ naics-embedder/
 │   ├── data/                 # Data preprocessing and generation
 │   │   ├── download_data.py  # Download and preprocess NAICS data
 │   │   ├── redirections.py   # The redirection table (Req 8) and the exclusion channel
+│   │   ├── window_summaries.py    # Build the window-fitting summaries (data summaries)
 │   │   ├── index_role_table.py    # Draw the frozen index-entry role table (data roles)
 │   │   ├── regressor_group_table.py  # Draw the regressor held-out groups (data regressor-groups)
 │   │   ├── compute_relations.py   # Compute relationship measures
@@ -105,6 +106,7 @@ naics-embedder/
 │   │   ├── selection_log.py  # Append-only log of split reads and test-split openings
 │   │   ├── outcome.py        # OutcomePanel: sealed validation and test query splits
 │   │   ├── lexical_encoder.py  # Training-free trigram stub encoder
+│   │   ├── window_summaries.py  # Window-fitting summaries: units, the pin, the resolver (Req 9)
 │   │   ├── qcew_rows.py      # QCEW national rows: cells, population, dated rows (D7)
 │   │   ├── regressor_splits.py  # The regressor partition and its committed held-out draw
 │   │   ├── ridge.py          # Ridge on standardized features along a penalty grid
@@ -175,6 +177,7 @@ naics-embedder/
 │   │   ├── index_roles.csv        # The frozen index-entry role table (committed)
 │   │   ├── regressor_panel.yaml   # QCEW pins, held-out draw, ridge grid, folds, branch record
 │   │   ├── regressor_heldout_groups.csv  # The regressor panel's held-out groups (committed)
+│   │   ├── window_summaries.csv   # Summaries of over-window channel texts (committed, pinned)
 │   │   ├── decision.yaml          # Decision rule: bootstrap replicates and seed, seed floor
 │   │   ├── relations.yaml
 │   │   ├── distances.yaml
@@ -449,6 +452,7 @@ uv run naics-embedder data all         # Run all data preparation steps
 # (data relations / distances / triplets are deprecated and build nothing)
 # (data roles drew conf/data/index_roles.csv once; it is committed, and preprocess applies it)
 # (data regressor-groups drew conf/data/regressor_heldout_groups.csv once; it is committed)
+# (data summaries built conf/data/window_summaries.csv once; it is committed and pinned in code)
 
 # Training commands
 uv run naics-embedder train            # Train model

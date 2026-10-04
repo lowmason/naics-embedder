@@ -330,6 +330,8 @@
       `data_loader.streaming.max_length`. Deferred from plan 8's final review and its re-review:
       none affects the Exit, whose export and reads shared one config. Size: plan. Done when:
       each case is fixed or ruled no-action.
+      → partly done in plan 9 (Task 7): the provenance records the tokenizer, and `from_files`
+      refuses a table exported with another. The other cases stay open.
 - [ ] Review Minor: the encoder, fusion and cache tests leave gaps.
       No test changes only the field markers in a tokenization cache's sidecar
       (`_cache_identity`, src/naics_embedder/text_model/dataloader/tokenization_cache.py).
@@ -346,6 +348,8 @@
       `_MpsStateReplay` (src/naics_embedder/text_model/shared_encoder.py) exists for. Deferred
       from plan 8's reviews as coverage gaps, not defects. Size: plan. Done when: each gap has a
       test, or a recorded ruling that it needs none.
+      → partly done in plan 9 (Task 1): `test_a_cache_built_under_other_markers_is_rebuilt`
+      (tests/unit/test_tokenization_cache.py) changes only the markers. The other gaps stay open.
 - [ ] Review Minor: `_pool_present` breaks under true half precision.
       src/naics_embedder/text_model/shared_encoder.py allocates the pooled rows in the
       projection weight's dtype, but `_pool_chunk` returns float32 (its mask is cast with
@@ -381,3 +385,86 @@
       docs/overview.md:587 cites docs/sampling_architecture.md, deleted in a7517dd. Deferred
       from plan 8's reviews: each is true or harmless as written. Size: quick-fix. Done when:
       each is edited or ruled no-action.
+      → partly done in plan 9: the cache's load messages name each sidecar entry that differs
+      (Task 1), and docs/text_training.md describes the summaries where the R15 note would have gone
+      and lists format, markers and summaries under Cache Regeneration (Task 9). The rest stays
+      open.
+
+## 9-window-fitting-summaries — 2026-10-04
+- [ ] Review Minor: building and parsing the summaries leave untested and untidy branches.
+      In src/naics_embedder/panels/window_summaries.py, no test pins P5's level-2 guards in
+      `text_units` (`_NO_BREAK`, and parenthesis balance when an over-long sentence is cut at
+      clauses). Two hand-traced cases would, with budgets in words as the tests count them: 'Farms
+      in the U.S. grow corn; ranches raise cattle. Others are not.' at budget 7, and 'Farms grow
+      (corn; wheat) here; ranches raise cattle. Others are not.' at budget 6.
+      `_parse_window_summaries` and `_is_extract` handle a malformed artifact thinly: a null summary
+      raises TypeError rather than ValueError, an empty pinned file raises polars' NoDataError, the
+      header goes unchecked because the schema applies by position, and an empty summary passes
+      every check when its source splits with a trailing empty piece, so the channel reads as
+      absent. Only a hand-edited, re-pinned artifact reaches these, since the build cannot emit
+      them; one guard (header names equal to `SUMMARIES_SCHEMA`, no nulls, no blank summary,
+      NoDataError raised as ValueError) would close them. In
+      src/naics_embedder/data/window_summaries.py, `select_units`' per-candidate fit filter is
+      untested: vectors [[1, 0], [0, 1], [1, 1]], weights [1, 1, 2], sizes [1, 1, 3] and budget 2
+      should select [0, 1] with no plateau. Every build test patches `backbone_embedder`, so it has
+      no test; a tiny BERT reading one text alone and in a padded batch would do. Its `embed`
+      neither calls `model.eval()` nor moves tokens to the model's device, relying on
+      `load_backbone`, while the provenance writes device cpu and dtype float32 as constants
+      (:389-390). Nothing pins that each unit is embedded once (P8). `summary_rows`' Raises omits
+      `select_units`' "no unit fits" ValueError. `generate_window_summaries` annotates its tokenizer
+      `Any` with a None default rather than Optional, silently replaces a caller's tokenizer and
+      revision when `model` is None, and writes the provenance after the move, outside its
+      try/finally (:316, :331). The `data summaries` command
+      (src/naics_embedder/cli/commands/data.py) lets `PackageNotFoundError` past its except clause
+      for OSError and ValueError (:283) and prints the error into Rich markup unescaped (:284). Its
+      test in tests/unit/test_cli_commands.py cannot fail on the default backbone, since MiniLM is
+      every default, and no test passes `--force`, `--descriptions` or `--output` or reaches that
+      clause. tests/unit/test_window_summaries_build.py checks that a failed build leaves no
+      artifact only from an empty conf/, never that a failed `force=True` rebuild leaves a good
+      artifact unchanged. The text-only builder (src/naics_embedder/panels/text_only.py) has no
+      no-pin refusal test, though the cache has one through the same resolver call, and a
+      descriptions frame without a channel column now raises ColumnNotFoundError in the cache build
+      instead of encoding the channel absent. Deferred at plan 9's gate: the build ran once, for the
+      committed artifact that every reader re-checks, and none of these changes what a reader reads.
+      Size: plan. Done when: each case is tested, fixed or ruled no-action.
+- [ ] Review Minor: the summaries' readers, tests and docs leave polish and coverage gaps.
+      Tests: `_identity_mismatch`
+      (src/naics_embedder/text_model/dataloader/tokenization_cache.py:249) has untested message
+      branches: no sidecar, an unreadable or non-object sidecar, an '<absent>' text, and several
+      differing keys. `ArmEncoder.from_files` (src/naics_embedder/text_model/arm_encoder.py) checks
+      in P11's order, but no test has both the tokenizer and the summaries wrong (the tokenizer's
+      message should win), or a pre-6b table with a wrong checkpoint ("before Stage 6b" should win).
+      No `run_seed_sweep` test gives a seed a provenance that describes another table, such as a
+      `table_sha256` of 64 zeros, which should be refused as 'describes another file'.
+      tests/unit/test_arm_encoder.py repeats a read-mutate-write of the provenance about seven
+      times, which a helper would shorten; tests/unit/test_decision_store.py:166's parametrize has
+      no `ids=`; the MiniLM name is defined in eight test modules, tests/conftest.py:51 among them;
+      and the `real_window_summaries` marker is registered in tests/conftest.py's
+      `pytest_configure`, while pyproject.toml registers the others. Code: the tokenizer refusal in
+      `from_files` has no remedy sentence; `check_seed_table` and `check_text_only`
+      (src/naics_embedder/decision/decide.py) print two unnamed 5-tuples, and `D9_FIELDS` and
+      `_arm_reads` are parallel orderings; and the Raises of `_build_tokenization_cache`
+      (tokenization_cache.py:72-77) and `build_text_only_table`
+      (src/naics_embedder/panels/text_only.py:183-186) give `check_window`'s refusal only as a
+      max_length over the window, though `trained_window` (src/naics_embedder/utils/input_window.py)
+      also raises for a backbone with no recorded window. Docs: "a channel text over the window is
+      read as its summary" remains at docs/usage.md:241, docs/api/input_window.md:4,
+      src/naics_embedder/cli/commands/data.py:257, and the docstrings at data/window_summaries.py:4,
+      panels/window_summaries.py:4, panels/text_only.py:175, tokenization_cache.py:67 and
+      utils/input_window.py:9. A title over the window is refused, not summarized, so none is wrong
+      under MiniLM, where no title is over it. Deferred at plan 9's gate: each is true or harmless
+      as written, or a coverage gap rather than a defect. Size: plan. Done when: each is tested,
+      edited or ruled no-action.
+- [ ] Watch: an export keys the summaries on its tokenizer, a text-only table on its backbone.
+      src/naics_embedder/text_model/export.py records
+      `summaries_identity(token_config.tokenizer_name)`, and src/naics_embedder/panels/text_only.py
+      records `summaries_identity(backbone)`; one `ArmSpec.summaries_sha256` is checked against
+      both, by `check_seed_table` and `check_text_only` (src/naics_embedder/decision/decide.py). The
+      two agree while the tokenizer's name is the backbone's, as for MiniLM. Where they differ, a
+      mismatch is refused, but the refusal shows two 5-tuples whose summaries differ instead of
+      naming the tokenizer and backbone split. The sweep's per-seed check reads the export through
+      `provenance_fields` (src/naics_embedder/decision/store.py), which skips its `tokenizer`, so it
+      compares tokenizers only through the summaries' sha256, and two unpinned names compare equal,
+      null with null. Deferred at plan 9's gate, keeping the code as built: no backbone the roadmap
+      runs has a tokenizer of another name. Size: plan. Revisit if: Stage 9 admits a backbone whose
+      tokenizer name differs from its own.

@@ -166,6 +166,8 @@ class NAICSContrastiveModel(
         structural_preference_margin: Ordering margin for structural preference
         structural_preference_temperature: Softplus temperature for structural preference
         structural_preference_tie_tolerance: Structural distance tie tolerance
+        summaries: The sha256 of the window-fitting summaries the token cache applied, or None
+            for a backbone with no pin; recorded in the checkpoint contract
         checkpoint_contract: Optional runtime contract; must match the loaded bundle
         supervision_bundle: Optional already-validated bundle for ``supervision_manifest_path``
             (not saved in hyperparameters)
@@ -217,6 +219,7 @@ class NAICSContrastiveModel(
         structural_preference_margin: float = 0.1,
         structural_preference_temperature: float = 1.0,
         structural_preference_tie_tolerance: float = 1e-6,
+        summaries: Optional[str] = None,
         checkpoint_contract: Optional[CheckpointContract] = None,
         supervision_bundle: Optional[ValidatedSupervisionBundle] = None,
     ):
@@ -282,7 +285,7 @@ class NAICSContrastiveModel(
                     )
                 bundle = supervision_bundle
             runtime_contract = contract_for_bundle(
-                bundle.manifest, supervision_mode, encoder=encoder_record
+                bundle.manifest, supervision_mode, encoder=encoder_record, summaries=summaries
             )
             self.relation_id_to_name = {
                 relation_id: name
@@ -292,7 +295,7 @@ class NAICSContrastiveModel(
             self.selection_coordinator = NegativeSelectionCoordinator()
             self.naics_hierarchy = load_naics_hierarchy(str(bundle.artifact_path('relations')))
         else:
-            runtime_contract = containment_contract(encoder=encoder_record)
+            runtime_contract = containment_contract(encoder=encoder_record, summaries=summaries)
             logger.warning(
                 'LEGACY CONTAINMENT (%s): not contract-compliant Stage-3 training. Structural '
                 'ranking and hierarchy losses, negative reordering, and pseudo-related handling '

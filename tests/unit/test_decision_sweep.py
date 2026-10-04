@@ -20,8 +20,9 @@ from naics_embedder.decision.sweep import SeedArtifacts, run_seed_sweep
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.regressor import DECISION_LEVEL, RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.schema import IndexRole
-from tests.fixtures.decision import spec, write_text_only
+from tests.fixtures.decision import spec, write_export_provenance, write_text_only
 from tests.fixtures.regressor_panel import CODEBOOK, HELDOUT_GROUPS, SETTINGS, SIX_DIGIT
 
 pytestmark = pytest.mark.unit
@@ -52,12 +53,18 @@ class SyntheticEncoder:
         return self._axes(codes) + torch.from_numpy(noise)
 
 class SyntheticRunner:
-    '''One seed of the informed or the uninformed arm, written under ``directory``.'''
+    '''
+    One seed of the informed or the uninformed arm, written under ``directory``.
 
-    def __init__(self, directory, informed, signal):
+    Each seed's table has the export provenance ``tools export-table`` writes, recording what the
+    spec reads; ``provenance`` replaces entries of it.
+    '''
+
+    def __init__(self, directory, informed, signal, provenance=None):
         self.directory = directory
         self.informed = informed
         self.signal = signal
+        self.provenance = provenance or {}
 
     def run(self, arm_spec, seed):
         rng = np.random.default_rng([seed, int(self.informed), 7])
@@ -73,6 +80,7 @@ class SyntheticRunner:
         }).hstack(pl.DataFrame(values, schema=schema, orient='row'))
         path = self.directory / f'{arm_spec.name}-{seed}.parquet'
         table.write_parquet(path)
+        write_export_provenance(path, arm_spec, **self.provenance)
         return SeedArtifacts(
             checkpoint=checkpoint,
             table=path,
@@ -208,6 +216,72 @@ def test_a_text_only_table_from_another_backbone_is_refused_before_any_read(
             spec('mislabelled', dimension=16),
             SEEDS,
             SyntheticRunner(tmp_path / 'runs' / 'mislabelled', False, _signal(regressor_rows)),
+            text_only_table=text_only,
+            store=store,
+            purpose=PURPOSE,
+            **panels,
+        )
+    assert log.records() == []
+
+@pytest.mark.parametrize(
+    'entry',
+    [
+        {
+            'backbone': 'another/backbone'
+        },
+        {
+            'revision': 'another-revision'
+        },
+        {
+            'descriptions': {
+                'path': 'naics_descriptions.parquet',
+                'sha256': 'f' * 64
+            }
+        },
+        # Exported before Stage 6b, from truncated text
+        {
+            'summaries': None
+        },
+        {
+            'max_length': 32
+        },
+    ],
+)
+def test_a_seed_exported_from_other_text_is_refused_before_any_read(
+    tmp_path, regressor_rows, panels, store, text_only, log, entry
+):
+    runner = SyntheticRunner(tmp_path / 'runs' / 'misread', False, _signal(regressor_rows), entry)
+
+    with pytest.raises(ValueError, match='misread seed 0: the table was exported from .*D9'):
+        run_seed_sweep(
+            spec('misread', dimension=3),
+            SEEDS,
+            runner,
+            text_only_table=text_only,
+            store=store,
+            purpose=PURPOSE,
+            **panels,
+        )
+    assert log.records() == []
+
+def test_a_seed_table_without_its_export_provenance_is_refused_before_any_read(
+    tmp_path, regressor_rows, panels, store, text_only, log
+):
+
+    class Unexported(SyntheticRunner):
+
+        def run(self, arm_spec, seed):
+            artifacts = super().run(arm_spec, seed)
+            provenance_path(artifacts.table).unlink()
+            return artifacts
+
+    runner = Unexported(tmp_path / 'runs' / 'unexported', False, _signal(regressor_rows))
+
+    with pytest.raises(ValueError, match='has no export provenance'):
+        run_seed_sweep(
+            spec('unexported', dimension=3),
+            SEEDS,
+            runner,
             text_only_table=text_only,
             store=store,
             purpose=PURPOSE,

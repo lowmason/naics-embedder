@@ -16,22 +16,31 @@ artifact store.
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import json
 import logging
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Protocol, Sequence, Union
+from typing import Any, Dict, List, Mapping, Protocol, Sequence, Union
 
 import polars as pl
 
-from naics_embedder.decision.decide import check_text_only
+from naics_embedder.decision.decide import check_seed_table, check_text_only
 from naics_embedder.decision.records import ArmRecord, ArmSpec, PanelSet, SeedRun
 from naics_embedder.decision.scores import DECISION_STATISTIC, PANELS, panel_statistic, seed_scores
-from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.decision.store import ArtifactStore, provenance_fields
 from naics_embedder.panels.outcome import OutcomePanel, QueryCodeEncoder
-from naics_embedder.panels.regressor import DECISION_LEVEL, ArmTables, Regime, RegressorPanel
+from naics_embedder.panels.regressor import (
+    DECISION_LEVEL,
+    ArmTables,
+    Regime,
+    RegressorPanel,
+    table_fingerprint,
+)
 from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.supervision.schema import IndexRole
 
 logger = logging.getLogger(__name__)
@@ -47,7 +56,8 @@ class SeedArtifacts:
 
     Attributes:
         checkpoint: The encoder checkpoint file.
-        table: The 2,125-code table in the export form (tangent coordinates if hyperbolic).
+        table: The 2,125-code table in the export form (tangent coordinates if hyperbolic), with
+            its export provenance beside it.
         encoder: Queries and codes embedded in one space, for the outcome panel.
         distance: The arm's decoding distance (``panels.decoding.DISTANCES``).
     '''
@@ -66,6 +76,24 @@ class ArmRunner(Protocol):
 # -------------------------------------------------------------------------------------------------
 # Driver
 # -------------------------------------------------------------------------------------------------
+
+def _seed_table_fields(table: Path) -> Mapping[str, Any]:
+    '''
+    The D9 fields of a seed's table, from the export provenance beside it.
+
+    Raises:
+        ValueError: If the provenance is missing, or as ``provenance_fields``.
+    '''
+
+    provenance = provenance_path(table)
+    if not provenance.is_file():
+        raise ValueError(f'{table} has no export provenance at {provenance}')
+    return provenance_fields(
+        json.loads(provenance.read_text(encoding='utf-8')),
+        sha256_file(table),
+        table_fingerprint(pl.read_parquet(table)),
+        str(provenance),
+    )
 
 def _fit_settings(panel: RegressorPanel) -> Dict[str, Any]:
     settings = asdict(panel.settings)
@@ -95,9 +123,9 @@ def run_seed_sweep(
     Run a configuration for each seed and read each seed once on each panel's validation split.
 
     Raises:
-        ValueError: If a seed repeats, the text-only table was not built from the arm's
-            backbone, revision, descriptions and window (D9), or a seed's table width is not
-            the arm spec's dimension.
+        ValueError: If a seed repeats; if the text-only table, or a seed's table by its export
+            provenance, was not built from the arm's backbone, revision, descriptions, summaries
+            and window (D9); or if a seed's table width is not the arm spec's dimension.
     '''
 
     if len(set(seeds)) != len(seeds):
@@ -110,6 +138,8 @@ def run_seed_sweep(
     runs: List[SeedRun] = []
     for seed in seeds:
         artifacts = runner.run(spec, seed)
+        # What the seed read, before anything is stored or any panel is read
+        check_seed_table(spec, seed, _seed_table_fields(Path(artifacts.table)))
         run_id = f'{spec.name}/seed-{seed}/{uuid.uuid4().hex}'
         checkpoint = store.put(artifacts.checkpoint)
         table = store.put_table(artifacts.table)

@@ -914,10 +914,22 @@ class TestCheckpointContract:
             encoder=shared_encoder_architecture(
                 fusion='masked_mean', dimension=8, backbone=model_config['base_model_name']
             ),
+            summaries=None,
         )
 
         with pytest.raises(ValueError, match='does not match'):
             NAICSContrastiveModel(**model_config, checkpoint_contract=other)
+
+    def test_the_model_records_its_summaries_in_either_contract(self, model_config):
+        repaired = NAICSContrastiveModel(**model_config, summaries='e' * 64)
+        containment = NAICSContrastiveModel(
+            **model_config, supervision_mode='legacy_containment', summaries='e' * 64
+        )
+
+        assert repaired.checkpoint_contract.summaries == 'e' * 64
+        assert containment.checkpoint_contract.summaries == 'e' * 64
+        # Saved with the hyperparameters, so load_from_checkpoint rebuilds the same contract
+        assert repaired.hparams['summaries'] == 'e' * 64
 
     def test_on_save_checkpoint_writes_contract(self, naics_model):
         checkpoint = {}

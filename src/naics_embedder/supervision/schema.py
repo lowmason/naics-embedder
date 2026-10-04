@@ -179,8 +179,11 @@ class InputWindowRecord(BaseModel):
     '''
     The backbone's trained input window, and each text channel's texts beyond it (Req 9).
 
-    The window comes from the backbone's own documentation (``utils/input_window.py``), and
-    every tokenizing path truncates to it, so these counts are the texts truncation shortens.
+    The window comes from the backbone's own documentation (``utils/input_window.py``). The
+    counts are the bundle's record of the texts beyond it, which readers since Stage 6b read as
+    their window-fitting summaries (``panels/window_summaries.py``), never truncated. They are
+    measured on text without its field marker, so they are no higher than the marked counts the
+    readers summarize.
     '''
 
     model_config = ConfigDict(frozen=True, extra='forbid')

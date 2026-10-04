@@ -14,6 +14,7 @@ from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.metrics.diagnostics import DiagnosticsReport
 from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.panels.window_summaries import SummariesPin
 from naics_embedder.utils.config import Config
 from tests.fixtures.decision import spec, synthetic_arm
 from tests.fixtures.regressor_panel import (
@@ -181,6 +182,40 @@ def test_data_regressor_groups_refuses_to_redraw_without_force(monkeypatch, runn
 
     assert result.exit_code == 1
     assert '--force' in result.output
+
+def test_data_summaries_builds_for_the_training_configs_backbone(monkeypatch, runner):
+    calls = []
+
+    def fake_generate(descriptions, output, *, backbone, force):
+        calls.append((descriptions, output, backbone, force))
+        return SummariesPin(path=str(output), sha256='a' * 64, window=128)
+
+    monkeypatch.setattr(data_cli, 'generate_window_summaries', fake_generate)
+
+    result = runner.invoke(data_cli.app, ['summaries'])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (
+            Path('./data/naics_descriptions.parquet'),
+            Path('conf/data/window_summaries.csv'),
+            'sentence-transformers/all-MiniLM-L6-v2',
+            False,
+        )
+    ]
+    assert f"sha256='{'a' * 64}'" in result.output.replace('\n', '')
+
+def test_data_summaries_refuses_to_rebuild_without_force(monkeypatch, runner):
+
+    def refuse(descriptions, output, *, backbone, force):
+        raise FileExistsError('the summaries exist; pass --force only to rebuild them')
+
+    monkeypatch.setattr(data_cli, 'generate_window_summaries', refuse)
+
+    result = runner.invoke(data_cli.app, ['summaries', '--backbone', 'other/backbone'])
+
+    assert result.exit_code == 1
+    assert '--force' in result.output.replace('\n', '')
 
 def test_tools_config_passes_config_path(monkeypatch, runner, tmp_path):
     captured = {}

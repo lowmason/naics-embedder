@@ -95,6 +95,33 @@ is replaced only with `--force`.
 uv run naics-embedder data roles --source-dir ~/Downloads/Data
 ```
 
+### `data summaries`
+
+Build the window-fitting summaries of over-long channel texts, once per backbone (roadmap
+Stage 6b). Every description, examples or excluded text whose marked form (`'description: …'`,
+special tokens included) is over the backbone's trained window is summarized by whole units of
+the text: its sentences, or clauses and segmenter pieces of an over-long sentence, or its
+examples entries. The frozen backbone (from the local Hugging Face cache) keeps, greedily, the
+units whose pooled vectors best approximate the whole text's, in source order, while the marked
+summary fits. Every unit boundary is a boundary of the leakage segmenter, so a summary's segments
+are a subset of its text's and the leakage checks need no sealed read. The artifact is checked as
+every reader checks it before it is moved into place; commit it with the pin the command prints,
+in `WINDOW_SUMMARIES` (`panels/window_summaries.py`). An existing artifact is replaced only with
+`--force`, and a new artifact needs a new pin.
+
+**Generates:** `conf/data/window_summaries.csv`, `conf/data/window_summaries_provenance.json`
+
+```bash
+HF_HUB_OFFLINE=1 uv run naics-embedder data summaries
+```
+
+**Options:**
+- `--descriptions PATH` - The descriptions parquet (default: `./data/naics_descriptions.parquet`)
+- `--backbone NAME` - The backbone (default: `data_loader.tokenization.tokenizer_name` in
+  `conf/config.yaml`)
+- `--output PATH` - The artifact (default: `conf/data/window_summaries.csv`)
+- `--force` - Replace an existing artifact
+
 ### `data regressor-groups`
 
 Draw the regressor panel's held-out four-digit groups, once: a fifth of each sector's groups
@@ -211,9 +238,11 @@ uv run naics-embedder tools outcome-baseline
 Embed every code's text with the arm's backbone, frozen: each of the four channels is mean-pooled
 over its tokens, and a code's vector is the mean of its present channels (roadmap D9). The
 backbone comes from the local Hugging Face cache (default: `text_only.backbone` in
-`conf/data/regressor_panel.yaml`). Each channel is truncated to the backbone's trained input
-window, and `text_only.max_length` may not exceed it (Req 9). The regressor panel reduces the
-table to the arm's dimension by PCA.
+`conf/data/regressor_panel.yaml`). A channel text over the backbone's trained input window is
+read as its window-fitting summary, as the arm reads it, so no channel text is truncated, and
+`text_only.max_length` may not exceed the window (Req 9). The provenance records the summaries'
+sha256 (`summaries`). The decision store records it, and `check_text_only` compares it with the
+arm's (D9). The regressor panel reduces the table to the arm's dimension by PCA.
 
 **Generates:** the table and `<stem>_provenance.json` beside it
 
@@ -268,11 +297,15 @@ bundle's codebook order.
 The command resolves the bundle and the token cache as `train` does, from `--config` and
 `key=value` overrides. The checkpoint's supervision contract must match the bundle. Its encoder
 record is its own, so a d = 8 checkpoint exports under a d = 16 config. A checkpoint trained at a
-curvature other than 1, or of the four-copy encoder (roadmap D2), is refused.
+curvature other than 1, or of the four-copy encoder (roadmap D2), is refused. So is a checkpoint
+trained under other window-fitting summaries than the tokenizer's pin, such as one trained
+before Stage 6b on truncated text: the refusal names `summaries`.
 
 **Generates:** the table and `<stem>_provenance.json` beside it. The provenance records the
-checkpoint's sha256 and contract, the backbone's revision, the window, the descriptions' sha256,
-`summaries`, and the table's sha256 and `matrix_fingerprint`.
+checkpoint's sha256 and contract, the backbone's revision, the tokenizer, the window, the
+descriptions' sha256, `summaries`, and the table's sha256 and `matrix_fingerprint`. A read
+(`tools outcome-panel`) refuses a table whose provenance records no `summaries` or `tokenizer`,
+or other ones than its own.
 
 ```bash
 uv run naics-embedder tools export-table --checkpoint checkpoints/sadc_default/last.ckpt \

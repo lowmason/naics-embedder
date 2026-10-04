@@ -29,6 +29,7 @@ from naics_embedder.panels.decoding import DecodingResult
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.regressor import coordinate_matrix
 from naics_embedder.panels.text_only import matrix_fingerprint, provenance_path
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.text_model.export import encode_token_rows, load_arm_model
@@ -139,25 +140,28 @@ class ArmEncoder:
         The arm of a checkpoint and the table exported from it.
 
         The table's provenance is checked before the model loads. It must name this checkpoint
-        and this table file, and the window it records, which the table's codes were encoded at,
-        must be the one the queries will be tokenized at: the arm has one preprocessing contract.
+        and this table file, and the window, tokenizer and summaries it records, which the table's
+        codes were read under, must be the ones the queries will be read under: the arm has one
+        preprocessing contract.
 
         Args:
             checkpoint_path: The arm's Lightning checkpoint.
             table_path: The table ``tools export-table`` wrote from it.
             bundle: The configured supervision bundle.
             token_config: The token cache training read (``code_token_config``): its tokenizer
-                and window tokenize the queries. The window must be the one the table was
-                exported at.
+                and window tokenize the queries. Its tokenizer, window and summaries must be the
+                ones the table was exported under.
             device: Where the model runs.
             batch_size: Queries per forward pass.
 
         Raises:
             ValueError: If the table's provenance is no exported arm table's (it names no
-                checkpoint, table hash or window), names another checkpoint, or the table file is
-                not the one it names; if the table was exported at another window than
-                ``token_config``'s; or as ``load_arm_model``: a curvature other than 1 (R8),
-                another supervision contract, or another encoder architecture (D2).
+                checkpoint, table hash or window), predates Stage 6b (it records no summaries or
+                tokenizer), names another checkpoint, or the table file is not the one it names;
+                if the table was exported at another window, with another tokenizer or under
+                other summaries than ``token_config``'s; or as ``load_arm_model``: a curvature
+                other than 1 (R8), another supervision contract or summaries, or another encoder
+                architecture (D2).
             FileNotFoundError: If the checkpoint, the table or its provenance is missing.
         '''
 
@@ -168,6 +172,12 @@ class ArmEncoder:
         named_checkpoint = _provenance_entry(provenance, table_path, 'checkpoint', 'sha256')
         named_table = _provenance_entry(provenance, table_path, 'table_sha256')
         exported_window = _provenance_entry(provenance, table_path, 'max_length')
+        for key in ('summaries', 'tokenizer'):
+            if key not in provenance:
+                raise ValueError(
+                    f'{table_path} was exported before Stage 6b: its provenance records no {key}; '
+                    'export the table again'
+                )
         checkpoint_sha256 = sha256_file(checkpoint_path)
         if named_checkpoint != checkpoint_sha256:
             raise ValueError(
@@ -182,7 +192,18 @@ class ArmEncoder:
                 f'tokenizes queries at {token_config.max_length}: export the table and read under '
                 'one data_loader.streaming.max_length'
             )
-        model, _ = load_arm_model(checkpoint_path, bundle, device=device)
+        if provenance['tokenizer'] != token_config.tokenizer_name:
+            raise ValueError(
+                f"{table_path} was exported with the tokenizer {provenance['tokenizer']}, but this "
+                f'read tokenizes queries with {token_config.tokenizer_name}'
+            )
+        summaries = summaries_identity(token_config.tokenizer_name)
+        if provenance['summaries'] != summaries:
+            raise ValueError(
+                f"{table_path} was exported under the summaries {provenance['summaries']}, but "
+                f'{token_config.tokenizer_name} reads under {summaries}: export the table again'
+            )
+        model, _ = load_arm_model(checkpoint_path, bundle, summaries=summaries, device=device)
         return cls(
             model,
             AutoTokenizer.from_pretrained(token_config.tokenizer_name),

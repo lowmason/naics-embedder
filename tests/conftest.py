@@ -11,6 +11,8 @@ import polars as pl
 import pytest
 import torch
 
+from naics_embedder.panels import window_summaries
+
 pytest_plugins = (
     'tests.fixtures.naics_sources',
     'tests.fixtures.regressor_panel',
@@ -41,6 +43,41 @@ def set_random_seeds(random_seed):
     torch.manual_seed(random_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(random_seed)
+
+# -------------------------------------------------------------------------------------------------
+# Window summaries: the dummy pin (Stage 6b spec, section 6)
+# -------------------------------------------------------------------------------------------------
+
+MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
+# A pin no test can read: its file does not exist. Fixture texts fit their windows, so the resolver
+# never looks for it, while every identity site records its sha256.
+DUMMY_SUMMARIES_PIN = window_summaries.SummariesPin(
+    path='/nonexistent/window_summaries.csv', sha256='5' * 64, window=128
+)
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        'markers',
+        'real_window_summaries: reads the committed window-summaries pins; the dummy-pin seam '
+        'stays off',
+    )
+
+@pytest.fixture(autouse=True)
+def dummy_window_summaries(request, monkeypatch):
+    '''
+    ``WINDOW_SUMMARIES`` holds one entry, MiniLM's dummy pin, unless the test is marked
+    ``real_window_summaries``.
+
+    The dict is changed in place, and every identity site reads it at call time, so each site
+    records the dummy's sha256. A test that needs no pin deletes the entry with
+    ``monkeypatch.delitem`` or names an unpinned backbone.
+    '''
+
+    if request.node.get_closest_marker('real_window_summaries') is not None:
+        return
+    for backbone in list(window_summaries.WINDOW_SUMMARIES):
+        monkeypatch.delitem(window_summaries.WINDOW_SUMMARIES, backbone)
+    monkeypatch.setitem(window_summaries.WINDOW_SUMMARIES, MINILM, DUMMY_SUMMARIES_PIN)
 
 # -------------------------------------------------------------------------------------------------
 # Hyperbolic Geometry Fixtures

@@ -31,6 +31,7 @@ import polars as pl
 import torch
 from sklearn.decomposition import PCA
 
+from naics_embedder.panels.window_summaries import resolve_channel_texts, summaries_identity
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.utils.input_window import check_window
 
@@ -171,13 +172,18 @@ def build_text_only_table(
     '''
     Embed every code's text with the frozen backbone and write the table and its provenance.
 
+    A channel text whose marked form is over the window is read as its pinned window-fitting
+    summary, as the arm reads it (``panels/window_summaries.py``); texts are embedded unmarked.
     ``model`` and ``tokenizer`` default to ``load_backbone(backbone)``; tests pass small ones.
 
     Returns:
         The table's path.
 
     Raises:
-        ValueError: If ``max_length`` exceeds the backbone's trained input window (Req 9).
+        ValueError: If ``max_length`` exceeds the backbone's trained input window (Req 9), or as
+            ``resolve_channel_texts``: a channel text is over the window and the backbone has no
+            pinned summaries, the pin fits a window other than ``max_length``, or the artifact
+            fails one of the resolver's checks.
     '''
 
     check_window(backbone, max_length)
@@ -185,6 +191,7 @@ def build_text_only_table(
     descriptions = pl.read_parquet(descriptions_path).sort('code')
     if model is None or tokenizer is None:
         model, tokenizer, revision = load_backbone(backbone)
+    descriptions = resolve_channel_texts(descriptions, tokenizer, backbone, max_length)
     vectors = encode_code_texts(
         descriptions, model, tokenizer, max_length=max_length, batch_size=batch_size
     )
@@ -203,6 +210,7 @@ def build_text_only_table(
         'channels': list(CHANNELS),
         'pooling': POOLING,
         'max_length': max_length,
+        'summaries': summaries_identity(backbone),
         'codes': table.height,
         'hidden_size': vectors.shape[1],
         'table_sha256': sha256_file(output_path),

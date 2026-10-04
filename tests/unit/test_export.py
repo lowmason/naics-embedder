@@ -13,6 +13,7 @@ import torch
 from naics_embedder.cli.commands import training as training_cli
 from naics_embedder.panels.regressor import coordinate_matrix, table_fingerprint
 from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.supervision.checkpoints import contract_for_bundle, shared_encoder_architecture
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
@@ -122,6 +123,26 @@ def test_the_hgcn_feeder_writes_d_plus_one_lorentz_columns(
     # Each row lies on the hyperboloid: -x0^2 + |x|^2 = -1
     assert np.allclose(-points[:, 0]**2 + (points[:, 1:]**2).sum(axis=1), -1.0, atol=1e-4)
 
+def test_the_hgcn_feeder_refuses_a_checkpoint_trained_on_truncated_text(
+    monkeypatch, tmp_path, truncated_checkpoint, validated_bundle, five_code_descriptions_parquet
+):
+    monkeypatch.setattr(
+        training_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle
+    )
+    # The refusal comes first. A regression past it would pick a device and build the default
+    # ./data/token_cache: keep that on the CPU and under tmp_path
+    monkeypatch.setattr(training_cli, 'pick_device', lambda *_args: torch.device('cpu'))
+    monkeypatch.chdir(tmp_path)
+    cfg = Config()
+    cfg.data_loader.streaming.descriptions_parquet = str(five_code_descriptions_parquet)
+    output = tmp_path / 'encodings.parquet'
+
+    with pytest.raises(ValueError, match="exact resume contract mismatch .*'summaries'"):
+        training_cli.generate_embeddings_from_checkpoint(
+            str(truncated_checkpoint), cfg, str(output)
+        )
+    assert not output.exists()
+
 # -------------------------------------------------------------------------------------------------
 # The code-table export
 # -------------------------------------------------------------------------------------------------
@@ -153,7 +174,9 @@ def test_the_table_is_in_reqs_export_form(exported_table):
 def test_the_table_holds_each_codes_capped_tangent(
     exported_table, shared_checkpoint, validated_bundle, five_code_token_config
 ):
-    model, _ = load_arm_model(shared_checkpoint, validated_bundle)
+    model, _ = load_arm_model(
+        shared_checkpoint, validated_bundle, summaries=summaries_identity(MINILM)
+    )
     rows = five_code_token_rows(five_code_token_config, validated_bundle)
     tangent = encode_token_rows(model, rows)['tangent']
 
@@ -177,6 +200,7 @@ def test_the_provenance_names_the_table_and_the_checkpoint(
         encoder=shared_encoder_architecture(
             fusion='masked_mean', dimension=ARM_DIMENSION, backbone=MINILM
         ),
+        summaries=summaries_identity(MINILM),
     )
     assert provenance['contract'] == expected.model_dump(mode='json')
     assert provenance['backbone'] == MINILM
@@ -187,7 +211,10 @@ def test_the_provenance_names_the_table_and_the_checkpoint(
         'path': str(five_code_descriptions_parquet),
         'sha256': sha256_file(five_code_descriptions_parquet),
     }
-    assert provenance['summaries'] is None
+    # The seam's dummy pin for MiniLM (tests/conftest.py)
+    assert provenance['summaries'] == summaries_identity(MINILM)
+    assert provenance['summaries'] is not None
+    assert provenance['tokenizer'] == MINILM
     assert (provenance['codes'], provenance['dimension']) == (5, ARM_DIMENSION)
     assert provenance['table_sha256'] == sha256_file(exported_table)
     assert provenance['matrix_fingerprint'] == table_fingerprint(pl.read_parquet(exported_table))
@@ -216,6 +243,19 @@ def test_a_checkpoint_of_another_bundle_is_refused(
 
     with pytest.raises(ValueError, match='supervision contract mismatch'):
         export_code_table(path, validated_bundle, five_code_token_config, tmp_path / 't.parquet')
+
+def test_a_load_that_omits_the_summaries_is_a_type_error(shared_checkpoint, validated_bundle):
+    with pytest.raises(TypeError):
+        load_arm_model(shared_checkpoint, validated_bundle)
+
+def test_a_checkpoint_trained_on_truncated_text_is_refused(
+    tmp_path, truncated_checkpoint, validated_bundle, five_code_token_config
+):
+    output = tmp_path / 'table.parquet'
+
+    with pytest.raises(ValueError, match="supervision contract mismatch .*'summaries'"):
+        export_code_table(truncated_checkpoint, validated_bundle, five_code_token_config, output)
+    assert not output.exists()
 
 def test_a_four_copy_checkpoint_is_refused_with_d2(
     tmp_path, shared_model, validated_bundle, five_code_token_config

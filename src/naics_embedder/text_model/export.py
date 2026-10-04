@@ -19,13 +19,14 @@ import logging
 from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import polars as pl
 import torch
 
 from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
 from naics_embedder.supervision.checkpoints import (
     CHECKPOINT_KEY,
@@ -33,7 +34,7 @@ from naics_embedder.supervision.checkpoints import (
     validate_supervision_contract,
 )
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
-from naics_embedder.text_model.dataloader.tokenization_cache import SUMMARIES, tokenization_cache
+from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.fields import CHANNELS
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import Config, TokenizationConfig
@@ -139,17 +140,21 @@ def load_arm_model(
     checkpoint_path: Union[str, Path],
     bundle: ValidatedSupervisionBundle,
     *,
+    summaries: Optional[str],
     device: Union[str, torch.device] = 'cpu',
 ) -> Tuple[NAICSContrastiveModel, CheckpointContract]:
     '''
     Load an arm's checkpoint for export or a read, refusing it before any weight loads.
 
     The checkpoint's own hyperparameters rebuild its fusion and dimension, so its encoder record
-    is never compared with a config (spec 4.4). Its supervision fields must match ``bundle``.
+    is never compared with a config (spec 4.4). Its supervision fields must match ``bundle``, and
+    its summaries ``summaries``.
 
     Args:
         checkpoint_path: The arm's Lightning checkpoint.
         bundle: The configured supervision bundle.
+        summaries: The sha256 of the summaries the read's token cache applies
+            (``summaries_identity`` of its tokenizer); keyword-only with no default.
         device: Where the model runs.
 
     Returns:
@@ -157,14 +162,17 @@ def load_arm_model(
 
     Raises:
         ValueError: If the curvature is not 1 (R8), the supervision contract is not the bundle's,
-            or the checkpoint is of another encoder architecture (D2).
+            the checkpoint was trained under other summaries, or it is of another encoder
+            architecture (D2).
     '''
 
     # Lightning checkpoints carry pickled hyperparameters; they are trusted artifacts of this
     # project's own training runs
     raw = torch.load(Path(checkpoint_path), map_location='cpu', weights_only=False)
     require_unit_curvature(raw.get('hyper_parameters', {}))
-    contract = validate_supervision_contract(raw.get(CHECKPOINT_KEY), bundle.manifest)
+    contract = validate_supervision_contract(
+        raw.get(CHECKPOINT_KEY), bundle.manifest, summaries=summaries
+    )
     # on_load_checkpoint refuses another encoder architecture before the state dict loads (D2)
     model = NAICSContrastiveModel.load_from_checkpoint(
         checkpoint_path,
@@ -213,7 +221,12 @@ def export_code_table(
             table, which is then not written.
     '''
 
-    model, contract = load_arm_model(checkpoint_path, bundle, device=device)
+    model, contract = load_arm_model(
+        checkpoint_path,
+        bundle,
+        summaries=summaries_identity(token_config.tokenizer_name),
+        device=device,
+    )
     descriptions_path = Path(token_config.descriptions_parquet)
     descriptions = pl.read_parquet(descriptions_path).sort('index')
     codebook = pl.read_parquet(bundle.artifact_path('codebook')).sort('code_id')
@@ -258,7 +271,9 @@ def export_code_table(
             'path': str(descriptions_path),
             'sha256': sha256_file(descriptions_path)
         },
-        'summaries': SUMMARIES,
+        'summaries': summaries_identity(token_config.tokenizer_name),
+        # The tokenizer the codes were read with, which a read's queries must share
+        'tokenizer': token_config.tokenizer_name,
         'codes': table.height,
         'dimension': tangent.shape[1],
         'coordinates': COORDINATES,

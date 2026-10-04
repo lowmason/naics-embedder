@@ -5,8 +5,8 @@ Before any number is computed, every arm is checked:
 
 - it has at least ``min_seeds`` seeds, each read once on each of the three panels;
 - every stored artifact still hashes to its reference;
-- its text-only table's stored provenance matches the arm's backbone, revision, descriptions
-  and window (D9);
+- its text-only table's stored provenance matches the arm's backbone, revision, descriptions,
+  summaries and window (D9);
 - each run's log records are validation reads that name the run, its table and its text-only
   table by the fingerprints the store recorded;
 - all arms read the same panels, with the same data on them and the same fit settings, so Δ
@@ -22,7 +22,7 @@ margins were fixed.
 # -------------------------------------------------------------------------------------------------
 
 from datetime import datetime, timezone
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import polars as pl
@@ -80,23 +80,56 @@ MIN_SEEDS = 5
 # Guards
 # -------------------------------------------------------------------------------------------------
 
+# What an arm reads, as provenance_fields names it (decision/store.py)
+D9_FIELDS = ('backbone', 'revision', 'descriptions_sha256', 'summaries_sha256', 'max_length')
+
+def _arm_reads(spec: ArmSpec) -> Tuple[Any, ...]:
+    return (
+        spec.backbone,
+        spec.backbone_revision,
+        spec.descriptions_sha256,
+        spec.summaries_sha256,
+        spec.max_length,
+    )
+
 def check_text_only(spec: ArmSpec, text_only: TextOnlyRef) -> None:
     '''
     Require the text-only table to come from the arm's backbone reading the arm's text (D9).
 
     Raises:
-        ValueError: If the provenance's backbone, revision, descriptions sha256 or window
-            differs from the arm's.
+        ValueError: If the provenance's backbone, revision, descriptions sha256, summaries sha256
+            or window differs from the arm's.
     '''
 
-    built = (
-        text_only.backbone, text_only.revision, text_only.descriptions_sha256, text_only.max_length
-    )
-    reads = (spec.backbone, spec.backbone_revision, spec.descriptions_sha256, spec.max_length)
+    fields = text_only.model_dump()
+    built = tuple(fields[name] for name in D9_FIELDS)
+    reads = _arm_reads(spec)
     if built != reads:
         raise ValueError(
             f'{spec.name}: the text-only table was built from {built}, the arm reads {reads} '
             "(D9: the arm's own backbone reading the arm's text)"
+        )
+
+def check_seed_table(spec: ArmSpec, seed: int, fields: Mapping[str, Any]) -> None:
+    '''
+    Require a seed's table to have been exported from what the arm reads (D9).
+
+    Args:
+        spec: The arm.
+        seed: The seed, which names the refusal.
+        fields: The table's export provenance, as ``provenance_fields`` reads it.
+
+    Raises:
+        ValueError: If the backbone, revision, descriptions sha256, summaries sha256 or window
+            differs from the arm's.
+    '''
+
+    exported = tuple(fields[name] for name in D9_FIELDS)
+    reads = _arm_reads(spec)
+    if exported != reads:
+        raise ValueError(
+            f'{spec.name} seed {seed}: the table was exported from {exported}, the arm reads '
+            f'{reads} (D9)'
         )
 
 def check_arm(arm: ArmRecord, store: ArtifactStore, min_seeds: int) -> None:

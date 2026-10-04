@@ -29,6 +29,7 @@ def _spec(name, components=1, dimension=16, geometry='hyperbolic'):
         backbone='b',
         backbone_revision='r',
         descriptions_sha256='d',
+        summaries_sha256=None,
         max_length=8,
     )
 
