@@ -283,7 +283,8 @@ uv run naics-embedder tools export-table --checkpoint checkpoints/sadc_default/l
 - `--checkpoint PATH` - The arm's checkpoint
 - `--output PATH` - Where to write the table
 - `--config PATH` - Config naming the bundle and the token cache (default: `conf/config.yaml`)
-- `KEY=VALUE ...` - Config overrides, as `train` takes them; one without `=` is refused
+- `KEY=VALUE ...` - Config overrides, as `train` takes them; one without `=` is refused, where
+  `train` warns and skips it
 
 ### `tools outcome-panel`
 

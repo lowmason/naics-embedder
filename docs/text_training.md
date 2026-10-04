@@ -419,6 +419,11 @@ term is logged as `train/structural_preference_loss` and configured under
 - **Streaming and multi-epoch caches** — stored in a versioned envelope keyed by contract, bundle
   ID, codebook fingerprint, and source-artifact fingerprints; caches from other bundles or legacy
   runs are rejected and regenerated.
+- **Pre-sampled epochs** — `data_loader.n_epochs` (default 100) is the number of sampling epochs
+  the datamodule pre-builds for the training and validation rows, and the caches key on it. One
+  training epoch reads all of them, so with the current bundle one Lightning epoch at the default
+  is about 19,883 steps at batch 16. The plan 8 Exit (roadmap Stage 6) ran `data_loader.n_epochs=1`:
+  one sampling of about 3,181 rows, or about 199 steps.
 - **Curriculum difficulty thresholds** — regenerated from the same bundle during bundle generation.
 - **Graph preprocessing** — `uv run python -m
   naics_embedder.graph_model.curriculum.preprocess_curriculum --supervision-manifest <path>` and
@@ -454,8 +459,9 @@ Structural matrices are loaded from the validated bundle, not trusted from check
 Embedding generation from a checkpoint applies the contract check in two forms. Export and reads
 (`tools export-table`, `tools outcome-panel`) compare the supervision fields with the configured
 bundle only, and the encoder record they use is the checkpoint's own: a d = 8 checkpoint exports
-under a d = 16 config, and a four-copy checkpoint is refused (roadmap D2). Only the HGCN feeder
-compares the checkpoint's encoder record with the config's, as exact resume does.
+under a d = 16 config, and a four-copy checkpoint is refused (roadmap D2). Only the embedding
+generation that feeds HGCN training compares the checkpoint's encoder record with the config's, as
+exact resume does.
 
 ### Legacy Containment
 
