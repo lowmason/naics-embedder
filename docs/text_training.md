@@ -118,7 +118,9 @@ verify when each mechanism is active.
 Two additional knobs were added for the experimentation tracks in [Issue #44](https://github.com/lowmason/naics-embedder/issues/44):
 
 - `curriculum.phase_mode=two_phase` merges Phase 3 behaviors into Phase 2 for a simpler two-stage schedule.
-- `curriculum.anneal.*` enables continuous schedules (e.g., annealing the tree-distance exponent or router mix ratio over `epochs` or when a metric threshold is reached).
+- `curriculum.anneal.*` enables continuous schedules (e.g., annealing the tree-distance exponent or
+  router mix ratio over `epochs` or when a metric threshold is reached); the router mix ratio
+  applies under `model.fusion: moe` only (spec R10).
 
 ---
 
@@ -371,12 +373,13 @@ refuses one. No slot is reserved for exclusions. The `K` slots come from strateg
 duplicates removed by code (keeping the smallest UID), ties broken by code ID then UID, and a
 deterministic backfill. Proposals are consulted in order:
 
-1. **Phase 2+ miners.** With hard-negative mining on, the geometric miner proposes its share of the
-   `K` slots, `K - int(K * router_mix_ratio)`; with router-guided mining also on, the router fills
-   the rest. `router_mix_ratio` comes from `curriculum.anneal` (default 0.5). Miners score one
-   occurrence per code (the smallest candidate UID, which the coordinator keeps) and never the
-   anchor or positive code, so on multiple GPUs, where a code repeats across rows and ranks of the
-   global pool, the miners still fill their slots with distinct codes.
+1. **Phase 2+ miners.** With hard-negative mining on, the geometric miner proposes all `K` slots;
+   under `model.fusion: moe` with router-guided mining also on, it proposes
+   `K - int(K * router_mix_ratio)` and the router fills the rest. `router_mix_ratio` comes from
+   `curriculum.anneal` (default 0.5). Miners score one occurrence per code (the smallest candidate
+   UID, which the coordinator keeps) and never the anchor or positive code, so on multiple GPUs,
+   where a code repeats across rows and ranks of the global pool, the miners still fill their slots
+   with distinct codes.
 2. **The difficulty proposal** from the data layer, which is the only proposal in Phase 1 and the
    fallback afterwards.
 3. **Deterministic backfill** from the remaining eligible codes.
@@ -448,7 +451,11 @@ Structural matrices are loaded from the validated bundle, not trusted from check
   freshly initialized parameter groups. This initializes from old weights; it does not undo what an
   old objective learned.
 
-Embedding generation from a checkpoint applies the same contract check.
+Embedding generation from a checkpoint applies the contract check in two forms. Export and reads
+(`tools export-table`, `tools outcome-panel`) compare the supervision fields with the configured
+bundle only, and the encoder record they use is the checkpoint's own: a d = 8 checkpoint exports
+under a d = 16 config, and a four-copy checkpoint is refused (roadmap D2). Only the HGCN feeder
+compares the checkpoint's encoder record with the config's, as exact resume does.
 
 ### Legacy Containment
 

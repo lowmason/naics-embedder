@@ -308,7 +308,8 @@ uv run naics-embedder tools outcome-panel --checkpoint checkpoints/sadc_default/
   `conf/data/outcome_panel.yaml`)
 - `--output PATH` - Also write the summary as JSON, with the panel's fingerprint, the table's
   `matrix_fingerprint` and the checkpoint's sha256
-- `KEY=VALUE ...` - Config overrides, as `train` takes them
+- `KEY=VALUE ...` - Config overrides, as `train` takes them; one without `=` is refused, where
+  `train` warns and skips it
 
 ### `tools margins`
 

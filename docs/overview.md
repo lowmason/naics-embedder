@@ -451,6 +451,9 @@ Default coefficient α = 0.01.
 L_total = L_DCL + L_hierarchy + L_structural_preference + L_radius + L_load_balancing
 ```
 
+`L_load_balancing` is present under `model.fusion: moe` only (spec R11); under any other fusion it
+is neither computed nor logged.
+
 | Loss Component | Default Weight | Purpose |
 |----------------|----------------|---------|
 | DCL Contrastive | 1.0 (implicit) | Primary representation learning |
@@ -575,8 +578,12 @@ The system monitors and logs VRAM usage for distributed operations:
 ## 13. Sampling Architecture
 
 - **Data Layer (Streaming Dataset):** Builds candidate pools that never admit an explicit exclusion of the anchor (Req 8(c)), applies Phase 1 inverse tree-distance weighting over D*, and masks siblings.
-- **Model Layer (NAICSContrastiveModel):** Performs Phase 2+ mining (embedding-based, router-guided), norm-adaptive margins, and Phase 3 false-negative masking. Curriculum flags control which mechanisms are active.
-- **Interface:** Data layer supplies pre-weighted negatives and metadata; model reshapes/reorders negatives for harder sampling and logs tree-distance and router confusion metrics.
+- **Model Layer (NAICSContrastiveModel):** Performs Phase 2+ mining (embedding-based; router-guided
+  under `moe` only, spec R10), norm-adaptive margins, and Phase 3 false-negative masking.
+  Curriculum flags control which mechanisms are active.
+- **Interface:** Data layer supplies pre-weighted negatives and metadata; model reshapes/reorders
+  negatives for harder sampling and logs tree-distance metrics, plus router confusion metrics under
+  `moe` only (spec R10).
 - See `docs/sampling_architecture.md` for full details.
 
 ---
