@@ -8,13 +8,26 @@ import sys
 from pathlib import Path
 
 import pytest
+from transformers import AutoTokenizer
 
 from naics_embedder.panels import window_summaries
-from naics_embedder.panels.window_summaries import SummariesPin, summaries_identity
+from naics_embedder.panels.leakage import SENTENCE_BREAK
+from naics_embedder.panels.window_summaries import (
+    SummariesPin,
+    summaries_identity,
+    summary_budget,
+    text_units,
+    token_counter,
+)
+from tests.fixtures.window_summaries import words
 
 pytestmark = pytest.mark.unit
 
 MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
+
+@pytest.fixture(scope='module')
+def minilm_tokenizer():
+    return AutoTokenizer.from_pretrained(MINILM)
 
 # -------------------------------------------------------------------------------------------------
 # The pin and its identity
@@ -59,3 +72,128 @@ def test_the_module_imports_no_torch():
     )
 
     assert imported.stdout.strip() == 'False'
+
+# -------------------------------------------------------------------------------------------------
+# Units
+# -------------------------------------------------------------------------------------------------
+
+def test_the_budget_is_the_window_less_the_marker_and_special_tokens(minilm_tokenizer):
+    count_marked = token_counter(minilm_tokenizer)
+
+    for channel in ('title', 'description', 'examples', 'excluded'):
+        assert summary_budget(count_marked, channel, 128) == 124
+
+def test_the_counter_counts_special_tokens_only_when_asked(minilm_tokenizer):
+    # 'soybean' is three word pieces: soy, ##be, ##an
+    assert token_counter(minilm_tokenizer)(['soybean farming', 'corn']) == [6, 3]
+    assert token_counter(minilm_tokenizer, special_tokens=False)(['soybean farming']) == [4]
+    # The tokenizer itself raises on an empty batch
+    assert token_counter(minilm_tokenizer)([]) == []
+
+@pytest.mark.parametrize(
+    ('channel', 'text', 'expected'),
+    [
+        pytest.param(
+            'description',
+            'Farms in the U.S. grow corn. Growers, i.e. farmers, sell it. Fruit, e.g. apples, is '
+            'excluded.',
+            [
+                'Farms in the U.S. grow corn.',
+                'Growers, i.e. farmers, sell it.',
+                'Fruit, e.g. apples, is excluded.',
+            ],
+            id='abbreviations',
+        ),
+        pytest.param(
+            'description',
+            'Mills grade wheat No. 2 and corn, etc. for feed. Bakers buy flour vs. meal.',
+            ['Mills grade wheat No. 2 and corn, etc. for feed.', 'Bakers buy flour vs. meal.'],
+            id='no-etc-vs',
+        ),
+        pytest.param(
+            'description',
+            'Farms do: 1. growing crops. 2. raising animals. Ranches are included.',
+            ['Farms do: 1. growing crops.', '2. raising animals.', 'Ranches are included.'],
+            id='numbered-list',
+        ),
+        pytest.param(
+            'description',
+            'Farms that grow onions are classified in Industry 111113. Others are not.',
+            ['Farms that grow onions are classified in Industry 111113.', 'Others are not.'],
+            id='a-code-closes-a-unit',
+        ),
+        pytest.param(
+            'excluded',
+            'Growing crops (1); raising animals (2); fishing--are classified in Industry 114111.',
+            [
+                'Growing crops (1); raising animals (2); fishing--are classified in Industry '
+                '114111.'
+            ],
+            id='parenthesized-numerals',
+        ),
+        pytest.param(
+            'excluded',
+            'Growing soybeans--are classified in Industry 111110, Soybean Farming; Growing '
+            'wheat--are classified in Industry 111140. Growing rice (except wild rice; see '
+            '111199)--are classified in Industry 111160, Rice Farming.',
+            [
+                'Growing soybeans--are classified in Industry 111110, Soybean Farming;',
+                'Growing wheat--are classified in Industry 111140.',
+                'Growing rice (except wild rice; see 111199)--are classified in Industry 111160, '
+                'Rice Farming.',
+            ],
+            id='cross-references',
+        ),
+    ],
+)
+def test_units_are_sentences_that_close_only_at_a_real_break(channel, text, expected):
+    units = text_units(channel, text, words, budget=100)
+
+    assert units == expected
+    # Every unit boundary is a boundary of the leakage segmenter (spec 4.2)
+    pieces = [piece for unit in units for piece in SENTENCE_BREAK.split(unit)]
+    assert pieces == SENTENCE_BREAK.split(text)
+
+def test_a_sentence_over_the_budget_is_re_split_at_its_clauses():
+    text = 'Farms grow corn; farms grow wheat; farms grow rice. Ranches raise cattle.'
+
+    assert text_units('description', text, words, budget=6) == [
+        'Farms grow corn;',
+        'farms grow wheat;',
+        'farms grow rice.',
+        'Ranches raise cattle.',
+    ]
+
+def test_a_clause_over_the_budget_is_re_split_at_its_pieces_without_the_guards():
+    # The parentheses keep the sentence one clause; its pieces split inside them
+    text = 'Farms grow (corn; wheat; rice) here. Ranches raise cattle.'
+
+    assert text_units('description', text, words, budget=4) == [
+        'Farms grow (corn;',
+        'wheat;',
+        'rice) here.',
+        'Ranches raise cattle.',
+    ]
+
+def test_a_piece_over_the_budget_is_refused():
+    with pytest.raises(ValueError, match='a description piece is over the 3-token budget'):
+        text_units('description', 'Farms grow corn and wheat. Ranches raise cattle.', words, 3)
+
+def test_examples_units_are_the_entries():
+    assert text_units('examples', 'Corn farming; ; Wheat farming', words, 100) == [
+        'Corn farming',
+        'Wheat farming',
+    ]
+
+def test_an_examples_entry_over_the_budget_is_refused():
+    with pytest.raises(ValueError, match='an examples entry is over the 1-token budget'):
+        text_units('examples', 'Corn; Wheat farming', words, 1)
+
+def test_a_title_is_one_unit_and_one_over_the_window_is_refused():
+    assert text_units('title', 'Soybean Farming', words, 2) == ['Soybean Farming']
+    with pytest.raises(ValueError, match='a title over the window cannot be summarized'):
+        text_units('title', 'Soybean Farming', words, 1)
+
+def test_a_channel_without_units_is_refused():
+    with pytest.raises(ValueError, match="no units are defined for channel 'query'"):
+        text_units('query', 'soybeans', words, 100)

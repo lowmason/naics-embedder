@@ -33,7 +33,9 @@ ACTIVITY_SEPARATOR = '--'
 TEXT_COLUMNS = ('title', 'description', 'examples', 'excluded')
 
 _NON_ALNUM = re.compile(r'[^a-z0-9]+')
-_SENTENCE_BREAK = re.compile(r'(?<=[.;])\s+')
+# A description or exclusion text splits after '.' or ';' followed by whitespace. Window-fitting
+# summaries (panels/window_summaries.py) build their units from the same pieces.
+SENTENCE_BREAK = re.compile(r'(?<=[.;])\s+')
 _CHUNK_ROWS = 256
 
 # -------------------------------------------------------------------------------------------------
@@ -56,7 +58,7 @@ def text_segments(text: Optional[str]) -> List[str]:
     if not text:
         return []
     pieces: List[str] = []
-    for sentence in _SENTENCE_BREAK.split(text):
+    for sentence in SENTENCE_BREAK.split(text):
         pieces.append(sentence)
         if ACTIVITY_SEPARATOR in sentence:
             pieces.append(sentence.split(ACTIVITY_SEPARATOR, 1)[0])
