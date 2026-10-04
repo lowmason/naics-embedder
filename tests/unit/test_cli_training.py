@@ -417,3 +417,19 @@ def test_training_passes_curriculum_horizon_to_datamodule(training_env):
     # The model's CurriculumScheduler derives Phase 1 from trainer.max_epochs and this hparam
     assert datamodule.kwargs['max_epochs'] == training_env.trainer.kwargs['max_epochs']
     assert datamodule.kwargs['phase1_end'] == model.kwargs['curriculum_phase1_end']
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('overrides', 'expected'),
+    [(None, 100), (['data_loader.n_epochs=1'], 1)],
+    ids=['shipped', 'overridden'],
+)
+def test_training_passes_the_pre_sampled_epoch_count_to_datamodule(
+    training_env, overrides, expected
+):
+    '''data_loader.n_epochs reaches the datamodule, and a run without it keeps the shipped 100.'''
+    training.train(skip_validation=True, overrides=overrides)
+
+    datamodule = training_env.trainer.fit_calls[0]['datamodule']
+
+    assert datamodule.kwargs['n_epochs'] == expected

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from naics_embedder.utils.config import (
     CheckpointLoadMode,
     Config,
+    DataLoaderConfig,
     DecisionConfig,
     DirConfig,
     DistancesConfig,
@@ -496,6 +497,23 @@ class TestSamplingConfig:
                     far_bucket_weight=0.0,
                 )
             )
+
+@pytest.mark.unit
+class TestDataLoaderConfig:
+    '''The data loader's pre-sampled epoch count, which the datamodule builds its rows from.'''
+
+    def test_n_epochs_defaults_to_100_and_the_shipped_config_keeps_it(self, valid_config_dict):
+        assert DataLoaderConfig().n_epochs == 100
+        assert valid_config_dict['data_loader']['n_epochs'] == 100
+
+    def test_n_epochs_must_be_positive(self):
+        with pytest.raises(ValidationError) as excinfo:
+            DataLoaderConfig(n_epochs=0)
+
+        assert _error_locs_and_types(excinfo) == [(('n_epochs', ), 'greater_than')]
+
+    def test_n_epochs_can_be_overridden(self):
+        assert Config().override({'data_loader.n_epochs': 1}).data_loader.n_epochs == 1
 
 @pytest.mark.unit
 class TestSupervisionBuildConfig:

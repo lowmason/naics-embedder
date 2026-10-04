@@ -850,6 +850,14 @@ class DataLoaderConfig(BaseModel):
     batch_size: int = Field(default=32, gt=0, le=512, description='Training batch size')
     num_workers: int = Field(default=4, ge=0, le=32, description='Number of data loading workers')
     val_split: float = Field(default=0.05, gt=0, lt=1, description='Validation split fraction')
+    n_epochs: int = Field(
+        default=100,
+        gt=0,
+        description=(
+            'Sampling epochs pre-built for the training and validation rows; one training epoch '
+            'reads them all'
+        ),
+    )
 
     @field_validator('batch_size')
     @classmethod

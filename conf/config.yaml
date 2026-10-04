@@ -80,6 +80,7 @@ data_loader:
   batch_size: 16
   num_workers: 4
   val_split: 0.05
+  n_epochs: 100  # Pre-sampled epochs; one training epoch reads them all
 
   tokenization:
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2

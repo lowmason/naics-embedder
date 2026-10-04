@@ -539,6 +539,7 @@ def train(
             batch_size=cfg.data_loader.batch_size,
             num_workers=cfg.data_loader.num_workers,
             val_split=cfg.data_loader.val_split,
+            n_epochs=cfg.data_loader.n_epochs,
             seed=cfg.seed,
             supervision_mode=cfg.supervision.mode,
             supervision_manifest_path=cfg.supervision.manifest_path,
