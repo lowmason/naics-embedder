@@ -16,6 +16,8 @@ Commands:
         it.
     regressor-groups: Draw the regressor panel's held-out four-digit groups, once; they are
         committed and the panel reads them.
+    summaries: Build the window-fitting summaries of over-long channel texts, once per
+        backbone; they are committed and pinned in code.
     preprocess: Download raw NAICS files and produce descriptions parquet.
     supervision: Build codebook, pair facts, compatibility distance/relation artifacts,
         training pairs, and curriculum thresholds as one versioned bundle.
@@ -35,7 +37,10 @@ from naics_embedder.data.download_data import download_preprocess_data
 from naics_embedder.data.index_role_table import generate_index_role_table
 from naics_embedder.data.regressor_group_table import generate_regressor_group_table
 from naics_embedder.data.supervision_bundle import generate_supervision_bundle
+from naics_embedder.data.window_summaries import generate_window_summaries
+from naics_embedder.panels.window_summaries import WINDOW_SUMMARIES_PATH
 from naics_embedder.utils.config import (
+    Config,
     DownloadConfig,
     OutcomePanelConfig,
     RegressorPanelConfig,
@@ -58,6 +63,7 @@ SUPERVISION_CONFIG = 'data/supervision.yaml'
 DOWNLOAD_CONFIG = 'data/download.yaml'
 OUTCOME_PANEL_CONFIG = 'data/outcome_panel.yaml'
 REGRESSOR_PANEL_CONFIG = 'data/regressor_panel.yaml'
+TRAINING_CONFIG = 'conf/config.yaml'
 
 SourceDirOption = Annotated[
     Optional[str],
@@ -221,6 +227,65 @@ def regressor_groups(
         raise typer.Exit(code=1)
 
     typer.echo(f'Regressor held-out groups: {table_path}')
+
+# -------------------------------------------------------------------------------------------------
+# Build the window-fitting summaries
+# -------------------------------------------------------------------------------------------------
+
+@app.command('summaries')
+def summaries(
+    descriptions: Annotated[
+        str,
+        typer.Option('--descriptions', help='The descriptions parquet whose texts are summarized'),
+    ] = './data/naics_descriptions.parquet',
+    backbone: Annotated[
+        Optional[str],
+        typer.Option('--backbone', help="The backbone (default: the training config's tokenizer)"),
+    ] = None,
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where to write the artifact (CSV)'),
+    ] = WINDOW_SUMMARIES_PATH,
+    force: Annotated[
+        bool,
+        typer.Option('--force', help='Rebuild an existing artifact, which then needs a new pin'),
+    ] = False,
+):
+    '''
+    Build the window-fitting summaries of over-long channel texts, once per backbone.
+
+    Every channel text whose marked form is over the backbone's trained window is summarized by
+    the whole units (sentences, clauses or examples entries) whose pooled vectors best approximate
+    the text's (roadmap Stage 6b). The backbone is read from the local Hugging Face cache. The
+    artifact is checked as every reader checks it before it is moved into place; commit it with
+    the pin this prints, in ``WINDOW_SUMMARIES`` (``panels/window_summaries.py``).
+
+    Output:
+        ``conf/data/window_summaries.csv`` and ``conf/data/window_summaries_provenance.json``.
+
+    Example:
+        Summarize the descriptions bundle 301cce28 was built from::
+
+            $ HF_HUB_OFFLINE=1 uv run naics-embedder data summaries
+    '''
+
+    configure_logging('data_summaries.log')
+
+    console.rule('[bold green]Building Window-Fitting Summaries[/bold green]')
+
+    if backbone is None:
+        backbone = load_config(Config, TRAINING_CONFIG).data_loader.tokenization.tokenizer_name
+    try:
+        pin = generate_window_summaries(
+            Path(descriptions), Path(output), backbone=backbone, force=force
+        )
+    # FileExistsError without --force, a missing file or cached backbone, or a failed check
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]{exc}[/bold red]')
+        raise typer.Exit(code=1)
+
+    typer.echo(f'Window summaries: {pin.path}')
+    typer.echo(f'Pin for {backbone}: {pin!r}')
 
 # -------------------------------------------------------------------------------------------------
 # Build the Stage-3 supervision bundle
