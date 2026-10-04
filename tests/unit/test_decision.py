@@ -394,6 +394,14 @@ def test_the_text_only_table_must_come_from_the_arms_backbone_and_text(
     with pytest.raises(ValueError, match='D9'):
         _decide([arm, reference], margins, store)
 
+def test_the_text_only_table_must_read_the_arms_summaries(store, tmp_path, reference, margins):
+    # Built before the arm's summaries: on truncated text
+    stale = write_text_only(tmp_path / 'stale', summaries=None)
+    arm = synthetic_arm(store, tmp_path, spec('stale'), {}, text_only_table=stale)
+
+    with pytest.raises(ValueError, match="'e{64}'.*D9"):
+        _decide([arm, reference], margins, store)
+
 def test_the_text_only_check_reads_the_stored_provenance(store, tmp_path, reference, margins):
     stale = write_text_only(tmp_path / 'stale', revision='an-older-revision')
     # The record's copy claims the arm's revision; the stored provenance names the older one

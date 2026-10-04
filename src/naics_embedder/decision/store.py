@@ -35,7 +35,10 @@ def provenance_fields(
     provenance: Mapping[str, Any], table_sha256: str, matrix_fingerprint: str, name: str
 ) -> Dict[str, Any]:
     '''
-    The fields D9 checks, from a text-only table's provenance that describes the table.
+    The fields D9 checks, from a table's provenance that describes the table.
+
+    A text-only table's provenance (``tools text-only-table``) and an exported table's
+    (``tools export-table``) both carry them.
 
     Args:
         provenance: The provenance's JSON content.
@@ -59,6 +62,7 @@ def provenance_fields(
             'backbone': provenance['backbone'],
             'revision': provenance['revision'],
             'descriptions_sha256': provenance['descriptions']['sha256'],
+            'summaries_sha256': provenance['summaries'],
             'max_length': provenance['max_length'],
         }
     except KeyError as exc:

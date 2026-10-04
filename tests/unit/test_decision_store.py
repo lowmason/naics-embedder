@@ -14,7 +14,13 @@ from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
-from tests.fixtures.decision import CODES, spec, synthetic_arm, write_text_only
+from tests.fixtures.decision import (
+    CODES,
+    SUMMARIES_SHA256,
+    spec,
+    synthetic_arm,
+    write_text_only,
+)
 from tests.fixtures.regressor_panel import coordinate_table
 
 pytestmark = pytest.mark.unit
@@ -120,6 +126,7 @@ def test_a_text_only_table_is_stored_with_its_provenance(store, tmp_path):
     assert (reference.backbone, reference.revision, reference.max_length) == (
         provenance['backbone'], provenance['revision'], provenance['max_length']
     )
+    assert reference.summaries_sha256 == provenance['summaries'] == SUMMARIES_SHA256
 
 def test_a_text_only_table_needs_the_provenance_that_describes_it(store, tmp_path):
     path = write_text_only(tmp_path / 'text')
@@ -144,6 +151,11 @@ def _without_max_length(path, provenance):
     provenance.pop('max_length')
     provenance_path(path).write_text(json.dumps(provenance))
 
+def _without_summaries(path, provenance):
+    # A text-only table built before Stage 6b
+    provenance.pop('summaries')
+    provenance_path(path).write_text(json.dumps(provenance))
+
 def _as_a_list(path, provenance):
     provenance_path(path).write_text(json.dumps([provenance]))
 
@@ -156,6 +168,7 @@ def _descriptions_as_text(path, provenance):
     [
         (_shortened, 'describes another file'),
         (_without_max_length, "lacks the field 'max_length'"),
+        (_without_summaries, "lacks the field 'summaries'"),
         (_as_a_list, 'is not a JSON object'),
         (_descriptions_as_text, 'descriptions field is not a JSON object'),
     ],

@@ -32,6 +32,7 @@ from naics_embedder.decision.scores import (
 )
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.panels.outcome import OUTCOME_PANEL
+from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path, text_only_fingerprint
 from naics_embedder.supervision.artifacts import sha256_file
 from tests.fixtures.regressor_panel import text_only_table as stub_text_only_table
@@ -42,6 +43,7 @@ SD = SIGMA * float(np.sqrt(2.5))
 BACKBONE = 'tiny-backbone'
 REVISION = 'abc123'
 DESCRIPTIONS_SHA256 = 'd' * 64
+SUMMARIES_SHA256 = 'e' * 64
 MAX_LENGTH = 16
 PANEL_SET = PanelSet(
     outcome='outcome-roles',
@@ -73,6 +75,7 @@ def spec(name: str, **overrides) -> ArmSpec:
         'backbone': BACKBONE,
         'backbone_revision': REVISION,
         'descriptions_sha256': DESCRIPTIONS_SHA256,
+        'summaries_sha256': SUMMARIES_SHA256,
         'max_length': MAX_LENGTH,
         **overrides,
     }
@@ -147,7 +150,10 @@ def synthetic_scores(effects: Mapping[str, float], offset: float) -> pl.DataFram
     return pl.concat(parts).cast(SCORE_SCHEMA)
 
 def write_text_only(
-    directory: Path, revision: str = REVISION, codes: Sequence[str] = CODES
+    directory: Path,
+    revision: str = REVISION,
+    codes: Sequence[str] = CODES,
+    summaries: Optional[str] = SUMMARIES_SHA256,
 ) -> Path:
     '''A text-only table with its provenance, as ``tools text-only-table`` writes them.'''
 
@@ -162,11 +168,35 @@ def write_text_only(
             'path': 'naics_descriptions.parquet',
             'sha256': DESCRIPTIONS_SHA256
         },
+        'summaries': summaries,
         'max_length': MAX_LENGTH,
         'table_sha256': sha256_file(path),
         'matrix_fingerprint': text_only_fingerprint(table),
     }
     provenance_path(path).write_text(json.dumps(provenance, indent=2) + '\n')
+    return path
+
+def write_export_provenance(table_path: Path, arm_spec: ArmSpec, **entries) -> Path:
+    '''
+    The provenance ``tools export-table`` writes beside a seed's table, recording what
+    ``arm_spec`` reads; ``entries`` replace its entries.
+    '''
+
+    provenance = {
+        'backbone': arm_spec.backbone,
+        'revision': arm_spec.backbone_revision,
+        'descriptions': {
+            'path': 'naics_descriptions.parquet',
+            'sha256': arm_spec.descriptions_sha256
+        },
+        'summaries': arm_spec.summaries_sha256,
+        'max_length': arm_spec.max_length,
+        'table_sha256': sha256_file(table_path),
+        'matrix_fingerprint': table_fingerprint(pl.read_parquet(table_path)),
+        **entries,
+    }
+    path = provenance_path(table_path)
+    path.write_text(json.dumps(provenance, indent=2) + '\n')
     return path
 
 def _table(directory: Path, name: str, seed: int, dimension: int) -> Path:

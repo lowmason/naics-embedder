@@ -57,6 +57,8 @@ class TextOnlyRef(_Record):
     backbone: str
     revision: Optional[str]
     descriptions_sha256: str
+    # The window-fitting summaries the table read; null for a backbone with no pin
+    summaries_sha256: Optional[str]
     max_length: int
 
 # -------------------------------------------------------------------------------------------------
@@ -69,8 +71,9 @@ class ArmSpec(_Record):
 
     Attributes:
         components: Stages or post-processing steps: Req 5's "fewer components".
-        backbone, backbone_revision, descriptions_sha256, max_length: What the arm's encoder
-            reads, which its text-only table must match (D9).
+        backbone, backbone_revision, descriptions_sha256, summaries_sha256, max_length: What
+            the arm's encoder reads, which its text-only table and each seed's table must match
+            (D9). ``summaries_sha256`` is null for a backbone with no pinned summaries.
         settings: The configuration's own settings, recorded as given.
     '''
 
@@ -81,6 +84,7 @@ class ArmSpec(_Record):
     backbone: str
     backbone_revision: Optional[str]
     descriptions_sha256: str
+    summaries_sha256: Optional[str]
     max_length: int = Field(ge=1)
     settings: Dict[str, Any] = Field(default_factory=dict)
 
