@@ -42,7 +42,11 @@ def _tokenize_text(
     max_length: int,
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
     '''
-    Tokenize one channel text with its field marker, truncated and padded to ``max_length``.
+    Tokenize one channel text with its field marker, padded to ``max_length``.
+
+    The text fits: ``_build_tokenization_cache`` has replaced an over-window text by its
+    window-fitting summary, so truncation, which ``fields.tokenize_field`` keeps for queries, never
+    shortens a channel text.
 
     An absent channel (null or blank) is encoded as the empty string, ``[CLS] [SEP]``, with no
     marker and never as placeholder text, and its ``present`` flag is False so fusion can mask it

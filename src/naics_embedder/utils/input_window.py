@@ -6,8 +6,10 @@ documentation. For sentence-transformers/all-MiniLM-L6-v2, the model card at rev
 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 says that in training "the sequence length was limited
 to 128 tokens". Its 256 (``sentence_bert_config.json``'s ``max_seq_length``, the truncation it
 applies at inference) and 512 (``config.json``'s ``max_position_embeddings``) are not the trained
-window. Every tokenizing path truncates to the window and refuses a longer ``max_length``, and
-the supervision bundle records each channel's share of texts beyond it.
+window. Every tokenizing path refuses a ``max_length`` beyond the window. A channel text over it
+is read as its window-fitting summary (``panels/window_summaries.py``), so no channel text is
+truncated, and truncation stays a backstop for queries. The supervision bundle records each
+channel's share of texts beyond the window.
 '''
 
 # -------------------------------------------------------------------------------------------------

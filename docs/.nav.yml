@@ -17,6 +17,7 @@ nav:
               - Graph Distance Measures: api/compute_distances.md
           - Create Contrastive Training Triplets: api/create_triplets.md
           - Redirection Table: api/redirections.md
+          - Window-Fitting Summaries: api/window_summaries.md
       - Training:
           - Text Training:
               - Data Loading:

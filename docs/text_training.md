@@ -69,8 +69,9 @@ One LoRA-adapted MiniLM backbone (revision 1110a243) reads every field
   `'excluded: …'`, `'examples: …'` or `'query: …'` (`text_model/fields.py`). An absent text
   (null or blank) is the unmarked empty string with `present` False. The tokenization cache's
   format `channels-v3` stores the marked texts. Its sidecar records the markers and a `summaries`
-  entry, null until Stage 6b. A cache built under another format, other markers or other
-  summaries is rebuilt.
+  entry, the sha256 of the pinned window-fitting summaries (see "Input window" below). A cache
+  built under another format, other markers or other summaries is rebuilt, and a load that finds
+  a stale sidecar names each entry that differs.
 - **Present channels only.** Each field's present texts go through the backbone in calls of at most
   256 texts (`MAX_TEXTS_PER_CALL`), each trimmed to its own longest text, and absent texts never
   enter it. Each present text is mean-pooled over its tokens.
@@ -333,9 +334,17 @@ positives, and parent retrieval never scores them.
 
 **Input window.** The manifest's `input_window` records the backbone's trained window: 128 tokens
 for `sentence-transformers/all-MiniLM-L6-v2`, from its model card. Per text channel it records
-the present texts, the texts beyond the window and their share. Every tokenizing path truncates
-to the window (`utils/input_window.py`). An absent channel is null in the descriptions, and the
-tokenization cache encodes it as the empty string, never as a placeholder.
+the present texts, the texts beyond the window and their share. A channel text whose marked form
+is over the window is read as its window-fitting summary (roadmap Stage 6b): whole sentences,
+clauses or examples entries of the text, chosen once by `naics-embedder data summaries` and
+committed as `conf/data/window_summaries.csv`. `WINDOW_SUMMARIES` (`panels/window_summaries.py`)
+pins the artifact by sha256, and the tokenization cache and the text-only comparator both read
+their texts through `resolve_channel_texts`, which checks the artifact on every call. No channel
+text is truncated; truncation stays a backstop for queries. Under MiniLM at 128 tokens, 162
+descriptions, 106 examples texts and 485 exclusion texts are summarized. The checkpoint contract,
+the export and text-only provenances and the decision records carry the summaries' sha256. An
+absent channel is null in the descriptions, and the tokenization cache encodes it as the empty
+string, never as a placeholder.
 
 ### Three Independent Axes
 
@@ -414,8 +423,8 @@ term is logged as `train/structural_preference_loss` and configured under
 ### Cache Regeneration
 
 - **Tokenization cache** — reused only when its JSON sidecar (`<cache>.meta.json`) records the
-  bundle's description and codebook fingerprints, tokenizer, and max length; otherwise it is
-  rebuilt.
+  bundle's description and codebook fingerprints, tokenizer, max length, cache format, field
+  markers and window-fitting summaries; otherwise it is rebuilt.
 - **Streaming and multi-epoch caches** — stored in a versioned envelope keyed by contract, bundle
   ID, codebook fingerprint, and source-artifact fingerprints; caches from other bundles or legacy
   runs are rejected and regenerated.
@@ -436,7 +445,10 @@ term is logged as `train/structural_preference_loss` and configured under
 
 Every new checkpoint records its supervision contract under `stage3_supervision`: supervision
 mode, contract version, bundle ID, codebook fingerprint, structural-preference-loss version,
-mining-contract version, and the encoder architecture (layout, fusion, dimension and backbone).
+mining-contract version, the encoder architecture (layout, fusion, dimension and backbone), and
+the sha256 of the window-fitting summaries its token cache applied (`summaries`). A checkpoint
+trained before Stage 6b, on truncated text, records none and reads as null, so exact resume,
+export, reads and the HGCN feeder refuse it; weights-only migration does not compare it.
 Structural matrices are loaded from the validated bundle, not trusted from checkpoint state.
 
 - **`--checkpoint-load-mode exact`** (default) restores optimizer, scheduler, epoch, global step,
