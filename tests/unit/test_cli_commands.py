@@ -825,3 +825,35 @@ def test_outcome_panel_needs_a_purpose(runner, tmp_path, default_config):
     assert result.exit_code == 2
     assert "Missing option '--purpose'" in click.unstyle(result.output).replace('\n', '')
     assert SelectionLog(log).records() == []
+
+@pytest.mark.unit
+def test_outcome_panel_refuses_a_text_only_table_without_a_traceback(
+    monkeypatch, runner, tmp_path, default_config, validated_bundle, text_only_comparator_table
+):
+    '''The comparator's table sits beside an arm's in data/plan8/: a read can name it by mistake.'''
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle)
+    monkeypatch.setattr(tools_cli, 'pick_device', lambda *_args: 'cpu')
+    checkpoint = tmp_path / 'arm.ckpt'
+    checkpoint.write_bytes(b'never read: the table is refused first')
+    log = tmp_path / 'selection_log.jsonl'
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'outcome-panel', '--checkpoint',
+            str(checkpoint), '--table',
+            str(text_only_comparator_table), '--purpose', 'a mixed-up read', '--log',
+            str(log)
+        ],
+    )
+
+    # The runner exits 1 for an uncaught KeyError too, and keeps its traceback out of the output:
+    # a refusal the command handles is the one that raises SystemExit
+    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == 1
+    # Rich folds at spaces, so rejoin the words; the phrases asserted hold no path
+    message = ' '.join(click.unstyle(result.output).split())
+    assert 'Outcome panel failed' in message
+    assert 'is not an exported arm table: its provenance names no checkpoint' in message
+    assert SelectionLog(log).records() == []

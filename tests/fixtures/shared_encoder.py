@@ -8,7 +8,8 @@ MiniLM.
 
 The arm fixtures train nothing. ``shared_model`` is a d = 16 model of the five-code supervision
 bundle (``tests/fixtures/supervision.py``) on the tiny backbone, and ``shared_checkpoint`` saves it
-as Lightning would.
+as Lightning would. ``text_only_comparator_table`` is a table a read can be pointed at by mistake:
+the text-only comparator's, written by its own builder.
 '''
 
 from pathlib import Path
@@ -18,8 +19,9 @@ import polars as pl
 import pytest
 import pytorch_lightning as pyl
 import torch
-from transformers import BertConfig, BertModel
+from transformers import AutoTokenizer, BertConfig, BertModel
 
+from naics_embedder.panels.text_only import build_text_only_table
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.export import export_code_table
@@ -131,4 +133,22 @@ def exported_table(tmp_path, shared_checkpoint, validated_bundle, five_code_toke
 
     return export_code_table(
         shared_checkpoint, validated_bundle, five_code_token_config, tmp_path / 'arm_table.parquet'
+    )
+
+@pytest.fixture
+def text_only_comparator_table(tmp_path, five_code_descriptions_parquet) -> Path:
+    '''
+    The five codes' text-only comparator table, with its provenance beside it.
+
+    ``build_text_only_table`` writes both, on the tiny backbone and MiniLM's tokenizer. The
+    provenance has the table's hash and window, as an export's does, but names no checkpoint.
+    '''
+
+    return build_text_only_table(
+        five_code_descriptions_parquet,
+        tmp_path / 'text_only.parquet',
+        backbone=MINILM,
+        max_length=TOKEN_WINDOW,
+        model=tiny_bert(),
+        tokenizer=AutoTokenizer.from_pretrained(MINILM),
     )

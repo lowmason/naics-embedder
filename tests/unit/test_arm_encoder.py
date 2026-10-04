@@ -42,6 +42,16 @@ def arm(shared_checkpoint, exported_table, validated_bundle, five_code_token_con
         shared_checkpoint, exported_table, validated_bundle, five_code_token_config
     )
 
+@pytest.fixture
+def no_model_load(monkeypatch):
+    '''Fails the test if a read loads the model: every provenance check comes first.'''
+
+    def never(*_args, **_kwargs):
+        # AssertionError, so a test's pytest.raises(ValueError) cannot swallow an unwanted load
+        raise AssertionError('the model loaded before the provenance was refused')
+
+    monkeypatch.setattr('naics_embedder.text_model.arm_encoder.load_arm_model', never)
+
 def _table_tangent(table_path) -> torch.Tensor:
     table = pl.read_parquet(table_path)
     return torch.tensor(table.select(pl.exclude('code', 'index', 'level')).to_numpy())
@@ -164,6 +174,80 @@ def test_a_checkpoint_at_another_curvature_is_refused(
 
     with pytest.raises(ValueError, match='curvature 2'):
         ArmEncoder.from_files(curved, exported_table, validated_bundle, five_code_token_config)
+
+def test_a_text_only_table_is_refused_before_any_model_loads(
+    no_model_load, shared_checkpoint, text_only_comparator_table, validated_bundle,
+    five_code_token_config
+):
+    '''Its provenance has a table hash and a window, like an export's, but names no checkpoint.'''
+
+    with pytest.raises(
+        ValueError, match='is not an exported arm table: its provenance names no checkpoint$'
+    ) as refusal:
+        ArmEncoder.from_files(
+            shared_checkpoint, text_only_comparator_table, validated_bundle, five_code_token_config
+        )
+
+    assert text_only_comparator_table.name in str(refusal.value)
+
+@pytest.mark.parametrize('missing', ['checkpoint', 'table_sha256', 'max_length'])
+def test_a_provenance_missing_an_entry_is_refused_before_any_model_loads(
+    no_model_load, missing, exported_table, shared_checkpoint, validated_bundle,
+    five_code_token_config
+):
+    path = provenance_path(exported_table)
+    provenance = json.loads(path.read_text())
+    del provenance[missing]
+    path.write_text(json.dumps(provenance))
+
+    with pytest.raises(
+        ValueError, match=f'is not an exported arm table: its provenance names no {missing}$'
+    ):
+        ArmEncoder.from_files(
+            shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
+
+def test_a_provenance_naming_no_checkpoint_hash_is_refused_before_any_model_loads(
+    no_model_load, exported_table, shared_checkpoint, validated_bundle, five_code_token_config
+):
+    path = provenance_path(exported_table)
+    provenance = json.loads(path.read_text())
+    del provenance['checkpoint']['sha256']
+    path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match=r'its provenance names no checkpoint\.sha256$'):
+        ArmEncoder.from_files(
+            shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
+
+def test_a_table_exported_at_another_window_is_refused_before_any_model_loads(
+    no_model_load, exported_table, shared_checkpoint, validated_bundle, five_code_token_config
+):
+    '''One preprocessing contract: queries take the window the table's codes were encoded at.'''
+
+    wider = five_code_token_config.model_copy(update={'max_length': 2 * TOKEN_WINDOW})
+
+    with pytest.raises(
+        ValueError,
+        match=f'exported at a {TOKEN_WINDOW}-token window.*tokenizes queries at {2 * TOKEN_WINDOW}',
+    ) as refusal:
+        ArmEncoder.from_files(shared_checkpoint, exported_table, validated_bundle, wider)
+
+    # The key the read's window comes from (code_token_config), so the remedy points at it
+    assert 'data_loader.streaming.max_length' in str(refusal.value)
+
+def test_queries_are_tokenized_at_the_tables_window(arm, exported_table):
+    provenance = json.loads(provenance_path(exported_table).read_text())
+
+    assert arm.max_length == provenance['max_length'] == TOKEN_WINDOW
+
+def test_a_missing_checkpoint_is_a_file_not_found_before_any_model_loads(
+    no_model_load, tmp_path, exported_table, validated_bundle, five_code_token_config
+):
+    with pytest.raises(FileNotFoundError):
+        ArmEncoder.from_files(
+            tmp_path / 'missing.ckpt', exported_table, validated_bundle, five_code_token_config
+        )
 
 # -------------------------------------------------------------------------------------------------
 # Devices

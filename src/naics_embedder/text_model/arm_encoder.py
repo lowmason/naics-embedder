@@ -59,6 +59,29 @@ def exp_map_origin(tangent: torch.Tensor) -> torch.Tensor:
     return torch.cat([torch.cosh(norm), torch.sinh(norm) / norm * tangent], dim=1)
 
 # -------------------------------------------------------------------------------------------------
+# The table's provenance
+# -------------------------------------------------------------------------------------------------
+
+def _provenance_entry(provenance: Any, table_path: Path, *keys: str) -> Any:
+    '''
+    The provenance's entry at ``keys``.
+
+    Raises:
+        ValueError: If the entry is absent. The file beside the table is then no exported arm
+            table's provenance: the text-only comparator's, say, names no checkpoint.
+    '''
+
+    entry = provenance
+    for depth, key in enumerate(keys, start=1):
+        if not isinstance(entry, dict) or key not in entry:
+            missing = '.'.join(keys[:depth])
+            raise ValueError(
+                f'{table_path} is not an exported arm table: its provenance names no {missing}'
+            )
+        entry = entry[key]
+    return entry
+
+# -------------------------------------------------------------------------------------------------
 # The arm encoder
 # -------------------------------------------------------------------------------------------------
 
@@ -115,35 +138,50 @@ class ArmEncoder:
         '''
         The arm of a checkpoint and the table exported from it.
 
-        The table's provenance is checked before the model loads.
+        The table's provenance is checked before the model loads. It must name this checkpoint
+        and this table file, and the window it records, which the table's codes were encoded at,
+        must be the one the queries will be tokenized at: the arm has one preprocessing contract.
 
         Args:
             checkpoint_path: The arm's Lightning checkpoint.
             table_path: The table ``tools export-table`` wrote from it.
             bundle: The configured supervision bundle.
             token_config: The token cache training read (``code_token_config``): its tokenizer
-                and window tokenize the queries.
+                and window tokenize the queries. The window must be the one the table was
+                exported at.
             device: Where the model runs.
             batch_size: Queries per forward pass.
 
         Raises:
-            ValueError: If the table's provenance names another checkpoint, or the table file is
-                not the one it names; or as ``load_arm_model``: a curvature other than 1 (R8),
+            ValueError: If the table's provenance is no exported arm table's (it names no
+                checkpoint, table hash or window), names another checkpoint, or the table file is
+                not the one it names; if the table was exported at another window than
+                ``token_config``'s; or as ``load_arm_model``: a curvature other than 1 (R8),
                 another supervision contract, or another encoder architecture (D2).
-            FileNotFoundError: If the table or its provenance is missing.
+            FileNotFoundError: If the checkpoint, the table or its provenance is missing.
         '''
 
         checkpoint_path, table_path = Path(checkpoint_path), Path(table_path)
         provenance = json.loads(provenance_path(table_path).read_text())
+        # The shape first: the text-only comparator's provenance has a table hash and a window but
+        # names no checkpoint, and that refusal says what the file is
+        named_checkpoint = _provenance_entry(provenance, table_path, 'checkpoint', 'sha256')
+        named_table = _provenance_entry(provenance, table_path, 'table_sha256')
+        exported_window = _provenance_entry(provenance, table_path, 'max_length')
         checkpoint_sha256 = sha256_file(checkpoint_path)
-        named = provenance['checkpoint']['sha256']
-        if named != checkpoint_sha256:
+        if named_checkpoint != checkpoint_sha256:
             raise ValueError(
-                f'the table was exported from another checkpoint: its provenance names {named}, '
-                f'and {checkpoint_path} is {checkpoint_sha256}'
+                'the table was exported from another checkpoint: its provenance names '
+                f'{named_checkpoint}, and {checkpoint_path} is {checkpoint_sha256}'
             )
-        if provenance['table_sha256'] != sha256_file(table_path):
+        if named_table != sha256_file(table_path):
             raise ValueError(f'{table_path} is not the table its provenance names')
+        if exported_window != token_config.max_length:
+            raise ValueError(
+                f'{table_path} was exported at a {exported_window}-token window, but this read '
+                f'tokenizes queries at {token_config.max_length}: export the table and read under '
+                'one data_loader.streaming.max_length'
+            )
         model, _ = load_arm_model(checkpoint_path, bundle, device=device)
         return cls(
             model,
