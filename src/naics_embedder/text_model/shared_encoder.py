@@ -70,7 +70,8 @@ class SharedEncoder(nn.Module):
         curvature: The head's curvature.
         use_gradient_checkpointing: Recompute the backbone's activations in the backward pass.
         max_texts_per_call: The most texts one backbone call carries. It bounds a call's memory and
-            leaves every output unchanged.
+            leaves every output unchanged up to float noise. With dropout on, it also changes the
+            order of the random draws.
 
     Raises:
         ValueError: If the fusion or the dimension is outside its set, or ``max_texts_per_call``

@@ -3,7 +3,9 @@ The shared encoder (Req 14; spec 4.1), on a one-layer BERT so these tests downlo
 
 One backbone serves codes and queries; an absent channel never reaches the output; exactly one
 affine map sits between fusion and the point; a field's texts go to the backbone in bounded chunks
-that leave every output unchanged; and a step reaches every adapter and the projection.
+that leave every output and every gradient unchanged up to float noise; a new encoder is in train
+mode, so its dropout and gradient checkpointing engage; and a step reaches every adapter and the
+projection.
 '''
 
 from collections import Counter
@@ -149,6 +151,30 @@ def _count_layer_runs(encoder):
         if isinstance(module, GradientCheckpointingLayer):
             watch(name, module)
     return ran, checkpointed
+
+def _switch_off_dropout(encoder):
+    '''
+    Turn off every dropout in the encoder, so a chunk bound cannot change the random draws.
+
+    Setting each ``nn.Dropout``'s ``p`` is not enough: under SDPA, BERT's attention dropout reads a
+    ``dropout_prob`` attribute and draws from the RNG inside the attention kernel.
+    '''
+
+    for module in encoder.modules():
+        if isinstance(module, nn.Dropout):
+            module.p = 0.0
+        if hasattr(module, 'dropout_prob'):
+            module.dropout_prob = 0.0
+
+def _weighted_loss(output):
+    '''A fixed random-weighted sum of ``tangent``, and of ``gate_probs`` under ``moe``.'''
+
+    loss = 0
+    for seed, key in enumerate(('tangent', 'gate_probs')):
+        if key in output:
+            weights = torch.randn(output[key].shape, generator=torch.Generator().manual_seed(seed))
+            loss = loss + (output[key] * weights).sum()
+    return loss
 
 # -------------------------------------------------------------------------------------------------
 # Structure
@@ -339,6 +365,38 @@ def test_each_row_of_a_batch_encodes_as_that_code_alone(make_encoder, fusion):
                     torch.testing.assert_close(slot, text_alone[0, 0])
                 else:
                     assert torch.equal(slot, torch.zeros_like(slot))
+
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_the_chunk_bound_leaves_the_gradients_unchanged(make_encoder, fusion):
+    encoder = make_encoder(fusion=fusion, use_gradient_checkpointing=True).train()
+    _switch_off_dropout(encoder)
+    # PEFT starts every lora_B at zero, which leaves every lora_A gradient exactly zero (P9)
+    generator = torch.Generator().manual_seed(0)
+    with torch.no_grad():
+        for name, parameter in encoder.named_parameters():
+            if 'lora_B' in name:
+                parameter.normal_(0.0, 0.1, generator=generator)
+    batch = stack_text_inputs(MIXED_CODES)
+
+    gradients = {}
+    for bound in (1, 2, MAX_TEXTS_PER_CALL):
+        encoder.max_texts_per_call = bound
+        encoder.zero_grad()
+        _weighted_loss(encoder(batch)).backward()
+        gradients[bound] = {
+            name: parameter.grad.clone()
+            for name, parameter in encoder.named_parameters() if parameter.grad is not None
+        }
+
+    reference = gradients[1]
+    lora_a = [gradient for name, gradient in reference.items() if 'lora_A' in name]
+    assert lora_a and all(gradient.abs().sum() > 0 for gradient in lora_a)
+    for bound in (2, MAX_TEXTS_PER_CALL):
+        assert gradients[bound].keys() == reference.keys()
+        for name, gradient in gradients[bound].items():
+            torch.testing.assert_close(
+                gradient, reference[name], msg=lambda text: f'{name}: {text}'
+            )
 
 # -------------------------------------------------------------------------------------------------
 # Outputs and refusals
