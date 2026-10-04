@@ -256,6 +256,19 @@ def test_the_model_and_its_contract_record_the_tokenizers_summaries(training_env
     assert model_kwargs['summaries'] is not None
 
 @pytest.mark.unit
+def test_the_summaries_follow_the_tokenizer_and_not_the_base_model(training_env):
+    # The seam pins MiniLM's summaries alone, so a key taken from the base model finds no pin
+    training.train(skip_validation=True, overrides=['model.base_model_name=other/backbone'])
+
+    model_kwargs = training_env.trainer.fit_calls[0]['model'].kwargs
+    # The override took, so the two names differ
+    assert model_kwargs['base_model_name'] == 'other/backbone'
+    assert model_kwargs['checkpoint_contract'].encoder.backbone == 'other/backbone'
+    assert model_kwargs['summaries'] == summaries_identity(MINILM)
+    assert model_kwargs['checkpoint_contract'].summaries == summaries_identity(MINILM)
+    assert model_kwargs['summaries'] is not None
+
+@pytest.mark.unit
 def test_a_containment_run_records_the_summaries_too(training_env):
     training.train(skip_validation=True, overrides=['supervision.mode=legacy_containment'])
 

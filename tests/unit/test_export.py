@@ -129,6 +129,10 @@ def test_the_hgcn_feeder_refuses_a_checkpoint_trained_on_truncated_text(
     monkeypatch.setattr(
         training_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle
     )
+    # The refusal comes first. A regression past it would pick a device and build the default
+    # ./data/token_cache: keep that on the CPU and under tmp_path
+    monkeypatch.setattr(training_cli, 'pick_device', lambda *_args: torch.device('cpu'))
+    monkeypatch.chdir(tmp_path)
     cfg = Config()
     cfg.data_loader.streaming.descriptions_parquet = str(five_code_descriptions_parquet)
     output = tmp_path / 'encodings.parquet'

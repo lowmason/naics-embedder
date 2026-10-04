@@ -266,7 +266,7 @@ def test_a_checkpoint_without_a_contract_cites_d2(tmp_path, runtime_contract):
     assert 'weights_only' not in str(excinfo.value)
 
 # -------------------------------------------------------------------------------------------------
-# Export and reads compare the supervision fields only
+# Export and reads compare the supervision fields and the summaries, not the encoder record
 # -------------------------------------------------------------------------------------------------
 
 def test_the_supervision_check_takes_the_encoder_record_from_the_checkpoint(

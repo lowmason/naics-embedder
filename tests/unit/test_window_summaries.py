@@ -17,6 +17,7 @@ from naics_embedder.panels.leakage import SENTENCE_BREAK
 from naics_embedder.panels.window_summaries import (
     SUMMARIES_SCHEMA,
     SummariesPin,
+    over_window,
     read_window_summaries,
     resolve_channel_texts,
     summaries_identity,
@@ -26,6 +27,7 @@ from naics_embedder.panels.window_summaries import (
     token_counter,
     write_window_summaries,
 )
+from naics_embedder.text_model.fields import marked_text
 from tests.fixtures.window_summaries import WordTokenizer, pin_artifact, words
 
 pytestmark = pytest.mark.unit
@@ -291,6 +293,31 @@ def test_the_reader_refuses_a_malformed_artifact(tmp_path, rows, refusal):
     with pytest.raises(ValueError, match=refusal):
         read_window_summaries(path)
 
+def test_over_window_lists_each_present_text_beyond_the_window_titles_included():
+    count_marked = token_counter(WordTokenizer())
+    # A marker adds a word, and [CLS] and [SEP] two tokens: seven words fill the window exactly
+    at_window = 'Farms grow corn wheat rice oats rye'
+    past_window = 'Farms grow corn wheat rice oats rye barley'
+    long_title = 'Soybean Farming and Oilseed Growing Services for Others'
+    assert count_marked([marked_text('description', at_window)]) == [WINDOW]
+    assert count_marked([marked_text('description', past_window)]) == [WINDOW + 1]
+    assert count_marked([marked_text('title', long_title)]) == [WINDOW + 1]
+    descriptions = pl.DataFrame(
+        {
+            'code': ['111110', '222220'],
+            'title': [long_title, 'Wheat Farming'],
+            'description': [at_window, past_window],
+            'examples': ['Soybeans; Beans', '  '],
+            'excluded': [None, 'Dairy farming'],
+        }
+    )
+
+    # Sorted by channel, then code: the loop meets the title first, and the sort puts it last
+    assert over_window(descriptions, count_marked, WINDOW) == [
+        ('222220', 'description'),
+        ('111110', 'title'),
+    ]
+
 def test_an_over_window_text_is_replaced_by_its_summary(tmp_path, caplog):
     descriptions = descriptions_frame()
 
@@ -330,6 +357,17 @@ def test_the_default_pin_is_the_backbones_entry_at_call_time(tmp_path, monkeypat
 
 def test_an_over_window_text_without_a_pin_is_refused():
     with pytest.raises(ValueError, match="code 111110's description is over the 10-token window"):
+        resolve(descriptions_frame(), None)
+
+def test_none_names_no_pin_even_for_a_backbone_that_has_one(tmp_path, monkeypatch):
+    # The same texts resolve under the backbone's pin, which is the default
+    monkeypatch.setitem(
+        window_summaries.WINDOW_SUMMARIES, STUB, pin_rows(tmp_path, [summary_row()])
+    )
+    default = resolve_channel_texts(descriptions_frame(), WordTokenizer(), STUB, WINDOW)
+    assert default.get_column('description').to_list()[0] == SUMMARY
+
+    with pytest.raises(ValueError, match='no window summaries are pinned for stub-backbone'):
         resolve(descriptions_frame(), None)
 
 def test_a_pin_for_another_window_is_refused(tmp_path):
