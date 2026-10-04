@@ -14,6 +14,7 @@ import polars as pl
 import torch
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.text_model.fields import CHANNELS, marker, tokenize_field
 from naics_embedder.utils.config import TokenizationConfig
 from naics_embedder.utils.input_window import check_window
@@ -25,10 +26,6 @@ logger = logging.getLogger(__name__)
 # False and no marker. A cache in an earlier format (unmarked texts, or a placeholder text)
 # records another format in its sidecar, or none, so it is rebuilt.
 CACHE_FORMAT = 'channels-v3'
-
-# Stage 6b's summaries artifact, by hash: null until it lands. It is part of the cache's identity,
-# so a cache built under other summaries is rebuilt.
-SUMMARIES: Optional[str] = None
 
 # Disable tokenizer parallelism to avoid fork issues with multiprocessing
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -213,7 +210,9 @@ def _cache_identity(
             channel: marker(channel)
             for channel in CHANNELS
         },
-        'summaries': SUMMARIES,
+        # The pinned summaries' sha256 (panels/window_summaries.py), so a cache built under other
+        # summaries is rebuilt
+        'summaries': summaries_identity(cfg.tokenizer_name),
     }
 
 def _write_cache_sidecar(
@@ -232,19 +231,43 @@ def _write_cache_sidecar(
     )
     temp_path.replace(sidecar)
 
+def _identity_mismatch(
+    cfg: TokenizationConfig,
+    description_fingerprint: str,
+    codebook_fingerprint: str,
+) -> Optional[str]:
+    '''
+    Why the cache's sidecar does not record the expected identity, or None when it does.
+
+    The sidecar matches only when it equals the expected identity exactly. The reason names each
+    key that differs, with its recorded and expected values.
+    '''
+
+    sidecar = _sidecar_path(Path(cfg.output_path))
+    if not sidecar.exists():
+        return f'it has no fingerprint sidecar at {sidecar}'
+    try:
+        recorded = json.loads(sidecar.read_text())
+    except (OSError, json.JSONDecodeError):
+        return f'its fingerprint sidecar {sidecar} is unreadable'
+    expected = _cache_identity(cfg, description_fingerprint, codebook_fingerprint)
+    if recorded == expected:
+        return None
+    if not isinstance(recorded, dict):
+        return f'its fingerprint sidecar {sidecar} is not a JSON object'
+    differing = {
+        key: (recorded.get(key, '<absent>'), expected.get(key, '<absent>'))
+        for key in sorted(set(recorded) | set(expected))
+        if key not in recorded or key not in expected or recorded[key] != expected[key]
+    }
+    return f'its sidecar differs (recorded, expected): {differing}'
+
 def _sidecar_matches(
     cfg: TokenizationConfig,
     description_fingerprint: str,
     codebook_fingerprint: str,
 ) -> bool:
-    sidecar = _sidecar_path(Path(cfg.output_path))
-    if not sidecar.exists():
-        return False
-    try:
-        recorded = json.loads(sidecar.read_text())
-    except (OSError, json.JSONDecodeError):
-        return False
-    return recorded == _cache_identity(cfg, description_fingerprint, codebook_fingerprint)
+    return _identity_mismatch(cfg, description_fingerprint, codebook_fingerprint) is None
 
 def load_verified_tokenization_cache(
     cfg: TokenizationConfig,
@@ -259,10 +282,11 @@ def load_verified_tokenization_cache(
         RuntimeError: If the cache is missing or was built from other inputs.
     '''
 
-    if not _sidecar_matches(cfg, description_fingerprint, codebook_fingerprint):
+    mismatch = _identity_mismatch(cfg, description_fingerprint, codebook_fingerprint)
+    if mismatch is not None:
         raise RuntimeError(
-            f'Tokenization cache at {cfg.output_path} is missing or does not match the expected '
-            'descriptions/codebook fingerprints; run prepare_data() to rebuild it'
+            f'Tokenization cache at {cfg.output_path} was not built from the expected inputs: '
+            f'{mismatch}; run prepare_data() to rebuild it'
         )
     cache = _load_tokenization_cache(cfg.output_path)
     if cache is None:
@@ -314,10 +338,11 @@ def tokenization_cache(
 
     # If we're not using locking (e.g., cache should already exist), fail fast
     if not use_locking:
+        mismatch = _identity_mismatch(cfg, **identity)
+        reason = f' ({mismatch})' if mismatch is not None else ''
         raise RuntimeError(
-            f'Tokenization cache not found at {cache_path} (or its fingerprint sidecar does not '
-            'match) and locking disabled. '
-            f'Cache should be built in prepare_data() before workers are spawned.'
+            f'Tokenization cache not found at {cache_path}{reason} and locking disabled. '
+            'Cache should be built in prepare_data() before workers are spawned.'
         )
 
     lock_path = cache_path.with_suffix('.lock')

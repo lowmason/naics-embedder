@@ -13,6 +13,7 @@ import torch
 from naics_embedder.cli.commands import training as training_cli
 from naics_embedder.panels.regressor import coordinate_matrix, table_fingerprint
 from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.supervision.checkpoints import contract_for_bundle, shared_encoder_architecture
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
@@ -187,7 +188,9 @@ def test_the_provenance_names_the_table_and_the_checkpoint(
         'path': str(five_code_descriptions_parquet),
         'sha256': sha256_file(five_code_descriptions_parquet),
     }
-    assert provenance['summaries'] is None
+    # The seam's dummy pin for MiniLM (tests/conftest.py)
+    assert provenance['summaries'] == summaries_identity(MINILM)
+    assert provenance['summaries'] is not None
     assert (provenance['codes'], provenance['dimension']) == (5, ARM_DIMENSION)
     assert provenance['table_sha256'] == sha256_file(exported_table)
     assert provenance['matrix_fingerprint'] == table_fingerprint(pl.read_parquet(exported_table))

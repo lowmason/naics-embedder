@@ -26,6 +26,7 @@ import torch
 
 from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
 from naics_embedder.supervision.checkpoints import (
     CHECKPOINT_KEY,
@@ -33,7 +34,7 @@ from naics_embedder.supervision.checkpoints import (
     validate_supervision_contract,
 )
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
-from naics_embedder.text_model.dataloader.tokenization_cache import SUMMARIES, tokenization_cache
+from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.fields import CHANNELS
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import Config, TokenizationConfig
@@ -258,7 +259,7 @@ def export_code_table(
             'path': str(descriptions_path),
             'sha256': sha256_file(descriptions_path)
         },
-        'summaries': SUMMARIES,
+        'summaries': summaries_identity(token_config.tokenizer_name),
         'codes': table.height,
         'dimension': tangent.shape[1],
         'coordinates': COORDINATES,

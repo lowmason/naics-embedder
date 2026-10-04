@@ -18,6 +18,8 @@ import pytest
 import torch
 from transformers import AutoTokenizer
 
+from naics_embedder.panels import window_summaries
+from naics_embedder.panels.window_summaries import SummariesPin, summaries_identity
 from naics_embedder.text_model.dataloader.tokenization_cache import (
     _acquire_lock,
     _build_tokenization_cache,
@@ -26,6 +28,7 @@ from naics_embedder.text_model.dataloader.tokenization_cache import (
     _save_tokenization_cache,
     _write_cache_sidecar,
     get_tokens,
+    load_verified_tokenization_cache,
     tokenization_cache,
 )
 from naics_embedder.utils.config import TokenizationConfig
@@ -803,7 +806,9 @@ def test_present_channels_are_cached_with_their_markers(sample_descriptions_parq
     assert torch.equal(cache[0]['excluded']['input_ids'], _padded(tokenizer, ''))
 
 @pytest.mark.unit
-def test_the_sidecar_records_the_markers_and_null_summaries(tokenization_config, counted_builds):
+def test_the_sidecar_records_the_markers_and_the_pins_summaries(
+    tokenization_config, counted_builds
+):
     tokenization_cache(tokenization_config, **FINGERPRINTS)
 
     cache_path = Path(tokenization_config.output_path)
@@ -815,7 +820,9 @@ def test_the_sidecar_records_the_markers_and_null_summaries(tokenization_config,
         'excluded': 'excluded: ',
         'examples': 'examples: ',
     }
-    assert sidecar['summaries'] is None
+    # The seam's dummy pin for MiniLM (tests/conftest.py): a site that recorded None would fail
+    assert sidecar['summaries'] == summaries_identity(tokenization_config.tokenizer_name)
+    assert sidecar['summaries'] is not None
 
 @pytest.mark.unit
 def test_a_cache_in_the_unmarked_v2_format_is_rebuilt(
@@ -837,15 +844,56 @@ def test_a_cache_in_the_unmarked_v2_format_is_rebuilt(
 
     assert len(counted_builds) == 1
 
+def _repin(monkeypatch, backbone: str) -> str:
+    '''Pin other summaries for the backbone, as a new committed artifact would.'''
+
+    monkeypatch.setitem(
+        window_summaries.WINDOW_SUMMARIES,
+        backbone,
+        SummariesPin(path='other_summaries.csv', sha256='a' * 64, window=128),
+    )
+    return 'a' * 64
+
 @pytest.mark.unit
 def test_a_cache_built_under_other_summaries_is_rebuilt(
     tokenization_config, counted_builds, monkeypatch
 ):
     tokenization_cache(tokenization_config, **FINGERPRINTS)
+    _repin(monkeypatch, tokenization_config.tokenizer_name)
+
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+
+    assert len(counted_builds) == 2
+
+@pytest.mark.unit
+def test_a_cache_built_under_other_markers_is_rebuilt(
+    tokenization_config, counted_builds, monkeypatch
+):
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
     monkeypatch.setattr(
-        'naics_embedder.text_model.dataloader.tokenization_cache.SUMMARIES', 'a' * 64
+        'naics_embedder.text_model.dataloader.tokenization_cache.marker',
+        lambda field: f'[{field}] ',
     )
 
     tokenization_cache(tokenization_config, **FINGERPRINTS)
 
     assert len(counted_builds) == 2
+
+@pytest.mark.unit
+def test_a_stale_sidecar_is_refused_naming_each_key_that_differs(
+    tokenization_config, counted_builds, monkeypatch
+):
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+    recorded = summaries_identity(tokenization_config.tokenizer_name)
+    expected = _repin(monkeypatch, tokenization_config.tokenizer_name)
+
+    with pytest.raises(RuntimeError, match='run prepare_data') as verified:
+        load_verified_tokenization_cache(tokenization_config, **FINGERPRINTS)
+    with pytest.raises(RuntimeError, match='Tokenization cache not found') as unlocked:
+        tokenization_cache(tokenization_config, **FINGERPRINTS, use_locking=False)
+
+    for refusal in (verified, unlocked):
+        message = str(refusal.value)
+        assert f"'summaries': ('{recorded}', '{expected}')" in message
+        # Only the keys that differ, with both values
+        assert 'description_fingerprint' not in message
