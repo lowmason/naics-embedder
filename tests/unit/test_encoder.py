@@ -6,6 +6,7 @@ affine map sits between fusion and the point; a field's texts go to the backbone
 that leave every output unchanged; and a step reaches every adapter and the projection.
 '''
 
+from collections import Counter
 from typing import List
 from unittest.mock import Mock
 
@@ -14,6 +15,7 @@ import torch
 import torch.nn as nn
 from peft.tuners.lora import LoraLayer
 from transformers import PreTrainedModel
+from transformers.modeling_layers import GradientCheckpointingLayer
 
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.fields import CHANNELS, QUERY
@@ -124,6 +126,29 @@ def _encode_with_slots(encoder, batch):
         handle.remove()
     pooled, present = seen[0]
     return output, pooled, present
+
+def _count_layer_runs(encoder):
+    '''
+    Per backbone layer, by name: how often it ran, and how often it ran through its checkpointing
+    function, which is the checkpointed branch of ``GradientCheckpointingLayer``.
+    '''
+
+    ran, checkpointed = Counter(), Counter()
+
+    def watch(name, layer):
+        through = layer._gradient_checkpointing_func
+
+        def count_and_call(function, *args, **kwargs):
+            checkpointed[name] += 1
+            return through(function, *args, **kwargs)
+
+        layer._gradient_checkpointing_func = count_and_call
+        layer.register_forward_hook(lambda module, args, output: ran.update([name]))
+
+    for name, module in encoder.backbone.named_modules():
+        if isinstance(module, GradientCheckpointingLayer):
+            watch(name, module)
+    return ran, checkpointed
 
 # -------------------------------------------------------------------------------------------------
 # Structure
@@ -355,6 +380,33 @@ def test_a_malformed_batch_is_refused(make_encoder):
 # -------------------------------------------------------------------------------------------------
 # Training
 # -------------------------------------------------------------------------------------------------
+
+def test_a_new_encoder_is_in_train_mode_throughout(make_encoder):
+    # The pretrained backbone arrives in eval mode (the fixture mirrors from_pretrained), and
+    # Lightning never calls .train(), so the encoder has to build every module in train mode
+    encoder = make_encoder()
+
+    assert {module.training for module in encoder.modules()} == {True}
+    encoder.eval()
+    assert {module.training for module in encoder.modules()} == {False}
+    encoder.train()
+    assert {module.training for module in encoder.modules()} == {True}
+
+def test_train_mode_runs_the_backbone_layers_checkpointed(make_encoder):
+    encoder = make_encoder(use_gradient_checkpointing=True)
+    ran, checkpointed = _count_layer_runs(encoder)
+    batch = stack_text_inputs(CODES)
+
+    # As built, with no .train() call: dropout and checkpointing key on each layer's own mode
+    encoder(batch)
+    assert ran and checkpointed == ran
+
+    ran.clear()
+    checkpointed.clear()
+    encoder.eval()
+    with torch.no_grad():
+        encoder(batch)
+    assert ran and not checkpointed
 
 @pytest.mark.parametrize('checkpointing', [False, True])
 @pytest.mark.parametrize('max_texts_per_call', (1, MAX_TEXTS_PER_CALL))

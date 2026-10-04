@@ -29,7 +29,7 @@ from naics_embedder.utils.config import TokenizationConfig
 TINY_HIDDEN = 8
 
 def tiny_bert(name: str = 'tiny-bert') -> BertModel:
-    '''A seeded one-layer BERT of width 8 over MiniLM's 30,522-token vocabulary.'''
+    '''A seeded one-layer BERT of width 8 over MiniLM's 30,522-token vocabulary, in eval mode.'''
 
     torch.manual_seed(0)
     config = BertConfig(
@@ -40,7 +40,8 @@ def tiny_bert(name: str = 'tiny-bert') -> BertModel:
         intermediate_size=16,
         max_position_embeddings=512,
     )
-    return BertModel(config)
+    # from_pretrained returns the real backbone in eval mode; a train-mode stand-in would hide it
+    return BertModel(config).eval()
 
 @pytest.fixture
 def tiny_backbone(monkeypatch):

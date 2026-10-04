@@ -114,6 +114,10 @@ class SharedEncoder(nn.Module):
             task_type='FEATURE_EXTRACTION',
         )
         self.backbone = get_peft_model(base_model, lora_config)
+        # from_pretrained returns the backbone in eval mode, and Lightning never calls .train(), so
+        # this makes every module follow the encoder's .train() and .eval(), which is what dropout
+        # and gradient checkpointing key on
+        self.backbone.train()
         if use_gradient_checkpointing:
             # Both calls are needed: checkpointed blocks reach the adapter only through inputs
             # that require grad
