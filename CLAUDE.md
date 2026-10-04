@@ -4,9 +4,9 @@
 
 **NAICS Hyperbolic Embedding System** is a sophisticated machine learning framework that produces
 hyperbolic embeddings for the North American Industry Classification System (NAICS). The system
-combines multi-channel text encoding, Mixture-of-Experts fusion, hyperbolic contrastive learning,
-and hyperbolic graph refinement to create geometry-aware embeddings aligned with the hierarchical
-NAICS taxonomy.
+combines a shared text encoder over marked text fields, masked fusion, hyperbolic contrastive
+learning, and hyperbolic graph refinement to create geometry-aware embeddings aligned with the
+hierarchical NAICS taxonomy.
 
 **Key Technologies:**
 
@@ -24,17 +24,21 @@ NAICS taxonomy.
 
 The system consists of **four sequential stages**:
 
-1. **Multi-Channel Text Encoding** (`text_model/encoder.py`)
-   - Independent LoRA-adapted transformer encoders for title, description, examples, exclusions
-   - Base model: sentence-transformers/all-MiniLM-L6-v2
-   - Produces 4 Euclidean embeddings per NAICS code
+1. **Shared Text Encoding** (`text_model/shared_encoder.py`, `text_model/fields.py`)
+   - One LoRA-adapted backbone (sentence-transformers/all-MiniLM-L6-v2) reads every field:
+     title, description, excluded, examples, and a query
+   - Each present text is marked with its field (`'title: …'`); absent channels never enter
+     the backbone
+   - Mean-pools one vector per present channel
 
-2. **Mixture-of-Experts Fusion** (`text_model/moe.py`)
-   - Top-2 gating with load-balancing loss
-   - Adaptively fuses the 4 channel embeddings into a single Euclidean embedding
+2. **Fusion and Projection** (`text_model/fusion.py`)
+   - `model.fusion`: masked mean (default), attention pooling, or `moe`, an ablation that
+     routes the masked mean through `text_model/moe.py`'s experts
+   - Exactly one `Linear(384 → d)` maps the fused vector to `model.dimension`, d in {8, 16, 32}
 
 3. **Hyperbolic Contrastive Learning** (`text_model/naics_model.py`, `text_model/loss.py`)
-   - Projects embeddings into Lorentz-model hyperbolic space
+   - A parameter-free head caps the tangent at norm 2 and maps it onto the Lorentz hyperboloid
+     (c = 1)
    - Uses Decoupled Contrastive Learning (DCL) with Lorentzian geodesic distances
    - Includes false negative mitigation via configurable strategies
    - Dynamic Structure-Aware Curriculum (SADC) adapts training difficulty
@@ -46,7 +50,8 @@ The system consists of **four sequential stages**:
    - Combines hyperbolic triplet loss with confidence-based margin adaptation
 
 **Final Output:** High-fidelity Lorentz-model hyperbolic embeddings suitable for hierarchical
-search, clustering, and downstream ML tasks.
+search, clustering, and downstream ML tasks. `tools export-table` writes a checkpoint's
+2,125-code table in Req 2's form: tangent coordinates at the origin, `e0 … e{d-1}`.
 
 ## Directory Structure
 
@@ -68,14 +73,18 @@ naics-embedder/
 │   │   ├── compute_distances.py   # Compute graph distance measures
 │   │   └── create_triplets.py     # Create contrastive training triplets
 │   ├── text_model/           # Stage 1-3: Text encoding and contrastive learning
-│   │   ├── encoder.py        # Multi-channel LoRA encoder
-│   │   ├── moe.py            # Mixture-of-Experts (with torch.compile)
+│   │   ├── fields.py         # The five fields and their markers ('title: …')
+│   │   ├── shared_encoder.py # SharedEncoder: one backbone, fusion, one Linear(384 → d) ⭐
+│   │   ├── fusion.py         # Masked mean, attention pooling, the MoE ablation
+│   │   ├── export.py         # Encode token rows; export the code table (tools export-table)
+│   │   ├── arm_encoder.py    # ArmEncoder: queries through the checkpoint, codes from its table
+│   │   ├── moe.py            # Mixture-of-Experts, read only under fusion: moe
 │   │   ├── hyperbolic.py     # Lorentz ops (with torch.compile)
 │   │   ├── naics_model.py    # PyTorch Lightning module (mixin-based) ⭐
 │   │   ├── mixins/           # ⭐ Functional mixins for NAICSContrastiveModel
 │   │   │   ├── distributed.py   # Global batch sampling for multi-GPU
 │   │   │   ├── loss.py          # Hierarchy, structural preference, radius losses
-│   │   │   ├── curriculum.py    # Hard negative mining, router sampling
+│   │   │   ├── curriculum.py    # Hard negative mining; router sampling under moe
 │   │   │   ├── logging.py       # Training/validation metric logging
 │   │   │   ├── validation.py    # Validation step and evaluation
 │   │   │   └── optimizer.py     # Optimizer and scheduler config
@@ -242,7 +251,7 @@ The system implements **two levels** of hyperbolic geometry support:
 - `CompileConfig` - Mode, backend, and dynamic shape settings
 - Compiled ops: exp/log maps, distance, Minkowski dot, projection
 
-### 2. Multi-Channel Architecture
+### 2. Text Fields and the Shared Encoder
 
 Each NAICS code has **4 text channels**:
 
@@ -251,15 +260,21 @@ Each NAICS code has **4 text channels**:
 - **Examples:** Example activities and products
 - **Excluded:** Related but excluded activities
 
-Each channel is encoded by a **separate LoRA-adapted transformer** (via PEFT library) to capture
-channel-specific semantics.
+Every channel goes through **one shared LoRA-adapted backbone** (via the PEFT library), marked with
+its field (`'title: Computer Systems Design Services'`), so the backbone can tell the fields apart.
+A query is a fifth field, `query`, read by the same backbone. An absent channel (null or blank)
+never enters the backbone, and fusion masks it (Req 9).
 
-### 3. Mixture-of-Experts (MoE)
+### 3. Fusion and the Mixture-of-Experts Ablation
 
-- **Top-k Gating:** Routes each input to the top-k most relevant experts (k=2)
-- **Load Balancing:** Auxiliary loss ensures even expert utilization
-- **Implementation:** `text_model/moe.py` (with torch.compile for gating ops)
-- **Purpose:** Learns adaptive fusion of the 4 channel embeddings
+`model.fusion` picks how the present channels' vectors become one (`text_model/fusion.py`):
+
+- **`masked_mean`** (default): the mean over present channels, with no parameters
+- **`attention`:** attention pooling over present channels; it starts as the masked mean
+- **`moe`** (an ablation only): the masked mean, then `text_model/moe.py`'s top-2 experts
+
+Router-guided mining, the load-balancing term and their logs run only under `moe` (spec R10,
+R11). Under any other fusion, the geometric miner takes every mining slot.
 
 ### 3.5. Model Mixin Architecture
 
@@ -269,7 +284,7 @@ The `NAICSContrastiveModel` is decomposed into **functional mixins** for maintai
 |-------|----------|----------------|
 | `DistributedMixin` | `mixins/distributed.py` | Global batch sampling, `all_gather` utilities |
 | `LossMixin` | `mixins/loss.py` | Hierarchy loss, structural preference, radius regularization |
-| `CurriculumMixin` | `mixins/curriculum.py` | Hard negative mining, router-guided sampling |
+| `CurriculumMixin` | `mixins/curriculum.py` | Hard negative mining; router-guided sampling under `moe` |
 | `LoggingMixin` | `mixins/logging.py` | Training/validation metric logging |
 | `ValidationMixin` | `mixins/validation.py` | Validation step, embedding evaluation |
 | `OptimizerMixin` | `mixins/optimizer.py` | Optimizer and LR scheduler configuration |
@@ -446,6 +461,8 @@ uv run naics-embedder tools investigate  # Investigate hierarchy correlation
 uv run naics-embedder tools outcome-baseline  # Lexical stub on the outcome validation split
 uv run naics-embedder tools text-only-table  # Frozen-backbone text table for the regressor panel
 uv run naics-embedder tools regressor-panel  # Score an arm on the regressor panel
+uv run naics-embedder tools export-table  # Export a checkpoint's code table in Req 2's form
+uv run naics-embedder tools outcome-panel  # Score an arm on the outcome validation split
 uv run naics-embedder tools margins   # Fix each panel's margin from a reference arm (Req 5)
 uv run naics-embedder tools decide    # Decide among arms under Req 5's rule
 uv run naics-embedder tools diagnostics  # Req 6's structural diagnostics for a table
@@ -764,11 +781,10 @@ controller programmatically.
 **Enabled by default** to save GPU memory:
 
 ```python
-# In encoder.py
+# In shared_encoder.py
 if use_gradient_checkpointing:
-    for channel in self.channels:
-        self.encoders[channel].enable_input_require_grads()
-        self.encoders[channel].base_model.gradient_checkpointing_enable()
+    self.backbone.enable_input_require_grads()
+    self.backbone.base_model.gradient_checkpointing_enable()
 ```
 
 **Trade-off:** Reduces memory usage at the cost of ~20% slower training.
@@ -781,7 +797,9 @@ if use_gradient_checkpointing:
 2. **Managed curvature** (`utils/hyperbolic.py`) - `CurvatureManager` with learnable or fixed
    curvature
 
-Both prevent numerical instability in hyperbolic operations.
+Both prevent numerical instability in hyperbolic operations. The text model's curvature is a
+fixed 1.0, and export and reads take c = 1 only: `tools export-table` and `tools outcome-panel`
+refuse a checkpoint trained at any other curvature (spec R8).
 
 ### 3. Mixed Precision Training
 
@@ -921,7 +939,10 @@ uv run pytest -v
 - `test_curriculum.py` - Text curriculum
 - `test_graph_curriculum.py` - Graph curriculum system (all components)
 - `test_datamodule.py` - Data loading
-- `test_encoder.py` - Multi-channel encoding
+- `test_encoder.py` - The shared encoder, on a tiny BERT
+- `test_fusion.py` - Fusion options and masking
+- `test_export.py` - The code-table export and the HGCN feeder
+- `test_arm_encoder.py` - The arm encoder and the outcome read
 - `test_evaluation.py` - Evaluation metrics
 - `test_hyperbolic.py` - Lorentz operations
 - `test_loss.py` - Loss functions
@@ -1201,8 +1222,9 @@ git push -u origin claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U
 
 **Model Architecture:**
 
-- `text_model/encoder.py` - Multi-channel encoder
-- `text_model/moe.py` - Mixture-of-Experts
+- `text_model/shared_encoder.py` - The shared encoder
+- `text_model/fusion.py` - Fusion options
+- `text_model/moe.py` - Mixture-of-Experts (the `moe` fusion ablation)
 - `text_model/loss.py` - Loss functions
 - `graph_model/hgcn.py` - Hyperbolic GCN
 - `graph_model/curriculum/*.py` - Graph curriculum system

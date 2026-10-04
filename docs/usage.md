@@ -244,9 +244,9 @@ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
 ```
 
 **Options:**
-- `--coordinates PATH` - The arm's 2,125-code table in the export form (tangent coordinates at
-  the origin for a hyperbolic arm). Lorentz points and constant columns, such as a log map's
-  zero time coordinate, are refused
+- `--coordinates PATH` - The arm's 2,125-code table in the export form (`tools export-table`:
+  tangent coordinates at the origin for a hyperbolic arm). Lorentz points and constant columns,
+  such as a log map's zero time coordinate, are refused
 - `--text-only PATH` - The text-only table (`tools text-only-table`)
 - `--codebook PATH` - A supervision bundle's `naics_codebook.parquet`
 - `--regime seen|heldout` - Regime to score (repeatable; default: both)
@@ -257,6 +257,58 @@ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
 - `--open-purpose TEXT`, `--reopen-reason TEXT` - Why the outer sets are opened, and why again
 - `--log PATH` - Selection log (default: `logs/selection_log.jsonl`)
 - `--output PATH` - Write the per-row predictions as parquet
+
+### `tools export-table`
+
+Export an arm's 2,125-code table in Req 2's form (roadmap Stage 6). Every code goes through the
+checkpoint's model in eval mode. The table holds `code`, `index` and `level`, then
+`e0 … e{d-1}` (float64): each code's tangent vector at the origin, capped at norm 2, in the
+bundle's codebook order.
+
+The command resolves the bundle and the token cache as `train` does, from `--config` and
+`key=value` overrides. The checkpoint's supervision contract must match the bundle. Its encoder
+record is its own, so a d = 8 checkpoint exports under a d = 16 config. A checkpoint trained at a
+curvature other than 1, or of the four-copy encoder (roadmap D2), is refused.
+
+**Generates:** the table and `<stem>_provenance.json` beside it. The provenance records the
+checkpoint's sha256 and contract, the backbone's revision, the window, the descriptions' sha256,
+`summaries`, and the table's sha256 and `matrix_fingerprint`.
+
+```bash
+uv run naics-embedder tools export-table --checkpoint checkpoints/sadc_default/last.ckpt \
+  --output data/arm_table.parquet supervision.manifest_path=/absolute/path/to/manifest.json
+```
+
+**Options:**
+- `--checkpoint PATH` - The arm's checkpoint
+- `--output PATH` - Where to write the table
+- `--config PATH` - Config naming the bundle and the token cache (default: `conf/config.yaml`)
+- `KEY=VALUE ...` - Config overrides, as `train` takes them; one without `=` is refused
+
+### `tools outcome-panel`
+
+Score an arm on the outcome panel's validation split under its own distance (`lorentz` for the
+hyperbolic head). Queries are marked `query:` and go through the checkpoint's model. Codes are
+decoded from the table `tools export-table` wrote from that checkpoint, and the table's provenance
+must name both. The read is appended to the selection log with the table's `matrix_fingerprint`
+(`table`) and the checkpoint's sha256 (`checkpoint`). The test split stays sealed: this command
+has no `--split`.
+
+```bash
+uv run naics-embedder tools outcome-panel --checkpoint checkpoints/sadc_default/last.ckpt \
+  --table data/arm_table.parquet --purpose 'first live reading' \
+  supervision.manifest_path=/absolute/path/to/manifest.json
+```
+
+**Options:**
+- `--checkpoint PATH`, `--table PATH` - The arm's checkpoint and the table exported from it
+- `--purpose TEXT` - Why this read happens; recorded in the selection log (required)
+- `--config PATH` - Config naming the bundle and the token cache (default: `conf/config.yaml`)
+- `--log PATH` - Selection log (default: `logs/selection_log.jsonl`, from
+  `conf/data/outcome_panel.yaml`)
+- `--output PATH` - Also write the summary as JSON, with the panel's fingerprint, the table's
+  `matrix_fingerprint` and the checkpoint's sha256
+- `KEY=VALUE ...` - Config overrides, as `train` takes them
 
 ### `tools margins`
 

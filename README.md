@@ -6,7 +6,7 @@
 
 ------------------------------------------------------------------------
 
-This project implements a unified hyperbolic representation learning framework for the **North American Industry Classification System (NAICS)**. The system combines multi-channel text encoding, Mixture-of-Experts fusion, hyperbolic contrastive learning, and a hyperbolic graph refinement stage to produce geometry-aware embeddings aligned with the hierarchical structure of the NAICS taxonomy.
+This project implements a unified hyperbolic representation learning framework for the **North American Industry Classification System (NAICS)**. The system combines a shared text encoder over marked text fields, masked fusion, hyperbolic contrastive learning, and a hyperbolic graph refinement stage to produce geometry-aware embeddings aligned with the hierarchical structure of the NAICS taxonomy.
 
 The final output is a set of **Lorentz-model hyperbolic embeddings** suitable for similarity search, hierarchical modeling, graph-based reasoning, and downstream machine learning applications.
 
@@ -16,8 +16,8 @@ The final output is a set of **Lorentz-model hyperbolic embeddings** suitable fo
 
 The system consists of four sequential stages:
 
-1. **Multi-channel text encoding** – independent transformer-based encoders for title, description, examples, and exclusions.
-2. **Mixture-of-Experts (MoE) fusion** – adaptive fusion of the four embeddings using Top-2 gating.
+1. **Shared text encoding** – one LoRA-adapted transformer reads the title, description, examples and exclusions, each marked with its field, and reads queries through the same layers.
+2. **Fusion and projection** – a masked mean over the present channels (attention pooling and a Mixture-of-Experts are options, the MoE an ablation only), then one linear map to dimension d ∈ {8, 16, 32}.
 3. **Hyperbolic contrastive learning** – projection into Lorentz space and optimization with Decoupled Contrastive Learning (DCL).
 4. **Hyperbolic Graph Convolutional Refinement (HGCN)** – structure-aware refinement using the explicit NAICS parent–child graph.
 
@@ -25,7 +25,7 @@ Each stage is designed to preserve or enhance the hierarchical geometry of NAICS
 
 ------------------------------------------------------------------------
 
-## 2. Stage 1 — Multi-Channel Text Encoding
+## 2. Stage 1 — Shared Text Encoding
 
 Each NAICS code includes four distinct text fields:
 
@@ -34,26 +34,19 @@ Each NAICS code includes four distinct text fields:
 - Examples: Representative businesses in this category ⟶ Concrete instantiations
 - Excluded: Codes explicitly NOT in this category ⟶ Disambiguation and boundaries
 
-Each field is processed independently using a transformer encoder (LoRA-adapted). This produces four Euclidean embeddings:
-
-- Title: (Embedding_title)
-- Description: (Embedding_description)
-- Examples: Embedding_examples)
-- Excluded: (Embedding_excluded)
-
-These embeddings serve as inputs to the fusion stage.
+Every field goes through one shared transformer (LoRA-adapted), marked with its name (`title: …`), so one backbone tells the fields apart. A query is a fifth field, `query`, read by the same layers, so queries and codes share one space. An absent field never enters the backbone. Each present field is mean-pooled into one vector, and these vectors are the fusion stage's input.
 
 ------------------------------------------------------------------------
 
-## 3. Stage 2 — Mixture-of-Experts Fusion (Top-2 Gating)
+## 3. Stage 2 — Fusion and Projection
 
-The four channel embeddings are concatenated and passed into a **Mixture-of-Experts (MoE)** module. Key components include:
+The present channels' vectors are fused into one (`model.fusion`):
 
-- Top-2 gating to route each input to the two most relevant experts.
-- Feed-forward expert networks that learn specialized fusion behaviors.
-- Auxiliary load-balancing loss to ensure even expert utilization across batches.
+- **Masked mean** (default): the mean over the present channels, with no parameters.
+- **Attention pooling**: a learned weighting over the present channels.
+- **Mixture-of-Experts** (an ablation only): the masked mean routed through top-2 experts, with an auxiliary load-balancing loss.
 
-This produces a single fused Euclidean embedding (E_fused) per NAICS code.
+Exactly one linear map then takes the fused vector to dimension d ∈ {8, 16, 32} (`model.dimension`, default 16).
 
 ------------------------------------------------------------------------
 
@@ -61,15 +54,15 @@ This produces a single fused Euclidean embedding (E_fused) per NAICS code.
 
 To align the latent space with the hierarchical structure of NAICS, embeddings are projected into **Lorentz-model hyperbolic space** via the exponential map.
 
-### 4.1 Hyperbolic Projection
+### 4.1 The Hyperbolic Head
 
-The fused Euclidean vector is mapped onto the hyperboloid:
+The d-dimensional vector is a tangent vector at the origin. A parameter-free head caps its norm at 2 and maps it onto the hyperboloid:
 
-- Uses exponential map at the origin
-- Supports learned or fixed curvature
+- Uses the exponential map at the origin
+- Curvature fixed at c = 1; export and reads refuse any other
 - Ensures numerical stability
 
-The result is a Lorentz embedding (E_hyp).
+The result is a Lorentz embedding (E_hyp) with d + 1 coordinates. The export (`tools export-table`) writes the tangent coordinates, `e0 … e{d-1}`: Req 2's form.
 
 ### 4.2 Decoupled Contrastive Learning (DCL) Loss
 
@@ -202,22 +195,21 @@ Upon completion of all four stages, the system produces:
 
 ``` text
 +-------------------------------+
-|  Multi-Channel Text Encoder   |
-|  (Title / Desc / Examples /   |
-|   Excluded via Transformer)   |
+|     Shared Text Encoder       |
+|  (one LoRA backbone; marked   |
+|   fields and queries)         |
 +---------------+---------------+
                 |
                 v
 +-------------------------------+
-|     Mixture-of-Experts        |
-|  Top-2 Gating + Expert MLPs   |
-|  Load-Balanced Fusion Layer   |
+|  Masked Fusion + Linear(→ d)  |
+|  (MoE only as an ablation)    |
 +---------------+---------------+
                 |
                 v
 +-------------------------------+
-|   Hyperbolic Projection       |
-|   (Lorentz Exponential Map)   |
+|   Hyperbolic Head             |
+|   (cap, Lorentz exp map, c=1) |
 +---------------+---------------+
                 |
                 v

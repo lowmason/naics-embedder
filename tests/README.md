@@ -43,8 +43,11 @@ tests/
 ├── unit/                      # Unit tests for individual components (53 files)
 │   ├── test_hyperbolic.py    # Hyperbolic geometry operations (CRITICAL) ✅
 │   ├── test_loss.py          # Loss functions ✅
-│   ├── test_moe.py           # Mixture of Experts ✅
-│   ├── test_encoder.py       # Multi-channel encoder ✅
+│   ├── test_moe.py           # Mixture of Experts (the moe fusion ablation) ✅
+│   ├── test_encoder.py       # The shared encoder (tiny BERT) ✅
+│   ├── test_fusion.py        # Fusion options and masking ✅
+│   ├── test_export.py        # Code-table export and the HGCN feeder ✅
+│   ├── test_arm_encoder.py   # The arm encoder and the outcome read ✅
 │   ├── test_naics_model.py   # PyTorch Lightning module ✅
 │   ├── test_evaluation.py    # Text model evaluation metrics ✅
 │   ├── test_curriculum.py    # Curriculum scheduling ✅
@@ -112,7 +115,7 @@ The following modules have comprehensive test coverage:
 
 1. **text_model/hyperbolic.py** ✅ - `test_hyperbolic.py`
    - LorentzOps (exp/log maps, distances, inner products)
-   - HyperbolicProjection (Euclidean → Lorentz)
+   - HyperbolicHead (norm cap and exp map, no parameters)
    - LorentzDistance computation
    - Manifold validity checks
    - Numerical stability tests
@@ -123,10 +126,10 @@ The following modules have comprehensive test coverage:
    - HierarchyPreservationLoss (distance correlation)
    - StructuralPreferenceLoss (pairwise structural ordering; gradient-direction contracts)
 
-3. **text_model/encoder.py** ✅ - `test_encoder.py`
-   - Multi-channel transformer encoders (title, description, examples, exclusions)
-   - LoRA adaptation layers
-   - Channel-specific encoding
+3. **text_model/shared_encoder.py** ✅ - `test_encoder.py`
+   - One LoRA-adapted backbone over marked fields and queries
+   - Present channels only: masking an absent channel leaves the output bit-identical
+   - Fusion options, one affine map, gradient to every adapter
 
 4. **text_model/moe.py** ✅ - `test_moe.py`
    - Top-k gating mechanism
