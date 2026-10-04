@@ -23,6 +23,7 @@ from rich.console import Console
 from rich.panel import Panel
 from typing_extensions import Annotated
 
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
@@ -134,6 +135,8 @@ def build_model_from_config(
         structural_preference_margin=structural_preference.margin,
         structural_preference_temperature=structural_preference.temperature,
         structural_preference_tie_tolerance=structural_preference.tie_tolerance,
+        # The key the token cache resolves under (spec 4.8)
+        summaries=summaries_identity(cfg.data_loader.tokenization.tokenizer_name),
         checkpoint_contract=runtime_contract,
         **supervision_inputs,
     )
@@ -167,7 +170,7 @@ def runtime_contract_for(
     cfg: Config, bundle: Optional[ValidatedSupervisionBundle]
 ) -> CheckpointContract:
     '''
-    The checkpoint contract of the configured run, its encoder record included.
+    The checkpoint contract of the configured run, its encoder record and summaries included.
 
     The supervision gate returns no bundle only for explicit legacy containment. Training's exact
     resume and the HGCN feeder compare this whole contract with a checkpoint's; export and reads
@@ -175,9 +178,12 @@ def runtime_contract_for(
     '''
 
     encoder = encoder_architecture_for(cfg)
+    summaries = summaries_identity(cfg.data_loader.tokenization.tokenizer_name)
     if bundle is None:
-        return containment_contract(encoder=encoder)
-    return contract_for_bundle(bundle.manifest, cfg.supervision.mode, encoder=encoder)
+        return containment_contract(encoder=encoder, summaries=summaries)
+    return contract_for_bundle(
+        bundle.manifest, cfg.supervision.mode, encoder=encoder, summaries=summaries
+    )
 
 def log_migration_report(report: MigrationReport) -> None:
     '''Report what a weights-only migration loaded, skipped, and left freshly initialized.'''

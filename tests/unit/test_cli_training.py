@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli import app as cli_app
 from naics_embedder.cli.commands import training
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
     MigrationReport,
@@ -16,9 +17,10 @@ from naics_embedder.utils.config import CheckpointLoadMode, Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
 
+MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
 # The record the default config builds
 CONFIGURED_ENCODER = shared_encoder_architecture(
-    fusion='masked_mean', dimension=16, backbone='sentence-transformers/all-MiniLM-L6-v2'
+    fusion='masked_mean', dimension=16, backbone=MINILM
 )
 
 @pytest.fixture
@@ -230,6 +232,8 @@ def test_training_checkpoint_resume_passes_ckpt(training_env):
         bundle_id='bundle-a',
         codebook_fingerprint='a' * 64,
         encoder=CONFIGURED_ENCODER,
+        # The seam's dummy pin for the configured tokenizer (tests/conftest.py)
+        summaries=summaries_identity(MINILM),
     )
 
 @pytest.mark.unit
@@ -238,9 +242,26 @@ def test_the_runtime_contract_records_the_configured_encoder(training_env):
 
     model_kwargs = training_env.trainer.fit_calls[0]['model'].kwargs
     assert model_kwargs['checkpoint_contract'].encoder == shared_encoder_architecture(
-        fusion='attention', dimension=8, backbone='sentence-transformers/all-MiniLM-L6-v2'
+        fusion='attention', dimension=8, backbone=MINILM
     )
     assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('attention', 8)
+
+@pytest.mark.unit
+def test_the_model_and_its_contract_record_the_tokenizers_summaries(training_env):
+    training.train(skip_validation=True)
+
+    model_kwargs = training_env.trainer.fit_calls[0]['model'].kwargs
+    assert model_kwargs['summaries'] == summaries_identity(MINILM)
+    assert model_kwargs['checkpoint_contract'].summaries == summaries_identity(MINILM)
+    assert model_kwargs['summaries'] is not None
+
+@pytest.mark.unit
+def test_a_containment_run_records_the_summaries_too(training_env):
+    training.train(skip_validation=True, overrides=['supervision.mode=legacy_containment'])
+
+    contract = training_env.trainer.fit_calls[0]['model'].kwargs['checkpoint_contract']
+    assert contract.supervision_mode == 'legacy_containment'
+    assert contract.summaries == summaries_identity(MINILM)
 
 @pytest.mark.unit
 def test_exact_resume_contract_mismatch_fails_before_training(training_env, monkeypatch):

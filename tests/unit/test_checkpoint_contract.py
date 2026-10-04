@@ -2,11 +2,13 @@ import pytest
 import torch
 from torch import nn
 
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.checkpoints import (
     D2_REFUSAL,
     LEGACY_ENCODER,
     CheckpointContract,
     EncoderArchitecture,
+    containment_contract,
     contract_for_bundle,
     load_weights_only,
     saved_encoder,
@@ -20,12 +22,19 @@ MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
 SHARED = shared_encoder_architecture(fusion='masked_mean', dimension=16, backbone=MINILM)
 
 @pytest.fixture
-def runtime_contract() -> CheckpointContract:
+def summaries() -> str:
+    '''MiniLM's summaries: under the test seam, the dummy pin's sha256.'''
+
+    return summaries_identity(MINILM)
+
+@pytest.fixture
+def runtime_contract(summaries) -> CheckpointContract:
     return CheckpointContract(
         supervision_mode='repaired',
         bundle_id='bundle-a',
         codebook_fingerprint='a' * 64,
         encoder=SHARED,
+        summaries=summaries,
     )
 
 @pytest.fixture
@@ -69,6 +78,13 @@ def test_matching_new_checkpoint_can_exact_resume(tmp_path, runtime_contract):
         {
             'mining_contract_version': 'other-mining'
         },
+        # Trained before Stage 6b, on truncated text, or under other summaries
+        {
+            'summaries': None
+        },
+        {
+            'summaries': 'f' * 64
+        },
     ],
 )
 def test_legacy_or_mismatched_checkpoint_cannot_exact_resume(
@@ -108,14 +124,56 @@ def test_a_checkpoint_trained_under_the_exclusion_quota_cannot_exact_resume(
     with pytest.raises(ValueError, match='exact resume'):
         validate_exact_resume(path, runtime_contract)
 
-def test_contract_for_bundle_reads_manifest_identity(validated_bundle):
-    contract = contract_for_bundle(validated_bundle.manifest, encoder=SHARED)
+def test_contract_for_bundle_reads_manifest_identity(validated_bundle, summaries):
+    contract = contract_for_bundle(validated_bundle.manifest, encoder=SHARED, summaries=summaries)
 
     assert contract.supervision_mode == 'repaired'
     assert contract.bundle_id == 'bundle-a'
     assert contract.contract_version == 'stage3-supervision-v2'
     assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
     assert contract.encoder == SHARED
+    assert contract.summaries == summaries
+
+# -------------------------------------------------------------------------------------------------
+# The summaries (Stage 6b spec, 4.8)
+# -------------------------------------------------------------------------------------------------
+
+def test_a_contract_saved_before_stage_6b_reads_as_null_summaries(runtime_contract):
+    saved = runtime_contract.model_dump()
+    del saved['summaries']
+
+    assert CheckpointContract.model_validate(saved).summaries is None
+
+def test_a_containment_checkpoint_under_other_summaries_cannot_exact_resume(tmp_path, summaries):
+    runtime = containment_contract(encoder=SHARED, summaries=summaries)
+    path = _save(
+        tmp_path / 'containment.ckpt', containment_contract(encoder=SHARED, summaries=None)
+    )
+
+    with pytest.raises(ValueError, match='exact resume') as refusal:
+        validate_exact_resume(path, runtime)
+
+    assert f"'summaries': (None, '{summaries}')" in str(refusal.value)
+
+def test_the_supervision_check_refuses_other_summaries_naming_the_field(
+    validated_bundle, summaries
+):
+    manifest = validated_bundle.manifest
+    saved = contract_for_bundle(manifest, encoder=SHARED, summaries=None)
+
+    with pytest.raises(ValueError, match="supervision contract mismatch .*'summaries'"):
+        validate_supervision_contract(saved.model_dump(), manifest, summaries=summaries)
+
+def test_a_caller_that_omits_the_summaries_is_a_type_error(validated_bundle, summaries):
+    manifest = validated_bundle.manifest
+    saved = contract_for_bundle(manifest, encoder=SHARED, summaries=summaries).model_dump()
+
+    with pytest.raises(TypeError):
+        validate_supervision_contract(saved, manifest)
+    with pytest.raises(TypeError):
+        contract_for_bundle(manifest, encoder=SHARED)
+    with pytest.raises(TypeError):
+        containment_contract(encoder=SHARED)
 
 # -------------------------------------------------------------------------------------------------
 # The encoder record (spec 4.4)
@@ -211,12 +269,14 @@ def test_a_checkpoint_without_a_contract_cites_d2(tmp_path, runtime_contract):
 # Export and reads compare the supervision fields only
 # -------------------------------------------------------------------------------------------------
 
-def test_the_supervision_check_takes_the_encoder_record_from_the_checkpoint(validated_bundle):
+def test_the_supervision_check_takes_the_encoder_record_from_the_checkpoint(
+    validated_bundle, summaries
+):
     manifest = validated_bundle.manifest
     other = shared_encoder_architecture(fusion='attention', dimension=8, backbone=MINILM)
-    saved = contract_for_bundle(manifest, encoder=other)
+    saved = contract_for_bundle(manifest, encoder=other, summaries=summaries)
 
-    assert validate_supervision_contract(saved.model_dump(), manifest) == saved
+    assert validate_supervision_contract(saved.model_dump(), manifest, summaries=summaries) == saved
 
 @pytest.mark.parametrize(
     'update',
@@ -232,16 +292,18 @@ def test_the_supervision_check_takes_the_encoder_record_from_the_checkpoint(vali
         },
     ],
 )
-def test_the_supervision_check_refuses_another_bundle(validated_bundle, update):
+def test_the_supervision_check_refuses_another_bundle(validated_bundle, summaries, update):
     manifest = validated_bundle.manifest
-    saved = contract_for_bundle(manifest, encoder=SHARED).model_copy(update=update)
+    saved = contract_for_bundle(manifest, encoder=SHARED, summaries=summaries)
 
     with pytest.raises(ValueError, match='supervision contract mismatch'):
-        validate_supervision_contract(saved.model_dump(), manifest)
+        validate_supervision_contract(
+            saved.model_copy(update=update).model_dump(), manifest, summaries=summaries
+        )
 
 def test_the_supervision_check_refuses_a_checkpoint_without_a_contract(validated_bundle):
     with pytest.raises(ValueError, match='no Stage-3 contract') as excinfo:
-        validate_supervision_contract(None, validated_bundle.manifest)
+        validate_supervision_contract(None, validated_bundle.manifest, summaries=None)
 
     assert D2_REFUSAL in str(excinfo.value)
 
@@ -322,6 +384,22 @@ def test_weights_only_rejects_a_checkpoint_with_no_encoder_weights(
 
     with pytest.raises(ValueError, match='no allowlisted encoder parameters'):
         load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+
+def test_weights_only_loads_a_checkpoint_trained_under_other_summaries(
+    tmp_path, runtime_contract, tiny_repaired_model
+):
+    # Weights-only compares the encoder record alone, so a pre-6b checkpoint can seed a run
+    key = sorted(name for name in tiny_repaired_model.state_dict()
+                 if name.startswith('encoder.'))[0]
+    path = _save(
+        tmp_path / 'truncated.ckpt',
+        runtime_contract.model_copy(update={'summaries': None}),
+        state_dict={key: torch.zeros_like(tiny_repaired_model.state_dict()[key])},
+    )
+
+    report = load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+
+    assert report.loaded == (key, )
 
 def test_weights_only_rejects_shape_mismatched_encoder_weights(
     tmp_path, runtime_contract, tiny_repaired_model

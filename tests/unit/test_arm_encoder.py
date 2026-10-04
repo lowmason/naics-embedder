@@ -236,6 +236,20 @@ def test_a_table_exported_at_another_window_is_refused_before_any_model_loads(
     # The key the read's window comes from (code_token_config), so the remedy points at it
     assert 'data_loader.streaming.max_length' in str(refusal.value)
 
+def test_a_checkpoint_trained_on_truncated_text_is_refused_on_read(
+    truncated_checkpoint, exported_table, validated_bundle, five_code_token_config
+):
+    # The provenance names the truncated checkpoint, so only its contract can refuse it
+    path = provenance_path(exported_table)
+    provenance = json.loads(path.read_text())
+    provenance['checkpoint']['sha256'] = sha256_file(truncated_checkpoint)
+    path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match="supervision contract mismatch .*'summaries'"):
+        ArmEncoder.from_files(
+            truncated_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
+
 def test_queries_are_tokenized_at_the_tables_window(arm, exported_table):
     provenance = json.loads(provenance_path(exported_table).read_text())
 

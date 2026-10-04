@@ -109,6 +109,10 @@ class CheckpointContract(BaseModel):
     mining_contract_version: str = MINING_CONTRACT_VERSION
     # Absent from every contract saved before Stage 6, which therefore reads as four-copy
     encoder: EncoderArchitecture = LEGACY_ENCODER
+    # The sha256 of the window-fitting summaries the model read (panels/window_summaries.py).
+    # Absent from every contract saved before Stage 6b, which therefore reads as null: those
+    # checkpoints trained on truncated text
+    summaries: Optional[str] = None
 
 @dataclass(frozen=True)
 class MigrationReport:
@@ -124,8 +128,14 @@ def contract_for_bundle(
     supervision_mode: str = 'repaired',
     *,
     encoder: EncoderArchitecture,
+    summaries: Optional[str],
 ) -> CheckpointContract:
-    '''The runtime contract for training against a validated bundle manifest.'''
+    '''
+    The runtime contract for training against a validated bundle manifest.
+
+    ``summaries`` is the sha256 of the window-fitting summaries the model reads, or None for a
+    backbone with no pin (``panels.window_summaries.summaries_identity``).
+    '''
 
     return CheckpointContract(
         supervision_mode=supervision_mode,
@@ -133,9 +143,14 @@ def contract_for_bundle(
         bundle_id=manifest.bundle_id,
         codebook_fingerprint=manifest.codebook_fingerprint,
         encoder=encoder,
+        summaries=summaries,
     )
 
-def containment_contract(*, encoder: EncoderArchitecture) -> CheckpointContract:
+def containment_contract(
+    *,
+    encoder: EncoderArchitecture,
+    summaries: Optional[str],
+) -> CheckpointContract:
     '''
     The tag every legacy-containment checkpoint carries.
 
@@ -148,6 +163,7 @@ def containment_contract(*, encoder: EncoderArchitecture) -> CheckpointContract:
         bundle_id=LEGACY_CONTAINMENT_BUNDLE_ID,
         codebook_fingerprint=UNVERSIONED_CODEBOOK_FINGERPRINT,
         encoder=encoder,
+        summaries=summaries,
     )
 
 def saved_encoder(raw: Optional[Dict[str, Any]]) -> EncoderArchitecture:
@@ -208,25 +224,37 @@ def validate_supervision_contract(
     raw: Optional[Dict[str, Any]],
     manifest: Any,
     supervision_mode: str = 'repaired',
+    *,
+    summaries: Optional[str],
 ) -> CheckpointContract:
     '''
-    Require a saved contract whose supervision fields match the configured bundle's.
+    Require a saved contract whose supervision fields and summaries match the configured ones.
 
     Export and reads take the encoder record from the checkpoint (spec 4.4), so it is not compared
     here. ``load_from_checkpoint`` rebuilds the checkpoint's own architecture from its saved
     hyperparameters, and refuses a four-copy one.
 
+    Args:
+        raw: The checkpoint's saved contract, or None.
+        manifest: The configured bundle's manifest.
+        supervision_mode: The configured supervision mode.
+        summaries: The sha256 of the summaries the read applies; keyword-only with no default,
+            so a caller cannot omit it.
+
     Returns:
         The saved contract.
 
     Raises:
-        ValueError: If the checkpoint has no contract, or a supervision field differs.
+        ValueError: If the checkpoint has no contract, or a supervision field or the summaries
+            differ.
     '''
 
     if raw is None:
         raise ValueError(f'legacy checkpoint has no Stage-3 contract; {D2_REFUSAL}')
     saved = CheckpointContract.model_validate(raw)
-    configured = contract_for_bundle(manifest, supervision_mode, encoder=saved.encoder)
+    configured = contract_for_bundle(
+        manifest, supervision_mode, encoder=saved.encoder, summaries=summaries
+    )
     if saved != configured:
         raise ValueError(
             'supervision contract mismatch (saved, configured): '

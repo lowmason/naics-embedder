@@ -22,6 +22,7 @@ import torch
 from transformers import AutoTokenizer, BertConfig, BertModel
 
 from naics_embedder.panels.text_only import build_text_only_table
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.export import export_code_table
@@ -105,7 +106,11 @@ def five_code_token_config(tmp_path, five_code_descriptions_parquet) -> Tokeniza
 
 @pytest.fixture
 def shared_model(tiny_backbone, generated_bundle) -> NAICSContrastiveModel:
-    '''A d = 16 masked-mean model of the five-code bundle on the tiny backbone, in eval mode.'''
+    '''
+    A d = 16 masked-mean model of the five-code bundle on the tiny backbone, in eval mode.
+
+    It records MiniLM's summaries, as training does: under the test seam, the dummy pin's sha256.
+    '''
 
     model = NAICSContrastiveModel(
         base_model_name=MINILM,
@@ -116,6 +121,7 @@ def shared_model(tiny_backbone, generated_bundle) -> NAICSContrastiveModel:
         dimension=ARM_DIMENSION,
         curvature=1.0,
         supervision_manifest_path=str(generated_bundle),
+        summaries=summaries_identity(MINILM),
     )
     return model.eval()
 
@@ -125,6 +131,17 @@ def shared_checkpoint(tmp_path, shared_model) -> Path:
 
     path = tmp_path / 'arm.ckpt'
     torch.save(lightning_checkpoint(shared_model), path)
+    return path
+
+@pytest.fixture
+def truncated_checkpoint(tmp_path, shared_model) -> Path:
+    '''``shared_model`` saved as a checkpoint trained before Stage 6b: it records no summaries.'''
+
+    checkpoint = lightning_checkpoint(shared_model)
+    del checkpoint['stage3_supervision']['summaries']
+    del checkpoint['hyper_parameters']['summaries']
+    path = tmp_path / 'truncated.ckpt'
+    torch.save(checkpoint, path)
     return path
 
 @pytest.fixture

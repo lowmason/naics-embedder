@@ -29,6 +29,7 @@ from naics_embedder.panels.decoding import DecodingResult
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.regressor import coordinate_matrix
 from naics_embedder.panels.text_only import matrix_fingerprint, provenance_path
+from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.text_model.export import encode_token_rows, load_arm_model
@@ -182,7 +183,12 @@ class ArmEncoder:
                 f'tokenizes queries at {token_config.max_length}: export the table and read under '
                 'one data_loader.streaming.max_length'
             )
-        model, _ = load_arm_model(checkpoint_path, bundle, device=device)
+        model, _ = load_arm_model(
+            checkpoint_path,
+            bundle,
+            summaries=summaries_identity(token_config.tokenizer_name),
+            device=device,
+        )
         return cls(
             model,
             AutoTokenizer.from_pretrained(token_config.tokenizer_name),
