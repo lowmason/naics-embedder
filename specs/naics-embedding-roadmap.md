@@ -132,8 +132,8 @@ the backbone's trained window are summarized, not truncated (Req 9's input windo
 their own before Stage 7. Truncation falls hardest on the top levels: 16 of the 20 sector
 descriptions and 59 of the 96 subsector ones overflow the 128-token window. The stage is inserted
 as 6b, not renumbered, so Stage 6's stamp and every reference to Stages 7–12 stand. Stage 6's spec
-(`specs/shared-encoder-and-projection.md`, Rollout note) records the measurements and the three
-constraints the entry carries.
+(`specs/completed/shared-encoder-and-projection.md`, Rollout note) records the measurements and
+the three constraints the entry carries.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -615,7 +615,7 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       Consumes: Bundle 301cce28's descriptions (sha256 `fe8c54e3…`), unchanged, since summaries
       written into them would change the description fingerprint the bundle records. The
       overflow at the 128-token window under MiniLM's tokenizer, special tokens included,
-      measured on 2026-10-03 (`specs/shared-encoder-and-projection.md`, Rollout note):
+      measured on 2026-10-03 (`specs/completed/shared-encoder-and-projection.md`, Rollout note):
       description 153 of 2,111 texts (sectors 16 of 20, median 246 tokens, maximum 1,131;
       subsectors 59 of 96), examples 105 of 1,075 (19 % of its tokens), excluded 464 of 1,117
       (26 %). Stage 6's tokenization cache, whose sidecar carries a `summaries` entry that stays

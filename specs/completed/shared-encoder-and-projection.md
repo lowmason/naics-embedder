@@ -1,6 +1,8 @@
 # Shared encoder and low-dimensional projection — Design Spec
 
-**Status:** APPROVED (2026-10-03). Ready for an implementation plan.
+**Status:** COMPLETE (2026-10-03) — implemented by
+`specs/plans/completed/8-shared-encoder-and-projection.md`; deferred items in
+`specs/deferred_items.md`
 
 **Roadmap:** `specs/naics-embedding-roadmap.md`, Stage 6 (ROUTING: brainstorming). Source spec
 `specs/naics-embedding.md` at d9126ce. Evidence read at origin/main ea2e09f. Paths are under
