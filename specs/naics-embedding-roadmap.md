@@ -647,7 +647,7 @@ tokenizer-revision entry keeps its trigger.
       Stage 6: COMPLETE (2026-10-03) — implemented by plan 8
       (specs/plans/completed/8-shared-encoder-and-projection.md). Next: resume the roadmap.
 
-- [ ] Stage 6b: Window-fitting summaries
+- [x] Stage 6b: Window-fitting summaries
       Objective: Replace the tail truncation of channel texts beyond the backbone's trained
       window with frozen summaries that fit it, before Stage 7 trains the reference
       configuration on them.
@@ -683,6 +683,24 @@ tokenizer-revision entry keeps its trigger.
       query in any summary; the artifact is committed under a pinned hash, and the cache, the
       text-only table's provenance and the decision records name it.
       ROUTING: brainstorming
+      Rollout note: the switch happens at merge. Every `channels-v3` cache rebuilds once. A
+      checkpoint made before this stage records no summaries: exact resume, export, the outcome read
+      and the HGCN feeder refuse it. `ArmEncoder.from_files` and `run_seed_sweep` refuse a table
+      exported before it, and the artifact store refuses a text-only table built before it, so
+      `run_seed_sweep` and `decide` do too. Weights-only loading still works, and
+      `tools regressor-panel`, which checks no provenance, still pairs pre-6b tables. Plan 8's Exit
+      numbers stay the floor its finding records; Stage 7 trains and builds its text-only table on
+      the summaries.
+      Realized: `conf/data/window_summaries.csv` (sha256 `dd425eb5…`), pinned for MiniLM at 128
+      tokens by `WINDOW_SUMMARIES` (`panels/window_summaries.py`), holds 753 extractive summaries,
+      picked by backbone centrality (`centrality-v1`) from whole sentences, clauses and examples
+      entries: 162 descriptions, 106 examples texts and 485 exclusion texts. They keep a mean 0.654,
+      0.616 and 0.622 of their source tokens, and 581 of 1,235, 1,179 of 2,307 and 1,718 of 3,270 of
+      their units. No title is over the window. The token cache, the checkpoint contract, the export
+      and text-only provenances and the decision records carry the sha256, and the export provenance
+      also names the tokenizer. The Exit trained nothing and read no split.
+      Stage 6b: COMPLETE (2026-10-04) — implemented by plan 9
+      (specs/plans/completed/9-window-fitting-summaries.md). Next: resume the roadmap.
 
 - [ ] Stage 7: Objective, anchors and live radius (the reference configuration)
       Objective: Replace the six-term objective and its sampling machinery with Req 11's three
@@ -701,8 +719,11 @@ tokenizer-revision entry keeps its trigger.
       `SeedArtifacts`: the checkpoint, the exported table, the `ArmEncoder` and its `distance`.
       Also Stage 6's interim head (`HyperbolicHead`, `text_model/hyperbolic.py`), whose cap at
       norm 2 this stage replaces, and legacy containment, which export and reads refuse and the
-      HGCN feeder still serves. Stage 6b's summaries, which the reference
-      configuration and its text-only table read; Stage 5's D*, redirection table and unary
+      HGCN feeder still serves. Stage 6b's summaries (`WINDOW_SUMMARIES` in
+      `panels/window_summaries.py`), which the reference configuration and its text-only table read:
+      a checkpoint's contract records their sha256, and exact resume, export and reads refuse one
+      trained under other summaries, plan 8's Exit checkpoint included, so Stage 6's floor was read
+      on truncated text; Stage 5's D*, redirection table and unary
       flags (the table's `activity` phrases with their referencing `code`; its five withheld rows
       carry none); Stage 2's query splits, scorer and selection log (the log's path is
       `OutcomePanelConfig.selection_log`, `logs/selection_log.jsonl`: gitignored, so a
@@ -710,10 +731,16 @@ tokenizer-revision entry keeps its trigger.
       The test split stays sealed: Stage 12 opens it, as the finding's section 6 erratum says.
       Stage 3's panel, on its validation split only; its text-only table is rebuilt from the
       arm's own descriptions with `tools text-only-table`, because the table Stage 3 built
-      embeds bundle 18403d29's text, which Stage 5 replaces (D9). Stage 4's seed-sweep driver
-      (`decision.sweep.run_seed_sweep`, whose `ArmRunner` returns each seed's `SeedArtifacts`:
-      the checkpoint, the 2,125-code table in the export form, the `QueryCodeEncoder` and its
-      distance), decision tooling (`tools margins`, `tools decide`) and δ procedure. The margins
+      embeds bundle 18403d29's text, which Stage 5 replaces (D9), and the store refuses plan 8's
+      Exit table (`checkpoints/plan8_exit/`), whose provenance predates the summaries; plan 9's Exit
+      built one under them (`checkpoints/plan9_exit/text_only.parquet`). Stage 4's seed-sweep driver
+      (`decision.sweep.run_seed_sweep`, whose `ArmRunner` returns each seed's `SeedArtifacts`: the
+      checkpoint, the 2,125-code table in the export form with the provenance `tools export-table`
+      writes beside it, the `QueryCodeEncoder` and its distance; before any panel read,
+      `check_seed_table` refuses a seed whose table's backbone, revision, descriptions, summaries or
+      window differ from the arm's `ArmSpec`, whose `summaries_sha256` is `summaries_identity` of
+      the arm's backbone), decision tooling (`tools margins`, `tools decide`) and δ procedure. The
+      margins
       are fixed from the reference arm's record before any other arm of a decision reads a
       panel, since a decision refuses a run that read first, and the artifact store's root must
       outlive the Lambda instance that trains.
@@ -760,8 +787,10 @@ tokenizer-revision entry keeps its trigger.
       (`text_model/arm_encoder.py`), so the Euclidean and spherical arms need their own maps
       there. Stage 2's scorer, whose registered distances are
       `euclidean`, `cosine` and `lorentz` at curvature −1 (`panels/decoding.py`).
-      Produces: Geometry as a configuration factor with per-arm distance, decoding and export
-      (the radial term only in the hyperbolic arm); guards on the two tie-order keys Stage 4
+      Produces: Geometry as a configuration factor with per-arm distance, decoding and export (the
+      radial term only in the hyperbolic arm; every arm's export writes the provenance
+      `tools export-table` writes, tokenizer and summaries included, which `run_seed_sweep` and
+      `ArmEncoder.from_files` check); guards on the two tie-order keys Stage 4
       leaves open: `run_seed_sweep` refuses an arm whose `SeedArtifacts.distance` does not fit
       its `ArmSpec.geometry`, and `decide` compares each read's logged `dimension` with the
       arm's (the decision fixture's reads hard-code 16); the nine-cell decision record; the
@@ -785,9 +814,15 @@ tokenizer-revision entry keeps its trigger.
       Consumes: Stage 8's selected cell; Stage 6's fusion options (`model.fusion`: `masked_mean`,
       `attention`, `moe`) and its one backbone loader (`load_base_model`,
       `text_model/shared_encoder.py`), whose LoRA adapter (`all-linear`) also wraps the pooler's
-      dense layer, which mean pooling never reads; Stage 6b's summaries, keyed by
-      target window, so a candidate with another window needs its own or none; Stage 4's
-      tooling.
+      dense layer, which mean pooling never reads; Stage 6b's summaries, pinned per backbone, not
+      per window (`WINDOW_SUMMARIES` in `panels/window_summaries.py` holds one `SummariesPin`, with
+      its window, per tokenizer name). A candidate whose channel texts all fit its window reads them
+      as they are; one with a longer text is refused until
+      `naics-embedder data summaries --backbone <name> --output <path>` writes its own artifact (the
+      default path is MiniLM's) and its pin is committed. Each candidate's summaries are selected
+      under its own frozen weights, so two candidates can read different summaries of one text;
+      whether one selection backbone serves them all is this stage's brainstorm's call
+      (`specs/completed/window-fitting-summaries.md`, section 2.2). Stage 4's tooling.
       Produces: A decision record per factor; the selected text stage (arm A for Stage 10); the
       trained window recorded per candidate with each channel's overflow share (a window enters
       `TRAINED_WINDOWS` in `utils/input_window.py` from the candidate's own documentation, since
@@ -821,8 +856,12 @@ tokenizer-revision entry keeps its trigger.
       took them off the progress bar only), no private tail, no last-epoch export); arm E
       (text-shuffle control, run only if D wins); the keep-or-drop record; the deliverable, a
       2,125-code table from the selected arm. Every arm's per-seed table carries the export's
-      provenance (`text_model/export.py`: its checkpoint's hash, its own and the window), which
-      `ArmEncoder.from_files` requires before Stage 12 can embed sealed queries against it.
+      provenance (`text_model/export.py`: its checkpoint's hash, its own, the window, the tokenizer
+      and the summaries' sha256). Before any panel read, `run_seed_sweep` refuses a seed whose table
+      lacks it or whose backbone, revision, descriptions, summaries or window differ from the arm's
+      (`check_seed_table`, D9), and `ArmEncoder.from_files` requires it before Stage 12 can embed
+      sealed queries against it, so an arm whose table no `tools export-table` call writes (C's
+      smoothing, D's graph stage) writes the same provenance.
       Exit: Arms A–D have at least 5 seeds on D8's three panels under the shared selection
       protocol; E ran if and only if D won, and its result is recorded; the decision record
       states keep or drop under Req 5; the 2,125-code table exists for the selected arm.
@@ -869,11 +908,15 @@ tokenizer-revision entry keeps its trigger.
       records and artifact references they carry (Stage 4's schema); by those references, the
       per-seed encoder checkpoints and 2,125-code tables of the final configuration and of every
       arm in its recorded comparisons, since sealed queries were never embedded, and each arm's
-      text-only table with its provenance, without which the regressor panel reads no arm. Stage
-      6's query path, `ArmEncoder.from_files` (`text_model/arm_encoder.py`), which embeds sealed
-      queries from a checkpoint and its table: it takes the tokenizer and window from the arm's
-      own config (`code_token_config`), refuses a table whose provenance names another window,
-      and maps through the hyperbolic exp map only, so a Euclidean or spherical arm needs Stage
+      text-only table with its provenance, without which the regressor panel reads no arm (it names
+      the summaries' sha256, which `decide` compares with the arm's, D9). Stage 6's query path,
+      `ArmEncoder.from_files` (`text_model/arm_encoder.py`), which embeds sealed queries from a
+      checkpoint and its table: it takes the tokenizer and window from the arm's own config
+      (`code_token_config`). Before any model loads, it refuses a table exported before Stage 6b or
+      one whose provenance names another window, tokenizer or summaries than that config reads, so
+      each recorded arm is read under the summaries pin it was exported under (`WINDOW_SUMMARIES`):
+      re-pinning a backbone's artifact refuses its earlier tables and checkpoints. It maps through
+      the hyperbolic exp map only, so a Euclidean or spherical arm needs Stage
       8's map; `read_outcome_validation` reads validation only, so the test read goes through
       `OutcomePanel.score` with the `detail` keys (`table`, `checkpoint`) it logs. The
       four QCEW slices under the hashes `conf/data/regressor_panel.yaml` pins, which loading the

@@ -1,5 +1,7 @@
 # Window-Fitting Summaries Implementation Plan
 
+**Status: COMPLETE (2026-10-04)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -576,7 +578,7 @@ Stop, report, and wait for your human partner when any of these happens:
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
 
 Run: `git status --short --branch`
 Expected: `## claude/plan-9-window-summaries` and nothing else. If the line ends in
@@ -602,7 +604,7 @@ Expected: no output.
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number.
@@ -610,7 +612,7 @@ Expected: `Python 3.12.` followed by a patch number.
 Run: `uv run python -c "import peft, polars, pydantic, pytorch_lightning, torch, transformers; print(peft.__version__, polars.__version__, pydantic.__version__, pytorch_lightning.__version__, torch.__version__, transformers.__version__)"`
 Expected: `0.17.1 1.35.1 2.12.4 2.5.5 2.9.1 4.57.1`. If they differ, stop and ask.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1845 passed, 1 skipped`, measured at 2d0af69 on 2026-10-04 (the skip needs CUDA).
@@ -634,7 +636,7 @@ Expected: `1845 passed, 1 skipped`, measured at 2d0af69 on 2026-10-04 (the skip 
 From Task 10 on, the local-only test runs, because Step 1 clones `data/naics_descriptions.parquet`.
 Without that file, as on CI, the final count is 1936 passed, 2 skipped.
 
-- [ ] **Step 4: Check the real inputs, read-only**
+- [x] **Step 4: Check the real inputs, read-only**
 
 Task 10 is the only reader of these files. Check them now so a missing input fails early.
 
@@ -647,7 +649,7 @@ Expected: `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`.
 Run: `ls /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/manifest.json /Users/lowell/Projects/naics-embedder/checkpoints/plan8_exit/last.ckpt /Users/lowell/Projects/naics-embedder/checkpoints/plan8_exit/arm_table.parquet /Users/lowell/Projects/naics-embedder/checkpoints/plan8_exit/arm_table_provenance.json /Users/lowell/Projects/naics-embedder/checkpoints/plan8_exit/text_only.parquet /Users/lowell/Projects/naics-embedder/checkpoints/plan8_exit/text_only_provenance.json`
 Expected: all six paths listed, no error.
 
-- [ ] **Step 5: Route the tasks**
+- [x] **Step 5: Route the tasks**
 
 Under executing-plans, run every task inline, in order.
 
@@ -696,7 +698,7 @@ load refusals name each sidecar key that differs (4.7, "Cache identity"; plan 8'
     for a key one side lacks. `SUMMARIES` is gone.
   - The export provenance's `summaries` is `summaries_identity(token_config.tokenizer_name)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_window_summaries.py`:
 
@@ -1072,14 +1074,14 @@ with:
     assert provenance['matrix_fingerprint'] == table_fingerprint(pl.read_parquet(exported_table))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_window_summaries.py -q`
 Expected: pytest stops at `ImportError while loading conftest '…/tests/conftest.py'`, with
 `ImportError: cannot import name 'window_summaries' from 'naics_embedder.panels'`. Every test
 stops there until the module exists.
 
-- [ ] **Step 3: Create the pin**
+- [x] **Step 3: Create the pin**
 
 Create `src/naics_embedder/panels/window_summaries.py`:
 
@@ -1138,7 +1140,7 @@ def summaries_identity(backbone: str) -> Optional[str]:
     return None if pin is None else pin.sha256
 ```
 
-- [ ] **Step 4: Run the tests to see what the identity sites still record**
+- [x] **Step 4: Run the tests to see what the identity sites still record**
 
 Run: `uv run pytest tests/unit/test_window_summaries.py tests/unit/test_tokenization_cache.py tests/unit/test_export.py -q`
 Expected: `4 failed, 51 passed`:
@@ -1152,7 +1154,7 @@ Expected: `4 failed, 51 passed`:
 - `test_a_cache_built_under_other_markers_is_rebuilt` already passes: the sidecar has recorded the
   markers since plan 8, and the test is the one plan 8's review found missing.
 
-- [ ] **Step 5: Record the identity in the cache and the export**
+- [x] **Step 5: Record the identity in the cache and the export**
 
 In `src/naics_embedder/text_model/dataloader/tokenization_cache.py`, replace:
 
@@ -1428,7 +1430,7 @@ with:
         'coordinates': COORDINATES,
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_window_summaries.py tests/unit/test_tokenization_cache.py tests/unit/test_export.py -q`
 Expected: `55 passed`.
@@ -1436,7 +1438,7 @@ Expected: `55 passed`.
 Run: `git grep -n -w SUMMARIES -- src tests`
 Expected: no output.
 
-- [ ] **Step 7: Format, run the suite, commit**
+- [x] **Step 7: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/panels/window_summaries.py src/naics_embedder/text_model/dataloader/tokenization_cache.py src/naics_embedder/text_model/export.py tests/conftest.py tests/unit/test_window_summaries.py tests/unit/test_tokenization_cache.py tests/unit/test_export.py`
 Run: `uv run pytest -n auto -q`
@@ -1475,7 +1477,7 @@ tokenizer, which CI downloads, as the cache tests already do.
       `count` counts tokens without special tokens.
   - In `tests/fixtures/window_summaries.py`: `words(texts) -> List[int]`, one token per word.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/fixtures/window_summaries.py`:
 
@@ -1685,13 +1687,13 @@ def test_a_channel_without_units_is_refused():
         text_units('query', 'soybeans', words, 100)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_window_summaries.py -q`
 Expected: `ERROR collecting tests/unit/test_window_summaries.py`, with
 `ImportError: cannot import name 'SENTENCE_BREAK' from 'naics_embedder.panels.leakage'`.
 
-- [ ] **Step 3: Make the segmenter's break public**
+- [x] **Step 3: Make the segmenter's break public**
 
 In `src/naics_embedder/panels/leakage.py`, replace:
 
@@ -1746,7 +1748,7 @@ with:
 Run: `git grep -n _SENTENCE_BREAK -- src tests`
 Expected: no output.
 
-- [ ] **Step 4: Add the counter, the budget and the units**
+- [x] **Step 4: Add the counter, the budget and the units**
 
 In `src/naics_embedder/panels/window_summaries.py`, replace:
 
@@ -1940,13 +1942,13 @@ def text_units(channel: str, text: str, count: TokenCounter, budget: int) -> Lis
     return [text[start:end] for start, end in units]
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_window_summaries.py tests/unit/test_outcome_leakage.py -q`
 Expected: `32 passed`. `test_the_module_imports_no_torch` still passes: the module now imports
 `panels.leakage` and `text_model.fields`, and neither loads torch.
 
-- [ ] **Step 6: Format, run the suite, commit**
+- [x] **Step 6: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/panels/leakage.py src/naics_embedder/panels/window_summaries.py tests/fixtures/window_summaries.py tests/unit/test_window_summaries.py`
 Run: `uv run pytest -n auto -q`
@@ -1999,7 +2001,7 @@ Its tests use a stub tokenizer that counts words, so no model is involved (P7).
   - `WordTokenizer`, a callable stub: one token per word, plus two special tokens when asked;
   - `pin_artifact(path: Path, rows: List[Dict[str, Any]], *, window: int) -> SummariesPin`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/window_summaries.py`, replace:
 
@@ -2371,13 +2373,13 @@ def test_a_summary_over_the_window_is_refused(tmp_path):
         resolve(descriptions_frame(), pin_rows(tmp_path, [summary_row(summary=LONG)]))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_window_summaries.py -q`
 Expected: `ERROR collecting tests/unit/test_window_summaries.py`, with
 `ImportError: cannot import name 'SUMMARIES_SCHEMA' from 'naics_embedder.panels.window_summaries'`.
 
-- [ ] **Step 3: Add the artifact and the resolver**
+- [x] **Step 3: Add the artifact and the resolver**
 
 In `src/naics_embedder/panels/window_summaries.py`, replace:
 
@@ -2724,12 +2726,12 @@ def resolve_channel_texts(
     return resolved
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_window_summaries.py -q`
 Expected: `42 passed`. `test_the_module_imports_no_torch` still passes: polars loads no torch.
 
-- [ ] **Step 5: Format, run the suite, commit**
+- [x] **Step 5: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/panels/window_summaries.py tests/fixtures/window_summaries.py tests/unit/test_window_summaries.py`
 Run: `uv run pytest -n auto -q`
@@ -2780,7 +2782,7 @@ model.
   `--descriptions` (default `./data/naics_descriptions.parquet`), `--backbone`, `--output`
   (default `WINDOW_SUMMARIES_PATH`) and `--force`; and `TRAINING_CONFIG = 'conf/config.yaml'`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_window_summaries_build.py`:
 
@@ -3132,7 +3134,7 @@ def test_tools_config_passes_config_path(monkeypatch, runner, tmp_path):
     monkeypatch.setattr(
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_window_summaries_build.py -q`
 Expected: `ERROR collecting tests/unit/test_window_summaries_build.py`, with
@@ -3143,7 +3145,7 @@ Expected: `2 failed, 40 passed`. Both new tests fail with
 `AttributeError: <module 'naics_embedder.cli.commands.data' …> has no attribute
 'generate_window_summaries'`.
 
-- [ ] **Step 3: Write the build**
+- [x] **Step 3: Write the build**
 
 Create `src/naics_embedder/data/window_summaries.py`:
 
@@ -3549,12 +3551,12 @@ def _provenance(
     }
 ```
 
-- [ ] **Step 4: Run the build's tests to verify they pass**
+- [x] **Step 4: Run the build's tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_window_summaries_build.py -q`
 Expected: `11 passed`.
 
-- [ ] **Step 5: Add the command**
+- [x] **Step 5: Add the command**
 
 In `src/naics_embedder/cli/commands/data.py`, replace:
 
@@ -3709,7 +3711,7 @@ def summaries(
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_window_summaries_build.py tests/unit/test_cli_commands.py -q`
 Expected: `53 passed`.
@@ -3718,7 +3720,7 @@ Run: `uv run naics-embedder data summaries --help`
 Expected: the usage, listing `--descriptions`, `--backbone`, `--output` and `--force`. This
 reads no data.
 
-- [ ] **Step 7: Format, run the suite, commit**
+- [x] **Step 7: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/data/window_summaries.py src/naics_embedder/cli/commands/data.py tests/unit/test_window_summaries_build.py tests/unit/test_cli_commands.py`
 Run: `uv run pytest -n auto -q`
@@ -3762,7 +3764,7 @@ tokens the text fits both windows, and the shapes the test checks are unchanged.
   - `build_text_only_table(...)` embeds resolved texts, and its provenance gains `summaries`
     (`summaries_identity(backbone)`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_tokenization_cache.py`, replace:
 
@@ -4030,7 +4032,7 @@ def test_a_max_length_beyond_the_trained_window_is_refused(tmp_path, monkeypatch
     output = tmp_path / 'text_only.parquet'
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_tokenization_cache.py tests/unit/test_text_only.py -q`
 Expected: `4 failed, 47 passed`:
@@ -4041,7 +4043,7 @@ Expected: `4 failed, 47 passed`:
   table embedded the truncated text.
 - `test_the_provenance_records_the_backbones_summaries` fails with `KeyError: 'summaries'`.
 
-- [ ] **Step 3: Resolve before tokenizing**
+- [x] **Step 3: Resolve before tokenizing**
 
 In `src/naics_embedder/text_model/dataloader/tokenization_cache.py`, replace:
 
@@ -4207,12 +4209,12 @@ with:
         'table_sha256': sha256_file(output_path),
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_tokenization_cache.py tests/unit/test_text_only.py -q`
 Expected: `51 passed`.
 
-- [ ] **Step 5: Format, run the suite, commit**
+- [x] **Step 5: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/dataloader/tokenization_cache.py src/naics_embedder/panels/text_only.py tests/unit/test_tokenization_cache.py tests/unit/test_text_only.py`
 Run: `uv run pytest -n auto -q`
@@ -4274,7 +4276,7 @@ is.
   - In `tests/fixtures/shared_encoder.py`: `shared_model` records `summaries_identity(MINILM)`,
     and the fixture `truncated_checkpoint(tmp_path, shared_model) -> Path` is new.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/shared_encoder.py`, replace:
 
@@ -4996,7 +4998,7 @@ def test_queries_are_tokenized_at_the_tables_window(arm, exported_table):
     provenance = json.loads(provenance_path(exported_table).read_text())
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_checkpoint_contract.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/unit/test_export.py tests/unit/test_arm_encoder.py -q`
 Expected: `14 failed, 94 passed, 62 errors`:
@@ -5007,7 +5009,7 @@ Expected: `14 failed, 94 passed, 62 errors`:
 - `contract_for_bundle`, `containment_contract` and `validate_supervision_contract` raise
   TypeError on the `summaries` keyword.
 
-- [ ] **Step 3: Record the summaries in the contract**
+- [x] **Step 3: Record the summaries in the contract**
 
 In `src/naics_embedder/supervision/checkpoints.py`, replace:
 
@@ -5193,7 +5195,7 @@ with:
             'supervision contract mismatch (saved, configured): '
 ```
 
-- [ ] **Step 4: Take the summaries as a model input**
+- [x] **Step 4: Take the summaries as a model input**
 
 In `src/naics_embedder/text_model/naics_model.py`, replace:
 
@@ -5290,7 +5292,7 @@ with:
                 'ranking and hierarchy losses, negative reordering, and pseudo-related handling '
 ```
 
-- [ ] **Step 5: Pass the tokenizer's summaries from training**
+- [x] **Step 5: Pass the tokenizer's summaries from training**
 
 In `src/naics_embedder/cli/commands/training.py`, replace:
 
@@ -5394,7 +5396,7 @@ def log_migration_report(report: MigrationReport) -> None:
     '''Report what a weights-only migration loaded, skipped, and left freshly initialized.'''
 ```
 
-- [ ] **Step 6: Check the summaries on export and read**
+- [x] **Step 6: Check the summaries on export and read**
 
 In `src/naics_embedder/text_model/export.py`, replace:
 
@@ -5588,12 +5590,14 @@ with:
             AutoTokenizer.from_pretrained(token_config.tokenizer_name),
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_checkpoint_contract.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/unit/test_export.py tests/unit/test_arm_encoder.py -q`
 Expected: `170 passed`.
 
-- [ ] **Step 8: Format, run the suite, commit**
+- [x] **Step 8: Format, run the suite, commit**
+
+> Deviation: the permission system denied the implementer's add and commit; the controller ran this step's exact add and commit (9d2623e) with the user's approval.
 
 Run: `./scripts/format_code.sh src/naics_embedder/supervision/checkpoints.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/cli/commands/training.py src/naics_embedder/text_model/export.py src/naics_embedder/text_model/arm_encoder.py tests/fixtures/shared_encoder.py tests/unit/test_checkpoint_contract.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/unit/test_export.py tests/unit/test_arm_encoder.py`
 Run: `uv run pytest -n auto -q`
@@ -5635,7 +5639,7 @@ checkpoint (Task 6).
     - `'<table> was exported under the summaries <sha256 or None>, but <tokenizer> reads under
       <sha256 or None>: export the table again'`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_arm_encoder.py`, replace:
 
@@ -5719,7 +5723,7 @@ with:
     assert provenance['matrix_fingerprint'] == table_fingerprint(pl.read_parquet(exported_table))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_arm_encoder.py tests/unit/test_export.py -q`
 Expected: `6 failed, 35 passed`:
@@ -5730,7 +5734,7 @@ Expected: `6 failed, 35 passed`:
 - `test_a_table_exported_before_stage_6b_is_refused_before_any_model_loads[tokenizer]` and
   `test_the_provenance_names_the_table_and_the_checkpoint` fail with `KeyError: 'tokenizer'`.
 
-- [ ] **Step 3: Record the tokenizer, and refuse before the model loads**
+- [x] **Step 3: Record the tokenizer, and refuse before the model loads**
 
 In `src/naics_embedder/text_model/export.py`, replace:
 
@@ -5879,12 +5883,12 @@ with:
             AutoTokenizer.from_pretrained(token_config.tokenizer_name),
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_arm_encoder.py tests/unit/test_export.py -q`
 Expected: `41 passed`.
 
-- [ ] **Step 5: Format, run the suite, commit**
+- [x] **Step 5: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/export.py src/naics_embedder/text_model/arm_encoder.py tests/unit/test_arm_encoder.py tests/unit/test_export.py`
 Run: `uv run pytest -n auto -q`
@@ -5941,7 +5945,7 @@ the `ArmSpec`'s, refusing the seed otherwise.
     `write_text_only(..., summaries=SUMMARIES_SHA256)`; and `write_export_provenance(table_path,
     arm_spec, **entries) -> Path`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/decision.py`, replace:
 
@@ -6433,13 +6437,13 @@ def test_a_repeated_seed_is_refused_before_any_read(
 ):
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision.py tests/unit/test_decision_rule.py tests/unit/test_decision_store.py tests/unit/test_decision_sweep.py -q`
 Expected: `18 failed, 22 passed, 36 errors`. Most of them fail on `ValidationError: 1 validation
 error for ArmSpec`, `summaries_sha256`, "Extra inputs are not permitted".
 
-- [ ] **Step 3: Record the summaries in the records and the store**
+- [x] **Step 3: Record the summaries in the records and the store**
 
 In `src/naics_embedder/decision/records.py`, replace:
 
@@ -6559,7 +6563,7 @@ with:
     except KeyError as exc:
 ```
 
-- [ ] **Step 4: Check five fields, for the text-only table and each seed's table**
+- [x] **Step 4: Check five fields, for the text-only table and each seed's table**
 
 In `src/naics_embedder/decision/decide.py`, replace:
 
@@ -6856,13 +6860,13 @@ with:
         table = store.put_table(artifacts.table)
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision.py tests/unit/test_decision_rule.py tests/unit/test_decision_store.py tests/unit/test_decision_sweep.py tests/unit/test_cli_commands.py -q`
 Expected: `118 passed`. `test_cli_commands.py` builds its decision records from the same
 fixtures.
 
-- [ ] **Step 6: Format, run the suite, commit**
+- [x] **Step 6: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/decision/records.py src/naics_embedder/decision/store.py src/naics_embedder/decision/decide.py src/naics_embedder/decision/sweep.py tests/fixtures/decision.py tests/unit/test_decision.py tests/unit/test_decision_rule.py tests/unit/test_decision_store.py tests/unit/test_decision_sweep.py`
 Run: `uv run pytest -n auto -q`
@@ -6896,7 +6900,9 @@ wrote.
 - Consumes: the modules of Tasks 1–8, whose docstrings mkdocstrings renders.
 - Produces: no code.
 
-- [ ] **Step 1: Correct the docstrings**
+- [x] **Step 1: Correct the docstrings**
+
+> Deviation: by the user's ruling on the Task 9 review (7b52cce), the `InputWindowRecord` docstring in `schema.py` adds that the manifest's counts are measured on unmarked text, so they are lower than the readers'.
 
 In `src/naics_embedder/text_model/dataloader/tokenization_cache.py`, replace:
 
@@ -6981,7 +6987,9 @@ channel's share of texts beyond the window.
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 2: The text-training guide**
+- [x] **Step 2: The text-training guide**
+
+> Deviation: by the user's ruling on the Task 9 review (7b52cce), the guide names description, examples and excluded texts rather than "channel text", says the resolver checks the artifact on every call that finds an over-window text, and adds that the manifest counts unmarked text (153, 105 and 464).
 
 In `docs/text_training.md`, replace:
 
@@ -7093,7 +7101,9 @@ Structural matrices are loaded from the validated bundle, not trusted from check
 - **`--checkpoint-load-mode exact`** (default) restores optimizer, scheduler, epoch, global step,
 ```
 
-- [ ] **Step 3: The usage guide**
+- [x] **Step 3: The usage guide**
+
+> Deviation: by the user's ruling on the Task 9 review (7b52cce), the guide names description, examples and excluded texts rather than "channel text", and says the decision store records the summaries' sha256 and `check_text_only` compares it.
 
 In `docs/usage.md`, replace:
 
@@ -7208,7 +7218,7 @@ or other ones than its own.
 uv run naics-embedder tools export-table --checkpoint checkpoints/sadc_default/last.ckpt \
 ````
 
-- [ ] **Step 4: The API pages and the navigation**
+- [x] **Step 4: The API pages and the navigation**
 
 Create `docs/api/window_summaries.md`:
 
@@ -7274,7 +7284,7 @@ with:
               - Data Loading:
 ```
 
-- [ ] **Step 5: CLAUDE.md**
+- [x] **Step 5: CLAUDE.md**
 
 In `CLAUDE.md`, replace:
 
@@ -7368,7 +7378,7 @@ with:
 uv run naics-embedder train            # Train model
 ```
 
-- [ ] **Step 6: Check the docs**
+- [x] **Step 6: Check the docs**
 
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds with no warning. `site/` is gitignored.
@@ -7379,7 +7389,7 @@ Expected: no output.
 Run: `git grep -n -i -E 'truncates to (the|it)|is truncated to the' -- src docs CLAUDE.md README.md`
 Expected: no output.
 
-- [ ] **Step 7: Format, run the suite, commit**
+- [x] **Step 7: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/dataloader/tokenization_cache.py src/naics_embedder/supervision/schema.py src/naics_embedder/utils/input_window.py`
 Run: `uv run pytest -n auto -q`
@@ -7419,7 +7429,7 @@ conditions.
   - Gitignored evidence: the cache built on the summaries, and
     `checkpoints/plan9_exit/text_only.parquet` with its provenance.
 
-- [ ] **Step 1: Confirm the state, and clone the inputs (§7 steps 1–2)**
+- [x] **Step 1: Confirm the state, and clone the inputs (§7 steps 1–2)**
 
 Run: `git status --short`
 Expected: no output.
@@ -7450,7 +7460,7 @@ Run: `uv run python -c "from naics_embedder.supervision.artifacts import load_va
 Expected: `301cce28-539c-42ea-8781-496bbdcf511c 4662b826 fe8c54e3`. The load re-runs every
 integrity and relational check.
 
-- [ ] **Step 2: Write the committed-artifact tests, and watch them fail**
+- [x] **Step 2: Write the committed-artifact tests, and watch them fail**
 
 Create `tests/unit/test_committed_window_summaries.py`:
 
@@ -7543,7 +7553,7 @@ Run: `uv run pytest tests/unit/test_committed_window_summaries.py -q`
 Expected: `4 errors`, each at setup with `KeyError: 'sentence-transformers/all-MiniLM-L6-v2'`.
 MiniLM has no pin yet.
 
-- [ ] **Step 3: Build the artifact (§7 step 3)**
+- [x] **Step 3: Build the artifact (§7 step 3)**
 
 Run: `HF_HUB_OFFLINE=1 uv run naics-embedder data summaries`
 Expected, in about 12 seconds:
@@ -7586,7 +7596,7 @@ Run: `wc -c conf/data/window_summaries.csv`
 Expected: about 514 KB (514102 bytes in the dry run): one header and 753 rows, LF line endings,
 one final newline.
 
-- [ ] **Step 4: Pin it; run the tests, the suite and the format check; commit (§7 step 3)**
+- [x] **Step 4: Pin it; run the tests, the suite and the format check; commit (§7 step 3)**
 
 Use the sha256 Step 3 printed.
 
@@ -7648,7 +7658,7 @@ git add conf/data/window_summaries.csv conf/data/window_summaries_provenance.jso
 git commit -m "feat(window-summaries): commit MiniLM's window-fitting summaries and pin them"
 ```
 
-- [ ] **Step 5: Build the tokenization cache (§7 step 4)**
+- [x] **Step 5: Build the tokenization cache (§7 step 4)**
 
 This builds the cache as `NAICSDataModule.prepare_data` does. Write this script to
 `/tmp/plan9_exit_cache.py` with the Write tool:
@@ -7720,7 +7730,7 @@ index_roles_no_leakage: True
 This run is the leakage evidence (4.4). The subset and S5 checks passed on all 753 rows, and the
 bundle's manifest records `index_roles_no_leakage: true`. Copy the output into the ledger.
 
-- [ ] **Step 6: Build a text-only table on the summaries (§7 step 5)**
+- [x] **Step 6: Build a text-only table on the summaries (§7 step 5)**
 
 Run: `HF_HUB_OFFLINE=1 uv run naics-embedder tools text-only-table --descriptions data/naics_descriptions.parquet --output checkpoints/plan9_exit/text_only.parquet`
 Expected, in about 11 seconds:
@@ -7734,7 +7744,7 @@ Run: `uv run python -c "import json; p = json.load(open('checkpoints/plan9_exit/
 Expected: `sentence-transformers/all-MiniLM-L6-v2 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 128
 <the pin's sha256> 2125`.
 
-- [ ] **Step 7: Show the chain's records and refusals (§7 step 6)**
+- [x] **Step 7: Show the chain's records and refusals (§7 step 6)**
 
 Write this script to `/tmp/plan9_exit_chain.py` with the Write tool:
 
@@ -7817,7 +7827,7 @@ Run: `ls checkpoints/plan9_exit/`
 Expected: `text_only.parquet` and `text_only_provenance.json` only. The refused export wrote
 nothing.
 
-- [ ] **Step 8: The full checks (§7 step 7)**
+- [x] **Step 8: The full checks (§7 step 7)**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1937 passed, 1 skipped`.
@@ -7840,7 +7850,9 @@ Expected: no output.
 
 Run every check before the final review, and paste each output into the ledger.
 
-- [ ] **Step 1: The suite on both CI versions**
+- [x] **Step 1: The suite on both CI versions**
+
+> Deviation: the final review's fix wave added 3 tests, so both versions end at 1940 passed, 1 skipped; CI should show 1939 passed, 2 skipped.
 
 Run: `uv run pytest -n auto -q`
 Expected:
@@ -7856,7 +7868,7 @@ Expected:
 
 Run: `rm -rf /tmp/naics-py310`
 
-- [ ] **Step 2: Lint, format and docs**
+- [x] **Step 2: Lint, format and docs**
 
 Run: `uv run ruff check src/ tests/`
 Expected: `All checks passed!`
@@ -7867,7 +7879,7 @@ Expected: exit 0, with no file listed.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds with no warning.
 
-- [ ] **Step 3: Nothing of the truncation era is left**
+- [x] **Step 3: Nothing of the truncation era is left**
 
 Run: `git grep -n -w SUMMARIES -- src tests`
 Expected: no output.
@@ -7881,7 +7893,7 @@ Expected: no output.
 Run: `git grep -n -i -E 'truncates to (the|it)|is truncated to the' -- src docs CLAUDE.md README.md`
 Expected: no output.
 
-- [ ] **Step 4: Spec §6's items, test by test**
+- [x] **Step 4: Spec §6's items, test by test**
 
 Each item of spec §6 maps to tests the plan wrote (the table below). Step 1 ran them all. This
 step checks that every one still exists under its name.
@@ -7999,7 +8011,7 @@ Run: `rm /tmp/plan9_check_map.py`
 | Local-only | `test_committed_window_summaries.py::test_the_resolver_accepts_the_artifact_on_the_real_descriptions` |
 | P3: torch-free | `test_window_summaries.py::test_the_module_imports_no_torch` |
 
-- [ ] **Step 5: The branch carries only this plan**
+- [x] **Step 5: The branch carries only this plan**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected:
@@ -8012,7 +8024,9 @@ Expected: only `conf/data/window_summaries.csv` and `conf/data/window_summaries_
 Run: `git grep -n 'manifest_path:' -- conf/config.yaml`
 Expected: `conf/config.yaml:12:  manifest_path: null  # …`. No path is committed.
 
-- [ ] **Step 6: The final review**
+- [x] **Step 6: The final review**
+
+> Deviation: Codex (`-m gpt-6-astra`) reviewed beside the code-reviewer and found nothing; by the user's ruling one fix wave fixed 11 findings (3fc6507 tests, 817b5ec docstrings and dividers), Steps 1–5 were rerun, and the rest were deferred.
 
 Dispatch the code-reviewer agent, which is pinned to Opus, on the whole branch, with:
 - `git diff origin/main...HEAD -- src tests conf docs CLAUDE.md`;
@@ -8030,7 +8044,7 @@ finishing-a-development-branch. It is writing-plans' Plan Completion Protocol, w
 edits written out. Every "replace" text below occurs exactly once in its file, at 2d0af69 and after
 the edits above it. Under a step that changed a name, adjust the text to what shipped.
 
-- [ ] **Step 1: Check for parallel sessions**
+- [x] **Step 1: Check for parallel sessions**
 
 `specs/naics-embedding-roadmap.md` and `specs/deferred_items.md` are shared by every session.
 
@@ -8040,7 +8054,7 @@ Run: `git worktree list`
   shared edits: Step 4 and Step 5.
 - When holding, give the user the exact text of each held edit, and continue with the rest.
 
-- [ ] **Step 2: The resolve-before-defer gate**
+- [x] **Step 2: The resolve-before-defer gate**
 
 Collect the leftovers:
 - plan steps skipped or descoped during execution;
@@ -8053,7 +8067,7 @@ Partition them:
 
 Unanswered questions block Steps 3–7.
 
-- [ ] **Step 3: Mark up the plan**
+- [x] **Step 3: Mark up the plan**
 
 In `specs/plans/9-window-fitting-summaries.md`:
 - Tick every completed step (`- [x]`).
@@ -8067,7 +8081,7 @@ In `specs/plans/9-window-fitting-summaries.md`:
 **Status: COMPLETE (YYYY-MM-DD)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md
 ```
 
-- [ ] **Step 4: The roadmap: tick Stage 6b and re-validate Stages 7–12**
+- [x] **Step 4: The roadmap: tick Stage 6b and re-validate Stages 7–12**
 
 First read the values the Realized line records, from the committed artifact, its provenance and
 the pin.
@@ -8276,7 +8290,7 @@ Expected: `[]`. The gap-analysis table's rows are exempt.
 Run: `git grep -n -E '^- \[x\] Stage 6b|Stage 6b: COMPLETE' -- specs/naics-embedding-roadmap.md`
 Expected: two lines, the ticked entry and the stamp.
 
-- [ ] **Step 5: Deferred items**
+- [x] **Step 5: Deferred items**
 
 In `specs/deferred_items.md`:
 
@@ -8347,7 +8361,7 @@ with:
 Run: `python3 -c "lines = open('specs/deferred_items.md').read().split('\n'); print([i + 1 for i, line in enumerate(lines) if len(line) > 100])"`
 Expected: `[]`.
 
-- [ ] **Step 6: Backlog triage**
+- [x] **Step 6: Backlog triage**
 
 Run: `uv run --no-project --python 3.13 python ~/.claude/skills/writing-plans/scripts/deferred_stats.py`
 Expected: its summary line, with the open count, the closure rate and the aged tail. Put it in the
@@ -8358,7 +8372,7 @@ At 20 or more open items, or with any aged tail, present the read-only triage pr
 of the Triage rubric in `references/deferred-backlog.md`. Say that `/deferred` acts on the user's
 selection. Do not apply a disposition here.
 
-- [ ] **Step 7: Commit the completion markup**
+- [x] **Step 7: Commit the completion markup**
 
 Run: `git status --short`
 Expected: the plan, the roadmap and `specs/deferred_items.md` modified, fewer if Step 1 held the
@@ -8369,7 +8383,7 @@ git add specs/plans/9-window-fitting-summaries.md specs/naics-embedding-roadmap.
 git commit -m "docs(roadmap): complete Stage 6b and re-validate Stages 7–12"
 ```
 
-- [ ] **Step 8: Retire the plan and the spec**
+- [x] **Step 8: Retire the plan and the spec**
 
 No other plan implements `specs/window-fitting-summaries.md`, so the spec retires with the plan.
 Neither file has relative links to re-point, and the roadmap names the spec only by its retired
@@ -8402,7 +8416,7 @@ git add specs/plans/completed/9-window-fitting-summaries.md specs/completed/wind
 git commit -m "chore(specs): retire plan 9"
 ```
 
-- [ ] **Step 9: Hand off**
+- [x] **Step 9: Hand off**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected:
