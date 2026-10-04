@@ -1,6 +1,8 @@
 # Window-fitting summaries — Design Spec
 
-**Status:** APPROVED (2026-10-04); revised the same day after a five-lens review
+**Status:** COMPLETE (2026-10-04) — implemented by
+`specs/plans/completed/9-window-fitting-summaries.md`; deferred items in
+`specs/deferred_items.md`
 
 **Roadmap:** `specs/naics-embedding-roadmap.md`, Stage 6b (ROUTING: brainstorming). Source spec
 `specs/naics-embedding.md` at d9126ce. Evidence read at origin/main f5c8307. Paths are under
