@@ -1,5 +1,7 @@
 # Shared Encoder and Low-Dimensional Projection Implementation Plan
 
+**Status: COMPLETE (2026-10-03)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md (seven: the `n_epochs` harness behavior, for Stage 7, and six grouped findings of the final review: arm export and read test gaps; arm export and read robustness; encoder, fusion and cache test gaps; `_pool_present` under true half precision; the transformers floor; code and docs polish)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -540,7 +542,7 @@ Stop, report, and wait for your human partner when any of these happens:
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
 
 Run: `git status --short --branch`
 Expected: `## claude/plan-8-shared-encoder-075aeb0a` and nothing else. If the line ends in
@@ -560,7 +562,7 @@ Expected: no output.
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number.
@@ -568,7 +570,7 @@ Expected: `Python 3.12.` followed by a patch number.
 Run: `uv run python -c "import peft, polars, pydantic, pytorch_lightning, torch, transformers; print(peft.__version__, polars.__version__, pydantic.__version__, pytorch_lightning.__version__, torch.__version__, transformers.__version__)"`
 Expected: `0.17.1 1.35.1 2.12.4 2.5.5 2.9.1 4.57.1`. If they differ, stop and ask.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1697 passed, 1 skipped`, measured at 52075f9 on 2026-10-03 (the skip needs CUDA).
@@ -576,7 +578,7 @@ Expected: `1697 passed, 1 skipped`, measured at 52075f9 on 2026-10-03 (the skip 
 - Its count is this baseline plus the tests the plan has added by then, minus those it removed.
 - The warnings count varies under xdist; ignore it.
 
-- [ ] **Step 4: Check the real inputs, read-only**
+- [x] **Step 4: Check the real inputs, read-only**
 
 Task 14 is the only reader of these files. Check them now so a missing input fails early.
 
@@ -589,7 +591,7 @@ Expected: `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`.
 Run: `ls /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/manifest.json ~/Downloads/Data/QCEW/2022_US000_annual.csv ~/Downloads/Data/QCEW/2023_US000_annual.csv ~/Downloads/Data/QCEW/2024_US000_annual.csv ~/Downloads/Data/QCEW/2025_US000_annual.csv`
 Expected: all five paths listed, no error.
 
-- [ ] **Step 5: Route the tasks**
+- [x] **Step 5: Route the tasks**
 
 Under executing-plans, run every task inline, in order.
 
@@ -624,7 +626,7 @@ Under subagent-driven-development:
     points on a hyperboloid, not the export form (tangent coordinates at the origin for a
     hyperbolic arm)".
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/unit/test_decision_scores.py`, after `test_a_row_without_every_repeat_is_refused`:
 
@@ -679,7 +681,7 @@ def test_the_lorentz_refusal_names_the_export_form_alone():
     assert 'regressor panel' not in str(excinfo.value)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision_scores.py tests/unit/test_regressor_panel.py -q -k "duplicated_repeat or counted_twice or export_form_alone"`
 Expected:
@@ -688,7 +690,7 @@ Expected:
 - `test_a_repeat_counted_twice_beside_every_other_one_is_refused` already passes. It guards the
   prediction count, which the fix keeps.
 
-- [ ] **Step 3: Count both in `regressor_scores`**
+- [x] **Step 3: Count both in `regressor_scores`**
 
 In `src/naics_embedder/decision/scores.py`, in `regressor_scores`'s docstring, replace:
 
@@ -739,7 +741,7 @@ with:
         )
 ```
 
-- [ ] **Step 4: Word the refusal around the export form**
+- [x] **Step 4: Word the refusal around the export form**
 
 In `src/naics_embedder/panels/regressor.py`, replace:
 
@@ -755,13 +757,13 @@ with:
             '(tangent coordinates at the origin for a hyperbolic arm)'
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_scores.py tests/unit/test_regressor_panel.py tests/unit/test_diagnostics.py -q`
 Expected: all pass. The existing `match='Lorentz points'` and `match='do not have 2 predictions'`
 tests still hold.
 
-- [ ] **Step 6: Format, run the suite, commit**
+- [x] **Step 6: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/decision/scores.py src/naics_embedder/panels/regressor.py tests/unit/test_decision_scores.py tests/unit/test_regressor_panel.py`
 Run: `uv run pytest -n auto -q`
@@ -794,7 +796,7 @@ git commit -m "fix(decision): count each row's distinct repeats; word the Lorent
     - `CACHE_FORMAT = 'channels-v3'` and `SUMMARIES: Optional[str] = None`;
     - the sidecar gains `field_markers` and `summaries`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_fields.py`:
 
@@ -938,7 +940,7 @@ def test_a_cache_built_under_other_summaries_is_rebuilt(
     assert len(counted_builds) == 2
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_fields.py tests/unit/test_tokenization_cache.py -q`
 Expected:
@@ -946,7 +948,7 @@ Expected:
 - The four new cache tests FAIL: the cache is unmarked, the sidecar has no `field_markers`, and
   the v2 sidecar still matches.
 
-- [ ] **Step 3: Create `src/naics_embedder/text_model/fields.py`**
+- [x] **Step 3: Create `src/naics_embedder/text_model/fields.py`**
 
 ```python
 '''
@@ -1035,7 +1037,7 @@ def tokenize_field(
     }
 ```
 
-- [ ] **Step 4: Move the cache to format v3**
+- [x] **Step 4: Move the cache to format v3**
 
 In `src/naics_embedder/text_model/dataloader/tokenization_cache.py`, replace:
 
@@ -1150,12 +1152,12 @@ with:
     it is rebuilt, because its source text is independently reproducible.
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_fields.py tests/unit/test_tokenization_cache.py -q`
 Expected: all pass, the existing cache tests included.
 
-- [ ] **Step 6: Format, run the suite, commit**
+- [x] **Step 6: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/fields.py src/naics_embedder/text_model/dataloader/tokenization_cache.py tests/unit/test_fields.py tests/unit/test_tokenization_cache.py`
 Run: `uv run pytest -n auto -q`
@@ -1186,7 +1188,7 @@ gains `present`, because the builder refuses a row without it.
     `torch.bool` tensor of shape (B,).
   - It raises `ValueError` matching "no present flag" when a row lacks `present`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_datamodule.py`, add `stack_text_inputs` to the import from
 `naics_embedder.text_model.dataloader.datamodule` (after `collate_fn`). Then add after
@@ -1237,7 +1239,7 @@ def test_repaired_collate_marks_invalid_rows_absent(make_repaired_batch_item):
         ]
 ```
 
-- [ ] **Step 2: Give every hand-built row a `present` flag**
+- [x] **Step 2: Give every hand-built row a `present` flag**
 
 The new builder refuses a row without `present`, so each hand-built channel dict below gains one.
 Each "Replace" is unique by the line above its dict.
@@ -1432,13 +1434,15 @@ with:
             'present': True,
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_datamodule.py -q`
 Expected: the four new tests fail. `stack_text_inputs` cannot be imported, so the module errors
 at collection with `ImportError: cannot import name 'stack_text_inputs'`.
 
-- [ ] **Step 4: Build `present` into the one builder**
+- [x] **Step 4: Build `present` into the one builder**
+
+> Deviation: six calls of `_stack_text_inputs(` were renamed, not five (`datamodule.py:125-127` and `:212-214`): a transcription slip, resolved before dispatch.
 
 In `src/naics_embedder/text_model/dataloader/datamodule.py`, replace:
 
@@ -1554,12 +1558,12 @@ with:
     }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_datamodule.py tests/unit/test_naics_model.py tests/integration/test_stage3_training_step.py tests/unit/test_streaming_dataset.py -q`
 Expected: all pass.
 
-- [ ] **Step 6: Format, run the suite, commit**
+- [x] **Step 6: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/dataloader/datamodule.py tests/unit/test_datamodule.py tests/fixtures/epoch_datasets.py tests/unit/test_naics_model.py tests/integration/test_stage3_training_step.py`
 Run: `uv run pytest -n auto -q`
@@ -1589,7 +1593,7 @@ git commit -m "feat(dataloader): one batch builder with a present flag per chann
   - `build_fusion(name, hidden_size, *, num_experts=4, top_k=2, moe_hidden_dim=1024) -> nn.Module`,
     raising `ValueError` ("unknown fusion …") outside `FUSIONS`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_fusion.py`:
 
@@ -1695,12 +1699,14 @@ def test_an_unknown_fusion_is_refused():
         build_fusion('concatenate', hidden_size=2)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_fusion.py -q`
 Expected: collection error, `ModuleNotFoundError: No module named 'naics_embedder.text_model.fusion'`.
 
-- [ ] **Step 3: Create `src/naics_embedder/text_model/fusion.py`**
+- [x] **Step 3: Create `src/naics_embedder/text_model/fusion.py`**
+
+> Deviation: as the user ruled after review, fusion zeroes absent slots before use (`_zero_absent`, a `masked_fill` ahead of `masked_mean` and of `AttentionFusion`'s score matmul), so a NaN or inf there cannot leak, and `masked_mean` requires a bool `present` (c1baaf9).
 
 ```python
 '''
@@ -1851,12 +1857,12 @@ def build_fusion(
     raise ValueError(f'unknown fusion {name!r}; expected one of {list(FUSIONS)}')
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_fusion.py -q`
 Expected: all pass.
 
-- [ ] **Step 5: Format, run the suite, commit**
+- [x] **Step 5: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/fusion.py tests/unit/test_fusion.py`
 Run: `uv run pytest -n auto -q`
@@ -1914,7 +1920,9 @@ starts here with that backbone, and Task 9 adds the export fixtures to it.
     BertModel` and the fixture `tiny_backbone`, which makes every `SharedEncoder` load
     `tiny_bert`.
 
-- [ ] **Step 1: Write the fixture module and register it**
+- [x] **Step 1: Write the fixture module and register it**
+
+> Deviation: `tiny_bert` returns its model in eval mode, as `from_pretrained` does, so the train-mode test has something to catch (b8d0d7f); 533ee05 adds a text-only provenance fixture for the arm encoder's refusals.
 
 Create `tests/fixtures/shared_encoder.py`:
 
@@ -1979,7 +1987,7 @@ pytest_plugins = (
 )
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Replace the whole of `tests/unit/test_encoder.py` with:
 
@@ -2314,14 +2322,14 @@ class TestHyperbolicHead:
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_encoder.py tests/unit/test_hyperbolic.py -q`
 Expected: both modules error at collection:
 - `ModuleNotFoundError: No module named 'naics_embedder.text_model.shared_encoder'`;
 - `ImportError: cannot import name 'HyperbolicHead'`.
 
-- [ ] **Step 4: Add the head**
+- [x] **Step 4: Add the head**
 
 In `src/naics_embedder/text_model/hyperbolic.py`, replace:
 
@@ -2386,7 +2394,9 @@ class HyperbolicHead(nn.Module):
 
 `Tuple` is already imported there, from `typing`.
 
-- [ ] **Step 5: Create `src/naics_embedder/text_model/shared_encoder.py`**
+- [x] **Step 5: Create `src/naics_embedder/text_model/shared_encoder.py`**
+
+> Deviation: Task 14's user-ruled fixes changed this file: each field's backbone calls are chunked at 256 texts (386c817; amends P4, though spec line 109 still says one call), the backbone is in train mode from construction (b8d0d7f), and checkpointing runs non-reentrant with a context that replays the MPS random state, without `enable_input_require_grads()` (fef1a38).
 
 ```python
 '''
@@ -2615,12 +2625,12 @@ class SharedEncoder(nn.Module):
         return flat.reshape(len(fields), batch_size, -1).transpose(0, 1)
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_encoder.py tests/unit/test_hyperbolic.py -q`
 Expected: all pass.
 
-- [ ] **Step 7: Format, run the suite, commit**
+- [x] **Step 7: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/hyperbolic.py src/naics_embedder/text_model/shared_encoder.py tests/fixtures/shared_encoder.py tests/conftest.py tests/unit/test_encoder.py tests/unit/test_hyperbolic.py`
 Run: `uv run pytest -n auto -q`
@@ -2662,7 +2672,7 @@ gates from the default path.
   - `LoggingMixin._log_loss_breakdown(contrastive_loss, scaled_load_balancing_loss:
     Optional[Tensor], ...)` logs `train/load_balancing_loss` only when that term is not None.
 
-- [ ] **Step 1: Give every selection host a fusion**
+- [x] **Step 1: Give every selection host a fusion**
 
 In `tests/unit/test_hard_negative_mining.py`, replace:
 
@@ -2703,7 +2713,9 @@ with:
         self.current_schedule_scalars = {}
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
+
+> Deviation: the `tiny_repaired_model` replacement text matches twice in `test_stage3_training_step.py` (:150 and :248); the edit anchored on `def tiny_repaired_model(`.
 
 In `tests/unit/test_hard_negative_mining.py`, add after `test_router_mix_ratio_splits_mined_slots`:
 
@@ -2905,7 +2917,7 @@ In class `TestCurriculumIntegration`, add after `test_curriculum_phase_transitio
         assert counters['train/integrity/geometric_selections'] > 0.0
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_hard_negative_mining.py tests/integration/test_stage3_training_step.py tests/unit/test_naics_model.py -q`
 Expected failures:
@@ -2916,7 +2928,7 @@ Expected failures:
 - `test_phase_two_selection_under_masked_mean_fills_no_router_slot`: the router fills two slots,
   so `assert 2.0 == 0.0`.
 
-- [ ] **Step 4: Gate router mining on the fusion**
+- [x] **Step 4: Gate router mining on the fusion**
 
 In `src/naics_embedder/text_model/mixins/curriculum.py`, class docstring, replace:
 
@@ -3006,7 +3018,7 @@ with:
             return
 ```
 
-- [ ] **Step 5: Make the load-balancing term optional**
+- [x] **Step 5: Make the load-balancing term optional**
 
 In `src/naics_embedder/text_model/mixins/loss.py`, replace the whole `_combine_loss_terms` method
 with:
@@ -3086,7 +3098,7 @@ with:
             )
 ```
 
-- [ ] **Step 6: Add the switch to the model**
+- [x] **Step 6: Add the switch to the model**
 
 In `src/naics_embedder/text_model/naics_model.py`, replace:
 
@@ -3239,12 +3251,12 @@ with:
 The calls to `_combine_loss_terms` and `_log_loss_breakdown` in both steps stay as they are; both
 now take `None`.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_hard_negative_mining.py tests/integration/test_stage3_training_step.py tests/integration/test_distributed_supervision.py tests/unit/test_naics_model.py tests/unit/test_text_validation_metrics.py -q`
 Expected: all pass.
 
-- [ ] **Step 8: Format, run the suite, commit**
+- [x] **Step 8: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/naics_model.py src/naics_embedder/text_model/mixins/curriculum.py src/naics_embedder/text_model/mixins/logging.py src/naics_embedder/text_model/mixins/loss.py tests/unit/test_hard_negative_mining.py tests/integration/test_distributed_supervision.py tests/integration/test_stage3_training_step.py tests/unit/test_naics_model.py`
 Run: `uv run pytest -n auto -q`
@@ -3292,7 +3304,7 @@ reaches it only when its closing prompt is answered yes.
     `tangent` (B, d), plus `gate_probs` and `top_k_indices` under `moe`.
   - `build_model_from_config` passes `fusion` and `dimension`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_config.py`, add after `test_base_config_parses_as_repaired_pre_generation`:
 
@@ -3536,7 +3548,7 @@ Replace both lines that read:
     monkeypatch.setattr(model_module, 'SharedEncoder', StubSharedEncoder)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_config.py tests/unit/test_cli_training.py tests/unit/test_utils_training.py tests/unit/test_naics_model.py tests/integration/test_stage3_training_step.py -q`
 Expected failures:
@@ -3545,7 +3557,7 @@ Expected failures:
 - the model tests: the encoder is a `MultiChannelEncoder`;
 - the integration tests: `AttributeError`, since `naics_model` has no `SharedEncoder`.
 
-- [ ] **Step 3: Declare the two config keys**
+- [x] **Step 3: Declare the two config keys**
 
 In `src/naics_embedder/utils/config.py`, class `ModelConfig`, replace:
 
@@ -3613,7 +3625,7 @@ with:
     num_experts: 4
 ```
 
-- [ ] **Step 4: Switch the model to the shared encoder**
+- [x] **Step 4: Switch the model to the shared encoder**
 
 In `src/naics_embedder/text_model/naics_model.py`, module docstring, replace:
 
@@ -3796,7 +3808,7 @@ with:
         '''
 ```
 
-- [ ] **Step 5: Pass the keys through the CLI**
+- [x] **Step 5: Pass the keys through the CLI**
 
 In `src/naics_embedder/cli/commands/training.py`, `build_model_from_config`, replace:
 
@@ -3846,7 +3858,7 @@ with:
                 'lora_rank': config.model.lora.r,
 ```
 
-- [ ] **Step 6: Delete the four-copy encoder and the projection**
+- [x] **Step 6: Delete the four-copy encoder and the projection**
 
 Run: `git rm src/naics_embedder/text_model/encoder.py`
 
@@ -3902,7 +3914,7 @@ Replace the whole of `docs/api/encoder.md` with:
 
 That keeps the strict docs build importable; Task 13 writes the docs.
 
-- [ ] **Step 7: Run the tests and the checks**
+- [x] **Step 7: Run the tests and the checks**
 
 Run: `uv run pytest tests/unit/test_config.py tests/unit/test_cli_training.py tests/unit/test_utils_training.py tests/unit/test_naics_model.py tests/integration/test_stage3_training_step.py tests/unit/test_hyperbolic.py tests/unit/test_encoder.py tests/unit/test_text_only.py -q`
 Expected: all pass.
@@ -3913,7 +3925,7 @@ Expected: no output.
 Run: `uv run mkdocs build --strict`
 Expected: the build completes with no warnings.
 
-- [ ] **Step 8: Format, run the suite, commit**
+- [x] **Step 8: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/utils/config.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/cli/commands/training.py src/naics_embedder/utils/training.py src/naics_embedder/panels/text_only.py src/naics_embedder/text_model/hyperbolic.py tests/unit/test_config.py tests/unit/test_cli_training.py tests/unit/test_utils_training.py tests/unit/test_naics_model.py tests/integration/test_stage3_training_step.py tests/unit/test_hyperbolic.py tests/conftest.py`
 Run: `uv run pytest -n auto -q`
@@ -3971,7 +3983,7 @@ Export and reads (Tasks 10 and 11) take the record from the checkpoint. This tas
   EncoderArchitecture`.
 - `model.checkpoint_contract.encoder` is the model's own shared record.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Replace the whole of `tests/unit/test_checkpoint_contract.py` with:
 
@@ -4491,14 +4503,14 @@ def test_the_runtime_contract_records_the_configured_encoder(training_env):
     assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('attention', 8)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_checkpoint_contract.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py -q`
 Expected: `test_checkpoint_contract.py` errors at collection with
 `ImportError: cannot import name 'D2_REFUSAL'`. The new model and CLI tests fail: the contract has
 no `encoder`.
 
-- [ ] **Step 3: Rewrite the contract module**
+- [x] **Step 3: Rewrite the contract module**
 
 Replace the whole of `src/naics_embedder/supervision/checkpoints.py` with:
 
@@ -4817,7 +4829,7 @@ def load_weights_only(
 The validator's name has no leading underscore: Pydantic treats an underscore-prefixed class
 attribute as a private attribute.
 
-- [ ] **Step 4: Give the model its record**
+- [x] **Step 4: Give the model its record**
 
 In `src/naics_embedder/text_model/naics_model.py`, replace:
 
@@ -4916,7 +4928,7 @@ with:
         '''
 ```
 
-- [ ] **Step 5: Build the config's record in the CLI**
+- [x] **Step 5: Build the config's record in the CLI**
 
 In `src/naics_embedder/cli/commands/training.py`, replace:
 
@@ -5022,12 +5034,12 @@ with:
             report = load_weights_only(model, checkpoint_path, encoder=runtime_contract.encoder)
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_checkpoint_contract.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py tests/integration/test_stage3_training_step.py -q`
 Expected: all pass.
 
-- [ ] **Step 7: Format, run the suite, commit**
+- [x] **Step 7: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/supervision/checkpoints.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/cli/commands/training.py tests/unit/test_checkpoint_contract.py tests/unit/test_naics_model.py tests/unit/test_cli_training.py`
 Run: `uv run pytest -n auto -q`
@@ -5090,7 +5102,9 @@ reuse.
     (Int64), `code`, then `hyp_e0 … hyp_e{d}` (Float64): d + 1 Lorentz columns. A missing or
     stale cache now rebuilds instead of failing (P19).
 
-- [ ] **Step 1: Extend the fixture module**
+- [x] **Step 1: Extend the fixture module**
+
+> Deviation: as the user ruled, helpers are reused rather than copied: `_lightning_checkpoint` moved here as `lightning_checkpoint` (`test_naics_model.py` imports it), and the token-row builder became the fixture helper `five_code_token_rows`, which Tasks 10 and 11 call.
 
 In `tests/fixtures/shared_encoder.py`, replace:
 
@@ -5209,7 +5223,9 @@ def shared_checkpoint(tmp_path, shared_model) -> Path:
 `load_from_checkpoint` rebuilds it on the tiny backbone too. The model's own default backbone name
 is `all-mpnet-base-v2`, which is why `base_model_name` is passed.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
+
+> Deviation: the `code_token_config` default-path test runs `monkeypatch.chdir(tmp_path)` first, so it writes only under `tmp_path` (user ruling: the Global Constraints govern).
 
 Create `tests/unit/test_export.py`:
 
@@ -5330,13 +5346,13 @@ def test_the_hgcn_feeder_writes_d_plus_one_lorentz_columns(
     assert np.allclose(-points[:, 0]**2 + (points[:, 1:]**2).sum(axis=1), -1.0, atol=1e-4)
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_export.py -q`
 Expected: a collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.text_model.export'`.
 
-- [ ] **Step 4: Create `src/naics_embedder/text_model/export.py`**
+- [x] **Step 4: Create `src/naics_embedder/text_model/export.py`**
 
 ```python
 '''
@@ -5427,7 +5443,7 @@ def encode_token_rows(
     return {name: torch.cat(collected) for name, collected in parts.items()}
 ```
 
-- [ ] **Step 5: Move the HGCN feeder onto it**
+- [x] **Step 5: Move the HGCN feeder onto it**
 
 In `src/naics_embedder/cli/commands/training.py`, delete the line `import torch`, which nothing
 else in the module uses.
@@ -5502,7 +5518,7 @@ Everything above the replaced block stays as it is:
 Everything below it stays too: the parquet write and the closing log lines, which still read
 `embedding_dim`.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_export.py tests/unit/test_cli_training.py -q`
 Expected: all pass.
@@ -5510,7 +5526,7 @@ Expected: all pass.
 Run: `uv run ruff check src/naics_embedder/cli/commands/training.py`
 Expected: `All checks passed!` (no unused `torch` or `TokenizationConfig`).
 
-- [ ] **Step 7: Format, run the suite, commit**
+- [x] **Step 7: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/export.py src/naics_embedder/cli/commands/training.py tests/fixtures/shared_encoder.py tests/unit/test_export.py`
 Run: `uv run pytest -n auto -q`
@@ -5570,7 +5586,9 @@ The checkpoint is checked before any weight loads:
   - `tools export-table --checkpoint <ckpt> --output <table.parquet> [--config <yaml>]
     [key=value ...]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
+
+> Deviation: the tests call Task 9's `five_code_token_rows` instead of an inline `_token_rows`, so the import block drops `tokenization_cache` and adds `five_code_token_rows` and `lightning_checkpoint`.
 
 In `tests/unit/test_export.py`, replace the imports:
 
@@ -5832,7 +5850,7 @@ def test_export_table_refuses_an_override_without_a_value(runner, tmp_path, defa
 The legacy test runs the real gate. Under `legacy_containment` it returns no bundle before it
 reads a file.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_export.py tests/unit/test_cli_commands.py -q`
 Expected:
@@ -5844,7 +5862,7 @@ Expected:
 - `test_export_table_refuses_an_override_without_a_value` FAILS: the exit code is 2 ("No such
   command 'export-table'"), not 1.
 
-- [ ] **Step 3: Implement the export**
+- [x] **Step 3: Implement the export**
 
 In `src/naics_embedder/text_model/export.py`, replace the module docstring and imports:
 
@@ -6106,7 +6124,7 @@ def exported_table(tmp_path, shared_checkpoint, validated_bundle, five_code_toke
 The fixture lands in this step, not in Step 1, because the fixture module's import of
 `export_code_table` would break every test's collection before the function exists.
 
-- [ ] **Step 4: Add `tools export-table`**
+- [x] **Step 4: Add `tools export-table`**
 
 In `src/naics_embedder/cli/commands/tools.py`, module docstring, replace:
 
@@ -6269,7 +6287,7 @@ def export_table(
     console.print(f'Provenance: {provenance_path(table)}')
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_export.py tests/unit/test_cli_commands.py -q`
 Expected: all pass.
@@ -6277,7 +6295,7 @@ Expected: all pass.
 Run: `uv run naics-embedder tools export-table --help`
 Expected: the help lists `--checkpoint`, `--output` and `--config`, and `OVERRIDES`.
 
-- [ ] **Step 6: Format, run the suite, commit**
+- [x] **Step 6: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/export.py src/naics_embedder/cli/commands/tools.py tests/fixtures/shared_encoder.py tests/unit/test_export.py tests/unit/test_cli_commands.py`
 Run: `uv run pytest -n auto -q`
@@ -6330,7 +6348,9 @@ The §6 "same encoder" and "live read" criteria are tested here.
     `encode_codes(codes: Sequence[str]) -> torch.Tensor` (C, d + 1), both float64 on the CPU.
     `encode_codes` raises `ValueError` matching "has no row for" on an unknown code.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
+
+> Deviation: the tests call Task 9's `five_code_token_rows` instead of an inline `_token_rows`, so the import block drops `tokenization_cache`.
 
 Create `tests/unit/test_arm_encoder.py`:
 
@@ -6525,13 +6545,15 @@ def test_queries_and_codes_on_mps_come_back_float64_on_the_cpu(
     assert torch.equal(codes, arm.encode_codes(list(FIVE_CODES)))
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_arm_encoder.py -q`
 Expected: a collection error,
 `ModuleNotFoundError: No module named 'naics_embedder.text_model.arm_encoder'`.
 
-- [ ] **Step 3: Create `src/naics_embedder/text_model/arm_encoder.py`**
+- [x] **Step 3: Create `src/naics_embedder/text_model/arm_encoder.py`**
+
+> Deviation: after the final review, `from_files` refuses with a ValueError, before the model loads, a provenance without `checkpoint.sha256`, `table_sha256` or `max_length`, and a table exported under another token window (533ee05).
 
 ```python
 '''
@@ -6711,7 +6733,7 @@ class ArmEncoder:
         return exp_map_origin(self._tangent[[self._rows[code] for code in codes]])
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_arm_encoder.py -v`
 Expected:
@@ -6719,7 +6741,7 @@ Expected:
 - `test_queries_and_codes_on_mps_come_back_float64_on_the_cpu` runs on an MPS machine, such
   as this M4 Max. It is skipped elsewhere: "needs an MPS device".
 
-- [ ] **Step 5: Format, run the suite, commit**
+- [x] **Step 5: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/arm_encoder.py tests/unit/test_arm_encoder.py`
 Run: `uv run pytest -n auto -q`
@@ -6763,7 +6785,9 @@ decoding. There is no test-split path; Stage 12 opens that split.
     - `--purpose` is required.
     - `--output` writes `{'fingerprint', 'table', 'checkpoint', 'summary'}`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
+
+> Deviation: the `--purpose` test matches `click.unstyle(result.output).replace('\n', '')`, because Typer styles usage errors with ANSI under GITHUB_ACTIONS (f4f0697).
 
 In `tests/unit/test_arm_encoder.py`, replace:
 
@@ -6899,7 +6923,7 @@ def test_outcome_panel_needs_a_purpose(runner, tmp_path, default_config):
 exactly the command's arguments. The read itself is real: the five-code bundle's panel, its
 selection log and its decoding. Only the encoder is a stand-in.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_arm_encoder.py tests/unit/test_cli_commands.py -q`
 Expected:
@@ -6910,7 +6934,7 @@ Expected:
 - `test_outcome_panel_needs_a_purpose` FAILS: the output says "No such command
   'outcome-panel'", not "Missing option '--purpose'".
 
-- [ ] **Step 3: Implement the read**
+- [x] **Step 3: Implement the read**
 
 In `src/naics_embedder/text_model/arm_encoder.py`, replace:
 
@@ -6971,7 +6995,7 @@ def read_outcome_validation(
     )
 ```
 
-- [ ] **Step 4: Add `tools outcome-panel`**
+- [x] **Step 4: Add `tools outcome-panel`**
 
 In `src/naics_embedder/cli/commands/tools.py`, module docstring, replace:
 
@@ -7086,7 +7110,7 @@ def outcome_panel(
         path.write_text(json.dumps(payload, indent=2) + '\n')
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_arm_encoder.py tests/unit/test_cli_commands.py -q`
 Expected: all pass.
@@ -7095,7 +7119,7 @@ Run: `uv run naics-embedder tools outcome-panel --help`
 Expected: `--checkpoint`, `--table` and `--purpose` are marked required, and there is no
 `--split` option.
 
-- [ ] **Step 6: Format, run the suite, commit**
+- [x] **Step 6: Format, run the suite, commit**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/arm_encoder.py src/naics_embedder/cli/commands/tools.py tests/unit/test_arm_encoder.py tests/unit/test_cli_commands.py`
 Run: `uv run pytest -n auto -q`
@@ -7127,7 +7151,9 @@ in `README.md`, which disables the line-length rule and keeps its paragraphs on 
   `export`, `arm_encoder`, `tools export-table` and `tools outcome-panel`.
 - Produces: documentation only.
 
-- [ ] **Step 1: `CLAUDE.md`**
+- [x] **Step 1: `CLAUDE.md`**
+
+> Deviation: `CLAUDE.md` shows the shipped checkpointing call (non-reentrant, `context_fn=_replay_mps_rng`, no `enable_input_require_grads()`; Change D), and its curvature text reads as the user ruled: 1.0 by default (`loss.curvature`), not learned, with the clamp attributed to `CurvatureManager` (e98119d).
 
 Replace:
 
@@ -7365,7 +7391,7 @@ with:
 - `text_model/moe.py` - Mixture-of-Experts (the `moe` fusion ablation)
 ```
 
-- [ ] **Step 2: `README.md`**
+- [x] **Step 2: `README.md`**
 
 Replace:
 
@@ -7533,7 +7559,7 @@ with:
 +---------------+---------------+
 ```
 
-- [ ] **Step 3: `docs/index.md`**
+- [x] **Step 3: `docs/index.md`**
 
 Replace:
 
@@ -7564,7 +7590,7 @@ with:
   selecting negatives that confuse the MoE gating network
 ```
 
-- [ ] **Step 4: `docs/overview.md`**
+- [x] **Step 4: `docs/overview.md`**
 
 Replace:
 
@@ -7940,7 +7966,7 @@ uv run naics-embedder tools outcome-panel --checkpoint checkpoints/sadc_default/
 ```
 ````
 
-- [ ] **Step 5: `docs/text_training.md`**
+- [x] **Step 5: `docs/text_training.md`**
 
 Replace:
 
@@ -8103,7 +8129,7 @@ with:
     `enable_clustering`) act in the model layer; the router flag acts only under `moe`.
 ```
 
-- [ ] **Step 6: `docs/usage.md`**
+- [x] **Step 6: `docs/usage.md`**
 
 Replace:
 
@@ -8185,7 +8211,7 @@ uv run naics-embedder tools outcome-panel --checkpoint checkpoints/sadc_default/
 ### `tools margins`
 ````
 
-- [ ] **Step 7: `tests/README.md`**
+- [x] **Step 7: `tests/README.md`**
 
 Replace:
 
@@ -8234,7 +8260,7 @@ with:
    - Fusion options, one affine map, gradient to every adapter
 ```
 
-- [ ] **Step 8: The API pages and the navigation**
+- [x] **Step 8: The API pages and the navigation**
 
 Replace the whole of `docs/api/encoder.md` with:
 
@@ -8299,7 +8325,7 @@ with:
               - Mixture of Experts: api/moe.md
 ```
 
-- [ ] **Step 9: Acceptance checks**
+- [x] **Step 9: Acceptance checks**
 
 Run: `git grep -n -i -E 'MultiChannelEncoder|HyperbolicProjection|text_model/encoder\.py|In encoder\.py|embedding_euc|separate LoRA|Independent LoRA|4 Euclidean|four Euclidean|E_fused' -- CLAUDE.md README.md docs tests/README.md ':!docs/report_files'`
 Expected: no output.
@@ -8315,7 +8341,9 @@ then rerun.
 Run: `git status --short`
 Expected: only the files in **Files** above, and no `site/` (gitignored).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
+
+> Deviation: Task 13 ran beside Task 14's first training attempt and landed as 55577ba plus review fixes a1acc4d (router mining and the load-balancing term scoped to `moe`; contract-check claims corrected) and e98119d (curvature wording, user-ruled); 7799e2e later added the `n_epochs` line and the final review's docs polish.
 
 ```bash
 git add CLAUDE.md README.md docs/index.md docs/overview.md docs/text_training.md docs/usage.md tests/README.md docs/api/encoder.md docs/api/export.md docs/api/moe.md docs/.nav.yml
@@ -8362,7 +8390,9 @@ The bundle clone's manifest, which every command names, is:
   `tools regressor-panel`.
 - Produces: the finding, which Plan completion's roadmap entry cites.
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
+
+> Deviation: at the 22:10 relaunch `checkpoints/sadc_default` existed, empty, left by the 19:53 attempt; `logs/selection_log.jsonl` was absent at both launches.
 
 Run: `pwd`
 Expected: `/Users/lowell/Projects/naics-embedder/.claude/worktrees/plan-8-shared-encoder`.
@@ -8378,7 +8408,7 @@ Expected: both "No such file or directory".
 - If either exists, stop and ask.
 - The selection log is append-only (Req 4), so never delete or move one.
 
-- [ ] **Step 2: Clone the inputs**
+- [x] **Step 2: Clone the inputs**
 
 Run: `mkdir -p data/supervision/stage3-supervision-v2 data/plan8 logs`
 
@@ -8389,7 +8419,7 @@ Run: `cp -c /Users/lowell/Projects/naics-embedder/data/naics_descriptions.parque
 `cp -c` makes APFS clones, so the copies cost no space and the originals stay untouched. Never
 symlink, rebuild or edit them.
 
-- [ ] **Step 3: Check the clones**
+- [x] **Step 3: Check the clones**
 
 Run: `shasum -a 256 data/naics_descriptions.parquet`
 Expected: `fe8c54e36efb7470e46122c0071e16c03c3dba1c909073c84c91ec998a0fdc36`.
@@ -8398,7 +8428,9 @@ Run: `uv run python -c "from naics_embedder.supervision.artifacts import load_va
 Expected: `301cce28-539c-42ea-8781-496bbdcf511c 4662b826 fe8c54e3`. The load re-runs every
 integrity and relational check.
 
-- [ ] **Step 4: Train one epoch**
+- [x] **Step 4: Train one epoch**
+
+> Deviation: the 19:53 attempt at f4f0697 ran out of MPS memory at step 0 of 19,883; after the user-ruled Changes A–D (386c817, d920884, b8d0d7f, fef1a38) the run relaunched at fef1a38 with `data_loader.n_epochs=1`: 199 training batches in 24:00, about 30 minutes in all (finding, section 1).
 
 Run: `printf 'n\n' > /tmp/plan8-train-answer.txt`
 
@@ -8422,7 +8454,7 @@ What to expect:
 Stop and ask if the log shows "Training failed" or a traceback, or if the run passes 2.5 hours.
 Stop it with `kill <pid>`.
 
-- [ ] **Step 5: Check the run**
+- [x] **Step 5: Check the run**
 
 Run: `tail -n 40 logs/plan8_train.out`
 Expected:
@@ -8465,13 +8497,15 @@ batch count.
 
 Record the epoch, the global step and the wall-clock time for the finding.
 
-- [ ] **Step 6: Export the code table**
+- [x] **Step 6: Export the code table**
+
+> Deviation: Steps 6–11 ran at 7799e2e, after the final review's fixes (refusals and docs only), not at the training SHA fef1a38.
 
 Run: `HF_HUB_OFFLINE=1 uv run naics-embedder tools export-table --checkpoint checkpoints/sadc_default/last.ckpt --output data/plan8/arm_table.parquet supervision.manifest_path=/Users/lowell/Projects/naics-embedder/.claude/worktrees/plan-8-shared-encoder/data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/manifest.json`
 Expected: `Code table: data/plan8/arm_table.parquet` and
 `Provenance: data/plan8/arm_table_provenance.json`.
 
-- [ ] **Step 7: Check the export**
+- [x] **Step 7: Check the export**
 
 Write this script to `/tmp/plan8_check_export.py` with the Write tool:
 
@@ -8519,14 +8553,14 @@ Stop and ask if the table holds other than 2,125 codes.
 Run: `shasum -a 256 data/plan8/arm_table.parquet checkpoints/sadc_default/last.ckpt`
 Expected: the first hash equals `table_sha256`, the second the checkpoint `sha256`.
 
-- [ ] **Step 8: Build the text-only table**
+- [x] **Step 8: Build the text-only table**
 
 Run: `HF_HUB_OFFLINE=1 uv run naics-embedder tools text-only-table --descriptions data/naics_descriptions.parquet --output data/plan8/text_only.parquet`
 Expected:
 - the table and `data/plan8/text_only_provenance.json`;
 - the backbone is the regressor config's MiniLM, read frozen from unmarked text (D9).
 
-- [ ] **Step 9: Read the regressor panel's validation split**
+- [x] **Step 9: Read the regressor panel's validation split**
 
 Run: `uv run naics-embedder tools regressor-panel --coordinates data/plan8/arm_table.parquet --text-only data/plan8/text_only.parquet --codebook data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/naics_codebook.parquet --purpose 'plan 8 Exit: first reading of the shared encoder (d = 16, masked_mean, one local epoch)' --output data/plan8/regressor_validation.parquet`
 
@@ -8538,7 +8572,7 @@ Expected:
 
 Copy the printed lines for the finding. Stop and ask if the command fails.
 
-- [ ] **Step 10: Read the outcome panel's validation split**
+- [x] **Step 10: Read the outcome panel's validation split**
 
 Run: `HF_HUB_OFFLINE=1 uv run naics-embedder tools outcome-panel --checkpoint checkpoints/sadc_default/last.ckpt --table data/plan8/arm_table.parquet --purpose 'plan 8 Exit: first reading of the shared encoder (d = 16, masked_mean, one local epoch)' --output data/plan8/outcome_validation.json supervision.manifest_path=/Users/lowell/Projects/naics-embedder/.claude/worktrees/plan-8-shared-encoder/data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/manifest.json`
 
@@ -8551,7 +8585,7 @@ Expected:
 
 Stop and ask if the counts differ or the command fails.
 
-- [ ] **Step 11: Check the logged names**
+- [x] **Step 11: Check the logged names**
 
 Write this script to `/tmp/plan8_check_log.py` with the Write tool:
 
@@ -8593,7 +8627,9 @@ Expected:
 - the table's one name, then the three records as JSON lines. Copy these into the finding: the
   log is gitignored.
 
-- [ ] **Step 12: Write the finding**
+- [x] **Step 12: Write the finding**
+
+> Deviation: section 6's Stage 7 list has a fifth item, Change C (dropout and checkpointing on from the first step); Reproduction adds Step 2's `mkdir`, Step 5's `tail` and `ls` and Step 7's `shasum`, leaving the check scripts to this plan; the finding's review fixes landed as a705d47.
 
 Create `specs/findings/shared-encoder-first-reading.md` in the format of
 `specs/findings/regressor-panel-splits.md`:
@@ -8691,7 +8727,9 @@ print(long_lines)
 Run: `python3 /tmp/plan8_check_lines.py`
 Expected: `[]`.
 
-- [ ] **Step 13: Commit the finding**
+- [x] **Step 13: Commit the finding**
+
+> Deviation: the /tmp check scripts were removed after the finding's review rather than at commit, so its fixes could re-run the line check.
 
 Run: `git status --short`
 Expected: `?? specs/findings/shared-encoder-first-reading.md` and `?? outputs/`. `outputs/` is not
@@ -8708,7 +8746,9 @@ Run: `rm /tmp/plan8-train-answer.txt /tmp/plan8_check_run.py /tmp/plan8_check_ex
 
 Run every check before the final review, and paste each output into the ledger.
 
-- [ ] **Step 1: The suite on both CI versions**
+- [x] **Step 1: The suite on both CI versions**
+
+> Deviation: run twice: during the Exit run at fef1a38 (1836 passed, 1 skipped, on both versions) and after the final review's fixes at 7799e2e (1845 passed, 1 skipped; 3.10 adds 423 matmul RuntimeWarnings); `/tmp/naics-py310` was kept until the second run.
 
 Run: `uv run pytest -n auto -q`
 Expected:
@@ -8724,7 +8764,7 @@ Expected:
 
 Run: `rm -rf /tmp/naics-py310`
 
-- [ ] **Step 2: Lint, format and docs**
+- [x] **Step 2: Lint, format and docs**
 
 Run: `uv run ruff check src/ tests/`
 Expected: `All checks passed!`
@@ -8735,7 +8775,7 @@ Expected: exit 0, with no file listed.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds with no warnings.
 
-- [ ] **Step 3: Nothing of the four-copy encoder is left**
+- [x] **Step 3: Nothing of the four-copy encoder is left**
 
 Run: `git grep -n -E 'MultiChannelEncoder|HyperbolicProjection|embedding_euc|moe_projection|text_model\.encoder|text_model/encoder\.py' -- src tests conf docs README.md CLAUDE.md ':!docs/report_files'`
 Expected: no output.
@@ -8743,7 +8783,9 @@ Expected: no output.
 Run: `git ls-files src/naics_embedder/text_model/encoder.py`
 Expected: no output.
 
-- [ ] **Step 4: Spec §6's criteria, test by test**
+- [x] **Step 4: Spec §6's criteria, test by test**
+
+> Deviation: the script as written printed every name as missing, because pyproject's addopts `-v` cancels its `-q`; with `-q -q` it prints `missing: []`.
 
 Each Exit criterion and supporting test of spec §6 maps to tests the plan wrote (the table
 below). Step 1 ran them all. This step checks that every one still exists under its name.
@@ -8835,7 +8877,9 @@ Run: `rm /tmp/plan8_check_map.py`
 | The feeder writes d + 1 `hyp_e*` columns | `test_export.py::test_the_hgcn_feeder_writes_d_plus_one_lorentz_columns` |
 | MPS: float64 CPU tensors | `test_arm_encoder.py::test_queries_and_codes_on_mps_come_back_float64_on_the_cpu` |
 
-- [ ] **Step 5: The branch carries only this plan**
+- [x] **Step 5: The branch carries only this plan**
+
+> Deviation: `conf/config.yaml`'s diff also carries `data_loader.n_epochs: 100` (Change B, user-approved).
 
 Run: `git log --oneline origin/main..HEAD`
 Expected:
@@ -8850,7 +8894,9 @@ Expected: only Task 7's edits:
 Run: `git grep -n 'manifest_path:' -- conf/config.yaml`
 Expected: `conf/config.yaml:12:  manifest_path: null  # …`. No path is committed.
 
-- [ ] **Step 6: The final review**
+- [x] **Step 6: The final review**
+
+> Deviation: both seats ran during the Exit run, at fef1a38, before the finding and Steps 1–5; Codex ran with `-m gpt-6-astra` (the configured model is refused); the merged fixes landed as 533ee05 and 7799e2e before Task 14's Steps 6–11, and the same reviewer then reviewed the finding.
 
 Dispatch the code-reviewer agent, which is pinned to Opus, on the whole branch, with:
 - `git diff origin/main...HEAD`;
@@ -8868,7 +8914,7 @@ finishing-a-development-branch. It is writing-plans' Plan Completion Protocol, w
 edits written out. Every "replace" text below occurs exactly once in its file. Under a step that
 changed a name, adjust the text to what shipped.
 
-- [ ] **Step 1: Check for parallel sessions**
+- [x] **Step 1: Check for parallel sessions**
 
 `specs/naics-embedding-roadmap.md` and `specs/deferred_items.md` are shared by every session.
 
@@ -8879,7 +8925,9 @@ Run: `git worktree list`
   5, and the roadmap part of Step 7.
 - When holding, give the user the exact text of each held edit, and continue with the rest.
 
-- [ ] **Step 2: The resolve-before-defer gate**
+- [x] **Step 2: The resolve-before-defer gate**
+
+> Deviation: the gate asked three batched questions: the `n_epochs` harness behavior became a Stage 7 deferred item, a note on pre-plan-8 runs' eval-mode backbone was dropped, and the review's Minors went in as six grouped items, dropping five mandated or moot ones (T1, T2-a, T6-a, T8-b, T8-c).
 
 Collect the leftovers:
 - plan steps skipped or descoped during execution;
@@ -8892,7 +8940,7 @@ Partition them:
 
 Unanswered questions block Steps 3–7.
 
-- [ ] **Step 3: Mark up the plan**
+- [x] **Step 3: Mark up the plan**
 
 In `specs/plans/8-shared-encoder-and-projection.md`:
 - Tick every completed step (`- [x]`).
@@ -8906,7 +8954,9 @@ In `specs/plans/8-shared-encoder-and-projection.md`:
 **Status: COMPLETE (YYYY-MM-DD)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md
 ```
 
-- [ ] **Step 4: The roadmap: tick Stage 6 and re-validate later stages**
+- [x] **Step 4: The roadmap: tick Stage 6 and re-validate later stages**
+
+> Deviation: Stage 8's text also carries the final review's T11-f (the arm encoder applies the exp map at the origin itself; only the distance name comes from the head), and the Realized line names `data_loader.n_epochs=1`.
 
 In `specs/naics-embedding-roadmap.md`, replace:
 
@@ -9043,7 +9093,7 @@ and edit one only if what shipped contradicts it.
 Run: `python3 -c "lines = open('specs/naics-embedding-roadmap.md').read().split('\n'); print([i + 1 for i, line in enumerate(lines) if len(line) > 100 and not line.startswith('|')])"`
 Expected: `[]`. The gap-analysis table's rows are exempt.
 
-- [ ] **Step 5: Deferred items**
+- [x] **Step 5: Deferred items**
 
 In `specs/deferred_items.md`:
 
@@ -9087,7 +9137,7 @@ with:
 
    Skip the section when nothing was deferred.
 
-- [ ] **Step 6: Backlog triage**
+- [x] **Step 6: Backlog triage**
 
 Run: `uv run --no-project --python 3.13 python ~/.claude/skills/writing-plans/scripts/deferred_stats.py`
 Expected: its summary line, with the open count, the closure rate and the aged tail. Put it in the
@@ -9111,7 +9161,7 @@ Its suggested tick, for `/deferred` to apply:
 
 Say that `/deferred` acts on the user's selection. Do not apply a disposition here.
 
-- [ ] **Step 7: Commit the completion markup**
+- [x] **Step 7: Commit the completion markup**
 
 Run: `git status --short`
 Expected:
@@ -9124,7 +9174,7 @@ git add specs/plans/8-shared-encoder-and-projection.md specs/naics-embedding-roa
 git commit -m "docs(roadmap): complete Stage 6 and re-validate Stages 6b, 7, 8, 9 and 10"
 ```
 
-- [ ] **Step 8: Retire the plan and the spec**
+- [x] **Step 8: Retire the plan and the spec**
 
 No other plan implements `specs/shared-encoder-and-projection.md`, so the spec retires with the
 plan. Neither file has relative links to re-point.
@@ -9184,7 +9234,7 @@ git add specs/plans/completed/8-shared-encoder-and-projection.md specs/completed
 git commit -m "chore(specs): retire plan 8"
 ```
 
-- [ ] **Step 9: Hand off**
+- [x] **Step 9: Hand off**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected:
