@@ -3,23 +3,30 @@ Window-fitting summaries (roadmap Stage 6b): the pin and its identity (spec 4.6)
 (4.2), the artifact (4.5) and the resolver (4.7).
 '''
 
+import logging
 import subprocess
 import sys
 from pathlib import Path
 
+import polars as pl
 import pytest
 from transformers import AutoTokenizer
 
 from naics_embedder.panels import window_summaries
 from naics_embedder.panels.leakage import SENTENCE_BREAK
 from naics_embedder.panels.window_summaries import (
+    SUMMARIES_SCHEMA,
     SummariesPin,
+    read_window_summaries,
+    resolve_channel_texts,
     summaries_identity,
     summary_budget,
+    text_sha256,
     text_units,
     token_counter,
+    write_window_summaries,
 )
-from tests.fixtures.window_summaries import words
+from tests.fixtures.window_summaries import WordTokenizer, pin_artifact, words
 
 pytestmark = pytest.mark.unit
 
@@ -197,3 +204,236 @@ def test_a_title_is_one_unit_and_one_over_the_window_is_refused():
 def test_a_channel_without_units_is_refused():
     with pytest.raises(ValueError, match="no units are defined for channel 'query'"):
         text_units('query', 'soybeans', words, 100)
+
+# -------------------------------------------------------------------------------------------------
+# The artifact and the resolver
+# -------------------------------------------------------------------------------------------------
+
+WINDOW = 10
+STUB = 'stub-backbone'
+# 'description: ' and three three-word sentences: 1 + 9 words and [CLS] [SEP], 12 > 10 tokens
+LONG = 'Farms grow corn. Farms grow wheat. Farms sell grain.'
+SUMMARY = 'Farms grow corn. Farms sell grain.'
+FITS = 'Farms grow oilseeds.'
+
+def descriptions_frame(description=LONG, examples='Soybeans; Beans'):
+    return pl.DataFrame(
+        {
+            'code': ['111110', '111120'],
+            'title': ['Soybean Farming', 'Oilseed Farming'],
+            'description': [description, FITS],
+            'examples': [examples, None],
+            'excluded': [None, '  '],
+        }
+    )
+
+def summary_row(code='111110', channel='description', summary=SUMMARY, source=LONG, **overrides):
+    row = {
+        'code': code,
+        'channel': channel,
+        'source_sha256': text_sha256(source),
+        'window': WINDOW,
+        'summary': summary,
+        'source_tokens': 12,
+        'summary_tokens': 9,
+        'units_kept': 2,
+        'units_total': 3,
+    }
+    row.update(overrides)
+    return row
+
+def pin_rows(tmp_path, rows, window=WINDOW):
+    return pin_artifact(tmp_path / 'window_summaries.csv', rows, window=window)
+
+def resolve(descriptions, pin):
+    return resolve_channel_texts(descriptions, WordTokenizer(), STUB, WINDOW, pin=pin)
+
+def test_the_artifact_round_trips_sorted_by_channel_then_code(tmp_path):
+    rows = [
+        summary_row(code='222220', channel='excluded'),
+        summary_row(code='111120'),
+        summary_row(code='111110', channel='excluded'),
+    ]
+    path = tmp_path / 'window_summaries.csv'
+
+    sha256 = write_window_summaries(pl.DataFrame(rows, schema=SUMMARIES_SCHEMA), path)
+    table = read_window_summaries(path)
+
+    assert sha256 == text_sha256(path.read_text(encoding='utf-8'))
+    assert table.schema == pl.Schema(SUMMARIES_SCHEMA)
+    assert table.select('channel', 'code').rows() == [
+        ('description', '111120'),
+        ('excluded', '111110'),
+        ('excluded', '222220'),
+    ]
+    # Rewriting what was read reproduces the bytes
+    assert write_window_summaries(table, tmp_path / 'again.csv') == sha256
+
+@pytest.mark.parametrize(
+    ('rows', 'refusal'),
+    [
+        pytest.param(
+            [summary_row(channel='title')],
+            "a channel outside \\('description', 'examples', 'excluded'\\): title",
+            id='channel',
+        ),
+        pytest.param(
+            [summary_row(), summary_row(summary='Farms grow corn.')],
+            "summarizes code 111110's description more than once",
+            id='repeated',
+        ),
+    ],
+)
+def test_the_reader_refuses_a_malformed_artifact(tmp_path, rows, refusal):
+    path = tmp_path / 'window_summaries.csv'
+    pl.DataFrame(rows, schema=SUMMARIES_SCHEMA).write_csv(path)
+
+    with pytest.raises(ValueError, match=refusal):
+        read_window_summaries(path)
+
+def test_an_over_window_text_is_replaced_by_its_summary(tmp_path, caplog):
+    descriptions = descriptions_frame()
+
+    with caplog.at_level(logging.INFO, logger='naics_embedder.panels.window_summaries'):
+        resolved = resolve(descriptions, pin_rows(tmp_path, [summary_row()]))
+
+    assert resolved.get_column('description').to_list() == [SUMMARY, FITS]
+    assert resolved.drop('description').equals(descriptions.drop('description'))
+    assert "{'description': 1, 'examples': 0, 'excluded': 0}" in caplog.text
+
+def test_an_examples_text_is_replaced_by_its_entries(tmp_path):
+    examples = 'Soybeans; Beans; Corn; Wheat; Rice; Oats; Rye; Barley'
+    row = summary_row(channel='examples', summary='Soybeans; Corn', source=examples)
+
+    descriptions = descriptions_frame(description='Farms grow corn.', examples=examples)
+
+    resolved = resolve(descriptions, pin_rows(tmp_path, [row]))
+
+    assert resolved.get_column('examples').to_list() == ['Soybeans; Corn', None]
+
+def test_texts_that_fit_pass_through_without_a_pin_or_an_artifact():
+    descriptions = descriptions_frame(description='Farms grow corn.')
+    unreadable = SummariesPin(path='/nonexistent/window_summaries.csv', sha256='f' * 64, window=99)
+
+    assert resolve(descriptions, None).equals(descriptions)
+    assert resolve(descriptions, unreadable).equals(descriptions)
+    # The seam's MiniLM pin names no file either
+    assert resolve_channel_texts(descriptions, WordTokenizer(), MINILM, WINDOW).equals(descriptions)
+
+def test_the_default_pin_is_the_backbones_entry_at_call_time(tmp_path, monkeypatch):
+    pin = pin_rows(tmp_path, [summary_row()])
+    monkeypatch.setitem(window_summaries.WINDOW_SUMMARIES, STUB, pin)
+
+    resolved = resolve_channel_texts(descriptions_frame(), WordTokenizer(), STUB, WINDOW)
+
+    assert resolved.get_column('description').to_list()[0] == SUMMARY
+
+def test_an_over_window_text_without_a_pin_is_refused():
+    with pytest.raises(ValueError, match="code 111110's description is over the 10-token window"):
+        resolve(descriptions_frame(), None)
+
+def test_a_pin_for_another_window_is_refused(tmp_path):
+    pin = pin_rows(tmp_path, [summary_row()], window=12)
+
+    with pytest.raises(ValueError, match='fit a 12-token window, but texts are tokenized at 10'):
+        resolve(descriptions_frame(), pin)
+
+def test_a_missing_artifact_is_refused_by_its_absolute_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    pin = SummariesPin(path='conf/window_summaries.csv', sha256='f' * 64, window=WINDOW)
+
+    with pytest.raises(ValueError, match='are missing') as refusal:
+        resolve(descriptions_frame(), pin)
+
+    assert str((tmp_path / 'conf/window_summaries.csv').resolve()) in str(refusal.value)
+
+def test_an_artifact_with_another_sha256_is_refused(tmp_path):
+    pin = pin_rows(tmp_path, [summary_row()])
+    Path(pin.path).write_text(Path(pin.path).read_text() + '\n')
+
+    with pytest.raises(ValueError, match='but the pin names'):
+        resolve(descriptions_frame(), pin)
+
+@pytest.mark.parametrize(
+    ('rows', 'refusal'),
+    [
+        pytest.param([], "code 111110's description is over the window", id='missing'),
+        pytest.param(
+            [summary_row(), summary_row(code='111120', source=FITS)],
+            "code 111120's description fits the window",
+            id='fits',
+        ),
+        pytest.param(
+            [summary_row(), summary_row(code='999999')],
+            "code 999999's description is not in the descriptions",
+            id='unknown-code',
+        ),
+        pytest.param(
+            [summary_row(), summary_row(channel='excluded')],
+            "code 111110's excluded is not in the descriptions",
+            id='absent-text',
+        ),
+    ],
+)
+def test_the_rows_must_be_exactly_the_over_window_texts(tmp_path, rows, refusal):
+    with pytest.raises(ValueError, match=refusal):
+        resolve(descriptions_frame(), pin_rows(tmp_path, rows))
+
+@pytest.mark.parametrize(
+    ('row', 'refusal'),
+    [
+        pytest.param(
+            summary_row(source='Farms grow corn.'),
+            "code 111110's description: the summary was built from another source text",
+            id='source',
+        ),
+        pytest.param(
+            summary_row(window=12),
+            "code 111110's description: the summary fits a 12-token window, not 10",
+            id='window',
+        ),
+    ],
+)
+def test_each_row_must_match_its_source_and_window(tmp_path, row, refusal):
+    with pytest.raises(ValueError, match=refusal):
+        resolve(descriptions_frame(), pin_rows(tmp_path, [row]))
+
+def test_every_row_is_checked_against_its_source_before_any_is_checked_as_an_extract(tmp_path):
+    examples = 'Soybeans; Beans; Corn; Wheat; Rice; Oats; Rye; Barley'
+    rows = [
+        # Reordered, so not an extract (step 6), and sorted first
+        summary_row(summary='Farms sell grain. Farms grow corn.'),
+        # Built from another text (step 5)
+        summary_row(channel='examples', summary='Soybeans; Corn', source='Soybeans; Corn'),
+    ]
+
+    with pytest.raises(ValueError, match="code 111110's examples: the summary was built from"):
+        resolve(descriptions_frame(examples=examples), pin_rows(tmp_path, rows))
+
+@pytest.mark.parametrize(
+    'summary',
+    [
+        pytest.param('Farms sell grain. Farms grow corn.', id='reordered'),
+        pytest.param('Farms grow corn. Farms grow corn.', id='repeated'),
+        pytest.param('Farms grow maize. Farms sell grain.', id='edited'),
+    ],
+)
+def test_a_summary_that_is_not_an_extract_is_refused(tmp_path, summary):
+    pin = pin_rows(tmp_path, [summary_row(summary=summary)])
+
+    with pytest.raises(ValueError, match="code 111110's description: the summary is not an"):
+        resolve(descriptions_frame(), pin)
+
+def test_reordered_examples_entries_are_refused(tmp_path):
+    examples = 'Soybeans; Beans; Corn; Wheat; Rice; Oats; Rye; Barley'
+    row = summary_row(channel='examples', summary='Corn; Soybeans', source=examples)
+
+    descriptions = descriptions_frame(description='Farms grow corn.', examples=examples)
+
+    with pytest.raises(ValueError, match="code 111110's examples: the summary is not an extract"):
+        resolve(descriptions, pin_rows(tmp_path, [row]))
+
+def test_a_summary_over_the_window_is_refused(tmp_path):
+    # The whole text is an extract of itself, and still over the window
+    with pytest.raises(ValueError, match="code 111110's description does not fit the 10-token"):
+        resolve(descriptions_frame(), pin_rows(tmp_path, [summary_row(summary=LONG)]))
