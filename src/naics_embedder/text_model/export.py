@@ -272,6 +272,8 @@ def export_code_table(
             'sha256': sha256_file(descriptions_path)
         },
         'summaries': summaries_identity(token_config.tokenizer_name),
+        # The tokenizer the codes were read with, which a read's queries must share
+        'tokenizer': token_config.tokenizer_name,
         'codes': table.height,
         'dimension': tangent.shape[1],
         'coordinates': COORDINATES,

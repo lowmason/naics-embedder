@@ -210,6 +210,7 @@ def test_the_provenance_names_the_table_and_the_checkpoint(
     # The seam's dummy pin for MiniLM (tests/conftest.py)
     assert provenance['summaries'] == summaries_identity(MINILM)
     assert provenance['summaries'] is not None
+    assert provenance['tokenizer'] == MINILM
     assert (provenance['codes'], provenance['dimension']) == (5, ARM_DIMENSION)
     assert provenance['table_sha256'] == sha256_file(exported_table)
     assert provenance['matrix_fingerprint'] == table_fingerprint(pl.read_parquet(exported_table))

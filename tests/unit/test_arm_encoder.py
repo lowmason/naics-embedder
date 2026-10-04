@@ -236,6 +236,43 @@ def test_a_table_exported_at_another_window_is_refused_before_any_model_loads(
     # The key the read's window comes from (code_token_config), so the remedy points at it
     assert 'data_loader.streaming.max_length' in str(refusal.value)
 
+@pytest.mark.parametrize('missing', ['summaries', 'tokenizer'])
+def test_a_table_exported_before_stage_6b_is_refused_before_any_model_loads(
+    no_model_load, missing, exported_table, shared_checkpoint, validated_bundle,
+    five_code_token_config
+):
+    path = provenance_path(exported_table)
+    provenance = json.loads(path.read_text())
+    del provenance[missing]
+    path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match=f'before Stage 6b: its provenance records no {missing};'):
+        ArmEncoder.from_files(
+            shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
+
+@pytest.mark.parametrize(
+    ('entry', 'value', 'refusal'),
+    [
+        ('tokenizer', 'other/tokenizer', 'exported with the tokenizer other/tokenizer'),
+        ('summaries', None, 'exported under the summaries None'),
+        ('summaries', 'f' * 64, f"exported under the summaries {'f' * 64}"),
+    ],
+)
+def test_a_table_read_under_another_tokenizer_or_summaries_is_refused_before_any_model_loads(
+    no_model_load, entry, value, refusal, exported_table, shared_checkpoint, validated_bundle,
+    five_code_token_config
+):
+    path = provenance_path(exported_table)
+    provenance = json.loads(path.read_text())
+    provenance[entry] = value
+    path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match=refusal):
+        ArmEncoder.from_files(
+            shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
+
 def test_a_checkpoint_trained_on_truncated_text_is_refused_on_read(
     truncated_checkpoint, exported_table, validated_bundle, five_code_token_config
 ):
