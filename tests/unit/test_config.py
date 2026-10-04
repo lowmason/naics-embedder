@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from naics_embedder.utils.config import (
     CheckpointLoadMode,
     Config,
+    DataLoaderConfig,
     DecisionConfig,
     DirConfig,
     DistancesConfig,
@@ -498,6 +499,23 @@ class TestSamplingConfig:
             )
 
 @pytest.mark.unit
+class TestDataLoaderConfig:
+    '''The data loader's pre-sampled epoch count, which the datamodule builds its rows from.'''
+
+    def test_n_epochs_defaults_to_100_and_the_shipped_config_keeps_it(self, valid_config_dict):
+        assert DataLoaderConfig().n_epochs == 100
+        assert valid_config_dict['data_loader']['n_epochs'] == 100
+
+    def test_n_epochs_must_be_positive(self):
+        with pytest.raises(ValidationError) as excinfo:
+            DataLoaderConfig(n_epochs=0)
+
+        assert _error_locs_and_types(excinfo) == [(('n_epochs', ), 'greater_than')]
+
+    def test_n_epochs_can_be_overridden(self):
+        assert Config().override({'data_loader.n_epochs': 1}).data_loader.n_epochs == 1
+
+@pytest.mark.unit
 class TestSupervisionBuildConfig:
     '''The supervision bundle build configuration.'''
 
@@ -654,6 +672,33 @@ def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
     assert cfg.loss.structural_preference == StructuralPreferenceConfig()
     assert cfg.loss.rank_order_weight is None
     assert cfg.data_loader.streaming.phase1_exclusion_weight is None
+
+def test_the_model_fuses_by_masked_mean_at_dimension_16(valid_config_dict):
+    cfg = Config.model_validate(valid_config_dict)
+
+    assert (cfg.model.fusion, cfg.model.dimension) == ('masked_mean', 16)
+
+@pytest.mark.parametrize(
+    ('key', 'value'),
+    [
+        ('model.fusion', 'attention'),
+        ('model.fusion', 'moe'),
+        ('model.dimension', 8),
+        ('model.dimension', 32),
+    ],
+)
+def test_every_fusion_and_dimension_in_its_set_is_accepted(key, value):
+    cfg = Config().override({key: value})
+
+    assert getattr(cfg.model, key.split('.')[1]) == value
+
+@pytest.mark.parametrize(('key', 'value'), [('model.fusion', 'concat'), ('model.dimension', 12)])
+def test_a_fusion_or_dimension_outside_its_set_is_refused(key, value):
+    with pytest.raises(ValidationError) as excinfo:
+        Config().override({key: value})
+
+    # A Literal refusal: before the keys are declared, the same override fails as extra_forbidden
+    assert _error_locs_and_types(excinfo) == [(('model', key.split('.')[1]), 'literal_error')]
 
 def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
     valid_config_dict['supervision'] = {

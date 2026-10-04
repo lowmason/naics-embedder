@@ -850,6 +850,14 @@ class DataLoaderConfig(BaseModel):
     batch_size: int = Field(default=32, gt=0, le=512, description='Training batch size')
     num_workers: int = Field(default=4, ge=0, le=32, description='Number of data loading workers')
     val_split: float = Field(default=0.05, gt=0, lt=1, description='Validation split fraction')
+    n_epochs: int = Field(
+        default=100,
+        gt=0,
+        description=(
+            'Sampling epochs pre-built for the training and validation rows; one training epoch '
+            'reads them all'
+        ),
+    )
 
     @field_validator('batch_size')
     @classmethod
@@ -901,9 +909,17 @@ class ModelConfig(BaseModel):
     base_model_name: str = Field(
         default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace base model name'
     )
+    fusion: Literal['masked_mean', 'attention', 'moe'] = Field(
+        default='masked_mean',
+        description='Channel fusion: masked_mean (the default), attention, or moe (an ablation)',
+    )
+    dimension: Literal[8, 16, 32] = Field(
+        default=16, description='Embedding dimension: the one Linear(hidden -> d) before the head'
+    )
     lora: LoRAConfig = Field(default_factory=LoRAConfig, description='LoRA configuration')
     moe: MoEConfig = Field(
-        default_factory=MoEConfig, description='Mixture of Experts configuration'
+        default_factory=MoEConfig,
+        description='Mixture of Experts configuration, read only under fusion moe',
     )
     eval_sample_size: int = Field(
         default=500, gt=0, le=2125, description='Number of codes to sample for evaluation'

@@ -132,8 +132,8 @@ the backbone's trained window are summarized, not truncated (Req 9's input windo
 their own before Stage 7. Truncation falls hardest on the top levels: 16 of the 20 sector
 descriptions and 59 of the 96 subsector ones overflow the 128-token window. The stage is inserted
 as 6b, not renumbered, so Stage 6's stamp and every reference to Stages 7–12 stand. Stage 6's spec
-(`specs/shared-encoder-and-projection.md`, Rollout note) records the measurements and the three
-constraints the entry carries.
+(`specs/completed/shared-encoder-and-projection.md`, Rollout note) records the measurements and
+the three constraints the entry carries.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -542,7 +542,7 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       Stage 5: COMPLETE (2026-09-26) — implemented by plan 7
       (specs/plans/completed/7-supervision-target-and-text.md). Next: resume the roadmap.
 
-- [ ] Stage 6: Shared encoder and low-dimensional projection
+- [x] Stage 6: Shared encoder and low-dimensional projection
       Objective: Replace the four-copy LoRA encoder and mixture-of-experts fusion with one
       shared encoder behind field markers, masked fusion, one affine map to a configurable
       dimension, and a query path.
@@ -585,6 +585,23 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       its validation split; Stage 2's scorer returns live validation-split numbers under the
       harness's curvature.
       ROUTING: brainstorming
+      Rollout note: the switch happens at merge. Main then trains and loads only the shared
+      encoder. A four-copy checkpoint has no encoder record and cannot exact-resume, load
+      weights-only, export or be read; nothing migrates it (D2). The tokenization cache rebuilds
+      once, as `channels-v3`: each present text is marked by its field, and `summaries` stays
+      null until Stage 6b. Router mining, the load-balancing term and their logs run only under
+      `model.fusion: moe`. Until Stage 7, the interim head caps the tangent at norm 2, and
+      `train`'s checkpoint monitor reads the in-sample validation loss, so an arm's reads take
+      `last.ckpt` (D6).
+      Realized: one MiniLM backbone (revision 1110a243) with one LoRA adapter reads five fields,
+      each marker two tokens. The default arm (masked mean, d = 16, c = 1) trained one local
+      epoch (`data_loader.n_epochs=1`) on MPS in about 30 minutes. Its export holds 2,125 codes,
+      0.2038 of them at the cap. On the validation splits, the regressor panel's level-6
+      `embedding` comparator reads R² 0.2591 (seen) and 0.2009 (held-out), beside `text_only`'s
+      0.2975 and 0.2248. The outcome panel reads top-1 0.1249 and MRR 0.2301 over 4,042 queries.
+      These numbers are a floor for Stage 7 (`specs/findings/shared-encoder-first-reading.md`).
+      Stage 6: COMPLETE (2026-10-03) — implemented by plan 8
+      (specs/plans/completed/8-shared-encoder-and-projection.md). Next: resume the roadmap.
 
 - [ ] Stage 6b: Window-fitting summaries
       Objective: Replace the tail truncation of channel texts beyond the backbone's trained
@@ -598,11 +615,13 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       Consumes: Bundle 301cce28's descriptions (sha256 `fe8c54e3…`), unchanged, since summaries
       written into them would change the description fingerprint the bundle records. The
       overflow at the 128-token window under MiniLM's tokenizer, special tokens included,
-      measured on 2026-10-03 (`specs/shared-encoder-and-projection.md`, Rollout note):
+      measured on 2026-10-03 (`specs/completed/shared-encoder-and-projection.md`, Rollout note):
       description 153 of 2,111 texts (sectors 16 of 20, median 246 tokens, maximum 1,131;
       subsectors 59 of 96), examples 105 of 1,075 (19 % of its tokens), excluded 464 of 1,117
       (26 %). Stage 6's tokenization cache, whose sidecar carries a `summaries` entry that stays
-      null until this stage, and its field markers, about two tokens of each window. Stage 2's
+      null until this stage (format `channels-v3`; a cache built under other summaries is
+      rebuilt), and its field markers (`text_model/fields.py`), two tokens of each window under
+      MiniLM's tokenizer (the field's name and `:`). Stage 2's
       leakage matcher (`panels/leakage.py`) and frozen role table: an abstractive summary can
       contain a held-out query, and a fix rewrites the summary, never the table.
       Produces: A frozen, committed summaries artifact with provenance, keyed by code, channel,
@@ -630,7 +649,13 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       "Selection hygiene" (validation half); D2, D5, D6, D8, D10.
       Gap closed: Req 11; Req 10; Req 13; Req 8 (b, training side of c); Req 4 (monitors);
       Req 5 (reference configuration and δ).
-      Consumes: Stage 6's encoder and query path; Stage 6b's summaries, which the reference
+      Consumes: Stage 6's encoder and query path (`SharedEncoder` in
+      `text_model/shared_encoder.py`; `ArmEncoder.from_files` and `read_outcome_validation` in
+      `text_model/arm_encoder.py`; `tools export-table` and `tools outcome-panel`), which supply
+      `SeedArtifacts`: the checkpoint, the exported table, the `ArmEncoder` and its `distance`.
+      Also Stage 6's interim head (`HyperbolicHead`, `text_model/hyperbolic.py`), whose cap at
+      norm 2 this stage replaces, and legacy containment, which export and reads refuse and the
+      HGCN feeder still serves. Stage 6b's summaries, which the reference
       configuration and its text-only table read; Stage 5's D*, redirection table and unary
       flags (the table's `activity` phrases with their referencing `code`; its five withheld rows
       carry none); Stage 2's query splits, scorer and selection log (the log's path is
@@ -682,7 +707,12 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       "Geometry × dimension"; D8; D9.
       Gap closed: Req 12 (geometry arms and the decision).
       Consumes: Stage 7's reference configuration and δ; Stage 4's tooling and seed-sweep
-      driver; Stage 6's configurable dimension; Stage 2's scorer, whose registered distances are
+      driver; Stage 6's configurable dimension, and its head's `distance` attribute, which
+      `ArmEncoder.distance` reads (`HyperbolicHead.distance` is `lorentz`; export and reads
+      refuse c ≠ 1, spec R8). Only that name follows the head: `ArmEncoder` maps queries and
+      codes through the hyperbolic exp map at the origin whatever the head
+      (`text_model/arm_encoder.py`), so the Euclidean and spherical arms need their own maps
+      there. Stage 2's scorer, whose registered distances are
       `euclidean`, `cosine` and `lorentz` at curvature −1 (`panels/decoding.py`).
       Produces: Geometry as a configuration factor with per-arm distance, decoding and export
       (the radial term only in the hyperbolic arm); guards on the two tie-order keys Stage 4
@@ -706,7 +736,10 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       arm's backbone).
       Gap closed: Req 14 (backbone half); Req 9 (channel-presence ablation, window); Req 7 (IC
       ablation).
-      Consumes: Stage 8's selected cell; Stage 6's fusion options; Stage 6b's summaries, keyed by
+      Consumes: Stage 8's selected cell; Stage 6's fusion options (`model.fusion`: `masked_mean`,
+      `attention`, `moe`) and its one backbone loader (`load_base_model`,
+      `text_model/shared_encoder.py`), whose LoRA adapter (`all-linear`) also wraps the pooler's
+      dense layer, which mean pooling never reads; Stage 6b's summaries, keyed by
       target window, so a candidate with another window needs its own or none; Stage 4's
       tooling.
       Produces: A decision record per factor; the selected text stage (arm A for Stage 10); the
@@ -729,7 +762,9 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       "Deliverable"; D3; D8.
       Gap closed: Req 15; Req 16 (composition and deliverable); Req 4 (graph-stage rows).
       Consumes: Stage 9's selected text stage; Stage 4's tooling and seed-sweep driver; Stage
-      6's export command; Stage 5's bundle as the graph stage's structural input. Under D* its
+      6's export command, and its HGCN feeder (`generate_embeddings_from_checkpoint`), which
+      writes d + 1 `hyp_e*` columns through the shared encoder; Stage 5's bundle as the graph
+      stage's structural input. Under D* its
       curriculum thresholds bind (phase-1 negatives at D* ≤ 7, phase-2 at D* ≤ 9), and arm D runs
       with them, since only Stage 11 removes them.
       Produces: Arm B (matched-compute continuation of the text stage); arm C (parameter-free

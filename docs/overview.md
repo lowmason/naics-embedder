@@ -8,8 +8,8 @@
 
 1. [Overview](#1-overview)
 2. [System Architecture Overview](#2-system-architecture-overview)
-3. [Multi-Channel Text Encoding](#3-multi-channel-text-encoding)
-4. [Mixture-of-Experts Fusion](#4-mixture-of-experts-fusion)
+3. [Shared Text Encoding](#3-shared-text-encoding)
+4. [Fusion and Projection](#4-fusion-and-projection)
 5. [Hyperbolic Geometry and Lorentz Model](#5-hyperbolic-geometry-and-lorentz-model)
 6. [Contrastive Learning Framework](#6-contrastive-learning-framework)
 7. [Sampling Strategies](#7-sampling-strategies)
@@ -32,7 +32,11 @@ Unlike standard classification approaches that treat categories as equidistant e
 
 **1. Hyperbolic Geometry (Lorentz Model):** Euclidean space is geometrically incompatible with tree structures—tree nodes grow exponentially with depth while Euclidean volume grows only polynomially. Hyperbolic space, with its exponential volume growth, provides a natural, low-distortion embedding environment for hierarchies. The Lorentz model is chosen over the Poincaré ball for its superior numerical stability.
 
-**2. Mixture-of-Experts Fusion:** Each NAICS code has four text channels (title, description, examples, excluded) with heterogeneous informativeness. MoE with Top-2 gating enables learning multiple specialized fusion strategies, allowing different experts to handle different types of codes.
+**2. One Shared Encoder:** Each NAICS code has four text channels (title, description, examples,
+excluded) with heterogeneous informativeness. One LoRA-adapted backbone reads them all, each
+marked with its field, and reads queries through the same layers, so codes and queries share one
+space. A masked mean fuses the present channels; attention pooling and a Mixture-of-Experts are
+options, the MoE an ablation only.
 
 **3. Curriculum-Based Training:** A three-phase Structure-Aware Dynamic Curriculum (SADC) progressively introduces complexity: structural initialization → geometric refinement → false negative mitigation.
 
@@ -50,34 +54,32 @@ The system consists of four sequential stages, each designed to preserve or enha
 
 | Stage | Component | Output |
 |-------|-----------|--------|
-| 1 | Multi-Channel Text Encoding (4 LoRA-adapted transformers) | E_title, E_desc, E_examples, E_excluded (4 × embedding_dim) |
-| 2 | Mixture-of-Experts Fusion (Top-2 gating, 4 experts) | E_fused (embedding_dim) |
-| 3 | Hyperbolic Projection (Lorentz exponential map) | E_hyp (embedding_dim + 1) |
+| 1 | Shared Text Encoding (one LoRA-adapted backbone, marked fields) | One vector per present channel (384) |
+| 2 | Fusion (masked mean by default) and one Linear(384 → d) | Tangent vector v (d, in {8, 16, 32}) |
+| 3 | Hyperbolic Head (norm cap, Lorentz exponential map, c = 1) | E_hyp (d + 1) |
 | 4 | Contrastive Learning (DCL + auxiliary losses) | Trained embeddings on Lorentz hyperboloid |
 
 ### Data Flow Diagram
 
 ```
-NAICS Code (4 text channels)
+NAICS Code (4 text channels) or a query
         ↓
-[Multi-Channel Encoder]
-    ├─→ Title Encoder (LoRA) → E_title
-    ├─→ Description Encoder (LoRA) → E_desc
-    ├─→ Examples Encoder (LoRA) → E_examples
-    └─→ Excluded Encoder (LoRA) → E_excluded
+[Field markers] → 'title: …', 'description: …', 'excluded: …', 'examples: …', 'query: …'
         ↓
-[Concatenate] → (embedding_dim × 4)
+[Shared Encoder (one LoRA backbone)] → one vector per present channel (384)
         ↓
-[MoE Fusion] → E_fused (embedding_dim)
+[Fusion: masked mean | attention | MoE ablation] → fused vector (384)
         ↓
-[Hyperbolic Projection] → E_hyp (embedding_dim + 1)
+[Linear(384 → d)] → tangent vector v (d)
+        ↓
+[Hyperbolic Head: cap at norm 2, exp map at the origin] → E_hyp (d + 1)
         ↓
 [Lorentz Hyperboloid] → Final Embedding
 ```
 
 ---
 
-## 3. Multi-Channel Text Encoding
+## 3. Shared Text Encoding
 
 Each NAICS code is characterized by four distinct text fields, each providing complementary information about the industry classification:
 
@@ -90,11 +92,14 @@ Each NAICS code is characterized by four distinct text fields, each providing co
 
 ### LoRA Adaptation
 
-Each channel uses a separate LoRA-adapted transformer encoder based on sentence-transformers. LoRA (Low-Rank Adaptation) reduces trainable parameters while maintaining expressiveness:
+One LoRA-adapted transformer, based on sentence-transformers, encodes every field. Each present
+text is marked with its field (`'title: Software Publishers'`), so the backbone can tell the
+fields apart, and an absent text never enters it. LoRA (Low-Rank Adaptation) reduces trainable
+parameters while maintaining expressiveness:
 
 | Parameter | Default Value | Description |
 |-----------|---------------|-------------|
-| base_model | all-mpnet-base-v2 | Pre-trained sentence transformer |
+| base_model | all-MiniLM-L6-v2 | Pre-trained sentence transformer (revision 1110a243) |
 | lora_r | 8 | LoRA rank (lower = fewer parameters) |
 | lora_alpha | 16 | LoRA scaling factor |
 | lora_dropout | 0.1 | Dropout rate for regularization |
@@ -104,42 +109,37 @@ Gradient checkpointing is enabled by default to reduce memory usage during backp
 
 ---
 
-## 4. Mixture-of-Experts Fusion
+## 4. Fusion and Projection
 
-The relative importance of text channels varies across NAICS codes. For some codes, the title and description suffice; for others, the examples are most illustrative; for nuanced codes, the excluded field is critical for disambiguation. A static fusion strategy cannot adapt to this heterogeneity.
+The relative importance of text channels varies across NAICS codes, and some codes lack a channel
+altogether. Fusion turns the present channels' vectors into one, and `model.fusion` chooses how:
 
-### Why MoE Over Alternatives
+| Option | Parameters | Function |
+|--------|------------|----------|
+| `masked_mean` (default) | None | Mean over the present channels |
+| `attention` | One learned query vector | Softmax-weighted mean over the present channels; starts as the masked mean |
+| `moe` (ablation only) | Gating network and experts | The masked mean, routed through top-2 experts (`text_model/moe.py`) |
 
-Three fusion strategies were evaluated: learned weighted average (static), gated attention (continuous dynamic control), and Mixture-of-Experts (discrete dynamic selection). MoE provides the most powerful paradigm because it offers coarse-grained selection between multiple specialized processing paths, not just dynamic weighting.
+Every option masks absent channels itself, so perturbing an absent channel's input leaves the
+output unchanged (Req 9). The masked mean is also the D9 text-only comparator's pooling, so an
+arm and its comparator differ only by training, the projection and the field markers.
 
-The MoE framework allows the model to effectively perform a learned architectural search, discovering experts optimized for different input types. One expert might specialize in ambiguity resolution (up-weighting the excluded channel), while another becomes a general classification expert focused on title and description.
+Exactly one `Linear(384 → d)` then maps the fused vector to the arm's dimension, d in {8, 16, 32}
+(`model.dimension`, default 16). Its output is the tangent vector the hyperbolic head maps onto
+the hyperboloid (Section 5).
 
-### Architecture
+### The Mixture-of-Experts Ablation
 
-| Component | Configuration | Function |
-|-----------|---------------|----------|
-| Input | embedding_dim × 4 | Concatenated channel embeddings |
-| Gating Network | Linear(input → num_experts) | Computes expert selection scores |
-| Top-K Selection | k = 2 | Selects 2 most relevant experts |
-| Expert Networks | 4 × 2-layer MLP | Linear→ReLU→Dropout→Linear |
-| Hidden Dim | 1024 | Expert network hidden dimension |
-| Output Projection | Linear(input → embedding_dim) | Projects back to embedding space |
+Under `moe`, a gating network routes the fused vector to the top 2 of 4 expert MLPs (hidden size
+1024). Two mechanisms exist only for this option (spec R10, R11):
 
-### Load Balancing Loss
+- **Load balancing.** An auxiliary loss, `L_aux = α · N · Σ(f_i · P_i)`, keeps expert use even.
+  N is the number of experts, α = 0.01, f_i the share of inputs routed to expert i and P_i its
+  mean gate probability. Under distributed training the statistics are synchronized across
+  workers before the loss (Section 12).
+- **Router-guided mining** (Section 7), which needs the gate outputs.
 
-Without correction, gating networks favor a small subset of "winning" experts, causing mode collapse. An auxiliary load balancing loss ensures even utilization:
-
-```
-L_aux = α · N · Σ(f_i · P_i)
-```
-
-Where N is the number of experts, α = 0.01 (default coefficient), f_i is the fraction of tokens routed to expert i, and P_i is the average gating probability for expert i.
-
-### Global-Batch vs. Micro-Batch Statistics
-
-A critical implementation detail: the auxiliary loss must be calculated on **global-batch** statistics, not micro-batch. Micro-batch balancing forces the router to balance within each sequence, hindering domain specialization. Global-batch balancing allows the router to send all "manufacturing" codes to Expert 1 and all "healthcare" codes to Expert 2, as long as total utilization remains balanced across the entire diverse batch.
-
-This requires synchronizing expert utilization counts (f_i) and router probabilities (P_i) across all distributed workers via AllReduce before computing the loss.
+Under the other options the model has no gates, so neither runs and neither is logged.
 
 ---
 
@@ -184,9 +184,14 @@ x₀ = cosh(||v|| / √c)
 x_rest = (sinh(||v|| / √c) · v) / ||v||
 ```
 
-### Hyperbolic Projection Implementation
+### The Hyperbolic Head
 
-The fused Euclidean embedding is projected onto the hyperboloid via a linear projection followed by the exponential map at the origin. The projection adds the time coordinate dimension (embedding_dim → embedding_dim + 1) and ensures points satisfy the Lorentz constraint through numerically stable clamping.
+The head (`HyperbolicHead`, `text_model/hyperbolic.py`) has no parameters, so the one linear map
+of Section 4 is the only affine map between the encoder and the point. It caps the tangent
+vector's norm at 2, then applies the exponential map at the origin, which adds the time
+coordinate (d → d + 1). It returns both the capped tangent, which the export writes (Req 2's
+form), and the point. The curvature is c = 1; export and reads refuse a checkpoint trained at any
+other (spec R8).
 
 ### Hyperbolic Utilities (utils/hyperbolic.py)
 
@@ -295,7 +300,11 @@ This adapts to the model's current state, targeting exact boundaries where the m
 
 ### Router-Guided Sampling
 
-Router-guided sampling selects negatives that maximize confusion in the MoE gating network. If the router sends anchor and negative to the same experts with similar confidence, they are "computationally indistinguishable." Using these as contrastive negatives forces experts to become more discriminative and combats mode collapse.
+Under `model.fusion: moe` only (spec R10), router-guided sampling selects negatives that maximize
+confusion in the MoE gating network. If the router sends anchor and negative to the same experts
+with similar confidence, they are "computationally indistinguishable." Using these as contrastive
+negatives forces experts to become more discriminative and combats mode collapse. Under any other
+fusion the model has no gates, and the geometric miner takes every mining slot.
 
 ### Global Batch Sampling
 
@@ -327,9 +336,12 @@ Inverse distance weighting (α ≈ 1.5) biases selection toward "Cousins" (d=4).
 
 **Strategy:** Annealed Hard Negative Mining in Lorentz Space
 
-As the embedding space matures, transition from symbolic tree priors to learned semantics. Sample a candidate pool, then select top-k negatives minimizing Lorentzian distance. Router-guided sampling is also enabled to force expert specialization.
+As the embedding space matures, transition from symbolic tree priors to learned semantics. Sample
+a candidate pool, then select top-k negatives minimizing Lorentzian distance. Under `moe`,
+router-guided sampling is also enabled to force expert specialization.
 
 **Curriculum Flags:** `enable_hard_negative_mining=True`, `enable_router_guided_sampling=True`
+(the router flag is read only under `moe`)
 
 ### Phase 3: False Negative Mitigation (70-100%)
 
@@ -346,7 +358,7 @@ Periodically freeze the encoder and perform Hyperbolic K-Means clustering. Assig
 | Phase | Epochs | Key Features | Goal |
 |-------|--------|--------------|------|
 | 1 | 0-30% | Tree-distance weighting, sibling masking | Build skeleton |
-| 2 | 30-70% | Hard negative mining, router-guided sampling | Refine shape |
+| 2 | 30-70% | Hard negative mining; router-guided sampling under `moe` | Refine shape |
 | 3 | 70-100% | Clustering-based FNE | Clean artifacts |
 
 ---
@@ -425,7 +437,7 @@ Where r is the hyperbolic radius (time coordinate x₀). Default weight: 0.01.
 
 ### MoE Load Balancing Loss
 
-As described in Section 4, ensures even expert utilization:
+Under `model.fusion: moe` only, as described in Section 4, ensures even expert utilization:
 
 ```
 L_aux = α · N · Σ(f_i · P_i)
@@ -439,13 +451,16 @@ Default coefficient α = 0.01.
 L_total = L_DCL + L_hierarchy + L_structural_preference + L_radius + L_load_balancing
 ```
 
+`L_load_balancing` is present under `model.fusion: moe` only (spec R11); under any other fusion it
+is neither computed nor logged.
+
 | Loss Component | Default Weight | Purpose |
 |----------------|----------------|---------|
 | DCL Contrastive | 1.0 (implicit) | Primary representation learning |
 | Hierarchy Preservation | 0.325 | Tree structure alignment |
 | Structural Preference | 0.35 | Structural ordering of selected candidates |
 | Radius Regularization | 0.01 | Embedding stability |
-| Load Balancing | 0.01 | Expert utilization balance |
+| Load Balancing | 0.01 | Expert utilization balance (`moe` only) |
 
 ---
 
@@ -543,7 +558,9 @@ The system supports distributed training with automatic global batch sampling. K
 
 **Gradient Flow:** The implementation preserves gradients through all_gather operations. During backpropagation, gradients are scattered back to each rank, ensuring all GPUs receive gradient updates for their embeddings.
 
-**Global-Batch Load Balancing:** Expert utilization statistics are synchronized across all workers via AllReduce before computing the auxiliary loss, enabling true domain specialization.
+**Global-Batch Load Balancing:** Under `moe`, expert utilization statistics are synchronized
+across all workers via AllReduce before computing the auxiliary loss, enabling true domain
+specialization.
 
 ### Memory Management
 
@@ -561,8 +578,12 @@ The system monitors and logs VRAM usage for distributed operations:
 ## 13. Sampling Architecture
 
 - **Data Layer (Streaming Dataset):** Builds candidate pools that never admit an explicit exclusion of the anchor (Req 8(c)), applies Phase 1 inverse tree-distance weighting over D*, and masks siblings.
-- **Model Layer (NAICSContrastiveModel):** Performs Phase 2+ mining (embedding-based, router-guided), norm-adaptive margins, and Phase 3 false-negative masking. Curriculum flags control which mechanisms are active.
-- **Interface:** Data layer supplies pre-weighted negatives and metadata; model reshapes/reorders negatives for harder sampling and logs tree-distance and router confusion metrics.
+- **Model Layer (NAICSContrastiveModel):** Performs Phase 2+ mining (embedding-based; router-guided
+  under `moe` only, spec R10), norm-adaptive margins, and Phase 3 false-negative masking.
+  Curriculum flags control which mechanisms are active.
+- **Interface:** Data layer supplies pre-weighted negatives and metadata; model reshapes/reorders
+  negatives for harder sampling and logs tree-distance metrics, plus router confusion metrics under
+  `moe` only (spec R10).
 - See `docs/sampling_architecture.md` for full details.
 
 ---
@@ -574,9 +595,12 @@ The system monitors and logs VRAM usage for distributed operations:
 | Module | Location | Purpose |
 |--------|----------|---------|
 | `NAICSContrastiveModel` | `text_model/naics_model.py` | Main Lightning module (mixin-based) |
-| `MultiChannelEncoder` | `text_model/encoder.py` | 4-channel text encoding |
-| `MixtureOfExperts` | `text_model/moe.py` | MoE fusion layer |
-| `HyperbolicProjection` | `text_model/hyperbolic.py` | Lorentz projection |
+| `SharedEncoder` | `text_model/shared_encoder.py` | One backbone, fusion, one Linear(384 → d), the head |
+| `build_fusion` | `text_model/fusion.py` | Masked mean, attention pooling, the MoE ablation |
+| `MixtureOfExperts` | `text_model/moe.py` | The experts of the `moe` ablation |
+| `HyperbolicHead` | `text_model/hyperbolic.py` | Norm cap and Lorentz exponential map |
+| `ArmEncoder` | `text_model/arm_encoder.py` | `QueryCodeEncoder` from a checkpoint and its table |
+| `export_code_table` | `text_model/export.py` | The 2,125-code table in Req 2's form |
 | `LorentzDistance` | `text_model/hyperbolic.py` | Geodesic distance |
 | `LorentzOps` | `text_model/hyperbolic.py` | Static utility class for Lorentz operations |
 | `HyperbolicInfoNCELoss` | `text_model/loss.py` | DCL implementation |
@@ -585,7 +609,7 @@ The system monitors and logs VRAM usage for distributed operations:
 | `CurriculumScheduler` | `text_model/curriculum.py` | SADC phase management |
 | `HyperbolicKMeans` | `text_model/hyperbolic_clustering.py` | Lorentz clustering |
 | `LorentzianHardNegativeMiner` | `text_model/hard_negative_mining.py` | HNM in hyperbolic space |
-| `RouterGuidedNegativeMiner` | `text_model/hard_negative_mining.py` | Router-confusion mining |
+| `RouterGuidedNegativeMiner` | `text_model/hard_negative_mining.py` | Router-confusion mining (`moe` only) |
 | `NormAdaptiveMargin` | `text_model/hard_negative_mining.py` | Sech-based adaptive margins |
 
 ### Model Mixins
@@ -596,7 +620,7 @@ The `NAICSContrastiveModel` is decomposed into functional mixins for maintainabi
 |-------|----------|---------|
 | `DistributedMixin` | `text_model/mixins/distributed.py` | Global batch sampling for multi-GPU |
 | `LossMixin` | `text_model/mixins/loss.py` | Loss computation (hierarchy, structural preference, radius) |
-| `CurriculumMixin` | `text_model/mixins/curriculum.py` | Checked negative selection (hard negative and router-guided proposals) |
+| `CurriculumMixin` | `text_model/mixins/curriculum.py` | Checked negative selection (hard negative proposals; router-guided ones under `moe`) |
 | `LoggingMixin` | `text_model/mixins/logging.py` | Training and validation metric logging |
 | `ValidationMixin` | `text_model/mixins/validation.py` | Validation step and evaluation logic |
 | `OptimizerMixin` | `text_model/mixins/optimizer.py` | Optimizer and scheduler configuration |
@@ -640,12 +664,13 @@ Compilation can be disabled via environment variable: `NAICS_DISABLE_COMPILE=1`
 
 | Category | Parameter | Default |
 |----------|-----------|---------|
-| Model | base_model_name | all-mpnet-base-v2 |
+| Model | base_model_name | all-MiniLM-L6-v2 |
+| Model | fusion / dimension | masked_mean / 16 |
 | LoRA | r / alpha / dropout | 8 / 16 / 0.1 |
-| MoE | num_experts / top_k / hidden_dim | 4 / 2 / 1024 |
+| MoE (`moe` only) | num_experts / top_k / hidden_dim | 4 / 2 / 1024 |
 | Loss | temperature / curvature | 0.07 / 1.0 |
 | Loss Weights | hierarchy / structural_preference / radius_reg / level_radius | 0.45 / 0.35 / 0.15 / 0.05 |
-| MoE | load_balancing_coef | 0.01 |
+| MoE (`moe` only) | load_balancing_coef | 0.01 |
 | Training | learning_rate / weight_decay | 2e-4 / 0.01 |
 | Training | warmup_steps | 500 |
 | Curriculum | phase1_end / phase2_end | 0.3 / 0.7 |
@@ -659,6 +684,12 @@ uv run naics-embedder data all
 
 # Training
 uv run naics-embedder train
+
+# Export a checkpoint's code table, then read the outcome panel's validation split
+uv run naics-embedder tools export-table --checkpoint checkpoints/sadc_default/last.ckpt \
+  --output arm_table.parquet
+uv run naics-embedder tools outcome-panel --checkpoint checkpoints/sadc_default/last.ckpt \
+  --table arm_table.parquet --purpose 'why this read happens'
 ```
 
 ---

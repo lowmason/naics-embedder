@@ -23,6 +23,7 @@ from naics_embedder.text_model.dataloader.datamodule import (
     NAICSMapDataset,
     TrainDatasetEpochCallback,
     collate_fn,
+    stack_text_inputs,
 )
 from tests.fixtures.epoch_datasets import EpochRecordingDataset
 
@@ -44,6 +45,7 @@ def make_embedding(channels):
             ch: {
                 'input_ids': torch.randint(0, 1000, (seq_len, )),
                 'attention_mask': torch.ones(seq_len, dtype=torch.long),
+                'present': True,
             }
             for ch in channels
         }
@@ -83,6 +85,7 @@ def make_repaired_batch_item():
             channel: {
                 'input_ids': torch.tensor([value, value + 1], dtype=torch.long),
                 'attention_mask': torch.ones(2, dtype=torch.long),
+                'present': True,
             }
             for channel in channels
         }
@@ -144,6 +147,49 @@ def test_collate_does_not_mutate_input_and_uses_invalid_rows(make_repaired_batch
     assert batch['candidate_source_slot'].tolist()[0] == [0, -1, -1]
     assert batch['candidate_inputs']['title']['attention_mask'][1].count_nonzero() == 0
     assert batch['candidate_inputs']['title']['attention_mask'][2].count_nonzero() == 0
+
+def test_stack_text_inputs_carries_a_boolean_present_per_channel(make_embedding):
+    absent = make_embedding()
+    absent['excluded']['present'] = False
+
+    batch = stack_text_inputs([make_embedding(), absent])
+
+    assert batch['excluded']['present'].dtype == torch.bool
+    assert batch['excluded']['present'].tolist() == [True, False]
+    assert batch['title']['present'].tolist() == [True, True]
+
+def test_stack_text_inputs_refuses_a_row_without_present(make_embedding):
+    row = make_embedding()
+    del row['title']['present']
+
+    with pytest.raises(ValueError, match='no present flag'):
+        stack_text_inputs([row])
+
+def test_stack_text_inputs_builds_a_query_batch():
+    row = {
+        'query': {
+            'input_ids': torch.tensor([101, 102]),
+            'attention_mask': torch.ones(2, dtype=torch.long),
+            'present': True,
+        }
+    }
+
+    batch = stack_text_inputs([row], fields=('query', ))
+
+    assert list(batch) == ['query']
+    assert batch['query']['present'].tolist() == [True]
+
+def test_repaired_collate_marks_invalid_rows_absent(make_repaired_batch_item):
+    batch = collate_fn(
+        [make_repaired_batch_item([101]),
+         make_repaired_batch_item([201, 202, 203])],
+        supervision_mode='repaired',
+    )
+
+    for channel in ('title', 'description', 'excluded', 'examples'):
+        assert batch['candidate_inputs'][channel]['present'].tolist() == [
+            True, False, False, True, True, True
+        ]
 
 def test_collate_carries_every_candidate_field_in_one_order(make_repaired_batch_item):
     item = make_repaired_batch_item(candidate_code_ids=[103, 101, 102])
@@ -241,6 +287,7 @@ def hierarchy_token_cache(hierarchy_descriptions):
                 channel: {
                     'input_ids': torch.full((4, ), int(index), dtype=torch.long),
                     'attention_mask': torch.ones(4, dtype=torch.long),
+                    'present': True,
                 }
                 for channel in channels
             },
@@ -678,6 +725,7 @@ def mock_token_cache():
             ch: {
                 'input_ids': torch.randint(0, 1000, (128, )),
                 'attention_mask': torch.ones(128, dtype=torch.long),
+                'present': True,
             }
             for ch in channels
         }
@@ -870,6 +918,7 @@ def test_collate_different_sequence_lengths(make_embedding):
             ch: {
                 'input_ids': torch.randint(0, 1000, (seq_len, )),
                 'attention_mask': torch.ones(seq_len, dtype=torch.long),
+                'present': True,
             }
             for ch in channels
         }
@@ -1152,6 +1201,7 @@ class TestDataLoaderCreation:
                 ch: {
                     'input_ids': torch.randint(0, 1000, (128, )),
                     'attention_mask': torch.ones(128, dtype=torch.long),
+                    'present': True,
                 }
                 for ch in channels
             }

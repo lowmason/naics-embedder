@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
 
+import click
 import polars as pl
 import pytest
+import torch
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
@@ -12,6 +14,7 @@ from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.metrics.diagnostics import DiagnosticsReport
 from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.utils.config import Config
 from tests.fixtures.decision import spec, synthetic_arm
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
@@ -677,3 +680,180 @@ def test_regressor_panel_checks_the_arm_and_the_output_before_opening(
         assert result.exit_code == 1
         assert 'Regressor panel failed' in result.output
     assert log.records() == []
+
+# -------------------------------------------------------------------------------------------------
+# Shared-encoder arms: export and the outcome read
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def default_config(monkeypatch):
+    '''--config resolves to the default Config, whatever file it names.'''
+
+    monkeypatch.setattr(Config, 'from_yaml', classmethod(lambda cls, path: Config()))
+
+@pytest.mark.unit
+def test_export_table_exports_under_the_configured_bundle_and_cache(
+    monkeypatch, runner, tmp_path, default_config
+):
+    bundle = object()
+    calls = []
+
+    def fake_gate(cfg):
+        calls.append(('gate', cfg.data_loader.streaming.max_length))
+        return bundle
+
+    def fake_export(checkpoint, chosen, token_config, output, *, device):
+        calls.append(('export', checkpoint, chosen, token_config.max_length, output, device))
+        return output
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', fake_gate)
+    monkeypatch.setattr(tools_cli, 'export_code_table', fake_export)
+    monkeypatch.setattr(tools_cli, 'pick_device', lambda *_args: 'cpu')
+    output = tmp_path / 'arm.parquet'
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'export-table', '--checkpoint', 'arm.ckpt', '--output',
+            str(output), 'data_loader.streaming.max_length=64'
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [('gate', 64), ('export', 'arm.ckpt', bundle, 64, output, 'cpu')]
+    # Rich folds long paths at the terminal's width (80 columns on CI), wherever it falls
+    assert 'arm_provenance.json' in result.output.replace('\n', '')
+
+@pytest.mark.unit
+def test_export_table_refuses_legacy_containment(monkeypatch, runner, tmp_path, default_config):
+
+    def never(*_args, **_kwargs):
+        raise AssertionError('legacy containment reached the export')
+
+    monkeypatch.setattr(tools_cli, 'export_code_table', never)
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'export-table', '--checkpoint', 'arm.ckpt', '--output',
+            str(tmp_path / 'arm.parquet'), 'supervision.mode=legacy_containment'
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert 'legacy containment has none' in ' '.join(result.output.split())
+
+@pytest.mark.unit
+def test_export_table_refuses_an_override_without_a_value(runner, tmp_path, default_config):
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'export-table', '--checkpoint', 'arm.ckpt', '--output',
+            str(tmp_path / 'arm.parquet'), 'model.dimension'
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert 'key=value' in ' '.join(result.output.split())
+
+class FakeArm:
+    '''Stands in for ArmEncoder: points on the hyperboloid's spatial axes, and the logged names.'''
+
+    distance = 'lorentz'
+    table_fingerprint = 't' * 64
+    checkpoint_sha256 = 'c' * 64
+
+    def encode_queries(self, texts):
+        return torch.zeros(len(texts), 3, dtype=torch.float64)
+
+    def encode_codes(self, codes):
+        return torch.tensor(
+            [[0.0, float(row), 0.0] for row in range(len(codes))], dtype=torch.float64
+        )
+
+@pytest.mark.unit
+def test_outcome_panel_reads_validation_and_logs_the_table(
+    monkeypatch, runner, tmp_path, default_config, validated_bundle
+):
+    calls = []
+
+    def fake_from_files(checkpoint, table, bundle, token_config, *, device):
+        calls.append((checkpoint, table, bundle, token_config.max_length, device))
+        return FakeArm()
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle)
+    monkeypatch.setattr(tools_cli.ArmEncoder, 'from_files', staticmethod(fake_from_files))
+    monkeypatch.setattr(tools_cli, 'pick_device', lambda *_args: 'cpu')
+    log = tmp_path / 'selection_log.jsonl'
+    output = tmp_path / 'read.json'
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'outcome-panel', '--checkpoint', 'arm.ckpt', '--table', 'arm.parquet', '--purpose',
+            'first live read', '--log',
+            str(log), '--output',
+            str(output)
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [('arm.ckpt', 'arm.parquet', validated_bundle, 128, 'cpu')]
+    [record] = SelectionLog(log).records()
+    assert (record['split'], record['purpose']) == ('validation', 'first live read')
+    assert record['detail'] == {
+        'encoder': 'FakeArm',
+        'distance': 'lorentz',
+        'table': 't' * 64,
+        'checkpoint': 'c' * 64,
+    }
+    payload = json.loads(output.read_text())
+    assert (payload['table'], payload['checkpoint']) == ('t' * 64, 'c' * 64)
+    assert payload['summary']['n_queries'] == 1
+
+@pytest.mark.unit
+def test_outcome_panel_needs_a_purpose(runner, tmp_path, default_config):
+    log = tmp_path / 'selection_log.jsonl'
+
+    result = runner.invoke(
+        tools_cli.app,
+        ['outcome-panel', '--checkpoint', 'arm.ckpt', '--table', 'arm.parquet', '--log',
+         str(log)],
+    )
+
+    # Click's usage error: the option is required
+    assert result.exit_code == 2
+    assert "Missing option '--purpose'" in click.unstyle(result.output).replace('\n', '')
+    assert SelectionLog(log).records() == []
+
+@pytest.mark.unit
+def test_outcome_panel_refuses_a_text_only_table_without_a_traceback(
+    monkeypatch, runner, tmp_path, default_config, validated_bundle, text_only_comparator_table
+):
+    '''The comparator's table sits beside an arm's in data/plan8/: a read can name it by mistake.'''
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle)
+    monkeypatch.setattr(tools_cli, 'pick_device', lambda *_args: 'cpu')
+    checkpoint = tmp_path / 'arm.ckpt'
+    checkpoint.write_bytes(b'never read: the table is refused first')
+    log = tmp_path / 'selection_log.jsonl'
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'outcome-panel', '--checkpoint',
+            str(checkpoint), '--table',
+            str(text_only_comparator_table), '--purpose', 'a mixed-up read', '--log',
+            str(log)
+        ],
+    )
+
+    # The runner exits 1 for an uncaught KeyError too, and keeps its traceback out of the output:
+    # a refusal the command handles is the one that raises SystemExit
+    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == 1
+    # Rich folds at spaces, so rejoin the words; the phrases asserted hold no path
+    message = ' '.join(click.unstyle(result.output).split())
+    assert 'Outcome panel failed' in message
+    assert 'is not an exported arm table: its provenance names no checkpoint' in message
+    assert SelectionLog(log).records() == []

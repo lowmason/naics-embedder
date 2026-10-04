@@ -3,7 +3,7 @@
 # -------------------------------------------------------------------------------------------------
 '''
 Main NAICS Contrastive Learning Model combining:
-- MultiChannelEncoder with LoRA fine-tuning and MoE
+- SharedEncoder: one LoRA-tuned backbone, masked fusion and one affine map to dimension d
 - Hyperbolic embeddings using the Lorentz model
 - Curriculum learning with structure-aware negative sampling
 - Multi-level supervision and false negative detection
@@ -36,6 +36,7 @@ from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
     containment_contract,
     contract_for_bundle,
+    shared_encoder_architecture,
     validate_checkpoint_contract,
 )
 from naics_embedder.supervision.index import SupervisionIndex
@@ -43,7 +44,7 @@ from naics_embedder.supervision.mode import SupervisionModePolicy
 from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.supervision.selection import NegativeSelectionCoordinator
 from naics_embedder.text_model.curriculum import CurriculumScheduler
-from naics_embedder.text_model.encoder import MultiChannelEncoder
+from naics_embedder.text_model.fusion import FUSIONS
 from naics_embedder.text_model.hard_negative_mining import (
     LorentzianHardNegativeMiner,
     NormAdaptiveMargin,
@@ -63,6 +64,7 @@ from naics_embedder.text_model.mixins import (
     ValidationMixin,
     gather_embeddings_global,
 )
+from naics_embedder.text_model.shared_encoder import DIMENSIONS, SharedEncoder
 
 # Re-export distributed utilities for backward compatibility
 __all__ = [
@@ -95,7 +97,8 @@ class NAICSContrastiveModel(
     NAICS Contrastive Learning Model for learning hierarchical NAICS code embeddings.
 
     This model combines:
-    - MultiChannelEncoder: LoRA-tuned transformer with Mixture of Experts
+    - SharedEncoder: one LoRA-tuned backbone over field-marked channels, masked fusion, and one
+      affine map to the embedding dimension
     - Hyperbolic embeddings: Lorentz model for hierarchical representation
     - Curriculum learning: Structure-aware dynamic curriculum (SADC)
     - Multiple loss functions: Contrastive, hierarchy preservation, structural preference
@@ -117,9 +120,13 @@ class NAICSContrastiveModel(
         lora_r: LoRA rank
         lora_alpha: LoRA alpha scaling factor
         lora_dropout: LoRA dropout rate
-        num_experts: Number of MoE experts
-        top_k: Number of experts to select per token
-        moe_hidden_dim: Hidden dimension of MoE layers
+        fusion: Channel fusion: ``masked_mean`` (default), ``attention`` or ``moe``. Router
+            mining and the load-balancing term run only under ``moe`` (R10, R11)
+        dimension: Embedding dimension, one of 8, 16 or 32: the width of the one
+            ``Linear(hidden → d)`` before the geometry head
+        num_experts: Number of MoE experts (``moe`` only)
+        top_k: Number of experts to select per code (``moe`` only)
+        moe_hidden_dim: Hidden dimension of MoE layers (``moe`` only)
         temperature: Temperature for InfoNCE loss
         curvature: Hyperbolic space curvature
         hierarchy_weight: Weight for hierarchy preservation loss
@@ -129,7 +136,7 @@ class NAICSContrastiveModel(
         weight_decay: AdamW weight decay
         warmup_steps: Number of warmup steps
         use_warmup_cosine: Use warmup + cosine decay scheduler
-        load_balancing_coef: MoE load balancing coefficient
+        load_balancing_coef: MoE load balancing coefficient (the term exists only under ``moe``)
         fn_curriculum_start_epoch: Epoch to start false negative curriculum
         fn_cluster_every_n_epochs: Clustering frequency for pseudo-labels
         fn_num_clusters: Number of clusters for pseudo-labeling
@@ -170,6 +177,8 @@ class NAICSContrastiveModel(
         lora_r: int = 8,
         lora_alpha: int = 16,
         lora_dropout: float = 0.1,
+        fusion: str = 'masked_mean',
+        dimension: int = 16,
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
@@ -213,6 +222,13 @@ class NAICSContrastiveModel(
     ):
         super().__init__()
 
+        if fusion not in FUSIONS:
+            raise ValueError(f'unknown fusion {fusion!r}; expected one of {list(FUSIONS)}')
+        if dimension not in DIMENSIONS:
+            raise ValueError(f'unknown dimension {dimension!r}; expected one of {list(DIMENSIONS)}')
+        # The one switch for the MoE-only machinery: router mining and load balancing (R10, R11)
+        self.fusion = fusion
+
         self.supervision_policy = SupervisionModePolicy.from_name(supervision_mode)
         if self.supervision_policy.require_bundle:
             if supervision_manifest_path is None:
@@ -231,6 +247,11 @@ class NAICSContrastiveModel(
         # identifiers, and a restored model re-validates its bundle from the manifest path.
         self.save_hyperparameters(ignore=['checkpoint_contract', 'supervision_bundle'])
         self.supervision_mode = supervision_mode
+        # The architecture this model's weights belong to; a checkpoint of any other is refused
+        # (spec 4.4, roadmap D2)
+        encoder_record = shared_encoder_architecture(
+            fusion=fusion, dimension=dimension, backbone=base_model_name
+        )
 
         self.supervision_index: Optional[SupervisionIndex] = None
         self.selection_coordinator: Optional[NegativeSelectionCoordinator] = None
@@ -260,7 +281,9 @@ class NAICSContrastiveModel(
                         f'{supervision_contract_version}'
                     )
                 bundle = supervision_bundle
-            runtime_contract = contract_for_bundle(bundle.manifest, supervision_mode)
+            runtime_contract = contract_for_bundle(
+                bundle.manifest, supervision_mode, encoder=encoder_record
+            )
             self.relation_id_to_name = {
                 relation_id: name
                 for name, relation_id in bundle.manifest.structural_relation_ids.items()
@@ -269,7 +292,7 @@ class NAICSContrastiveModel(
             self.selection_coordinator = NegativeSelectionCoordinator()
             self.naics_hierarchy = load_naics_hierarchy(str(bundle.artifact_path('relations')))
         else:
-            runtime_contract = containment_contract()
+            runtime_contract = containment_contract(encoder=encoder_record)
             logger.warning(
                 'LEGACY CONTAINMENT (%s): not contract-compliant Stage-3 training. Structural '
                 'ranking and hierarchy losses, negative reordering, and pseudo-related handling '
@@ -294,12 +317,14 @@ class NAICSContrastiveModel(
         self.checkpoint_contract = runtime_contract
         self.supervision_bundle_id = runtime_contract.bundle_id
 
-        # Initialize encoder
-        self.encoder = MultiChannelEncoder(
+        # Initialize the shared encoder: one backbone, fusion, one affine map, the head
+        self.encoder = SharedEncoder(
             base_model_name=base_model_name,
             lora_r=lora_r,
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
+            fusion=fusion,
+            dimension=dimension,
             num_experts=num_experts,
             top_k=top_k,
             moe_hidden_dim=moe_hidden_dim,
@@ -308,7 +333,7 @@ class NAICSContrastiveModel(
 
         # Initialize loss function
         self.loss_fn = HyperbolicInfoNCELoss(
-            embedding_dim=self.encoder.embedding_dim,
+            embedding_dim=self.encoder.dimension,
             temperature=temperature,
             curvature=curvature,
         )
@@ -421,29 +446,31 @@ class NAICSContrastiveModel(
 
     def forward(self, channel_inputs: Dict[str, Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         '''
-        Forward pass through the encoder.
+        Forward pass through the shared encoder.
 
         Args:
-            channel_inputs: Dictionary of channel inputs with tokenized text
+            channel_inputs: Per field, tokenized text and a boolean ``present``, as
+                ``stack_text_inputs`` builds them: a code batch's four channels, or ``query``
 
         Returns:
             Dictionary containing:
-            - embedding: Hyperbolic embeddings (batch_size, embed_dim + 1)
-            - gate_probs: MoE gate probabilities (batch_size, num_experts)
-            - top_k_indices: Selected expert indices (batch_size, top_k)
+            - embedding: Lorentz points (batch_size, dimension + 1)
+            - tangent: Capped tangent vectors at the origin (batch_size, dimension)
+            - gate_probs, top_k_indices: The experts' gates, under ``moe`` fusion only
         '''
         return self.encoder(channel_inputs)
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-        '''Record the supervision contract this checkpoint was trained under.'''
+        '''Record the supervision contract and encoder architecture this checkpoint belongs to.'''
         checkpoint[CHECKPOINT_KEY] = self.checkpoint_contract.model_dump()
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         '''
-        Refuse to restore a checkpoint trained under any other supervision contract.
+        Refuse to restore a checkpoint of any other supervision contract or encoder architecture.
 
-        Runs for Lightning exact resume and ``load_from_checkpoint``; weights-only migration
-        never reaches this hook.
+        Runs for Lightning exact resume and ``load_from_checkpoint`` before the state dict loads,
+        so a four-copy checkpoint meets the D2 refusal, never a key mismatch. Weights-only
+        migration never reaches this hook; it checks the encoder record itself.
         '''
         validate_checkpoint_contract(checkpoint.get(CHECKPOINT_KEY), self.checkpoint_contract)
 
@@ -573,21 +600,24 @@ class NAICSContrastiveModel(
             batch_size,
         )
 
-        # MoE load balancing over anchors, positives, and valid candidate rows only
-        valid_candidates = batch['candidate_valid_mask'].reshape(-1)
-        valid_candidate_output = {
-            name: candidate_output[name][valid_candidates]
-            for name in ('gate_probs', 'top_k_indices') if name in candidate_output
-        }
-        gate_probs_list, topk_indices_list = self._collect_gate_outputs(
-            [anchor_output, positive_output, valid_candidate_output]
-        )
-        self._log_router_diversity(gate_probs_list, batch_size)
-        raw_load_balancing_loss = self._compute_load_balancing_loss(
-            gate_probs_list,
-            topk_indices_list,
-            batch_size,
-        )
+        # MoE load balancing over anchors, positives, and valid candidate rows only. Only the MoE
+        # fusion has experts, so only it computes, adds and logs the term (R11).
+        raw_load_balancing_loss = None
+        if self.fusion == 'moe':
+            valid_candidates = batch['candidate_valid_mask'].reshape(-1)
+            valid_candidate_output = {
+                name: candidate_output[name][valid_candidates]
+                for name in ('gate_probs', 'top_k_indices') if name in candidate_output
+            }
+            gate_probs_list, topk_indices_list = self._collect_gate_outputs(
+                [anchor_output, positive_output, valid_candidate_output]
+            )
+            self._log_router_diversity(gate_probs_list, batch_size)
+            raw_load_balancing_loss = self._compute_load_balancing_loss(
+                gate_probs_list,
+                topk_indices_list,
+                batch_size,
+            )
 
         # Combine losses
         total_loss, scaled_load_balancing_loss = self._combine_loss_terms(
@@ -642,14 +672,16 @@ class NAICSContrastiveModel(
             is_explicit_exclusion=explicit,
             pseudo_related_mask=None,
         )
-        gate_probs, topk_indices = self._collect_gate_outputs(
-            [anchor_output, positive_output, negative_output]
-        )
-        load_balancing = self._compute_load_balancing_loss(
-            gate_probs,
-            topk_indices,
-            batch_size,
-        )
+        load_balancing = None
+        if self.fusion == 'moe':
+            gate_probs, topk_indices = self._collect_gate_outputs(
+                [anchor_output, positive_output, negative_output]
+            )
+            load_balancing = self._compute_load_balancing_loss(
+                gate_probs,
+                topk_indices,
+                batch_size,
+            )
         radius = self._compute_radius_regularization(
             anchor_output['embedding'],
             positive_output['embedding'],

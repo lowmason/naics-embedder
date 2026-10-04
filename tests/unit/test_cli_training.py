@@ -6,11 +6,20 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli import app as cli_app
 from naics_embedder.cli.commands import training
-from naics_embedder.supervision.checkpoints import CheckpointContract, MigrationReport
+from naics_embedder.supervision.checkpoints import (
+    CheckpointContract,
+    MigrationReport,
+    shared_encoder_architecture,
+)
 from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
 from naics_embedder.utils.config import CheckpointLoadMode, Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
+
+# The record the default config builds
+CONFIGURED_ENCODER = shared_encoder_architecture(
+    fusion='masked_mean', dimension=16, backbone='sentence-transformers/all-MiniLM-L6-v2'
+)
 
 @pytest.fixture
 def cli_runner():
@@ -173,6 +182,15 @@ def test_the_train_banner_headlines_no_structural_statistic(cli_runner, training
     assert 'Structural statistics, for the record only' in output
 
 @pytest.mark.unit
+def test_the_train_banner_names_the_fusion_and_dimension(cli_runner, training_env):
+    result = cli_runner.invoke(cli_app, ['train', 'model.dimension=8'], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    output = result.output.replace('\n', '')
+    assert 'Fusion: masked_mean' in output
+    assert 'Dimension: 8' in output
+
+@pytest.mark.unit
 def test_cli_train_applies_overrides(cli_runner, training_env, monkeypatch):
     captured = {}
 
@@ -211,7 +229,18 @@ def test_training_checkpoint_resume_passes_ckpt(training_env):
         supervision_mode='repaired',
         bundle_id='bundle-a',
         codebook_fingerprint='a' * 64,
+        encoder=CONFIGURED_ENCODER,
     )
+
+@pytest.mark.unit
+def test_the_runtime_contract_records_the_configured_encoder(training_env):
+    training.train(skip_validation=True, overrides=['model.fusion=attention', 'model.dimension=8'])
+
+    model_kwargs = training_env.trainer.fit_calls[0]['model'].kwargs
+    assert model_kwargs['checkpoint_contract'].encoder == shared_encoder_architecture(
+        fusion='attention', dimension=8, backbone='sentence-transformers/all-MiniLM-L6-v2'
+    )
+    assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('attention', 8)
 
 @pytest.mark.unit
 def test_exact_resume_contract_mismatch_fails_before_training(training_env, monkeypatch):
@@ -237,8 +266,9 @@ def test_weights_only_never_passes_checkpoint_to_trainer(training_env, monkeypat
     )
     reports = []
 
-    def fake_load_weights_only(model, path):
+    def fake_load_weights_only(model, path, *, encoder):
         assert path == 'legacy.ckpt'
+        assert encoder == CONFIGURED_ENCODER
         report = MigrationReport(
             loaded=('encoder.weight', ),
             skipped=('loss_fn.buffer', ),
@@ -266,7 +296,7 @@ def test_weights_only_without_an_existing_checkpoint_is_fatal(training_env, monk
     monkeypatch.setattr(
         training,
         'load_weights_only',
-        lambda *_args: pytest.fail('nothing to migrate'),
+        lambda *_args, **_kwargs: pytest.fail('nothing to migrate'),
     )
 
     with pytest.raises(typer.Exit) as excinfo:
@@ -354,6 +384,7 @@ def test_repaired_model_and_datamodule_receive_bundle_supervision(training_env):
     assert model_kwargs['supervision_bundle'] is training_env.bundle
     assert model_kwargs['checkpoint_contract'].bundle_id == 'bundle-a'
     assert model_kwargs['structural_preference_weight'] == 0.35
+    assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('masked_mean', 16)
     assert 'selection_seed' not in model_kwargs
     for legacy_key in ('rank_order_weight', 'distance_matrix_path', 'relations_parquet_path'):
         assert legacy_key not in model_kwargs
@@ -386,3 +417,19 @@ def test_training_passes_curriculum_horizon_to_datamodule(training_env):
     # The model's CurriculumScheduler derives Phase 1 from trainer.max_epochs and this hparam
     assert datamodule.kwargs['max_epochs'] == training_env.trainer.kwargs['max_epochs']
     assert datamodule.kwargs['phase1_end'] == model.kwargs['curriculum_phase1_end']
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('overrides', 'expected'),
+    [(None, 100), (['data_loader.n_epochs=1'], 1)],
+    ids=['shipped', 'overridden'],
+)
+def test_training_passes_the_pre_sampled_epoch_count_to_datamodule(
+    training_env, overrides, expected
+):
+    '''data_loader.n_epochs reaches the datamodule, and a run without it keeps the shipped 100.'''
+    training.train(skip_validation=True, overrides=overrides)
+
+    datamodule = training_env.trainer.fit_calls[0]['datamodule']
+
+    assert datamodule.kwargs['n_epochs'] == expected

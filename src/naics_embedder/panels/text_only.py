@@ -6,9 +6,9 @@ dimension". The table holds one vector per code at the backbone's hidden size; t
 it to the arm's dimension when it scores the arm.
 
 - **Text.** The four channels the arm reads (``title``, ``description``, ``excluded``,
-  ``examples``) from the arm's own descriptions file.
+  ``examples``) from the arm's own descriptions file, without the arm's field markers (spec 4.2).
 - **Pooling.** Each channel is mean-pooled over its tokens under the attention mask, as the arm's
-  encoder pools (``text_model/encoder.py``). A code's vector is the mean over its present
+  encoder pools (``text_model/shared_encoder.py``). A code's vector is the mean over its present
   channels: an absent (null or blank) channel is masked out, never encoded as a placeholder.
 - **Frozen.** The backbone runs in evaluation mode under ``torch.no_grad``, on the CPU in
   float32, with no adapter.

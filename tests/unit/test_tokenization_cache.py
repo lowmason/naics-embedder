@@ -16,6 +16,7 @@ from unittest.mock import patch
 import polars as pl
 import pytest
 import torch
+from transformers import AutoTokenizer
 
 from naics_embedder.text_model.dataloader.tokenization_cache import (
     _acquire_lock,
@@ -772,3 +773,79 @@ def test_a_cache_in_the_placeholder_format_is_rebuilt(
     tokenization_cache(tokenization_config, **FINGERPRINTS)
 
     assert len(counted_builds) == 1
+
+# -------------------------------------------------------------------------------------------------
+# Format v3: field markers and the summaries entry
+# -------------------------------------------------------------------------------------------------
+
+def _padded(tokenizer, text: str) -> torch.Tensor:
+    return tokenizer(
+        text, padding='max_length', truncation=True, max_length=128, return_tensors='pt'
+    )['input_ids'][0]
+
+@pytest.mark.unit
+def test_present_channels_are_cached_with_their_markers(sample_descriptions_parquet):
+    tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+
+    cache = _build_tokenization_cache(
+        sample_descriptions_parquet, 'sentence-transformers/all-MiniLM-L6-v2', 128
+    )
+
+    assert torch.equal(
+        cache[0]['title']['input_ids'], _padded(tokenizer, 'title: Dog Food Manufacturing')
+    )
+    assert torch.equal(
+        cache[2]['description']['input_ids'],
+        _padded(tokenizer, 'description: Saw logs into lumber')
+    )
+    # An absent channel stays the unmarked empty string
+    assert cache[0]['excluded']['present'] is False
+    assert torch.equal(cache[0]['excluded']['input_ids'], _padded(tokenizer, ''))
+
+@pytest.mark.unit
+def test_the_sidecar_records_the_markers_and_null_summaries(tokenization_config, counted_builds):
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+
+    cache_path = Path(tokenization_config.output_path)
+    sidecar = json.loads(cache_path.with_name(cache_path.name + '.meta.json').read_text())
+    assert sidecar['cache_format'] == 'channels-v3'
+    assert sidecar['field_markers'] == {
+        'title': 'title: ',
+        'description': 'description: ',
+        'excluded': 'excluded: ',
+        'examples': 'examples: ',
+    }
+    assert sidecar['summaries'] is None
+
+@pytest.mark.unit
+def test_a_cache_in_the_unmarked_v2_format_is_rebuilt(
+    tokenization_config, sample_tokenization_cache, counted_builds
+):
+    cache_path = Path(tokenization_config.output_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(sample_tokenization_cache, cache_path)
+    # The sidecar a Stage 5 cache wrote: the same inputs, unmarked, with no summaries entry
+    earlier = {
+        **FINGERPRINTS,
+        'tokenizer_name': tokenization_config.tokenizer_name,
+        'max_length': tokenization_config.max_length,
+        'cache_format': 'channels-v2',
+    }
+    cache_path.with_name(cache_path.name + '.meta.json').write_text(json.dumps(earlier))
+
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+
+    assert len(counted_builds) == 1
+
+@pytest.mark.unit
+def test_a_cache_built_under_other_summaries_is_rebuilt(
+    tokenization_config, counted_builds, monkeypatch
+):
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+    monkeypatch.setattr(
+        'naics_embedder.text_model.dataloader.tokenization_cache.SUMMARIES', 'a' * 64
+    )
+
+    tokenization_cache(tokenization_config, **FINGERPRINTS)
+
+    assert len(counted_builds) == 2

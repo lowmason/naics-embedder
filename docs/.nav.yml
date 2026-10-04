@@ -23,7 +23,8 @@ nav:
                   - Tokenization: api/tokenization_cache.md
                   - Streaming DataSet: api/streaming_dataset.md
                   - DataLoader: api/datamodule.md
-              - Encoder: api/encoder.md
+              - Shared Encoder: api/encoder.md
+              - Export and Arm Encoder: api/export.md
               - Mixture of Experts: api/moe.md
               - Hyperbolic Operations: api/hyperbolic.md
               - Loss Functions:

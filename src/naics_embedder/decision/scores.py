@@ -109,7 +109,8 @@ def regressor_scores(predictions: pl.DataFrame, repeats: int) -> pl.DataFrame:
 
     Raises:
         ValueError: If a row is not a level-6 validation row of a regressor panel, or a row does not
-            have exactly ``repeats`` predictions under every comparator of its panel.
+            have exactly ``repeats`` predictions, one per repeat, under every comparator of its
+            panel.
     '''
 
     outside = predictions.filter(
@@ -127,16 +128,18 @@ def regressor_scores(predictions: pl.DataFrame, repeats: int) -> pl.DataFrame:
         predictions
         .with_columns(error=(pl.col('prediction') - pl.col('outcome'))**2)
         .group_by(keys)
-        .agg(n=pl.len(), value=pl.col('error').mean())
+        .agg(n=pl.len(), distinct=pl.col('repeat').n_unique(), value=pl.col('error').mean())
     )
     # yapf: enable
-    uneven = rows.filter(pl.col('n') != repeats)
+    # One prediction per repeat: a duplicated repeat beside a missing one has the right count
+    # but too few distinct repeats
+    uneven = rows.filter((pl.col('n') != repeats) | (pl.col('distinct') != repeats))
     if uneven.height:
         first = uneven.row(0, named=True)
         raise ValueError(
-            f'{uneven.height:,} rows do not have {repeats} predictions each, e.g. '
-            f'{first["panel"]} {first["comparator"]} {first["code"]}/{first["feature_year"]}: '
-            f'{first["n"]}'
+            f'{uneven.height:,} rows do not have {repeats} predictions each, one per repeat, '
+            f'e.g. {first["panel"]} {first["comparator"]} {first["code"]}/'
+            f'{first["feature_year"]}: {first["n"]} predictions over {first["distinct"]} repeats'
         )
     # A comparator entirely absent for a row forms no group above, so it would silently vanish
     # from the output rather than being caught as uneven; every row of a panel must appear under

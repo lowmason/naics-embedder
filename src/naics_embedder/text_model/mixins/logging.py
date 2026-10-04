@@ -271,7 +271,7 @@ class LoggingMixin:
         enable_hnm = self.current_curriculum_flags.get('enable_hard_negative_mining', False)
         if not enable_hnm:
             return
-        enable_router = self.current_curriculum_flags.get('enable_router_guided_sampling', False)
+        enable_router = self._router_mining_enabled()
         with torch.no_grad():
             distances = self.hard_negative_miner.lorentz_distance.batched_forward(
                 anchor_emb,
@@ -365,9 +365,7 @@ class LoggingMixin:
 
     def _log_router_diversity(self, gate_probs_list: List[torch.Tensor], batch_size: int) -> None:
         '''Log router diversity metrics for MoE.'''
-        if not gate_probs_list or not self.current_curriculum_flags.get(
-            'enable_router_guided_sampling', False
-        ):
+        if not gate_probs_list or not self._router_mining_enabled():
             return
 
         gate_probs_combined = torch.cat(gate_probs_list, dim=0)
@@ -385,7 +383,7 @@ class LoggingMixin:
     def _log_loss_breakdown(
         self,
         contrastive_loss: torch.Tensor,
-        scaled_load_balancing_loss: torch.Tensor,
+        scaled_load_balancing_loss: Optional[torch.Tensor],
         hierarchy_loss: torch.Tensor,
         structural_preference_loss: torch.Tensor,
         radius_reg_loss: torch.Tensor,
@@ -395,12 +393,14 @@ class LoggingMixin:
     ) -> None:
         '''Log breakdown of all loss components.'''
         self.log('train/contrastive_loss', contrastive_loss, prog_bar=True, batch_size=batch_size)
-        self.log(
-            'train/load_balancing_loss',
-            scaled_load_balancing_loss,
-            prog_bar=True,
-            batch_size=batch_size,
-        )
+        # Only the MoE fusion has a load-balancing term (R11)
+        if scaled_load_balancing_loss is not None:
+            self.log(
+                'train/load_balancing_loss',
+                scaled_load_balancing_loss,
+                prog_bar=True,
+                batch_size=batch_size,
+            )
         if hierarchy_loss.item() > 0:
             self.log('train/hierarchy_loss', hierarchy_loss, prog_bar=False, batch_size=batch_size)
         if structural_preference_loss.item() > 0:

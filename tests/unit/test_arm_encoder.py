@@ -1,0 +1,299 @@
+'''
+The arm encoder: queries through the checkpoint's model, codes from its exported table
+(spec 4.3).
+'''
+
+import json
+
+import polars as pl
+import pytest
+import torch
+
+from naics_embedder.panels.decoding import lorentz_distances
+from naics_embedder.panels.outcome import OutcomePanel
+from naics_embedder.panels.regressor import table_fingerprint
+from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.text_model.arm_encoder import (
+    ArmEncoder,
+    exp_map_origin,
+    read_outcome_validation,
+)
+from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
+from naics_embedder.text_model.export import encode_token_rows
+from naics_embedder.text_model.fields import QUERY, tokenize_field
+from naics_embedder.text_model.hyperbolic import HyperbolicHead
+from tests.fixtures.shared_encoder import (
+    ARM_DIMENSION,
+    FIVE_CODES,
+    TOKEN_WINDOW,
+    five_code_token_rows,
+    lightning_checkpoint,
+)
+
+pytestmark = pytest.mark.unit
+
+QUERIES = ['Edamame farming', 'Lignite mining']
+
+@pytest.fixture
+def arm(shared_checkpoint, exported_table, validated_bundle, five_code_token_config) -> ArmEncoder:
+    return ArmEncoder.from_files(
+        shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+    )
+
+@pytest.fixture
+def no_model_load(monkeypatch):
+    '''Fails the test if a read loads the model: every provenance check comes first.'''
+
+    def never(*_args, **_kwargs):
+        # AssertionError, so a test's pytest.raises(ValueError) cannot swallow an unwanted load
+        raise AssertionError('the model loaded before the provenance was refused')
+
+    monkeypatch.setattr('naics_embedder.text_model.arm_encoder.load_arm_model', never)
+
+def _table_tangent(table_path) -> torch.Tensor:
+    table = pl.read_parquet(table_path)
+    return torch.tensor(table.select(pl.exclude('code', 'index', 'level')).to_numpy())
+
+# -------------------------------------------------------------------------------------------------
+# The exp map at the origin
+# -------------------------------------------------------------------------------------------------
+
+def test_the_exp_map_lands_on_the_hyperboloid_as_the_heads_does():
+    tangent = torch.randn(6, ARM_DIMENSION) * 0.2
+    tangent[0] = 0.0
+    # Below the head's cap, so the head maps these tangents unchanged
+    assert (torch.linalg.vector_norm(tangent, dim=1) < 2.0).all()
+
+    points = exp_map_origin(tangent)
+
+    assert points.dtype == torch.float64
+    assert points.shape == (6, ARM_DIMENSION + 1)
+    lorentz_norm = -points[:, 0]**2 + (points[:, 1:]**2).sum(dim=1)
+    assert torch.allclose(lorentz_norm, torch.full((6, ), -1.0, dtype=torch.float64), atol=1e-12)
+    origin = torch.zeros(ARM_DIMENSION + 1, dtype=torch.float64)
+    origin[0] = 1.0
+    assert torch.equal(points[0], origin)
+    _, head_points = HyperbolicHead()(tangent)
+    assert torch.allclose(points, head_points.to(torch.float64), atol=1e-5)
+
+# -------------------------------------------------------------------------------------------------
+# Queries and codes
+# -------------------------------------------------------------------------------------------------
+
+def test_a_query_embeds_through_the_same_forward_as_a_code(arm):
+    '''Spec §6: encode_queries([T]) is the float64 exp map of the forward's {'query': [T]}.'''
+
+    tokens = tokenize_field(arm.tokenizer, QUERY, 'Edamame farming', TOKEN_WINDOW)
+    with torch.no_grad():
+        output = arm.model(stack_text_inputs([{QUERY: tokens}], fields=(QUERY, )))
+
+    assert torch.equal(arm.encode_queries(['Edamame farming']), exp_map_origin(output['tangent']))
+
+def test_codes_decode_from_the_table_in_the_order_asked(arm, exported_table):
+    tangent = _table_tangent(exported_table)
+
+    decoded = arm.encode_codes(['222222', '111111'])
+
+    assert torch.equal(decoded, exp_map_origin(tangent[[3, 0]]))
+
+def test_table_decoded_distances_match_the_live_forward(
+    arm, five_code_token_config, validated_bundle
+):
+    '''Spec §6: decoding from the table matches the live forward within float32 tolerance.'''
+
+    rows = five_code_token_rows(five_code_token_config, validated_bundle)
+    # The head's own float32 points, from the forward the export ran
+    live = encode_token_rows(arm.model, rows)['embedding']
+    queries = arm.encode_queries(QUERIES)
+
+    decoded = arm.encode_codes(list(FIVE_CODES))
+
+    assert torch.allclose(
+        lorentz_distances(queries, decoded), lorentz_distances(queries, live), atol=1e-4
+    )
+
+def test_an_unknown_code_is_refused(arm):
+    with pytest.raises(ValueError, match='has no row for'):
+        arm.encode_codes(['111111', '999999'])
+
+def test_the_distance_is_the_heads(arm):
+    assert arm.distance == arm.model.encoder.head.distance == 'lorentz'
+
+def test_the_logged_names_are_the_tables_and_the_checkpoints(
+    arm, exported_table, shared_checkpoint
+):
+    provenance = json.loads(provenance_path(exported_table).read_text())
+
+    assert arm.table_fingerprint == provenance['matrix_fingerprint']
+    # The name tools regressor-panel logs the same table by
+    assert arm.table_fingerprint == table_fingerprint(pl.read_parquet(exported_table))
+    assert arm.checkpoint_sha256 == sha256_file(shared_checkpoint)
+
+# -------------------------------------------------------------------------------------------------
+# Refusals
+# -------------------------------------------------------------------------------------------------
+
+def test_a_table_of_another_checkpoint_is_refused(
+    tmp_path, shared_model, exported_table, validated_bundle, five_code_token_config
+):
+    checkpoint = lightning_checkpoint(shared_model)
+    # The same weights in a file with other bytes, as another run's would be
+    checkpoint['note'] = 'another run'
+    other = tmp_path / 'other.ckpt'
+    torch.save(checkpoint, other)
+
+    with pytest.raises(ValueError, match='another checkpoint'):
+        ArmEncoder.from_files(other, exported_table, validated_bundle, five_code_token_config)
+
+def test_an_edited_table_is_refused(
+    exported_table, shared_checkpoint, validated_bundle, five_code_token_config
+):
+    pl.read_parquet(exported_table).with_columns(pl.col('e0') * 2).write_parquet(exported_table)
+
+    with pytest.raises(ValueError, match='not the table its provenance names'):
+        ArmEncoder.from_files(
+            shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
+
+def test_a_checkpoint_at_another_curvature_is_refused(
+    tmp_path, shared_model, exported_table, validated_bundle, five_code_token_config
+):
+    '''Spec §6: curvature other than 1 is refused (R8).'''
+
+    checkpoint = lightning_checkpoint(shared_model)
+    checkpoint['hyper_parameters']['curvature'] = 2.0
+    curved = tmp_path / 'curved.ckpt'
+    torch.save(checkpoint, curved)
+    # The provenance names the curved checkpoint, so its checks pass and R8's guard is what fires
+    path = provenance_path(exported_table)
+    provenance = json.loads(path.read_text())
+    provenance['checkpoint']['sha256'] = sha256_file(curved)
+    path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match='curvature 2'):
+        ArmEncoder.from_files(curved, exported_table, validated_bundle, five_code_token_config)
+
+def test_a_text_only_table_is_refused_before_any_model_loads(
+    no_model_load, shared_checkpoint, text_only_comparator_table, validated_bundle,
+    five_code_token_config
+):
+    '''Its provenance has a table hash and a window, like an export's, but names no checkpoint.'''
+
+    with pytest.raises(
+        ValueError, match='is not an exported arm table: its provenance names no checkpoint$'
+    ) as refusal:
+        ArmEncoder.from_files(
+            shared_checkpoint, text_only_comparator_table, validated_bundle, five_code_token_config
+        )
+
+    assert text_only_comparator_table.name in str(refusal.value)
+
+@pytest.mark.parametrize('missing', ['checkpoint', 'table_sha256', 'max_length'])
+def test_a_provenance_missing_an_entry_is_refused_before_any_model_loads(
+    no_model_load, missing, exported_table, shared_checkpoint, validated_bundle,
+    five_code_token_config
+):
+    path = provenance_path(exported_table)
+    provenance = json.loads(path.read_text())
+    del provenance[missing]
+    path.write_text(json.dumps(provenance))
+
+    with pytest.raises(
+        ValueError, match=f'is not an exported arm table: its provenance names no {missing}$'
+    ):
+        ArmEncoder.from_files(
+            shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
+
+def test_a_provenance_naming_no_checkpoint_hash_is_refused_before_any_model_loads(
+    no_model_load, exported_table, shared_checkpoint, validated_bundle, five_code_token_config
+):
+    path = provenance_path(exported_table)
+    provenance = json.loads(path.read_text())
+    del provenance['checkpoint']['sha256']
+    path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match=r'its provenance names no checkpoint\.sha256$'):
+        ArmEncoder.from_files(
+            shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
+
+def test_a_table_exported_at_another_window_is_refused_before_any_model_loads(
+    no_model_load, exported_table, shared_checkpoint, validated_bundle, five_code_token_config
+):
+    '''One preprocessing contract: queries take the window the table's codes were encoded at.'''
+
+    wider = five_code_token_config.model_copy(update={'max_length': 2 * TOKEN_WINDOW})
+
+    with pytest.raises(
+        ValueError,
+        match=f'exported at a {TOKEN_WINDOW}-token window.*tokenizes queries at {2 * TOKEN_WINDOW}',
+    ) as refusal:
+        ArmEncoder.from_files(shared_checkpoint, exported_table, validated_bundle, wider)
+
+    # The key the read's window comes from (code_token_config), so the remedy points at it
+    assert 'data_loader.streaming.max_length' in str(refusal.value)
+
+def test_queries_are_tokenized_at_the_tables_window(arm, exported_table):
+    provenance = json.loads(provenance_path(exported_table).read_text())
+
+    assert arm.max_length == provenance['max_length'] == TOKEN_WINDOW
+
+def test_a_missing_checkpoint_is_a_file_not_found_before_any_model_loads(
+    no_model_load, tmp_path, exported_table, validated_bundle, five_code_token_config
+):
+    with pytest.raises(FileNotFoundError):
+        ArmEncoder.from_files(
+            tmp_path / 'missing.ckpt', exported_table, validated_bundle, five_code_token_config
+        )
+
+# -------------------------------------------------------------------------------------------------
+# Devices
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason='needs an MPS device')
+def test_queries_and_codes_on_mps_come_back_float64_on_the_cpu(
+    arm, shared_checkpoint, exported_table, validated_bundle, five_code_token_config
+):
+    '''Spec §6: on MPS, encode_queries and encode_codes return float64 CPU tensors.'''
+
+    on_mps = ArmEncoder.from_files(
+        shared_checkpoint, exported_table, validated_bundle, five_code_token_config, device='mps'
+    )
+
+    queries = on_mps.encode_queries(QUERIES)
+    codes = on_mps.encode_codes(list(FIVE_CODES))
+
+    for vectors in (queries, codes):
+        assert vectors.dtype == torch.float64
+        assert vectors.device.type == 'cpu'
+    assert torch.allclose(queries, arm.encode_queries(QUERIES), atol=1e-4)
+    assert torch.equal(codes, arm.encode_codes(list(FIVE_CODES)))
+
+# -------------------------------------------------------------------------------------------------
+# The outcome read
+# -------------------------------------------------------------------------------------------------
+
+def test_a_validation_read_logs_the_table_it_decodes_against(
+    tmp_path, arm, exported_table, validated_bundle
+):
+    '''Spec §6: a read on a fixture panel logs table equal to the table's matrix_fingerprint.'''
+
+    log_path = tmp_path / 'selection_log.jsonl'
+    panel = OutcomePanel.from_bundle(validated_bundle, log_path)
+
+    result = read_outcome_validation(arm, panel, 'plan 8 fixture read')
+
+    # The five-code bundle's one validation entry: 'Edamame farming', for 111111
+    [record] = SelectionLog(log_path).records()
+    assert (record['event'], record['split'], record['n_queries']) == ('read', 'validation', 1)
+    assert record['purpose'] == 'plan 8 fixture read'
+    assert record['detail'] == {
+        'encoder': 'ArmEncoder',
+        'distance': 'lorentz',
+        'table': table_fingerprint(pl.read_parquet(exported_table)),
+        'checkpoint': arm.checkpoint_sha256,
+    }
+    assert (result.summary['n_queries'], result.summary['n_candidates']) == (1, 5)

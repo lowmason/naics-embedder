@@ -200,7 +200,7 @@
       is checked; (4) stores nothing until the provenance checks out, and `decide` refuses a
       record whose text-only fields differ from its stored provenance, naming them; (5) also
       refuses a symlink inside the store that leads out of it.
-- [ ] Review Minor, for Stage 6: (1) `regressor_scores` (src/naics_embedder/decision/scores.py)
+- [x] Review Minor, for Stage 6: (1) `regressor_scores` (src/naics_embedder/decision/scores.py)
       counts each row's predictions with `pl.len()`, not its distinct `repeat` values, so a
       duplicated repeat beside a missing one passes; the panel's own `_predict` is the only
       producer today. (2) `coordinate_matrix`'s refusal of Lorentz points
@@ -209,6 +209,8 @@
       the export form and next touches both. Fix: count `pl.col('repeat').n_unique()`; word the
       refusal around the export form alone. Size: quick-fix. Done when: Stage 6's export lands
       with both changed.
+      → done in plan 8 (Task 1: `regressor_scores` checks each row's distinct repeats as well as
+      its count, and `coordinate_matrix`'s refusal names the export form alone).
 - [ ] Review Minor, for Stage 10: the diagnostics report's interfaces
       (src/naics_embedder/metrics/diagnostics.py). (1) A codebook mismatch gives counts only,
       which confuses when the counts match, and `tools diagnostics` does not cast the
@@ -289,3 +291,93 @@
       specs/findings/supervision-target-and-text.md records. Deferred from plan 7's final review
       because the field changes bundle output. Size: quick-fix. Revisit if: a later stage
       rebuilds the bundle or bumps its contract.
+
+## 8-shared-encoder-and-projection — 2026-10-03
+- [ ] Stage 7: one training epoch reads every pre-sampled epoch.
+      `NAICSDataModule` pre-samples `data_loader.n_epochs` epochs (default 100,
+      src/naics_embedder/utils/config.py:853), and `RepairedMapDataset`
+      (src/naics_embedder/text_model/dataloader/datamodule.py:656) serves all of them in one
+      Lightning epoch, so `training.trainer.max_epochs=1` runs about 19,883 batches on bundle
+      301cce28. Plan 8's Exit set `data_loader.n_epochs=1`, for 199 batches
+      (specs/findings/shared-encoder-first-reading.md, section 1). Deferred by the user's ruling
+      at plan 8's gate, as its final review recommended: Stage 7 owns the Lambda workflow and its
+      training schedule. Size: design. Done when: Stage 7's spec fixes what one training epoch
+      reads, and its Lambda config sets `data_loader.n_epochs` to match.
+- [ ] Review Minor: the export and the arm encoder's reads have untested branches.
+      In src/naics_embedder/text_model/export.py: the `batch_size < 1` refusal (:95), an absent
+      curvature reading as 1 (:131), the claim that a refused table is never written (the
+      curvature test in tests/unit/test_export.py asserts nothing about it), the exact provenance
+      key set (`coordinates` and `generated_at` go unchecked), and a cap check that cannot tell a
+      capped table from an uncapped one. In src/naics_embedder/cli/commands/tools.py:
+      `export-table`'s ValidationError and OSError branches (:903), and `outcome-panel`'s
+      bare-override and legacy refusals, its failure on a bad `--output` before the read is
+      logged, and its payload's `fingerprint` key (:958-984). `exp_map_origin`'s `.cpu()`
+      (src/naics_embedder/text_model/arm_encoder.py:57) never meets an MPS tensor in the tests:
+      removing it fails nothing. Deferred from plan 8's final review as coverage gaps, not
+      defects. Size: plan. Done when: each branch has a test, or a recorded ruling that it needs
+      none.
+- [ ] Review Minor: the export and the outcome read handle a few failures untidily.
+      src/naics_embedder/text_model/export.py writes the table (:246) before it hashes the
+      checkpoint and descriptions and writes the provenance (:273), so a failure between them
+      leaves a table without provenance, which `ArmEncoder.from_files` then refuses. It records
+      the checkpoint and descriptions paths as given, unresolved (:250, :258).
+      src/naics_embedder/cli/commands/tools.py puts exception text and paths into Rich markup
+      unescaped (:904, :972), and lets an `UnpicklingError` or `RuntimeError` from a corrupt
+      checkpoint through as a traceback (:903, :971). `tools outcome-panel` refuses a blank
+      `--purpose` only after the model loads. The provenance records no tokenizer name, so
+      `from_files` checks the token window but not the tokenizer. docs/usage.md's outcome-panel
+      paragraph does not say that a read refuses a table exported under another
+      `data_loader.streaming.max_length`. Deferred from plan 8's final review and its re-review:
+      none affects the Exit, whose export and reads shared one config. Size: plan. Done when:
+      each case is fixed or ruled no-action.
+- [ ] Review Minor: the encoder, fusion and cache tests leave gaps.
+      No test changes only the field markers in a tokenization cache's sidecar
+      (`_cache_identity`, src/naics_embedder/text_model/dataloader/tokenization_cache.py).
+      `AttentionFusion`'s autocast case, where the scores are narrower than the input
+      (src/naics_embedder/text_model/fusion.py:92-93), is untested, and
+      tests/unit/test_fusion.py:88 runs its finite-gradient test in eval mode, which drops the
+      train-mode (dropout) case. The tiny fixtures share one width: `WIDTH`, `TINY_HIDDEN` and
+      the default dimension are all 8 (tests/unit/test_encoder.py:37,
+      tests/fixtures/shared_encoder.py:31), which can hide a width and hidden-size mix-up.
+      tests/unit/test_naics_model.py:941 builds its other contract without an encoder record and
+      matches only 'bundle', so it passes for a reason other than the one it names. The HGCN
+      feeder's encoder-mismatch refusal (src/naics_embedder/cli/commands/training.py) has no
+      direct test, and no test runs two backward passes through one graph, the re-entry that
+      `_MpsStateReplay` (src/naics_embedder/text_model/shared_encoder.py) exists for. Deferred
+      from plan 8's reviews as coverage gaps, not defects. Size: plan. Done when: each gap has a
+      test, or a recorded ruling that it needs none.
+- [ ] Review Minor: `_pool_present` breaks under true half precision.
+      src/naics_embedder/text_model/shared_encoder.py allocates the pooled rows in the
+      projection weight's dtype, but `_pool_chunk` returns float32 (its mask is cast with
+      `.float()`), so a `bf16-true` or `16-true` model raises "Index put requires the source and
+      destination dtypes match". It is unreachable today: `create_trainer` picks `16-mixed` or
+      `32-true`. Deferred from plan 8's final review, which kept the training path still during
+      the Exit run. Fix: cast each chunk to the pooled dtype before the write. Size: quick-fix.
+      Revisit if: a run can select `bf16-true` or `16-true` precision.
+- [ ] Review Minor: a test needs a newer transformers than pyproject's floor.
+      tests/unit/test_encoder.py:21 imports `GradientCheckpointingLayer` from
+      `transformers.modeling_layers`, which the floor `transformers[torch]>=4.46` (pyproject.toml)
+      lacks. The lock's 4.57.1 has it, and CI installs from `uv.lock`, so no environment the
+      project builds is affected; the source itself runs at the floor. Deferred from plan 8's
+      reviews. Fix: raise the floor in a deliberate re-lock, or guard the import. Size:
+      quick-fix. Done when: pyproject's floor includes `transformers.modeling_layers`, or the
+      test no longer imports it.
+- [ ] Review Minor: code and docs polish left by plan 8's reviews.
+      Code: the tokenization cache's load messages still name only the fingerprints, though the
+      sidecar identity also covers format, markers and summaries
+      (src/naics_embedder/text_model/dataloader/tokenization_cache.py:256-262); its cache
+      annotations read `Dict[int, Dict[str, torch.Tensor]]`, but rows nest channel dicts (:254,
+      :282); `LoggingMixin`'s docstring (src/naics_embedder/text_model/mixins/logging.py:28-37)
+      omits its `fusion` dependency; three bare `'moe'` literals (mixins/curriculum.py:162,
+      naics_model.py:606, :676) could use a constant beside `FUSIONS`; and the HGCN feeder
+      (cli/commands/training.py) and the export (text_model/export.py) repeat a three-line
+      code-row flow. Docs: docs/text_training.md could say near :69-73 that channels stay
+      tail-truncated until Stage 6b (R15); its Cache Regeneration list (:414) omits format,
+      markers and summaries; its "Exact Resume versus Weights-Only Migration" heading (:435)
+      sits beside "nothing migrates it" (:92); "buffers" sits alone on :451; its "MoE gating"
+      compiled op (:602, and CLAUDE.md:862) applies under `moe` only; tests/README.md omits the
+      P8 pooler exemption; five statements of c = 1 (CLAUDE.md:41, README.md:212,
+      docs/overview.md:59 and :193, docs/text_training.md:83) could say "by default"; and
+      docs/overview.md:587 cites docs/sampling_architecture.md, deleted in a7517dd. Deferred
+      from plan 8's reviews: each is true or harmless as written. Size: quick-fix. Done when:
+      each is edited or ruled no-action.

@@ -335,8 +335,8 @@ def coordinate_matrix(table: pl.DataFrame) -> Tuple[Tuple[str, ...], np.ndarray]
         raise ValueError('the coordinate table has a coordinate that is not finite')
     if looks_lorentz(matrix):
         raise ValueError(
-            'the coordinate table holds Lorentz points on a hyperboloid; the regressor panel '
-            'takes the export form (tangent coordinates at the origin for a hyperbolic arm)'
+            'the coordinate table holds Lorentz points on a hyperboloid, not the export form '
+            '(tangent coordinates at the origin for a hyperbolic arm)'
         )
     constant = [name for name, spread in zip(columns, np.ptp(matrix, axis=0)) if spread == 0]
     if constant:

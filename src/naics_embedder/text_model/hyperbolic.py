@@ -78,71 +78,49 @@ def _batched_lorentz_dot_compiled(uv: torch.Tensor) -> torch.Tensor:
     return torch.sum(uv[:, :, 1:], dim=2) - uv[:, :, 0]
 
 # -------------------------------------------------------------------------------------------------
-# Hyperbolic Projection to Lorentz Model
+# Interim geometry head
 # -------------------------------------------------------------------------------------------------
 
-class HyperbolicProjection(nn.Module):
+class HyperbolicHead(nn.Module):
     '''
-    Projects Euclidean embeddings to the Lorentz model of hyperbolic space.
+    The interim hyperbolic head (spec 4.1). It has no parameters.
 
-    The Lorentz model represents points as (x₀, x₁, ..., xₙ) where:
-    - x₀ is the time coordinate (hyperbolic radius)
-    - x₁...xₙ are spatial coordinates
-    - Constraint: -x₀² + x₁² + ... + xₙ² = -1/c (Lorentz inner product)
+    It rescales each tangent vector to norm at most ``max_norm``, the interim harness's cap
+    (Stage 7 removes it, Req 13), then maps it to the Lorentz hyperboloid by the exp map at the
+    origin. ``distance`` names the decoding distance for its points.
+
+    Args:
+        curvature: The hyperboloid's curvature c.
+        max_norm: The cap on a tangent vector's norm.
     '''
 
-    def __init__(self, input_dim: int, curvature: float = 1.0, max_norm: float = 2.0):
+    distance = 'lorentz'
+
+    def __init__(self, curvature: float = 1.0, max_norm: float = 2.0):
         super().__init__()
+        self.curvature = curvature
+        self.max_norm = max_norm
 
-        self.input_dim = input_dim
-        self.c = curvature
-        self.max_norm = max_norm  # Maximum tangent vector norm for numerical stability
-
-        # Projection layer: maps Euclidean embedding to tangent space
-        self.projection = nn.Linear(input_dim, input_dim + 1)
-
-    def exp_map_zero(self, v: torch.Tensor) -> torch.Tensor:
+    def forward(self, tangent: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
-        Exponential map from tangent space at origin to Lorentz hyperboloid.
-
-        The output satisfies the Lorentz constraint: ||x_spatial||^2 - x0^2 = -1/c
-
-        Uses compiled operations when torch.compile is enabled.
+        Cap the tangent vectors, then map them to the hyperboloid.
 
         Args:
-            v: Tangent vector of shape (batch_size, input_dim + 1)
+            tangent: Tangent vectors at the origin, (B, d), without a time coordinate.
 
         Returns:
-            Point on Lorentz hyperboloid of shape (batch_size, input_dim + 1)
+            ``(tangent, embedding)``: the capped tangent (B, d), which the export writes, and the
+            Lorentz point (B, d + 1), which the interim loss reads.
         '''
-        sqrt_c = torch.sqrt(torch.tensor(self.c, device=v.device, dtype=v.dtype))
-        v_spatial = v[:, 1:]  # (batch_size, input_dim)
-        return _exp_map_zero_compiled(v_spatial, sqrt_c)
 
-    def forward(self, euclidean_embedding: torch.Tensor) -> torch.Tensor:
-        '''
-        Project Euclidean embedding to Lorentz hyperboloid.
-
-        Args:
-            euclidean_embedding: Euclidean embedding of shape (batch_size, input_dim)
-
-        Returns:
-            Hyperbolic embedding in Lorentz model of shape (batch_size, input_dim + 1)
-        '''
-        tangent_vec = self.projection(euclidean_embedding)
-
-        # Scale tangent vectors to limit hyperbolic radius for numerical stability
-        # Only scale the spatial components (index 1:)
-        spatial = tangent_vec[:, 1:]
-        norm = torch.norm(spatial, p=2, dim=1, keepdim=True)
+        norm = torch.norm(tangent, p=2, dim=1, keepdim=True)
         scale = torch.where(
             norm > self.max_norm, self.max_norm / (norm + 1e-8), torch.ones_like(norm)
         )
-        tangent_vec = torch.cat([tangent_vec[:, :1], spatial * scale], dim=1)
-
+        tangent = tangent * scale
+        curvature = torch.tensor(self.curvature, device=tangent.device, dtype=tangent.dtype)
         _mark_cudagraph_step()
-        hyperbolic_embedding = self.exp_map_zero(tangent_vec)
-        return hyperbolic_embedding
+        return tangent, _exp_map_zero_compiled(tangent, torch.sqrt(curvature))
 
 # -------------------------------------------------------------------------------------------------
 # Lorentz Distance Computation

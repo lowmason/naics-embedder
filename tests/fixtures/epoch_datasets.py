@@ -25,6 +25,7 @@ def _embedding() -> Dict[str, Dict[str, torch.Tensor]]:
         channel: {
             'input_ids': torch.zeros(4, dtype=torch.long),
             'attention_mask': torch.ones(4, dtype=torch.long),
+            'present': True,
         }
         for channel in CHANNELS
     }

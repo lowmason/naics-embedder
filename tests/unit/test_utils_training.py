@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -216,3 +217,5 @@ def test_save_training_summary_writes_files(tmp_path):
 
     assert 'yaml' in paths and Path(paths['yaml']).exists()
     assert 'json' in paths and Path(paths['json']).exists()
+    snapshot = json.loads(Path(paths['json']).read_text())['config_snapshot']['model']
+    assert (snapshot['fusion'], snapshot['dimension']) == ('masked_mean', 16)

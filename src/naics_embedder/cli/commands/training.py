@@ -16,7 +16,6 @@ from typing import List, Optional
 
 import polars as pl
 import pytorch_lightning as pyl
-import torch
 import typer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -27,10 +26,12 @@ from typing_extensions import Annotated
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
+    EncoderArchitecture,
     MigrationReport,
     containment_contract,
     contract_for_bundle,
     load_weights_only,
+    shared_encoder_architecture,
     validate_exact_resume,
 )
 from naics_embedder.text_model.dataloader.datamodule import (
@@ -39,11 +40,11 @@ from naics_embedder.text_model.dataloader.datamodule import (
     legacy_token_fingerprints,
 )
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
+from naics_embedder.text_model.export import code_token_config, encode_token_rows
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import (
     CheckpointLoadMode,
     Config,
-    TokenizationConfig,
 )
 from naics_embedder.utils.console import configure_logging
 from naics_embedder.utils.training import (
@@ -97,6 +98,8 @@ def build_model_from_config(
         lora_r=cfg.model.lora.r,
         lora_alpha=cfg.model.lora.alpha,
         lora_dropout=cfg.model.lora.dropout,
+        fusion=cfg.model.fusion,
+        dimension=cfg.model.dimension,
         num_experts=cfg.model.moe.num_experts,
         top_k=cfg.model.moe.top_k,
         moe_hidden_dim=cfg.model.moe.hidden_dim,
@@ -146,18 +149,35 @@ def announce_legacy_containment() -> None:
     logger.warning(message)
     console.print(f'[bold red]{message}[/bold red]\n')
 
+def encoder_architecture_for(cfg: Config) -> EncoderArchitecture:
+    '''
+    The configured run's encoder record.
+
+    It comes from the same helper the model builds its own record with, so the two cannot drift
+    (spec 4.4).
+    '''
+
+    return shared_encoder_architecture(
+        fusion=cfg.model.fusion,
+        dimension=cfg.model.dimension,
+        backbone=cfg.model.base_model_name,
+    )
+
 def runtime_contract_for(
     cfg: Config, bundle: Optional[ValidatedSupervisionBundle]
 ) -> CheckpointContract:
     '''
-    The checkpoint contract of the configured run.
+    The checkpoint contract of the configured run, its encoder record included.
 
-    The supervision gate returns no bundle only for explicit legacy containment.
+    The supervision gate returns no bundle only for explicit legacy containment. Training's exact
+    resume and the HGCN feeder compare this whole contract with a checkpoint's; export and reads
+    take the encoder record from the checkpoint instead (spec 4.4).
     '''
 
+    encoder = encoder_architecture_for(cfg)
     if bundle is None:
-        return containment_contract()
-    return contract_for_bundle(bundle.manifest, cfg.supervision.mode)
+        return containment_contract(encoder=encoder)
+    return contract_for_bundle(bundle.manifest, cfg.supervision.mode, encoder=encoder)
 
 def log_migration_report(report: MigrationReport) -> None:
     '''Report what a weights-only migration loaded, skipped, and left freshly initialized.'''
@@ -265,113 +285,28 @@ def generate_embeddings_from_checkpoint(
     df = pl.read_parquet(descriptions_path).sort('index')
     logger.info(f'Loaded {df.height:,} NAICS codes')
 
-    # Load tokenization cache
-    tokenization_cfg = TokenizationConfig(
-        descriptions_parquet=descriptions_path,
-        tokenizer_name=config.data_loader.tokenization.tokenizer_name,
-        max_length=config.data_loader.tokenization.max_length,
-    )
-
+    # The cache training reads; a missing or stale one is rebuilt (spec §5)
     logger.info('Loading tokenization cache...')
-    token_cache = tokenization_cache(tokenization_cfg, **token_fingerprints, use_locking=False)
+    token_cache = tokenization_cache(code_token_config(config), **token_fingerprints)
     logger.info('Tokenization cache loaded')
 
-    # Generate embeddings in batches
+    # Every code through the shared encoder, in eval mode and without gradient
     logger.info(f'Generating embeddings (batch_size={batch_size})...')
-    all_embeddings = []
-    all_indices = []
-    all_levels = []
-    all_codes = []
+    rows = [token_cache[index] for index in df.get_column('index').to_list()]
+    embeddings = encode_token_rows(model, rows, batch_size=batch_size)['embedding']
+    embedding_dim = embeddings.shape[1]
+    logger.info(f'Generated embeddings: shape={tuple(embeddings.shape)}')
 
-    num_batches = (df.height + batch_size - 1) // batch_size
-
-    with torch.no_grad():
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, df.height)
-            batch_df = df.slice(start_idx, end_idx - start_idx)
-
-            # Prepare batch inputs
-            channel_inputs = {
-                'title': {
-                    'input_ids': [],
-                    'attention_mask': []
-                },
-                'description': {
-                    'input_ids': [],
-                    'attention_mask': []
-                },
-                'excluded': {
-                    'input_ids': [],
-                    'attention_mask': []
-                },
-                'examples': {
-                    'input_ids': [],
-                    'attention_mask': []
-                },
-            }
-
-            batch_indices = []
-            batch_levels = []
-            batch_codes = []
-
-            for row in batch_df.iter_rows(named=True):
-                idx = row['index']
-                batch_indices.append(idx)
-                batch_levels.append(row['level'])
-                batch_codes.append(row['code'])
-
-                # Get tokenized inputs from cache
-                tokens = token_cache[idx]
-
-                for channel in ['title', 'description', 'excluded', 'examples']:
-                    channel_inputs[channel]['input_ids'].append(
-                        tokens[channel]['input_ids']  # pyright: ignore[reportArgumentType]
-                    )
-                    channel_inputs[channel]['attention_mask'].append(
-                        tokens[channel]['attention_mask']  # pyright: ignore[reportArgumentType]
-                    )
-
-            # Stack tensors
-            for channel in channel_inputs:
-                channel_inputs[channel]['input_ids'] = torch.stack(  # pyright: ignore[reportArgumentType]
-                    channel_inputs[channel]['input_ids']
-                ).to(device)
-                channel_inputs[channel]['attention_mask'] = torch.stack(  # pyright: ignore[reportArgumentType]
-                    channel_inputs[channel]['attention_mask']
-                ).to(device)
-
-            # Run inference
-            output = model(channel_inputs)
-            embeddings = output['embedding']  # Hyperbolic embeddings (batch_size, embedding_dim+1)
-
-            # Store embeddings
-            all_embeddings.append(embeddings.cpu())
-            all_indices.extend(batch_indices)
-            all_levels.extend(batch_levels)
-            all_codes.extend(batch_codes)
-
-            if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
-                logger.info(
-                    f'  Processed {end_idx:,} / {df.height:,} codes ({(end_idx / df.height) * 100:.1f}%)'
-                )
-
-    # Concatenate all embeddings
-    logger.info('Concatenating embeddings...')
-    all_embeddings_tensor = torch.cat(all_embeddings, dim=0)  # (N, embedding_dim+1)
-    embedding_dim = all_embeddings_tensor.shape[1]
-
-    logger.info(f'Generated embeddings: shape={all_embeddings_tensor.shape}')
-
-    # Convert to numpy
-    embeddings_np = all_embeddings_tensor.numpy()
-
-    # Create DataFrame with hyp_e* columns
+    # d + 1 Lorentz coordinates as hyp_e* columns, which HGCN finds by prefix
     emb_schema = {f'{STAGE3_EMBEDDING_PREFIX}{i}': pl.Float64 for i in range(embedding_dim)}
-    emb_df = pl.DataFrame(embeddings_np, schema=emb_schema, orient='row')
+    emb_df = pl.DataFrame(embeddings.numpy(), schema=emb_schema, orient='row')
 
-    # Combine with metadata
-    base_df = pl.DataFrame({'index': all_indices, 'level': all_levels, 'code': all_codes})
+    # Combine with metadata, in the Int64 the feeder has always written
+    base_df = df.select(
+        pl.col('index').cast(pl.Int64),
+        pl.col('level').cast(pl.Int64),
+        pl.col('code'),
+    )
 
     result_df = base_df.hstack(emb_df)
 
@@ -409,7 +344,8 @@ def train(
             '--checkpoint-load-mode',
             help=(
                 'exact: resume optimizer/epoch/curriculum state (requires a matching supervision '
-                'contract); weights_only: load allowlisted encoder weights into a fresh run'
+                'contract); weights_only: load allowlisted encoder weights of the same encoder '
+                'architecture into a fresh run'
             ),
         ),
     ] = CheckpointLoadMode.EXACT,
@@ -446,7 +382,8 @@ def train(
             experiment. Specify a full path for cross-experiment resumption.
         checkpoint_load_mode: ``exact`` resumes full training state and requires the
             checkpoint's supervision contract to match the runtime bundle; ``weights_only``
-            loads allowlisted encoder weights into a fresh run starting at epoch zero.
+            loads allowlisted encoder weights of the same encoder architecture into a fresh run
+            starting at epoch zero.
         skip_validation: Skip advisory pre-flight checks for data files and tokenization
             cache. The mandatory supervision bundle gate is never skipped.
         overrides: Optional list of key-value override strings. Use dot notation
@@ -535,8 +472,8 @@ def train(
             '[cyan]Model:[/cyan]',
             f'  • Base: {cfg.model.base_model_name.split("/")[-1]}',
             f'  • LoRA rank: {cfg.model.lora.r}',
-            '  • MoE: ',
-            f'    - {cfg.model.moe.num_experts} experts\n',
+            f'  • Fusion: {cfg.model.fusion}',
+            f'  • Dimension: {cfg.model.dimension}\n',
             '[cyan]Training:[/cyan]',
             f'  • Learning rate: {cfg.training.learning_rate}',
             f'  • Max epochs: {cfg.training.trainer.max_epochs}',
@@ -602,6 +539,7 @@ def train(
             batch_size=cfg.data_loader.batch_size,
             num_workers=cfg.data_loader.num_workers,
             val_split=cfg.data_loader.val_split,
+            n_epochs=cfg.data_loader.n_epochs,
             seed=cfg.seed,
             supervision_mode=cfg.supervision.mode,
             supervision_manifest_path=cfg.supervision.manifest_path,
@@ -642,7 +580,7 @@ def train(
         model = build_model_from_config(cfg, runtime_contract, bundle)
 
         if checkpoint_path and not exact_resume:
-            report = load_weights_only(model, checkpoint_path)
+            report = load_weights_only(model, checkpoint_path, encoder=runtime_contract.encoder)
             log_migration_report(report)
 
         # Setup callbacks

@@ -12,6 +12,7 @@ explicit exclusions, and training pairs. See
 - [Training Guide](#training-guide)
   - [Table of Contents](#table-of-contents)
   - [Quick Start](#quick-start)
+  - [The Shared Encoder](#the-shared-encoder)
   - [SADC Scheduler](#sadc-scheduler)
   - [CLI Reference](#cli-reference)
   - [Structural Spearman Validation](#structural-spearman-validation)
@@ -59,6 +60,43 @@ To avoid repeating the override, set `supervision.manifest_path` in `conf/config
 
 ---
 
+## The Shared Encoder
+
+One LoRA-adapted MiniLM backbone (revision 1110a243) reads every field
+(`text_model/shared_encoder.py`):
+
+- **Field markers.** A present text is marked with its field: `'title: …'`, `'description: …'`,
+  `'excluded: …'`, `'examples: …'` or `'query: …'` (`text_model/fields.py`). An absent text
+  (null or blank) is the unmarked empty string with `present` False. The tokenization cache's
+  format `channels-v3` stores the marked texts. Its sidecar records the markers and a `summaries`
+  entry, null until Stage 6b. A cache built under another format, other markers or other
+  summaries is rebuilt.
+- **Present channels only.** Each field's present texts go through the backbone in calls of at most
+  256 texts (`MAX_TEXTS_PER_CALL`), each trimmed to its own longest text, and absent texts never
+  enter it. Each present text is mean-pooled over its tokens.
+- **Fusion** (`model.fusion`): `masked_mean` (default), `attention`, or `moe`, the ablation that
+  routes the masked mean through the experts of `model.moe`. Router-guided mining and the
+  load-balancing term run only under `moe` (spec R10, R11).
+- **Projection** (`model.dimension`): exactly one `Linear(384 → d)`, d in {8, 16, 32}, default
+  16.
+- **Head.** A parameter-free head caps the tangent's norm at 2 and maps it onto the hyperboloid
+  at c = 1. The model returns both the capped `tangent` (d) and the point `embedding` (d + 1).
+
+```bash
+# An ablation at dimension 8 under the MoE fusion
+uv run naics-embedder train supervision.manifest_path=/absolute/path/to/manifest.json \
+  model.fusion=moe model.dimension=8
+```
+
+A checkpoint records its encoder architecture (layout, fusion, dimension and backbone) in its
+contract. A checkpoint of another architecture cannot load, and nothing migrates it: four-copy
+checkpoints from before Stage 6 cannot load into the shared encoder (roadmap D2).
+
+After training, `tools export-table` writes the 2,125-code table, and `tools outcome-panel` reads
+the outcome panel's validation split (see `docs/usage.md`).
+
+---
+
 ## SADC Scheduler
 
 The scheduler runs three phases within a single training invocation:
@@ -68,7 +106,8 @@ The scheduler runs three phases within a single training invocation:
    - Effect: weights negatives by inverse tree distance and masks siblings.
 2. **Geometric Refinement (30–70%)**
    - Flags: `enable_hard_negative_mining`, `enable_router_guided_sampling`
-   - Effect: activates Lorentzian hard-negative mining and router-guided MoE sampling.
+   - Effect: activates Lorentzian hard-negative mining, and router-guided sampling under
+     `model.fusion: moe` only; under any other fusion the geometric miner fills every slot.
 3. **False Negative Mitigation (70–100%)**
    - Flags: `enable_clustering`
    - Effect: enables clustering-driven false-negative elimination.
@@ -79,7 +118,9 @@ verify when each mechanism is active.
 Two additional knobs were added for the experimentation tracks in [Issue #44](https://github.com/lowmason/naics-embedder/issues/44):
 
 - `curriculum.phase_mode=two_phase` merges Phase 3 behaviors into Phase 2 for a simpler two-stage schedule.
-- `curriculum.anneal.*` enables continuous schedules (e.g., annealing the tree-distance exponent or router mix ratio over `epochs` or when a metric threshold is reached).
+- `curriculum.anneal.*` enables continuous schedules (e.g., annealing the tree-distance exponent or
+  router mix ratio over `epochs` or when a metric threshold is reached); the router mix ratio
+  applies under `model.fusion: moe` only (spec R10).
 
 ---
 
@@ -203,9 +244,11 @@ uv run naics-embedder train \
   --checkpoint-load-mode exact \
   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 
-# Explicit legacy initialization: weights only, all training state resets.
+# Explicit weights-only seeding from a shared-encoder checkpoint with the same encoder record
+# (layout, fusion, dimension, backbone); all training state resets. Four-copy (pre-Stage-6) and
+# contract-less checkpoints are refused (roadmap D2).
 uv run naics-embedder train \
-  --ckpt-path checkpoints/legacy.ckpt \
+  --ckpt-path checkpoints/other_run/last.ckpt \
   --checkpoint-load-mode weights_only \
   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
@@ -330,12 +373,13 @@ refuses one. No slot is reserved for exclusions. The `K` slots come from strateg
 duplicates removed by code (keeping the smallest UID), ties broken by code ID then UID, and a
 deterministic backfill. Proposals are consulted in order:
 
-1. **Phase 2+ miners.** With hard-negative mining on, the geometric miner proposes its share of the
-   `K` slots, `K - int(K * router_mix_ratio)`; with router-guided mining also on, the router fills
-   the rest. `router_mix_ratio` comes from `curriculum.anneal` (default 0.5). Miners score one
-   occurrence per code (the smallest candidate UID, which the coordinator keeps) and never the
-   anchor or positive code, so on multiple GPUs, where a code repeats across rows and ranks of the
-   global pool, the miners still fill their slots with distinct codes.
+1. **Phase 2+ miners.** With hard-negative mining on, the geometric miner proposes all `K` slots;
+   under `model.fusion: moe` with router-guided mining also on, it proposes
+   `K - int(K * router_mix_ratio)` and the router fills the rest. `router_mix_ratio` comes from
+   `curriculum.anneal` (default 0.5). Miners score one occurrence per code (the smallest candidate
+   UID, which the coordinator keeps) and never the anchor or positive code, so on multiple GPUs,
+   where a code repeats across rows and ranks of the global pool, the miners still fill their slots
+   with distinct codes.
 2. **The difficulty proposal** from the data layer, which is the only proposal in Phase 1 and the
    fallback afterwards.
 3. **Deterministic backfill** from the remaining eligible codes.
@@ -375,6 +419,11 @@ term is logged as `train/structural_preference_loss` and configured under
 - **Streaming and multi-epoch caches** — stored in a versioned envelope keyed by contract, bundle
   ID, codebook fingerprint, and source-artifact fingerprints; caches from other bundles or legacy
   runs are rejected and regenerated.
+- **Pre-sampled epochs** — `data_loader.n_epochs` (default 100) is the number of sampling epochs
+  the datamodule pre-builds for the training and validation rows, and the caches key on it. One
+  training epoch reads all of them, so with the current bundle one Lightning epoch at the default
+  is about 19,883 steps at batch 16. The plan 8 Exit (roadmap Stage 6) ran `data_loader.n_epochs=1`:
+  one sampling of about 3,181 rows, or about 199 steps.
 - **Curriculum difficulty thresholds** — regenerated from the same bundle during bundle generation.
 - **Graph preprocessing** — `uv run python -m
   naics_embedder.graph_model.curriculum.preprocess_curriculum --supervision-manifest <path>` and
@@ -386,18 +435,20 @@ term is logged as `train/structural_preference_loss` and configured under
 ### Exact Resume versus Weights-Only Migration
 
 Every new checkpoint records its supervision contract under `stage3_supervision`: supervision
-mode, contract version, bundle ID, codebook fingerprint, structural-preference-loss version, and
-mining-contract version. Structural matrices are loaded from the validated bundle, not trusted from
-checkpoint state.
+mode, contract version, bundle ID, codebook fingerprint, structural-preference-loss version,
+mining-contract version, and the encoder architecture (layout, fusion, dimension and backbone).
+Structural matrices are loaded from the validated bundle, not trusted from checkpoint state.
 
 - **`--checkpoint-load-mode exact`** (default) restores optimizer, scheduler, epoch, global step,
   curriculum, and sampler state. It is allowed only when every contract field matches the runtime
   bundle; otherwise training stops before model construction with
   `exact resume contract mismatch (saved, runtime): {...}`. Checkpoints without a contract fail
-  with `legacy checkpoint has no Stage-3 contract and cannot exact resume; use weights_only
-  explicitly`.
+  with `legacy checkpoint has no Stage-3 contract and cannot exact resume`, followed by the D2
+  refusal. A checkpoint of another encoder architecture fails with that refusal too (roadmap D2).
 - **`--checkpoint-load-mode weights_only`** loads only allowlisted encoder parameters (`encoder.*`:
-  transformer adapters, projection, MoE, and router). Loss modules and data-derived buffers
+  the shared backbone and its adapter, fusion, and the projection). It refuses a checkpoint of
+  another encoder architecture before reading any parameter (D2). Loss modules and data-derived
+  buffers
   (`loss_fn.`, `hierarchy_loss_fn.`, `lambdarank_loss_fn.`, `structural_preference_loss_fn.`,
   ground-truth distances, `norm_adaptive_margin.`) are skipped. Any other parameter group is fatal.
   Optimizer, scheduler, epoch, global step, curriculum, sampler, and mining state are discarded, and
@@ -405,7 +456,12 @@ checkpoint state.
   freshly initialized parameter groups. This initializes from old weights; it does not undo what an
   old objective learned.
 
-Embedding generation from a checkpoint applies the same contract check.
+Embedding generation from a checkpoint applies the contract check in two forms. Export and reads
+(`tools export-table`, `tools outcome-panel`) compare the supervision fields with the configured
+bundle only, and the encoder record they use is the checkpoint's own: a d = 8 checkpoint exports
+under a d = 16 config, and a four-copy checkpoint is refused (roadmap D2). Only the embedding
+generation that feeds HGCN training compares the checkpoint's encoder record with the config's, as
+exact resume does.
 
 ### Legacy Containment
 
@@ -418,11 +474,12 @@ is not contract-compliant Stage-3 training:
 - hard-negative and router-based reordering and pseudo-related elimination or attraction are
   disabled; training uses local, unmined negatives in collated order, with the legacy
   repeat-last padding of shorter negative lists;
-- MoE routing, load balancing, and radius regularizers still run;
+- radius regularizers still run, as do MoE routing and load balancing under `model.fusion: moe`;
 - runs log `LEGACY CONTAINMENT` at startup and `train/integrity/legacy_containment = 1` each epoch;
 - checkpoints are tagged with bundle ID `legacy-containment` and codebook fingerprint
-  `unversioned`, so they can never exact-resume into repaired training; they may only seed a
-  repaired run through `weights_only`.
+  `unversioned`, so they can never exact-resume into repaired training; they can seed a repaired
+  run through `weights_only` only when their encoder record matches the run's. Containment
+  checkpoints saved before Stage 6 carry the four-copy layout and are refused (roadmap D2).
 
 ### Rollout Gates
 
@@ -495,7 +552,8 @@ The model is decomposed into functional **mixins** for maintainability:
   proposal:
   - Embedding-based hard negative proposals (Lorentzian distance), for a `1 - router_mix_ratio`
     share of the slots when router mining is also on.
-  - Router-guided proposals (gate confusion) fill the remaining slots.
+  - Router-guided proposals (gate confusion) fill the remaining slots, under `model.fusion: moe`
+    only.
   - Norm-adaptive margins via `NormAdaptiveMargin` (sech-based decay) are logged for annealing.
 - Phase 3:
   - Pseudo-related candidates from clustering, derived only after selection and never including
@@ -514,7 +572,8 @@ The model is decomposed into functional **mixins** for maintainability:
   source slots; no pair-dependent supervision is trusted from the batch.
 - **Curriculum flags influence:**
   - Phase 1 flags (`use_tree_distance`, `mask_siblings`) act in the data layer.
-  - Phase 2/3 flags (`enable_hard_negative_mining`, `enable_router_guided_sampling`, `enable_clustering`) act in the model layer.
+  - Phase 2/3 flags (`enable_hard_negative_mining`, `enable_router_guided_sampling`,
+    `enable_clustering`) act in the model layer; the router flag acts only under `moe`.
 - **Selection:** every strategy proposes source indices; the selection coordinator performs the
   only gather, so all losses see the same selected candidates.
 

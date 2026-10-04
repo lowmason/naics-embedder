@@ -11,7 +11,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from naics_embedder.text_model.hyperbolic import (
-    HyperbolicProjection,
+    HyperbolicHead,
     LorentzDistance,
     LorentzOps,
     check_lorentz_manifold_validity,
@@ -146,68 +146,43 @@ class TestLorentzOps:
         assert not torch.any(torch.isinf(hyp_emb))
 
 # -------------------------------------------------------------------------------------------------
-# HyperbolicProjection Tests
+# HyperbolicHead Tests
 # -------------------------------------------------------------------------------------------------
 
 @pytest.mark.unit
-class TestHyperbolicProjection:
-    '''Test suite for HyperbolicProjection module.'''
+class TestHyperbolicHead:
+    '''The interim geometry head: no parameters, the cap, then the exp map at the origin.'''
 
-    def test_projection_output_shape(self, sample_euclidean_embeddings):
-        '''Test that projection increases dimension by 1.'''
+    def test_the_head_has_no_parameters_and_names_its_distance(self):
+        head = HyperbolicHead(curvature=1.0)
 
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=1.0)
+        assert list(head.parameters()) == []
+        assert head.distance == 'lorentz'
 
-        output = projection(sample_euclidean_embeddings)
+    def test_a_tangent_inside_the_cap_passes_unchanged(self):
+        tangent = torch.tensor([[0.3, -0.4], [1.0, 1.0]])
 
-        assert output.shape == (sample_euclidean_embeddings.shape[0], input_dim + 1)
+        capped, embedding = HyperbolicHead(curvature=1.0)(tangent)
 
-    def test_projection_preserves_batch_size(self, sample_euclidean_embeddings):
-        '''Test that batch size is preserved through projection.'''
+        assert torch.equal(capped, tangent)
+        assert embedding.shape == (2, 3)
 
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=1.0)
+    def test_a_long_tangent_is_scaled_to_the_cap(self):
+        capped, _ = HyperbolicHead(curvature=1.0, max_norm=2.0)(torch.tensor([[3.0, 4.0]]))
 
-        output = projection(sample_euclidean_embeddings)
+        torch.testing.assert_close(capped, torch.tensor([[1.2, 1.6]]))
 
-        assert output.shape[0] == sample_euclidean_embeddings.shape[0]
+    @pytest.mark.parametrize('curvature', [0.5, 1.0, 2.0])
+    def test_the_point_is_the_exp_map_of_the_capped_tangent(self, curvature):
+        tangent = torch.tensor([[0.3, -0.4], [3.0, 4.0]])
 
-    def test_projection_output_on_manifold(self, sample_euclidean_embeddings):
-        '''Test that projected embeddings lie on Lorentz manifold.'''
+        capped, embedding = HyperbolicHead(curvature=curvature)(tangent)
 
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=1.0)
-
-        output = projection(sample_euclidean_embeddings)
-
-        is_valid, _, _ = check_lorentz_manifold_validity(output, curvature=1.0, tolerance=1e-3)
+        # LorentzOps takes a (B, d + 1) tangent and ignores its time slot
+        padded = torch.cat([torch.zeros(2, 1), capped], dim=1)
+        torch.testing.assert_close(embedding, LorentzOps.exp_map_zero(padded, c=curvature))
+        is_valid, _, _ = check_lorentz_manifold_validity(embedding, curvature=curvature)
         assert is_valid
-
-    @pytest.mark.parametrize('curvature', [0.1, 1.0, 5.0])
-    def test_projection_with_different_curvatures(self, sample_euclidean_embeddings, curvature):
-        '''Test projection works correctly for different curvature values.'''
-
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=curvature)
-
-        output = projection(sample_euclidean_embeddings)
-
-        is_valid, _, _ = check_lorentz_manifold_validity(
-            output, curvature=curvature, tolerance=1e-2
-        )
-        assert is_valid
-
-    def test_projection_no_nans_or_infs(self, sample_euclidean_embeddings):
-        '''Test that projection never produces NaN or Inf values.'''
-
-        input_dim = sample_euclidean_embeddings.shape[1]
-        projection = HyperbolicProjection(input_dim=input_dim, curvature=1.0)
-
-        output = projection(sample_euclidean_embeddings)
-
-        assert not torch.any(torch.isnan(output))
-        assert not torch.any(torch.isinf(output))
 
 # -------------------------------------------------------------------------------------------------
 # LorentzDistance Tests

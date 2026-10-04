@@ -5,8 +5,8 @@ This documentation describes a unified hyperbolic representation learning framew
 
 The system consists of four sequential stages:
 
-- Multi-channel transformer-based text encoding  
-- Mixture-of-Experts fusion  
+- A shared transformer-based text encoder over marked fields  
+- Masked fusion and one linear map to dimension d  
 - Lorentz-model hyperbolic contrastive learning  
 - Hyperbolic Graph Convolutional refinement (HGCN)
 
@@ -19,7 +19,8 @@ search, hierarchical modeling, graph-based reasoning, and downstream machine lea
 ### Advanced Training Techniques
 
 - **Hard Negative Mining**: Selects geometrically challenging negatives using Lorentzian distances
-- **Router-Guided Sampling**: Prevents expert collapse by selecting negatives that confuse the MoE gating network
+- **Router-Guided Sampling** (under `model.fusion: moe` only): Prevents expert collapse by
+  selecting negatives that confuse the MoE gating network
 - **Global Batch Sampling**: Enables hard negative mining across all GPUs in distributed training
 - **Structure-Aware Dynamic Curriculum**: Progressively enables advanced features based on training progress
 - **Multi-Level Supervision**: Supports multiple positive examples at different hierarchy levels

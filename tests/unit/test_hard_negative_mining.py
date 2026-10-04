@@ -154,9 +154,10 @@ def test_local_difficulty_proposals_translate_by_occurrence_uid(candidate_batch)
 
 class _SelectionHost(DistributedMixin, CurriculumMixin):
 
-    def __init__(self, index: SupervisionIndex, flags: dict):
+    def __init__(self, index: SupervisionIndex, flags: dict, fusion: str = 'moe'):
         self.supervision_index = index
         self.current_curriculum_flags = flags
+        self.fusion = fusion
         self.current_schedule_scalars = {}
         self.current_epoch = 0
         self.hard_negative_miner = LorentzianHardNegativeMiner()
@@ -341,6 +342,30 @@ def test_router_mix_ratio_splits_mined_slots(hierarchy_index, mix, expected):
     )
 
     assert _reasons(selected) == expected
+
+def test_router_mining_runs_only_under_moe_fusion(hierarchy_index):
+    # R10: without the MoE fusion there are no gates, and the geometric miner takes every slot
+    host = _SelectionHost(
+        hierarchy_index,
+        {
+            'enable_hard_negative_mining': True,
+            'enable_router_guided_sampling': True
+        },
+        fusion='masked_mean',
+    )
+    batch = _hierarchy_batch(
+        hierarchy_index, [HIERARCHY_EXCLUSION] + CROSS_SECTOR_CODES, HIERARCHY_GRANDPARENT, 4
+    )
+
+    selected = host._select_negative_batch(
+        batch=batch,
+        anchor_output={'embedding': _code_embedding(13).unsqueeze(0)},
+        candidate_output={'embedding': _candidate_output(batch)['embedding']},
+        candidate_uid=_local_uid(batch),
+        batch_idx=0,
+    )
+
+    assert _reasons(selected) == [SelectionReason.GEOMETRIC] * 4
 
 def test_repeated_codes_cannot_crowd_distinct_codes_out_of_mining(hierarchy_index):
     # A global pool repeats codes across rows and ranks. Three copies of code 13 sit at the anchor

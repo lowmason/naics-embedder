@@ -24,12 +24,16 @@ import polars as pl
 import pytest
 import pytorch_lightning as pyl
 import torch
+from transformers import PreTrainedModel
 
+from naics_embedder.supervision.checkpoints import contract_for_bundle, shared_encoder_architecture
 from naics_embedder.text_model.dataloader.datamodule import collate_fn
 from naics_embedder.text_model.naics_model import (
     NAICSContrastiveModel,
     gather_embeddings_global,
 )
+from naics_embedder.text_model.shared_encoder import SharedEncoder
+from tests.fixtures.shared_encoder import lightning_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,7 @@ def sample_training_batch(test_device, batch_size=4, k_negatives=8):
             channel: {
                 'input_ids': torch.randint(0, 1000, (batch_size, seq_length), device=test_device),
                 'attention_mask': torch.ones(batch_size, seq_length, device=test_device),
+                'present': torch.ones(batch_size, dtype=torch.bool, device=test_device),
             }
             for channel in channels
         }
@@ -118,6 +123,7 @@ def _tokens(code_id: int, seq_length: int = 32) -> dict:
         channel: {
             'input_ids': torch.randint(0, 1000, (seq_length, ), generator=generator),
             'attention_mask': torch.ones(seq_length, dtype=torch.long),
+            'present': True,
         }
         for channel in CHANNELS
     }
@@ -195,12 +201,19 @@ class TestModelInitialization:
         assert naics_model.hparams['curvature'] == model_config['curvature']
 
     def test_encoder_configuration(self, naics_model, model_config):
-        '''Test that encoder is configured correctly.'''
+        '''One MiniLM backbone, masked-mean fusion and one Linear(384 -> 16) to the head.'''
 
         encoder = naics_model.encoder
+        assert isinstance(encoder, SharedEncoder)
         assert encoder.curvature == model_config['curvature']
-        assert encoder.moe.num_experts == model_config['num_experts']
-        assert encoder.moe.top_k == model_config['top_k']
+        assert sum(isinstance(module, PreTrainedModel) for module in naics_model.modules()) == 1
+        assert encoder.fusion_name == 'masked_mean'
+        assert (encoder.projection.in_features, encoder.projection.out_features) == (384, 16)
+        assert list(encoder.head.parameters()) == []
+
+    def test_an_unknown_dimension_is_refused(self, model_config):
+        with pytest.raises(ValueError, match='unknown dimension'):
+            NAICSContrastiveModel(**model_config, dimension=12)
 
     def test_loss_function_configuration(self, naics_model, model_config):
         '''Test that loss function is configured correctly.'''
@@ -288,6 +301,14 @@ class TestModelInitialization:
         with pytest.raises(ValueError, match='supervision mode'):
             NAICSContrastiveModel(**model_config, supervision_mode='mystery')
 
+    def test_fusion_defaults_to_masked_mean_and_an_unknown_one_is_refused(
+        self, naics_model, model_config
+    ):
+        assert naics_model.fusion == 'masked_mean'
+        assert naics_model.hparams['fusion'] == 'masked_mean'
+        with pytest.raises(ValueError, match='unknown fusion'):
+            NAICSContrastiveModel(**model_config, fusion='concatenate')
+
 # -------------------------------------------------------------------------------------------------
 # Test: Forward Pass
 # -------------------------------------------------------------------------------------------------
@@ -297,29 +318,24 @@ class TestForwardPass:
     '''Test model forward pass.'''
 
     def test_forward_basic(self, naics_model, sample_training_batch):
-        '''Test basic forward pass through encoder.'''
+        '''The default fusion returns the point and its tangent, and no gates.'''
 
         with torch.no_grad():
             output = naics_model(sample_training_batch['anchor'])
 
-        assert 'embedding' in output
-        assert 'embedding_euc' in output
-        assert 'gate_probs' in output
-        assert 'top_k_indices' in output
+        assert set(output) == {'embedding', 'tangent'}
 
     def test_forward_output_shapes(self, naics_model, sample_training_batch):
-        '''Test forward pass output shapes.'''
+        '''The Lorentz point is (batch, 17) and its capped tangent (batch, 16).'''
 
         batch_size = sample_training_batch['batch_size']
 
         with torch.no_grad():
             output = naics_model(sample_training_batch['anchor'])
 
-        # Hyperbolic embedding: (batch_size, embedding_dim + 1)
-        assert output['embedding'].shape == (batch_size, naics_model.encoder.embedding_dim + 1)
-
-        # Euclidean embedding: (batch_size, embedding_dim)
-        assert output['embedding_euc'].shape == (batch_size, naics_model.encoder.embedding_dim)
+        assert naics_model.encoder.dimension == 16
+        assert output['embedding'].shape == (batch_size, 17)
+        assert output['tangent'].shape == (batch_size, 16)
 
 # -------------------------------------------------------------------------------------------------
 # Test: Training Step
@@ -351,6 +367,34 @@ class TestTrainingStep:
         grads = [p.grad for p in naics_model.parameters() if p.requires_grad]
         assert any(grad is not None for grad in grads)
         assert all(grad is None or torch.isfinite(grad).all() for grad in grads)
+
+    def test_a_step_at_dimension_16_trains_the_adapter_and_the_projection(
+        self, naics_model, repaired_training_batch, monkeypatch
+    ):
+        '''Spec §6: the step reaches LoRA and the projection, and logs no load-balancing term.'''
+
+        log = Mock()
+        monkeypatch.setattr(naics_model, 'log', log)
+        naics_model.train()
+
+        naics_model.training_step(repaired_training_batch, batch_idx=0).backward()
+
+        encoder = naics_model.encoder
+        assert encoder.dimension == 16
+        assert encoder.projection.weight.grad.abs().sum() > 0
+        # PEFT starts lora_B at zero, so lora_A's first gradient is exactly zero (P9); the
+        # pooler's adapter never gets one, since mean pooling never reads it (P8)
+        adapters = {
+            name: parameter
+            for name, parameter in encoder.backbone.named_parameters()
+            if 'lora_B' in name and '.pooler.' not in name
+        }
+        assert adapters
+        for name, parameter in adapters.items():
+            assert parameter.grad is not None and parameter.grad.abs().sum() > 0, name
+        keys = {call.args[0] for call in log.call_args_list}
+        assert 'train/load_balancing_loss' not in keys
+        assert not any(key.startswith('train/moe/') for key in keys)
 
     def test_forward_candidate_pool_encodes_only_valid_rows(
         self, naics_model, repaired_training_batch
@@ -462,17 +506,23 @@ class TestTrainingStep:
         assert 'train/structural_preference_loss' in keys
         assert not any('lambdarank' in key for key in keys)
 
-    def test_training_step_load_balancing_loss(self, naics_model, repaired_training_batch):
-        '''Test that load balancing loss is computed.'''
+    @pytest.mark.parametrize(('fusion', 'logged'), [('masked_mean', False), ('moe', True)])
+    def test_load_balancing_is_computed_and_logged_only_under_moe(
+        self, model_config, repaired_training_batch, monkeypatch, fusion, logged
+    ):
+        '''R11: only the MoE fusion has experts, so only it has a load-balancing term.'''
 
-        naics_model.train()
-        naics_model.load_balancing_coef = 0.01
+        model = NAICSContrastiveModel(**model_config, fusion=fusion)
+        log = Mock()
+        monkeypatch.setattr(model, 'log', log)
+        model.train()
 
-        loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
+        loss = model.training_step(repaired_training_batch, batch_idx=0)
 
-        # Loss should include load balancing component
-        assert isinstance(loss, torch.Tensor)
-        assert loss.item() > 0
+        keys = {call.args[0] for call in log.call_args_list}
+        assert ('train/load_balancing_loss' in keys) is logged
+        assert any(key.startswith('train/moe/') for key in keys) is logged
+        assert torch.isfinite(loss)
 
     def test_combine_loss_terms_scales_load_balancing(self, naics_model):
         '''Ensure load balancing term is scaled before contributing to total loss.'''
@@ -503,6 +553,21 @@ class TestTrainingStep:
 
         assert torch.isclose(scaled_load_balancing, expected_scaled)
         assert torch.isclose(total_loss, expected_total)
+
+    def test_combine_loss_terms_without_a_load_balancing_term(self, naics_model):
+        '''Outside the MoE fusion there is no term to scale or add (R11).'''
+
+        total_loss, scaled_load_balancing = naics_model._combine_loss_terms(
+            torch.tensor(1.0),
+            None,
+            torch.tensor(0.3),
+            torch.tensor(0.2),
+            torch.tensor(0.1),
+            torch.tensor(0.05),
+        )
+
+        assert scaled_load_balancing is None
+        assert torch.isclose(total_loss, torch.tensor(1.65))
 
 # -------------------------------------------------------------------------------------------------
 # Test: Validation Step
@@ -583,7 +648,7 @@ class TestValidationStep:
         for code in naics_model.validation_codes:
             assert code in naics_model.validation_embeddings
             embedding = naics_model.validation_embeddings[code]
-            assert embedding.shape[0] == naics_model.encoder.embedding_dim + 1  # Lorentz
+            assert embedding.shape[0] == naics_model.encoder.dimension + 1  # Lorentz
 
     def test_validation_step_no_duplicate_codes(self, naics_model, repaired_training_batch):
         '''Test that validation step doesn\'t store duplicate codes.'''
@@ -765,6 +830,29 @@ class TestCurriculumIntegration:
         current_phase = naics_model.curriculum_scheduler.get_phase(naics_model.current_epoch)
         assert naics_model.previous_phase == current_phase
 
+    def test_phase_two_selection_under_masked_mean_fills_no_router_slot(
+        self, naics_model, repaired_training_batch, monkeypatch
+    ):
+        '''Spec §6: a phase-2 step under the default fusion neither raises nor routes (R10).'''
+
+        log = Mock()
+        monkeypatch.setattr(naics_model, 'log', log)
+        monkeypatch.setattr(naics_model, '_update_curriculum_state', lambda *_args: None)
+        naics_model.current_curriculum_flags = {
+            'enable_hard_negative_mining': True,
+            'enable_router_guided_sampling': True,
+        }
+        naics_model.train()
+
+        naics_model.training_step(repaired_training_batch, batch_idx=1)
+
+        counters = {
+            call.args[0]: call.args[1].item()
+            for call in log.call_args_list if call.args[0].startswith('train/integrity/')
+        }
+        assert counters['train/integrity/router_selections'] == 0.0
+        assert counters['train/integrity/geometric_selections'] > 0.0
+
 # -------------------------------------------------------------------------------------------------
 # Test: Checkpoint Loading
 # -------------------------------------------------------------------------------------------------
@@ -806,15 +894,6 @@ class TestCheckpointLoading:
 # Test: Supervision checkpoint contract
 # -------------------------------------------------------------------------------------------------
 
-def _lightning_checkpoint(model) -> dict:
-    checkpoint = {
-        'state_dict': model.state_dict(),
-        'hyper_parameters': dict(model.hparams),
-        'pytorch-lightning_version': pyl.__version__,
-    }
-    model.on_save_checkpoint(checkpoint)
-    return checkpoint
-
 @pytest.mark.unit
 class TestCheckpointContract:
     '''The supervision contract travels with checkpoints and gates every restore.'''
@@ -825,6 +904,20 @@ class TestCheckpointContract:
         assert contract.supervision_mode == 'repaired'
         assert contract.bundle_id == validated_bundle.manifest.bundle_id
         assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
+        assert contract.encoder == shared_encoder_architecture(
+            fusion='masked_mean', dimension=16, backbone='sentence-transformers/all-MiniLM-L6-v2'
+        )
+
+    def test_a_runtime_contract_of_another_encoder_is_refused(self, model_config, validated_bundle):
+        other = contract_for_bundle(
+            validated_bundle.manifest,
+            encoder=shared_encoder_architecture(
+                fusion='masked_mean', dimension=8, backbone=model_config['base_model_name']
+            ),
+        )
+
+        with pytest.raises(ValueError, match='does not match'):
+            NAICSContrastiveModel(**model_config, checkpoint_contract=other)
 
     def test_on_save_checkpoint_writes_contract(self, naics_model):
         checkpoint = {}
@@ -882,20 +975,51 @@ class TestCheckpointContract:
 
     def test_load_from_checkpoint_round_trips_the_contract(self, naics_model, tmp_path):
         path = tmp_path / 'repaired.ckpt'
-        torch.save(_lightning_checkpoint(naics_model), path)
+        torch.save(lightning_checkpoint(naics_model), path)
 
         restored = NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
 
         assert restored.checkpoint_contract == naics_model.checkpoint_contract
+        assert restored.checkpoint_contract.encoder.layout == 'shared'
+        assert restored.encoder.dimension == 16
 
     def test_load_from_checkpoint_rejects_a_legacy_checkpoint(self, naics_model, tmp_path):
-        checkpoint = _lightning_checkpoint(naics_model)
+        checkpoint = lightning_checkpoint(naics_model)
         del checkpoint['stage3_supervision']
         path = tmp_path / 'legacy.ckpt'
         torch.save(checkpoint, path)
 
         with pytest.raises(ValueError, match='exact resume'):
             NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
+
+    def test_load_from_checkpoint_refuses_a_four_copy_checkpoint_before_its_weights(
+        self, naics_model, tmp_path
+    ):
+        '''Spec 4.4: a pre-Stage-6 checkpoint meets the D2 refusal, never a state-dict key error.'''
+
+        checkpoint = lightning_checkpoint(naics_model)
+        # Contracts saved before Stage 6 carry no encoder record, and their hyperparameters
+        # predate fusion and dimension
+        del checkpoint['stage3_supervision']['encoder']
+        for name in ('fusion', 'dimension'):
+            del checkpoint['hyper_parameters'][name]
+        # The four-copy layout's keys, which a strict load_state_dict would reject
+        checkpoint['state_dict'] = {
+            'encoder.encoders.title.base_model.model.embeddings.word_embeddings.weight': torch
+            .zeros(1)
+        }
+        path = tmp_path / 'four-copy.ckpt'
+        torch.save(checkpoint, path)
+
+        with pytest.raises(ValueError, match='D2'):
+            NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
+
+    def test_load_from_checkpoint_refuses_another_dimension(self, naics_model, tmp_path):
+        path = tmp_path / 'shared.ckpt'
+        torch.save(lightning_checkpoint(naics_model), path)
+
+        with pytest.raises(ValueError, match='D2'):
+            NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu', dimension=8)
 
 # -------------------------------------------------------------------------------------------------
 # Test: Explicit legacy containment

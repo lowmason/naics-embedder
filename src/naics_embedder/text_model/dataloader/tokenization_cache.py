@@ -14,15 +14,21 @@ import polars as pl
 import torch
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+from naics_embedder.text_model.fields import CHANNELS, marker, tokenize_field
 from naics_embedder.utils.config import TokenizationConfig
 from naics_embedder.utils.input_window import check_window
 
 logger = logging.getLogger(__name__)
 
-# How channels are encoded: every channel at the window, and an absent one as the empty string
-# with ``present`` False. A cache in the earlier format (a placeholder text, titles at 24 tokens)
-# records no format in its sidecar, so it is rebuilt.
-CACHE_FORMAT = 'channels-v2'
+# How channels are encoded: each present channel as its marked text, '<field>: <text>'
+# (text_model/fields.py), at the window, and an absent one as the empty string with ``present``
+# False and no marker. A cache in an earlier format (unmarked texts, or a placeholder text)
+# records another format in its sidecar, or none, so it is rebuilt.
+CACHE_FORMAT = 'channels-v3'
+
+# Stage 6b's summaries artifact, by hash: null until it lands. It is part of the cache's identity,
+# so a cache built under other summaries is rebuilt.
+SUMMARIES: Optional[str] = None
 
 # Disable tokenizer parallelism to avoid fork issues with multiprocessing
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -39,29 +45,16 @@ def _tokenize_text(
     max_length: int,
 ) -> Tuple[Dict[str, Any], Dict[str, int]]:
     '''
-    Tokenize one channel text, truncated and padded to ``max_length``.
+    Tokenize one channel text with its field marker, truncated and padded to ``max_length``.
 
-    An absent channel (null or blank) is encoded as the empty string, ``[CLS] [SEP]``, never as
-    placeholder text, and its ``present`` flag is False so fusion can mask it (Req 9).
+    An absent channel (null or blank) is encoded as the empty string, ``[CLS] [SEP]``, with no
+    marker and never as placeholder text, and its ``present`` flag is False so fusion can mask it
+    (Req 9). ``fields.tokenize_field`` does the work, as it does for a query.
     '''
 
-    text = row.get(field) or ''
-    present = bool(text.strip())
-    if present:
+    encoding = tokenize_field(tokenizer, field, row.get(field), max_length)
+    if encoding['present']:
         counter[field] += 1
-    else:
-        text = ''
-
-    encoded = tokenizer(
-        text, padding='max_length', truncation=True, max_length=max_length, return_tensors='pt'
-    )
-
-    encoding = {
-        'input_ids': torch.squeeze(encoded['input_ids']),  # type: ignore
-        'attention_mask': torch.squeeze(encoded['attention_mask']),  # type: ignore
-        'present': present,
-    }
-
     return encoding, counter
 
 def _build_tokenization_cache(
@@ -216,6 +209,11 @@ def _cache_identity(
         'tokenizer_name': cfg.tokenizer_name,
         'max_length': cfg.max_length,
         'cache_format': CACHE_FORMAT,
+        'field_markers': {
+            channel: marker(channel)
+            for channel in CHANNELS
+        },
+        'summaries': SUMMARIES,
     }
 
 def _write_cache_sidecar(
@@ -286,8 +284,8 @@ def tokenization_cache(
     Get tokenization cache, loading from disk or building if necessary.
 
     A cache is reused only when its JSON sidecar records exactly the requested description and
-    codebook fingerprints, tokenizer, and max length; otherwise it is rebuilt, because its source
-    text is independently reproducible.
+    codebook fingerprints, tokenizer, max length, format, field markers and summaries; otherwise
+    it is rebuilt, because its source text is independently reproducible.
 
     This function is safe for multi-worker environments. It uses file locking
     to ensure only one worker builds the cache, while others wait and then load it.
