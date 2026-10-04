@@ -12,9 +12,10 @@ Per code the path is:
 
 A query is a one-field batch, ``{'query': …}``, and takes the same path.
 
-A batch's present (row, field) texts are gathered into one backbone call, trimmed to the longest
-of them, so neither an absent text nor a padding column enters the backbone. Presence comes from
-each field's ``present`` flag, never from the attention mask (Req 9).
+Each field's present texts go to the backbone in chunks of at most ``max_texts_per_call``, each
+trimmed to its own longest text. So no absent text, and no padding column beyond a chunk's longest
+text, enters the backbone. Presence comes from each field's ``present`` flag, never from the
+attention mask (Req 9).
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -26,7 +27,6 @@ from typing import Dict, List, Mapping
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
 from transformers import AutoModel, PreTrainedModel
 
@@ -37,6 +37,8 @@ from naics_embedder.text_model.hyperbolic import HyperbolicHead
 logger = logging.getLogger(__name__)
 
 DIMENSIONS = (8, 16, 32)
+# The most texts in one backbone call; its backward peak is ~13 MiB per 128-token text, ~3 GiB here
+MAX_TEXTS_PER_CALL = 256
 
 # -------------------------------------------------------------------------------------------------
 # Backbone
@@ -67,9 +69,12 @@ class SharedEncoder(nn.Module):
         moe_hidden_dim: The experts' hidden width, under ``moe`` only.
         curvature: The head's curvature.
         use_gradient_checkpointing: Recompute the backbone's activations in the backward pass.
+        max_texts_per_call: The most texts one backbone call carries. It bounds a call's memory and
+            leaves every output unchanged.
 
     Raises:
-        ValueError: If the fusion or the dimension is outside its set.
+        ValueError: If the fusion or the dimension is outside its set, or ``max_texts_per_call``
+            is below 1.
     '''
 
     def __init__(
@@ -85,6 +90,7 @@ class SharedEncoder(nn.Module):
         moe_hidden_dim: int = 1024,
         curvature: float = 1.0,
         use_gradient_checkpointing: bool = True,
+        max_texts_per_call: int = MAX_TEXTS_PER_CALL,
     ):
         super().__init__()
 
@@ -92,6 +98,8 @@ class SharedEncoder(nn.Module):
             raise ValueError(f'unknown fusion {fusion!r}; expected one of {list(FUSIONS)}')
         if dimension not in DIMENSIONS:
             raise ValueError(f'unknown dimension {dimension!r}; expected one of {list(DIMENSIONS)}')
+        if max_texts_per_call < 1:
+            raise ValueError(f'max_texts_per_call must be at least 1, got {max_texts_per_call!r}')
 
         base_model = load_base_model(base_model_name)
         self.hidden_size = int(base_model.config.hidden_size)
@@ -124,6 +132,7 @@ class SharedEncoder(nn.Module):
         self.head = HyperbolicHead(curvature=curvature)
         self.dimension = dimension
         self.curvature = curvature
+        self.max_texts_per_call = max_texts_per_call
 
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.parameters())
@@ -188,37 +197,40 @@ class SharedEncoder(nn.Module):
         present: torch.Tensor,
     ) -> torch.Tensor:
         '''
-        Mean-pool every present (row, field) text in one backbone call, to (B, F, H).
+        Mean-pool every present (row, field) text, to (B, F, H).
 
-        Present texts are gathered field by field and right-padded to one width, which is then
-        trimmed to the longest text, so neither an absent text nor a padding column enters the
-        backbone (P4). Absent slots stay zeros, and fusion masks them.
+        Each field's present texts, in row order, go to the backbone in chunks of at most
+        ``max_texts_per_call``, each trimmed to its own longest text. So no absent text, and no
+        padding column beyond a chunk's longest text, enters the backbone (P4). A field with no
+        present text makes no call, and a batch with none makes no call at all. Absent slots stay
+        zeros, and fusion masks them.
         '''
 
         batch_size = present.shape[0]
-        width = max(int(channel_inputs[field]['input_ids'].shape[1]) for field in fields)
-        input_ids: List[torch.Tensor] = []
-        attention_mask: List[torch.Tensor] = []
+        pooled = self.projection.weight.new_zeros((batch_size, len(fields), self.hidden_size))
         for column, field in enumerate(fields):
-            rows = present[:, column]
-            ids = channel_inputs[field]['input_ids'][rows]
-            mask = channel_inputs[field]['attention_mask'][rows]
-            input_ids.append(F.pad(ids, (0, width - ids.shape[1])))
-            attention_mask.append(F.pad(mask, (0, width - mask.shape[1])))
-        ids = torch.cat(input_ids)
-        mask = torch.cat(attention_mask)
-        if ids.shape[0] == 0:
-            # No present text in the batch: every slot is absent, and fusion masks them all
-            return self.projection.weight.new_zeros((batch_size, len(fields), self.hidden_size))
+            rows = present[:, column].nonzero().squeeze(1)
+            if rows.numel() == 0:
+                # split() of no rows still yields one empty chunk, and a call needs a text
+                continue
+            for chunk in rows.split(self.max_texts_per_call):
+                pooled[chunk, column] = self._pool_chunk(
+                    channel_inputs[field]['input_ids'][chunk],
+                    channel_inputs[field]['attention_mask'][chunk],
+                )
+        return pooled
 
-        used = torch.nonzero(mask.ne(0).any(dim=0))
+    def _pool_chunk(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        '''
+        One backbone call over a chunk of present texts, mean-pooled to (n, H).
+
+        The chunk is trimmed to its longest text: the last column where any row's mask is nonzero,
+        plus one, or one column if none is.
+        '''
+
+        used = torch.nonzero(attention_mask.ne(0).any(dim=0))
         length = int(used[-1]) + 1 if used.numel() else 1
-        ids, mask = ids[:, :length], mask[:, :length]
+        ids, mask = input_ids[:, :length], attention_mask[:, :length]
         hidden = self.backbone(input_ids=ids, attention_mask=mask).last_hidden_state
         weights = mask.unsqueeze(-1).float()
-        vectors = (hidden * weights).sum(dim=1) / weights.sum(dim=1).clamp(min=1e-9)
-
-        # Field-major slots, in the order the texts were gathered
-        flat = vectors.new_zeros((len(fields) * batch_size, vectors.shape[1]))
-        flat[present.t().reshape(-1)] = vectors
-        return flat.reshape(len(fields), batch_size, -1).transpose(0, 1)
+        return (hidden * weights).sum(dim=1) / weights.sum(dim=1).clamp(min=1e-9)

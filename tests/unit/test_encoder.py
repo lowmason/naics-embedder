@@ -2,9 +2,11 @@
 The shared encoder (Req 14; spec 4.1), on a one-layer BERT so these tests download nothing.
 
 One backbone serves codes and queries; an absent channel never reaches the output; exactly one
-affine map sits between fusion and the point; and a step reaches every adapter and the projection.
+affine map sits between fusion and the point; a field's texts go to the backbone in bounded chunks
+that leave every output unchanged; and a step reaches every adapter and the projection.
 '''
 
+from typing import List
 from unittest.mock import Mock
 
 import pytest
@@ -17,7 +19,7 @@ from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.fields import CHANNELS, QUERY
 from naics_embedder.text_model.fusion import FUSIONS
 from naics_embedder.text_model.hyperbolic import HyperbolicHead, check_lorentz_manifold_validity
-from naics_embedder.text_model.shared_encoder import DIMENSIONS, SharedEncoder
+from naics_embedder.text_model.shared_encoder import DIMENSIONS, MAX_TEXTS_PER_CALL, SharedEncoder
 from tests.fixtures.shared_encoder import TINY_HIDDEN, tiny_bert
 
 pytestmark = pytest.mark.unit
@@ -52,6 +54,30 @@ CODES = [
     _code(description=[101, 2006, 2007, 102]),
 ]
 
+def _tokens(row, field, length):
+    '''Token ids that belong to this (row, field) alone: ``[CLS]``, length - 2 ids, ``[SEP]``.'''
+
+    start = 3000 + 100 * row + 10 * CHANNELS.index(field)
+    return [101, *range(start, start + length - 2), 102]
+
+def _mixed_code(row, counts):
+    '''A code whose present channels have these token counts, with ids that no other code shares.'''
+
+    return _code(**{field: _tokens(row, field, length) for field, length in counts.items()})
+
+# Per row, the token count of each present channel; the last code has none. The title is present
+# in rows 0, 2, 3 and 4, so a bound of 2 splits it into the chunks (0, 2) and (3, 4)
+MIXED_PRESENCE = [
+    dict(title=4, examples=6),
+    dict(description=5),
+    dict(title=7, description=3, excluded=4),
+    dict(title=3, examples=5),
+    dict(title=5, excluded=6, examples=4),
+    dict(),
+]
+# Every text has ids of its own, so a pooled vector in another row's slot changes an output
+MIXED_CODES = [_mixed_code(row, counts) for row, counts in enumerate(MIXED_PRESENCE)]
+
 @pytest.fixture
 def make_encoder(tiny_backbone):
     '''Build a ``SharedEncoder`` on the tiny backbone, with these settings overridden.'''
@@ -73,6 +99,31 @@ def make_encoder(tiny_backbone):
         return SharedEncoder(**{**settings, **overrides})
 
     return make
+
+def _record_backbone_calls(encoder, monkeypatch) -> List[torch.Tensor]:
+    '''The ``input_ids`` of every backbone call the encoder makes, in order.'''
+
+    calls = []
+    forward = encoder.backbone.forward
+
+    def spy(**inputs):
+        calls.append(inputs['input_ids'].clone())
+        return forward(**inputs)
+
+    monkeypatch.setattr(encoder.backbone, 'forward', spy)
+    return calls
+
+def _encode_with_slots(encoder, batch):
+    '''The encoder's output for this batch, and the ``(pooled, present)`` it gave its fusion.'''
+
+    seen = []
+    handle = encoder.fusion.register_forward_hook(lambda module, args, output: seen.append(args))
+    try:
+        output = encoder(batch)
+    finally:
+        handle.remove()
+    pooled, present = seen[0]
+    return output, pooled, present
 
 # -------------------------------------------------------------------------------------------------
 # Structure
@@ -109,6 +160,11 @@ def test_an_unknown_fusion_or_dimension_is_refused(make_encoder):
     with pytest.raises(ValueError, match='unknown dimension'):
         make_encoder(dimension=12)
 
+@pytest.mark.parametrize('bound', [0, -1])
+def test_a_chunk_bound_below_one_is_refused(make_encoder, bound):
+    with pytest.raises(ValueError, match='max_texts_per_call must be at least 1'):
+        make_encoder(max_texts_per_call=bound)
+
 # -------------------------------------------------------------------------------------------------
 # One encoder for codes and queries
 # -------------------------------------------------------------------------------------------------
@@ -134,8 +190,11 @@ def test_a_one_field_batch_encodes_as_a_code_with_only_that_channel(make_encoder
 # -------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('fusion', FUSIONS)
-def test_perturbing_an_absent_channel_leaves_the_output_bit_identical(make_encoder, fusion):
-    encoder = make_encoder(fusion=fusion).eval()
+@pytest.mark.parametrize('max_texts_per_call', (1, MAX_TEXTS_PER_CALL))
+def test_perturbing_an_absent_channel_leaves_the_output_bit_identical(
+    make_encoder, fusion, max_texts_per_call
+):
+    encoder = make_encoder(fusion=fusion, max_texts_per_call=max_texts_per_call).eval()
     batch = stack_text_inputs(CODES)
     perturbed = stack_text_inputs(CODES)
     for channel in CHANNELS:
@@ -152,23 +211,17 @@ def test_perturbing_an_absent_channel_leaves_the_output_bit_identical(make_encod
 
 def test_absent_texts_and_padding_never_enter_the_backbone(make_encoder, monkeypatch):
     encoder = make_encoder().eval()
-    calls = []
-    forward = encoder.backbone.forward
+    calls = _record_backbone_calls(encoder, monkeypatch)
 
-    def spy(**inputs):
-        calls.append(inputs['input_ids'].clone())
-        return forward(**inputs)
-
-    monkeypatch.setattr(encoder.backbone, 'forward', spy)
     with torch.no_grad():
         encoder(stack_text_inputs(CODES))
 
-    # The three present texts in one call, field by field, trimmed to the longest (five tokens)
-    [input_ids] = calls
-    assert input_ids.tolist() == [
-        [101, 2001, 2002, 102, 0],
-        [101, 2006, 2007, 102, 0],
-        [101, 2003, 2004, 2005, 102],
+    # One call per field with a present text, in field order (no code has an excluded text), each
+    # trimmed to its own longest text
+    assert [call.tolist() for call in calls] == [
+        [[101, 2001, 2002, 102]],
+        [[101, 2006, 2007, 102]],
+        [[101, 2003, 2004, 2005, 102]],
     ]
 
 @pytest.mark.parametrize('fusion', FUSIONS)
@@ -193,6 +246,74 @@ def test_a_batch_with_no_present_text_never_calls_the_backbone(make_encoder, mon
 
     assert output['embedding'].shape == (2, 9)
     assert torch.isfinite(output['embedding']).all()
+
+# -------------------------------------------------------------------------------------------------
+# Chunked backbone calls
+# -------------------------------------------------------------------------------------------------
+
+def test_each_fields_texts_go_in_chunks_trimmed_to_their_own_longest_text(
+    make_encoder, monkeypatch
+):
+    encoder = make_encoder(max_texts_per_call=2).eval()
+    calls = _record_backbone_calls(encoder, monkeypatch)
+    codes = [
+        _code(title=[101, 2001, 102]),
+        _code(title=[101, 2002, 2003, 2004, 102]),
+        _code(title=[101, 2005, 2006, 102]),
+    ]
+
+    with torch.no_grad():
+        encoder(stack_text_inputs(codes))
+
+    # Rows 0 and 1 share a chunk, trimmed to the longer (five tokens); row 2 is trimmed to its own
+    assert [call.tolist() for call in calls] == [
+        [[101, 2001, 102, 0, 0], [101, 2002, 2003, 2004, 102]],
+        [[101, 2005, 2006, 102]],
+    ]
+
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_the_chunk_bound_leaves_the_outputs_unchanged(make_encoder, fusion):
+    encoder = make_encoder(fusion=fusion).eval()
+    batch = stack_text_inputs(MIXED_CODES)
+
+    outputs = []
+    for bound in (1, 2, MAX_TEXTS_PER_CALL):
+        encoder.max_texts_per_call = bound
+        with torch.no_grad():
+            outputs.append(encoder(batch))
+
+    reference, *others = outputs
+    for output in others:
+        assert output.keys() == reference.keys()
+        torch.testing.assert_close(output['embedding'], reference['embedding'])
+        torch.testing.assert_close(output['tangent'], reference['tangent'])
+        if 'gate_probs' in output:
+            torch.testing.assert_close(output['gate_probs'], reference['gate_probs'])
+            assert torch.equal(output['top_k_indices'], reference['top_k_indices'])
+
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_each_row_of_a_batch_encodes_as_that_code_alone(make_encoder, fusion):
+    # A bound of 2 puts rows of the same field in one chunk, so a vector can land in another row
+    encoder = make_encoder(fusion=fusion, max_texts_per_call=2).eval()
+
+    with torch.no_grad():
+        together, pooled, present = _encode_with_slots(encoder, stack_text_inputs(MIXED_CODES))
+        for row, code in enumerate(MIXED_CODES):
+            alone = encoder(stack_text_inputs([code]))
+            assert alone.keys() == together.keys()
+            for key in alone:
+                torch.testing.assert_close(together[key][row], alone[key][0])
+
+            # Every slot holds its own text, pooled on its own, or zeros if the text is absent. A
+            # misplacement that is the same for every batch composition shows only here
+            for column, field in enumerate(CHANNELS):
+                slot = pooled[row, column]
+                if present[row, column]:
+                    one_field = stack_text_inputs([{field: code[field]}], fields=(field, ))
+                    _, text_alone, _ = _encode_with_slots(encoder, one_field)
+                    torch.testing.assert_close(slot, text_alone[0, 0])
+                else:
+                    assert torch.equal(slot, torch.zeros_like(slot))
 
 # -------------------------------------------------------------------------------------------------
 # Outputs and refusals
@@ -236,8 +357,13 @@ def test_a_malformed_batch_is_refused(make_encoder):
 # -------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('checkpointing', [False, True])
-def test_a_step_reaches_every_adapter_and_the_projection(make_encoder, checkpointing):
-    encoder = make_encoder(use_gradient_checkpointing=checkpointing).train()
+@pytest.mark.parametrize('max_texts_per_call', (1, MAX_TEXTS_PER_CALL))
+def test_a_step_reaches_every_adapter_and_the_projection(
+    make_encoder, checkpointing, max_texts_per_call
+):
+    encoder = make_encoder(
+        use_gradient_checkpointing=checkpointing, max_texts_per_call=max_texts_per_call
+    ).train()
 
     encoder(stack_text_inputs(CODES))['embedding'].sum().backward()
 

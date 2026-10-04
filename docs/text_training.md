@@ -71,9 +71,9 @@ One LoRA-adapted MiniLM backbone (revision 1110a243) reads every field
   format `channels-v3` stores the marked texts. Its sidecar records the markers and a `summaries`
   entry, null until Stage 6b. A cache built under another format, other markers or other
   summaries is rebuilt.
-- **Present channels only.** A batch's present texts go through the backbone in one call, and
-  absent texts and padding columns never enter it. Each present text is mean-pooled over its
-  tokens.
+- **Present channels only.** Each field's present texts go through the backbone in calls of at most
+  256 texts (`MAX_TEXTS_PER_CALL`), each trimmed to its own longest text, and absent texts never
+  enter it. Each present text is mean-pooled over its tokens.
 - **Fusion** (`model.fusion`): `masked_mean` (default), `attention`, or `moe`, the ablation that
   routes the masked mean through the experts of `model.moe`. Router-guided mining and the
   load-balancing term run only under `moe` (spec R10, R11).
