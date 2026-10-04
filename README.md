@@ -59,7 +59,7 @@ To align the latent space with the hierarchical structure of NAICS, embeddings a
 The d-dimensional vector is a tangent vector at the origin. A parameter-free head caps its norm at 2 and maps it onto the hyperboloid:
 
 - Uses the exponential map at the origin
-- Curvature fixed at c = 1; export and reads refuse any other
+- Curvature c = 1 by default (`loss.curvature`, not learned); export and reads refuse any other
 - Ensures numerical stability
 
 The result is a Lorentz embedding (E_hyp) with d + 1 coordinates. The export (`tools export-table`) writes the tangent coordinates, `e0 … e{d-1}`: Req 2's form.

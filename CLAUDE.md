@@ -793,13 +793,15 @@ if use_gradient_checkpointing:
 
 **Two approaches:**
 
-1. **Clamped curvature** (`text_model/hyperbolic.py`) - Clamps to safe range `[0.1, 10.0]`
+1. **Configured curvature** (`text_model/hyperbolic.py`) - The head takes `loss.curvature` as
+   given: it is not learned and not clamped
 2. **Managed curvature** (`utils/hyperbolic.py`) - `CurvatureManager` with learnable or fixed
-   curvature
+   curvature; a learnable value is clamped to `[0.1, 10.0]` by default, which prevents numerical
+   instability in hyperbolic operations
 
-Both prevent numerical instability in hyperbolic operations. The text model's curvature is a
-fixed 1.0, and export and reads take c = 1 only: `tools export-table` and `tools outcome-panel`
-refuse a checkpoint trained at any other curvature (spec R8).
+The text model uses the first. Its curvature defaults to 1.0 (`loss.curvature`) and is not learned,
+and export and reads take c = 1 only: `tools export-table` and `tools outcome-panel` refuse a
+checkpoint trained at any other curvature (spec R8).
 
 ### 3. Mixed Precision Training
 
