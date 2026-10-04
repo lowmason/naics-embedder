@@ -4,17 +4,19 @@
 > reconcile step; route each unticked stage per its ROUTING line; never plan
 > this document wholesale.
 
-**Status: APPROVED (2026-09-23); resumed three times on 2026-09-24 and once on 2026-10-03.**
-Derived in a session that could not ask questions, then the six open questions were answered
-interactively and the eleven-stage partition approved at the human checkpoint (decisions D1–D6
-below). Stages 1–5 are complete. The first resume re-validated Stages 2–11 against Stage 1 and
-recorded D7 and D8; the second re-validated Stages 3–11 against Stage 2, recorded D9 and added
-Stage 12 (below); the third re-validated Stages 4–12 against Stage 3 and recorded D10 and D11,
-which settle the former Open questions. Stage 4's completion commit (9c028ae, 2026-09-25)
-re-validated the entries of Stages 5–12 against what Stage 4 shipped, and Stage 5's (768a2b0,
-2026-09-26) those of Stages 6, 7, 9 and 10; the fourth resume re-validated Stages 6–12 against
-both (below). Stage 6 is next, per its ROUTING line. Stage 6b, added on 2026-10-03 during Stage
-6's brainstorm (below), can be built beside it and lands before Stage 7.
+**Status: APPROVED (2026-09-23); resumed three times on 2026-09-24, once on 2026-10-03 and once
+on 2026-10-04.** Derived in a session that could not ask questions, then the six open questions
+were answered interactively and the eleven-stage partition approved at the human checkpoint
+(decisions D1–D6 below). Stages 1–6 are complete. The first resume re-validated Stages 2–11
+against Stage 1 and recorded D7 and D8; the second re-validated Stages 3–11 against Stage 2,
+recorded D9 and added Stage 12 (below); the third re-validated Stages 4–12 against Stage 3 and
+recorded D10 and D11, which settle the former Open questions. Stage 4's completion commit
+(9c028ae, 2026-09-25) re-validated the entries of Stages 5–12 against what Stage 4 shipped, and
+Stage 5's (768a2b0, 2026-09-26) those of Stages 6, 7, 9 and 10; the fourth resume re-validated
+Stages 6–12 against both (below). Stage 6b was added on 2026-10-03 during Stage 6's brainstorm
+(below). Stage 6's completion commit (08e0fdc, 2026-10-03) re-validated Stages 6b–10, and the
+fifth resume re-validated Stages 11 and 12 and the Gap analysis (below). Stage 6b is next, per
+its ROUTING line, and lands before Stage 7.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
@@ -135,6 +137,39 @@ as 6b, not renumbered, so Stage 6's stamp and every reference to Stages 7–12 s
 (`specs/completed/shared-encoder-and-projection.md`, Rollout note) records the measurements and
 the three constraints the entry carries.
 
+**Resume after Stage 6 (2026-10-04).** Stage 6's stamp is authoritative: plan 8, merged as PR #122
+(f5c8307). Its completion commit had re-validated Stages 6b–10; this resume re-validated Stages
+11 and 12 at origin/main f5c8307, where the spec is still d9126ce's, and re-read every Gap
+analysis citation into the 22 files Stage 6 changed under `src/` and `conf/`, in the rows unticked
+stages read. Citations whose mechanism moved were re-pointed (Reqs 4, 10, 11, 13 and 16, and the
+legacy-containment row), and those Stage 6 rewrote now say what replaced them: Req 11's
+load-balancing term exists only under `model.fusion: moe`, Req 13's cap sits in the
+parameter-free `HyperbolicHead`, Req 15's text export is the HGCN feeder's d + 1 columns, and Req
+16's standalone export exists for the text stage. Citations into code Stage 6 deleted stay as
+entry-time evidence: Req 9's `text_model/encoder.py:140`, where fusion now masks absent channels
+(`text_model/shared_encoder.py:225-235`, `text_model/fusion.py:40-59`), and the `encoder.py`
+citations in the rows of Reqs 3, 12 and 14, the Sequencing paragraph and Stage 2's Consumes. The
+Stage 5 resume's curvature path now runs through `text_model/hyperbolic.py:101`. Every verdict
+stands. Four gaps surfaced:
+
+- The overflow the Stage 6b entry carried was measured on unmarked texts. The cache tokenizes
+  each text with its field marker, so 162 descriptions, 106 examples texts and 485 exclusion
+  texts are truncated, not 153, 105 and 464; the sectors (16 of 20) and subsectors (59 of 96) are
+  the same either way. The entry now carries both.
+- Stage 12 named no query path. Stage 6's is `ArmEncoder.from_files`, which reads only a table
+  whose provenance names its checkpoint, its own hash and the window (`text_model/export.py`
+  writes one), takes the tokenizer from the arm's config, and maps through the hyperbolic exp
+  map only. Stage 10's arm tables now carry that provenance, and Stage 12 inherits Stage 8's
+  per-geometry maps.
+- Stage 11's drop path did not name the HGCN feeder, `generate_embeddings_from_checkpoint` and
+  `train`'s prompt for it (`cli/commands/training.py`), whose `encode_token_rows` the export and
+  the arm encoder keep using.
+- The bundle build imports `graph_model.curriculum.preprocess_curriculum` for the
+  `difficulty_thresholds` member (`data/supervision_bundle.py:694-697`) that the manifest
+  requires (`supervision/artifacts.py:177`). Removing the graph stage therefore breaks
+  `data supervision`, and dropping the member changes the bundle contract. Stage 11's drop path
+  now names it as a contract decision.
+
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
 
@@ -227,21 +262,21 @@ third resume checkpoint. Stage 4 builds both into its tooling, through which Sta
 | 1 | missing | `text_model/mixins/validation.py:182` (ground truth is the taxonomy distance matrix), `:167-170` (300-code subsample); `utils/training.py:307` (checkpoint monitors `val/contrastive_loss`); `tools/embeddings_verification.py:33-35` (structural acceptance gate) | No evaluation reads data outside the taxonomy; no sealed split exists; structural statistics still gate (`verify-stage4`). Looked in `metrics/*`, `mixins/validation.py`, `tools/*`, `cli/commands/*`, `graph_model/hgcn.py:863-943`. |
 | 2 | implemented-differently | `metrics/qcew.py:79` (one row per code), `:110`, `:136` (`Ridge(alpha=1.0)` on unscaled features), `:131-132` (2022, private only), `:185-187` (one `GroupShuffleSplit`), `:178` (covariates are QCEW's own establishments and wages), `:331` (multi-level loop); no CLI wiring in `cli/commands/*`; only run: `tests/unit/test_graph_downstream_evaluation.py:84` on a synthetic CSV | The module is the definition Req 2 rejects (one row per code, fixed penalty, no ancestor, text-only or covariates-only arms, no regimes) and has never run on real data. The (open) item is unresolved: Stage 1. Outcome data are external BLS QCEW files, not a repo artifact. |
 | 3 | missing | `data/download_data.py:86`, `:397` (index file becomes the examples channel, joined with `'; '`); `text_model/encoder.py:122-123` (forward needs all four channels; no single-text path); `metrics/core.py:152` (`RetrievalMetrics` is code–code with binary relevance, called only from the never-instantiated `metrics/runner.py:110`) | No query encoding, decoding, roles or leakage check. Looked in `text_model/*`, `metrics/*`, `tools/*`, `cli/*`, `tests/unit/*`. |
-| 4 | missing | `text_model/dataloader/datamodule.py:876` (validation is the same builder with seed + 1000), `:1089`, `:1092` (same `_repaired_dataset` for train and validation), `:840` (`val_split` unused); no `test_step` or `test_dataloader` in `src/`; `cli/commands/training.py:661`, `:795` (checkpoint and export from the best `val/contrastive_loss`); `graph_model/dataloader/hgcn_datamodule.py:212`, `:245-246` (5 % unshuffled tail); `graph_model/hgcn.py:1326`, `:1331` (no checkpointing; last-epoch export) | The in-sample contrastive loss selects everything (`datamodule.py:1132-1133` documents it); no test split; the graph stage has both forbidden behaviours. |
+| 4 | missing | `text_model/dataloader/datamodule.py:901` (validation is the same builder with seed + 1000), `:1114`, `:1117` (same `_repaired_dataset` for train and validation), `:865` (`val_split` unused); no `test_step` or `test_dataloader` in `src/`; `cli/commands/training.py:599`, `:733` (checkpoint and export from the best `val/contrastive_loss`); `graph_model/dataloader/hgcn_datamodule.py:212`, `:245-246` (5 % unshuffled tail); `graph_model/hgcn.py:1326`, `:1331` (no checkpointing; last-epoch export) | The in-sample contrastive loss selects everything (`datamodule.py:1157-1158` documents it); no test split; the graph stage has both forbidden behaviours. |
 | 5 | missing | `conf/config.yaml:5`, `conf/graph.yaml:100` (single seed); no seeds, pairing, interval, dominance or record code in `src/`, `tests/`, `conf/`, `scripts/`; `tools/embeddings_verification.py:33-35` (the fixed thresholds Req 5 replaces) | Only the mechanism to be replaced exists. The one retained run holds three metric records (`outputs/sadc_default/version_0/evaluation_metrics.json`). |
 | 6 | implemented-differently | `metrics/core.py:341` (`cophenetic_correlation`; Pearson at `:389`), `:508` (continuous NDCG grades); `metrics/structural_spearman.py:16` (global, unstratified); `metrics/hierarchy_structure.py:103-106` (parent retrieval over every pair, unary pairs included); `text_model/mixins/validation.py:406-408` (cophenetic on the progress bar); `tools/metrics_tools.py:104-106` (headline table); no sector AUC or within-sector statistic in `src/` | The statistics exist but are global, keep the cophenetic name, grade NDCG continuously, score unary pairs, and headline or gate. |
 | 7 | implemented-differently | `data/compute_distances.py:160-164` (−0.5 on lineal pairs), `:244` (`fill_null(99)`); `supervision/schema.py:36`, `:41`; `tests/unit/test_data_distances.py:280`, `:492` pin both; no information-content code anywhere | The collateral term matches D*; the half-step and the 99 constant do not; no virtual root. The prior spec kept 99 deliberately (`specs/completed/stage-3-supervision-integrity.md:117-118`) and scoped out hierarchy changes (`:42-48`). 87.9 % of the bundle's pair facts are 99. |
 | 8 | implemented-differently | `data/download_data.py:352`, `:366` (exclusion text exploded per referenced code, so repeated); `data/create_triplets.py:227-229` (exclusion pairs generated as `UNRELATED` negatives); `supervision/selection.py:184-192` (rotating one-slot exclusion quota); `text_model/mixins/curriculum.py:244` (exclusions exempt from eligibility); `text_model/loss.py:78` (always in the denominator); `supervision/index.py:102-104` (symmetric, so the nine lineal references act as negatives); `graph_model/hgcn.py:1157-1162` (edges from structural relations only) | (a) repeated, not once; (b) absent; (c) inverted for negatives (a protected negative was a deliverable of the prior spec, `:270-271`, `:503-505`) and as specified for edges; lineal references untreated. |
 | 9 | implemented-differently | `text_model/dataloader/tokenization_cache.py:39-40` (`'[EMPTY]'` placeholder), `text_model/encoder.py:140` (all four channels concatenated, no presence mask); `data/download_data.py:556-560`, `:629` (`.unique` picks an arbitrary child for the 14 four-digit codes), `:567`, `:582-584` (a five-digit code copies its lone child); no provenance column; `data/positive_sampling.py:78-81` (five-digit anchors get their lone child as positive); `metrics/hierarchy_structure.py:103-106`; `conf/config.yaml:95` (`max_length: 512`), `tokenization_cache.py:74` (title fixed at 24) | Placeholder instead of masking; arbitrary inheritance unrecorded; unary pairs in supervision and scoring; the rejected 512 window. The backbone's own files disagree (`sentence_bert_config.json` 256, `tokenizer_config.json` 512), so the (open) item stands. |
-| 10 | implemented-differently | `data/compute_distances.py:49-56`, `data/create_triplets.py:104`, `data/supervision_bundle.py:809` (canonical orientation: 35 six-digit codes are never anchors; no ancestor positives); `text_model/naics_model.py:514-517`, `datamodule.py:656-665`, `conf/config.yaml:98` (pools of 24 pre-drawn negatives per pair; manifest `training_pairs` has 45,373,918 rows); `supervision/margins.py:75` (eligibility rule); `text_model/dataloader/streaming_dataset.py:196-198`, `conf/config.yaml:100-101` (inverse-distance draws); `text_model/mixins/curriculum.py:439-450` (hyperbolic k-means pseudo-labels) | Every removed mechanism is present; the 4,675 sibling-positive, grandchild-negative rows reproduce in the live bundle; no per-epoch cache of all code points. |
-| 11 | implemented-differently | `text_model/mixins/loss.py:485-488` (six-term sum); `text_model/loss.py:47-129` (DCL), `:135-228` (distance matching, batch-normalized at `:222-223`), `:330-401` (pairwise preference); `mixins/loss.py:207-209` (radius penalty, zero by construction since r ≤ 2 < 10), `:318` (load balancing); `losses/level_radius.py:26-29` (level term; gradient ≈ 1e-7 under the cap, by probe); `naics_model.py:558-559` (margin logged only); `loss.py:58` (fixed float temperature); `text_model/mixins/optimizer.py:165-174`, `text_model/curriculum.py:108-116` (scheduler always built; mining active in epochs 6–9 of the shipped 10); no query term in `src/` | No task term; no learned scales; two code–code terms, neither listwise over all codes; every term Req 11 removes is present. Verification "No inert terms" fails today. |
+| 10 | implemented-differently | `data/compute_distances.py:49-56`, `data/create_triplets.py:104`, `data/supervision_bundle.py:809` (canonical orientation: 35 six-digit codes are never anchors; no ancestor positives); `text_model/naics_model.py:541-544`, `datamodule.py:681-690`, `conf/config.yaml:99` (pools of 24 pre-drawn negatives per pair; manifest `training_pairs` has 45,373,918 rows); `supervision/margins.py:75` (eligibility rule); `text_model/dataloader/streaming_dataset.py:196-198`, `conf/config.yaml:101-102` (inverse-distance draws); `text_model/mixins/curriculum.py:453-464` (hyperbolic k-means pseudo-labels) | Every removed mechanism is present; the 4,675 sibling-positive, grandchild-negative rows reproduce in the live bundle; no per-epoch cache of all code points. |
+| 11 | implemented-differently | `text_model/mixins/loss.py:485-494` (five-term sum; six under `model.fusion: moe`); `text_model/loss.py:47-129` (DCL), `:135-228` (distance matching, batch-normalized at `:222-223`), `:330-401` (pairwise preference); `mixins/loss.py:207-209` (radius penalty, zero by construction since r ≤ 2 < 10), `:318` (load balancing, under `moe` only); `losses/level_radius.py:26-29` (level term; gradient ≈ 1e-7 under the cap, by probe); `naics_model.py:585-586` (margin logged only); `loss.py:58` (fixed float temperature); `text_model/mixins/optimizer.py:165-174`, `text_model/curriculum.py:108-116` (scheduler always built; mining active in epochs 6–9 of the shipped 10); no query term in `src/` | No task term; no learned scales; two code–code terms, neither listwise over all codes; every term Req 11 removes is present. Verification "No inert terms" fails today. |
 | 12 | missing | `text_model/encoder.py:42` (dimension is the backbone hidden size, 384), `:81`, `:146` (`moe_projection` 1536→384) then `text_model/hyperbolic.py:102` (384→385): two stacked affine maps; no geometry switch in `src/` or `conf/`; `tests/unit/test_encoder.py:106` pins 384 | Dimension not configurable; Lorentz only. |
-| 13 | missing | `text_model/hyperbolic.py:94` (`max_norm=2.0`), `:138-140` (hard rescale; saturated points pass ≈ 1e-7 gradient, by probe); `losses/level_radius.py:28` (level 2 targets sinh r = 0, the origin); three radial coordinates in use (`level_radius.py:26-27`, `text_model/hyperbolic.py:281`, `text_model/hard_negative_mining.py:60-62`); `utils/config.py:949`, `conf/config.yaml:138` (curvature is a config parameter threaded everywhere); `graph_model/hgcn.py:85-88`, `:106-107` (per-layer parameter detached by `.item()`); `text_model/hyperbolic.py:234-267` (manifold check at tolerance 1e-3; no radius-resolution check) | E1 and E3 premises confirmed by probe. |
+| 13 | missing | `text_model/hyperbolic.py:99` (`max_norm=2.0` in the parameter-free `HyperbolicHead`), `:116-120` (hard rescale; saturated points pass ≈ 1e-7 gradient, by probe); `losses/level_radius.py:28` (level 2 targets sinh r = 0, the origin); three radial coordinates in use (`level_radius.py:26-27`, `text_model/hyperbolic.py:259`, `text_model/hard_negative_mining.py:60-62`); `utils/config.py:965`, `conf/config.yaml:141` (curvature is a config parameter threaded everywhere); `graph_model/hgcn.py:85-88`, `:106-107` (per-layer parameter detached by `.item()`); `text_model/hyperbolic.py:212-245` (manifold check at tolerance 1e-3; no radius-resolution check) | E1 and E3 premises confirmed by probe. |
 | 14 | missing | `text_model/encoder.py:56-61` (four full backbone loads, each with its own LoRA), `:122-123`, `:140` (concatenation into the MoE); `text_model/moe.py:118-125`, `conf/config.yaml:124-128` (MoE is the only fusion); `conf/config.yaml:117` (one `base_model_name`; no candidate list, no freeze flag) | No shared encoder, field markers, masked fusion, query path or backbone selection. |
-| 15 | missing | `graph_model/hgcn.py:1300`, `conf/graph.yaml:100` (single seed, one arm); no smoothing, shuffle control or matched-compute tooling in `src/`; `conf/graph.yaml:20` (`tangent_dim: 31`) against the 385-wide text export (`cli/commands/training.py:361-371`; by probe `Linear(31, 31)` rejects it; no width check at `hgcn.py:1303-1311`) | Arm D cannot run on the text stage's output as configured (the Req 16 fix); arms B, C and E do not exist; the fixed-threshold gate is the only comparison tooling. `conf/graph.yaml:15` names the bundle only in the unpushed local commit. |
-| 16 | implemented-differently | `graph_model/hgcn.py:82` (`Linear(dim, dim)`: no learned projection, but width 31 ≠ 385); `:303` (node states are a free `nn.Parameter` seeded from the text points; no retention term); `:1230-1237` (graph export of all rows); `cli/commands/training.py:786-798` (text export only behind an interactive `typer.confirm`); `cli/__init__.py:44-48` (no export command) | No projection map, as specified, but no shared space either; per-stage tables exist, no defined final deliverable, no standalone export. |
+| 15 | missing | `graph_model/hgcn.py:1300`, `conf/graph.yaml:100` (single seed, one arm); no smoothing, shuffle control or matched-compute tooling in `src/`; `conf/graph.yaml:20` (`tangent_dim: 31`) against the HGCN feeder's d + 1 `hyp_e*` columns, 17 at the default d = 16 (`cli/commands/training.py:296-302`; at entry the export was 385 wide, which by probe `Linear(31, 31)` rejects; no width check at `hgcn.py:1303-1311`) | Arm D cannot run on the text stage's output as configured (the Req 16 fix); arms B, C and E do not exist; the fixed-threshold gate is the only comparison tooling. `conf/graph.yaml:15` names the bundle only in the unpushed local commit. |
+| 16 | implemented-differently | `graph_model/hgcn.py:82` (`Linear(dim, dim)`: no learned projection, but width 31 ≠ 385); `:303` (node states are a free `nn.Parameter` seeded from the text points; no retention term); `:1230-1237` (graph export of all rows); `cli/commands/training.py:724-736` (the HGCN feeder only behind an interactive `typer.confirm`); `cli/commands/tools.py:854-908` (`tools export-table`, the text stage's standalone export, Stage 6) | No projection map, as specified, but no shared space either; per-stage tables exist, and the text stage's has a standalone export (Stage 6); no defined final deliverable. |
 | 17 | implemented-differently | `conf/graph.yaml:49-53`, `graph_model/hgcn.py:1190`, `:1195-1202` (child, grandchild, great-grandchild and sibling edges, bidirectional, plus self-loops); `hgcn.py:135`, `:143` (edge weight enters twice), `:1182-1183`; `hgcn.py:84`, `:118-120` (tangent LayerNorm; output radius ≈ 5.4 whatever the input, by probe); no distillation or residual to the text points; `hgcn.py:249`, `conf/graph.yaml:38-39` (hinge temperature); `hgcn.py:670-707`, `graph.yaml:73` (adaptive margin on); `hgcn.py:181-182`, `:205-207`, `graph.yaml:24` (uncertainty weights on); `hgcn.py:518-569`, `:592-626`, `graph.yaml:64` (in-file three-phase curriculum filters on); `graph_model/curriculum/*` (four-phase controller package, unwired: `hgcn.py:23` imports only `resolve_graph_config`) | Every mechanism Req 17 would replace is present and on by default. Untouched until Req 15 decides (user adjudication Q2); not applicable before Stage 10. |
-| (none) | in-code-but-not-in-spec | `text_model/naics_model.py:616-691`, `supervision/mode.py:35-40` | Legacy containment mode with a second `training_step`. Deleted in Stage 7 (D2). |
+| (none) | in-code-but-not-in-spec | `text_model/naics_model.py:646-723`, `supervision/mode.py:35-40` | Legacy containment mode with a second `training_step`. Deleted in Stage 7 (D2). |
 | (none) | in-code-but-not-in-spec | `data/supervision_bundle.py`, `supervision/checkpoints.py`, `conf/config.yaml:9-12` | The supervision bundle contract (manifest, contract version, exact-resume checkpoint contract). The spec's Staleness note assumes it without naming it; Stages 2 and 5 version it. Unrecorded decision to fold back: the bundle stays the single authority for structure and text. |
 | (none) | in-code-but-not-in-spec | `data/compute_relations.py:109-160`, `conf/data/supervision.yaml:10-25`, `data/create_triplets.py:149-160` | Fourteen named kinship relations plus `cross_sector` as a second structural axis with its own margin. Names survive as edge types and labels only; the margin axis leaves in Stage 7 (D5). |
 | (none) | in-code-but-not-in-spec | `losses/level_radius.py:26-29` via `graph_model/hgcn.py:741-746` | The graph stage's level-radius term (sectors at the origin). Req 17 does not list it. Handled in Stage 10 per D3. |
@@ -304,7 +339,16 @@ text model's Lorentz distances, exact only at c = 1, if a run leaves c = 1 or HG
 curvature gains a gradient (Stages 10–11); the manifest's tokenizer revision, at the next bundle
 rebuild or contract bump; and the activity phrases a forced role redraw's leakage check skips, if
 `data roles --force` runs. Three are standalone quick-fixes: the bundle build's tokenizer order
-and its text-channel check, and the `tools` commands' handling of polars errors.
+and its text-channel check, and the `tools` commands' handling of polars errors. The fifth resume
+adds plan 8's seven entries, as that plan handed them over. Stage 7 discharges one: what one
+training epoch reads, with its Lambda config's `data_loader.n_epochs` set to match. Three hold
+parts that touch Stage 6b's edits, and its spec says which it takes: the export provenance's
+missing tokenizer name, the cache's load messages, which name only the fingerprints, and the
+missing test that changes only a sidecar's markers. One waits on a trigger: `_pool_present`
+under true half precision, if a run can select it. The rest are standalone: the export's and the
+arm encoder's untested branches and untidy failures, the encoder, fusion and cache test gaps, the
+transformers floor and the remaining polish. Stage 6b does not rebuild the bundle, so plan 7's
+tokenizer-revision entry keeps its trigger.
 
 - [x] Stage 1: Employment-statistics coverage
       Objective: Verify which public employment series publish NAICS 2022 six-digit cells, for
@@ -615,10 +659,12 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       Consumes: Bundle 301cce28's descriptions (sha256 `fe8c54e3…`), unchanged, since summaries
       written into them would change the description fingerprint the bundle records. The
       overflow at the 128-token window under MiniLM's tokenizer, special tokens included,
-      measured on 2026-10-03 (`specs/completed/shared-encoder-and-projection.md`, Rollout note):
-      description 153 of 2,111 texts (sectors 16 of 20, median 246 tokens, maximum 1,131;
-      subsectors 59 of 96), examples 105 of 1,075 (19 % of its tokens), excluded 464 of 1,117
-      (26 %). Stage 6's tokenization cache, whose sidecar carries a `summaries` entry that stays
+      measured on 2026-10-03 without the field marker
+      (`specs/completed/shared-encoder-and-projection.md`, Rollout note): description 153 of
+      2,111 texts (sectors 16 of 20, median 246 tokens, maximum 1,131; subsectors 59 of 96),
+      examples 105 of 1,075 (19 % of its tokens), excluded 464 of 1,117 (26 %). With the marker
+      the cache adds, 162, 106 and 485 texts are truncated (resume, 2026-10-04). Stage 6's
+      tokenization cache, whose sidecar carries a `summaries` entry that stays
       null until this stage (format `channels-v3`; a cache built under other summaries is
       rebuilt), and its field markers (`text_model/fields.py`), two tokens of each window under
       MiniLM's tokenizer (the field's name and `:`). Stage 2's
@@ -774,7 +820,9 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       split's MRR (D6), not on the structural statistics HGCN's validation still logs (Stage 4
       took them off the progress bar only), no private tail, no last-epoch export); arm E
       (text-shuffle control, run only if D wins); the keep-or-drop record; the deliverable, a
-      2,125-code table from the selected arm.
+      2,125-code table from the selected arm. Every arm's per-seed table carries the export's
+      provenance (`text_model/export.py`: its checkpoint's hash, its own and the window), which
+      `ArmEncoder.from_files` requires before Stage 12 can embed sealed queries against it.
       Exit: Arms A–D have at least 5 seeds on D8's three panels under the shared selection
       protocol; E ran if and only if D won, and its result is recorded; the decision record
       states keep or drop under Req 5; the 2,125-code table exists for the selected arm.
@@ -792,10 +840,15 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       residual correction; an objective without hinge temperature, adaptive margin or
       uncertainty weights; no curriculum filters or four-phase controller; each repair adopted
       under Req 5; the deliverable refreshed. If dropped: `graph_model/`, its curriculum
-      package, `conf/graph.yaml`, the graph docs and every graph-stage code path removed, with
+      package, `conf/graph.yaml`, the graph docs and every graph-stage code path removed, the
+      HGCN feeder (`generate_embeddings_from_checkpoint` and `train`'s prompt for it) included
+      but not the `encode_token_rows` it shares with the export and the arm encoder, with
       the deliverable defined by the text stage alone and arm D's referenced artifacts kept for
       Stage 12 (Req 16 scores its code points against the text stage's queries, so no graph code
-      is needed).
+      is needed). The bundle build imports the curriculum package for its required
+      `difficulty_thresholds` member (`data/supervision_bundle.py:694-697`,
+      `supervision/artifacts.py:177`), so the drop path decides how the build computes it or
+      whether the contract drops it, and leaves bundle 301cce28 loadable.
       Exit: If kept: a Req 5 record per repair, a final 2,125-code table from the repaired
       stage, and no structural statistic computed at HGCN validation, which Stage 4 took off the
       progress bar only. If dropped: no graph-stage code path remains, the suite passes, the
@@ -816,7 +869,13 @@ and its text-channel check, and the `tools` commands' handling of polars errors.
       records and artifact references they carry (Stage 4's schema); by those references, the
       per-seed encoder checkpoints and 2,125-code tables of the final configuration and of every
       arm in its recorded comparisons, since sealed queries were never embedded, and each arm's
-      text-only table with its provenance, without which the regressor panel reads no arm; the
+      text-only table with its provenance, without which the regressor panel reads no arm. Stage
+      6's query path, `ArmEncoder.from_files` (`text_model/arm_encoder.py`), which embeds sealed
+      queries from a checkpoint and its table: it takes the tokenizer and window from the arm's
+      own config (`code_token_config`), refuses a table whose provenance names another window,
+      and maps through the hyperbolic exp map only, so a Euclidean or spherical arm needs Stage
+      8's map; `read_outcome_validation` reads validation only, so the test read goes through
+      `OutcomePanel.score` with the `detail` keys (`table`, `checkpoint`) it logs. The
       four QCEW slices under the hashes `conf/data/regressor_panel.yaml` pins, which loading the
       panel re-reads from `qcew_dir` outside the repo, and a bundle codebook with the pinned
       2,125 codes; Stage 2's
