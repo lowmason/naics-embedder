@@ -1,0 +1,74 @@
+{
+  "artifact_sha256": "dd425eb5ef9a7fa2be1b2e821c02f1b036f74f6ec503ff2fa70256ea7808a9a0",
+  "backbone": "sentence-transformers/all-MiniLM-L6-v2",
+  "budget": {
+    "description": 124,
+    "examples": 124,
+    "excluded": 124,
+    "title": 124
+  },
+  "channels": {
+    "description": {
+      "mean_kept_share": 0.6539185980940161,
+      "min_summary_tokens": 83,
+      "over_window": 162,
+      "p10_summary_tokens": 107,
+      "plateau_stops": 3,
+      "present": 2111,
+      "summarized": 162
+    },
+    "examples": {
+      "mean_kept_share": 0.6159725994505694,
+      "min_summary_tokens": 39,
+      "over_window": 106,
+      "p10_summary_tokens": 114,
+      "plateau_stops": 20,
+      "present": 1075,
+      "summarized": 106
+    },
+    "excluded": {
+      "mean_kept_share": 0.6223511770545875,
+      "min_summary_tokens": 44,
+      "over_window": 485,
+      "p10_summary_tokens": 106,
+      "plateau_stops": 14,
+      "present": 1117,
+      "summarized": 485
+    },
+    "title": {
+      "mean_kept_share": null,
+      "min_summary_tokens": null,
+      "over_window": 0,
+      "p10_summary_tokens": null,
+      "plateau_stops": 0,
+      "present": 2125,
+      "summarized": 0
+    }
+  },
+  "descriptions": {
+    "path": "data/naics_descriptions.parquet",
+    "sha256": "fe8c54e36efb7470e46122c0071e16c03c3dba1c909073c84c91ec998a0fdc36"
+  },
+  "generated_at": "2026-10-04T15:29:45.971380+00:00",
+  "library_versions": {
+    "numpy": "2.3.4",
+    "polars": "1.35.1",
+    "torch": "2.9.1",
+    "transformers": "4.57.1"
+  },
+  "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+  "selection": {
+    "device": "cpu",
+    "dtype": "float32",
+    "pooling": "attention-masked mean of the last hidden state, each unit unmarked",
+    "rule": "centrality-v1",
+    "weights": "token count without special tokens"
+  },
+  "tokenizer": "sentence-transformers/all-MiniLM-L6-v2",
+  "tokenizer_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+  "units": {
+    "no_break_pattern": "(?:\\bU\\.S|\\bi\\.e|\\be\\.g|\\betc|\\bNo|\\bvs|(?:^|\\s)\\d{1,2}|\\(\\d{1,2}\\))[.;]$",
+    "rule": "sentence-clause-piece-v1"
+  },
+  "window": 128
+}

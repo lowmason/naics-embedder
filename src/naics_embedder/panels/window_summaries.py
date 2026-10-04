@@ -61,8 +61,15 @@ class SummariesPin:
     sha256: str
     window: int
 
-# Keyed by backbone. Plan 9's Exit adds MiniLM's entry together with the artifact it pins.
-WINDOW_SUMMARIES: Dict[str, SummariesPin] = {}
+# Keyed by backbone, like TRAINED_WINDOWS (utils/input_window.py). Each entry is a reviewed
+# change, committed with the artifact it pins; `naics-embedder data summaries` prints it.
+WINDOW_SUMMARIES: Dict[str, SummariesPin] = {
+    'sentence-transformers/all-MiniLM-L6-v2': SummariesPin(
+        path=WINDOW_SUMMARIES_PATH,
+        sha256='dd425eb5ef9a7fa2be1b2e821c02f1b036f74f6ec503ff2fa70256ea7808a9a0',
+        window=128,
+    ),
+}
 
 def summaries_identity(backbone: str) -> Optional[str]:
     '''
