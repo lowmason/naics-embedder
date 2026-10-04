@@ -22,8 +22,9 @@ attention mask (Req 9).
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import contextlib
 import logging
-from typing import Dict, List, Mapping
+from typing import ContextManager, Dict, List, Mapping, Tuple
 
 import torch
 import torch.nn as nn
@@ -48,6 +49,46 @@ def load_base_model(name: str) -> PreTrainedModel:
     '''The backbone's pretrained weights. Tests replace this with a one-layer BERT.'''
 
     return AutoModel.from_pretrained(name)
+
+class _MpsStateReplay:
+    '''
+    The recompute context of ``_replay_mps_rng``: it sets the recorded MPS random state on entry and
+    puts back the state it found on exit. It is a class, not a generator context, because torch
+    enters a recompute context once per backward pass over a graph, and a generator context cannot
+    be entered twice.
+    '''
+
+    def __init__(self, recorded: torch.Tensor):
+        self.recorded = recorded
+        self.found = None
+
+    def __enter__(self) -> None:
+        self.found = torch.mps.get_rng_state()
+        torch.mps.set_rng_state(self.recorded)
+
+    def __exit__(self, *exception_info) -> None:
+        torch.mps.set_rng_state(self.found)
+
+def _replay_mps_rng() -> Tuple[ContextManager[None], ContextManager[None]]:
+    '''
+    The ``context_fn`` of non-reentrant gradient checkpointing: it makes a block's recompute draw
+    the random numbers its forward drew, on MPS too.
+
+    The backward pass reruns each checkpointed block, and a block with dropout in it must draw the
+    masks it drew in the forward, or its gradients belong to another forward. torch 2.9.1 restores
+    the CPU and CUDA random states for the recompute but not the MPS one, so dropout would draw new
+    masks there and the gradients would be wrong without any error. This records the MPS state when
+    the block's forward starts, sets it for the recompute, and puts back the state it found, which
+    leaves the random stream after the step as an uncheckpointed step leaves it. Off MPS both
+    contexts do nothing.
+
+    Returns:
+        The forward context, which does nothing, and the recompute context.
+    '''
+
+    if not torch.backends.mps.is_available():
+        return contextlib.nullcontext(), contextlib.nullcontext()
+    return contextlib.nullcontext(), _MpsStateReplay(torch.mps.get_rng_state())
 
 # -------------------------------------------------------------------------------------------------
 # Shared encoder
@@ -120,10 +161,13 @@ class SharedEncoder(nn.Module):
         # and gradient checkpointing key on
         self.backbone.train()
         if use_gradient_checkpointing:
-            # Both calls are needed: checkpointed blocks reach the adapter only through inputs
-            # that require grad
-            self.backbone.enable_input_require_grads()
-            self.backbone.base_model.gradient_checkpointing_enable()
+            # Non-reentrant for its context_fn, which replays the MPS random state in each recompute
+            self.backbone.base_model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={
+                    'use_reentrant': False,
+                    'context_fn': _replay_mps_rng
+                }
+            )
 
         self.fusion_name = fusion
         self.fusion = build_fusion(

@@ -783,9 +783,12 @@ controller programmatically.
 ```python
 # In shared_encoder.py
 if use_gradient_checkpointing:
-    self.backbone.enable_input_require_grads()
-    self.backbone.base_model.gradient_checkpointing_enable()
+    self.backbone.base_model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={'use_reentrant': False, 'context_fn': _replay_mps_rng}
+    )
 ```
+
+**MPS:** `_replay_mps_rng` replays the MPS random state that torch skips, so dropout masks match.
 
 **Trade-off:** Reduces memory usage at the cost of ~20% slower training.
 

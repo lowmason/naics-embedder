@@ -4,10 +4,11 @@ The shared encoder (Req 14; spec 4.1), on a one-layer BERT so these tests downlo
 One backbone serves codes and queries; an absent channel never reaches the output; exactly one
 affine map sits between fusion and the point; a field's texts go to the backbone in bounded chunks
 that leave every output and every gradient unchanged up to float noise; a new encoder is in train
-mode, so its dropout and gradient checkpointing engage; and a step reaches every adapter and the
-projection.
+mode, so its dropout and gradient checkpointing engage, and a checkpointed backward replays the
+forward's dropout masks, on MPS too; and a step reaches every adapter and the projection.
 '''
 
+import contextlib
 from collections import Counter
 from typing import List
 from unittest.mock import Mock
@@ -23,7 +24,12 @@ from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.fields import CHANNELS, QUERY
 from naics_embedder.text_model.fusion import FUSIONS
 from naics_embedder.text_model.hyperbolic import HyperbolicHead, check_lorentz_manifold_validity
-from naics_embedder.text_model.shared_encoder import DIMENSIONS, MAX_TEXTS_PER_CALL, SharedEncoder
+from naics_embedder.text_model.shared_encoder import (
+    DIMENSIONS,
+    MAX_TEXTS_PER_CALL,
+    SharedEncoder,
+    _replay_mps_rng,
+)
 from tests.fixtures.shared_encoder import TINY_HIDDEN, tiny_bert
 
 pytestmark = pytest.mark.unit
@@ -173,8 +179,47 @@ def _weighted_loss(output):
     for seed, key in enumerate(('tangent', 'gate_probs')):
         if key in output:
             weights = torch.randn(output[key].shape, generator=torch.Generator().manual_seed(seed))
-            loss = loss + (output[key] * weights).sum()
+            loss = loss + (output[key] * weights.to(output[key].device)).sum()
     return loss
+
+DEVICES = [
+    'cpu',
+    pytest.param(
+        'mps',
+        marks=pytest.mark.skipif(
+            not torch.backends.mps.is_available(), reason='needs an MPS device'
+        ),
+    ),
+]
+
+def _to_device(batch, device):
+    '''A ``stack_text_inputs`` batch with every tensor on this device.'''
+
+    return {
+        field: {
+            name: tensor.to(device)
+            for name, tensor in inputs.items()
+        }
+        for field, inputs in batch.items()
+    }
+
+def _seeded_step(encoder, batch, device):
+    '''
+    One forward and backward from a fixed seed, with the encoder on this device. It returns the
+    tangent, every gradient, and the random state the step leaves behind, all as CPU tensors.
+    '''
+
+    encoder.to(device).train()
+    torch.manual_seed(1234)
+    output = encoder(batch)
+    _weighted_loss(output).backward()
+    gradients = {
+        name: parameter.grad.cpu()
+        for name, parameter in encoder.named_parameters() if parameter.grad is not None
+    }
+    # The state that dropout on this device draws from
+    state = torch.mps.get_rng_state() if device == 'mps' else torch.get_rng_state()
+    return output['tangent'].detach().cpu(), gradients, state
 
 # -------------------------------------------------------------------------------------------------
 # Structure
@@ -465,6 +510,57 @@ def test_train_mode_runs_the_backbone_layers_checkpointed(make_encoder):
     with torch.no_grad():
         encoder(batch)
     assert ran and not checkpointed
+
+@pytest.mark.parametrize('device', DEVICES)
+def test_checkpointing_replays_the_dropout_masks(make_encoder, device):
+    # Dropout is on in train mode, and a checkpointed layer's backward reruns its forward. The rerun
+    # has to draw the forward's masks, or its gradients belong to another forward. torch restores
+    # the CPU and CUDA random states for it, but not MPS's
+    settings = dict(lora_dropout=0.1, max_texts_per_call=2)
+    checkpointed = make_encoder(use_gradient_checkpointing=True, **settings)
+    plain = make_encoder(use_gradient_checkpointing=False, **settings)
+    # PEFT starts every lora_B at zero, which leaves every lora_A gradient exactly zero (P9)
+    generator = torch.Generator().manual_seed(0)
+    with torch.no_grad():
+        for name, parameter in checkpointed.named_parameters():
+            if 'lora_B' in name:
+                parameter.normal_(0.0, 0.1, generator=generator)
+    plain.load_state_dict(checkpointed.state_dict())
+    batch = _to_device(stack_text_inputs(MIXED_CODES), device)
+
+    plain_tangent, plain_gradients, plain_state = _seeded_step(plain, batch, device)
+    tangent, gradients, state = _seeded_step(checkpointed, batch, device)
+
+    # Dropout is live, so equal gradients come from replayed masks: another seed, another forward
+    with torch.no_grad():
+        torch.manual_seed(4321)
+        other_tangent = plain(batch)['tangent'].cpu()
+    assert not torch.allclose(other_tangent, plain_tangent)
+    torch.testing.assert_close(tangent, plain_tangent)
+    assert gradients.keys() == plain_gradients.keys()
+    lora_a = [gradient for name, gradient in plain_gradients.items() if 'lora_A' in name]
+    assert lora_a and all(gradient.abs().sum() > 0 for gradient in lora_a)
+    for name, gradient in gradients.items():
+        torch.testing.assert_close(
+            gradient, plain_gradients[name], msg=lambda text: f'{name}: {text}'
+        )
+    # The recompute also leaves the random stream where an uncheckpointed step leaves it
+    assert torch.equal(state, plain_state)
+
+def test_off_mps_the_replay_contexts_do_nothing(monkeypatch):
+    monkeypatch.setattr(torch.backends.mps, 'is_available', lambda: False)
+    read_state, set_state = Mock(), Mock()
+    monkeypatch.setattr(torch.mps, 'get_rng_state', read_state)
+    monkeypatch.setattr(torch.mps, 'set_rng_state', set_state)
+
+    forward_context, recompute_context = _replay_mps_rng()
+    with forward_context, recompute_context:
+        pass
+
+    assert isinstance(forward_context, contextlib.nullcontext)
+    assert isinstance(recompute_context, contextlib.nullcontext)
+    read_state.assert_not_called()
+    set_state.assert_not_called()
 
 @pytest.mark.parametrize('checkpointing', [False, True])
 @pytest.mark.parametrize('max_texts_per_call', (1, MAX_TEXTS_PER_CALL))
