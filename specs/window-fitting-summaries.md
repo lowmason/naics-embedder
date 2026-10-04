@@ -94,9 +94,12 @@ hard-coded.
 **Exclusions (Req 8).** Req 8(a) and Verification "Exclusions" were discharged at generation in
 Stage 5, on the bundle's exclusion text, which S2 keeps unchanged. A summary of an exclusion text
 is a source-order subset of its cross-references, so it never duplicates one; like truncation
-today, it leaves some out of the model's view of the channel. Every destination still reaches
-training through the bundle's `excluded_codes` and Req 8(b)'s activity phrases, which this stage
-does not touch.
+today, it leaves some out of the model's view of the channel. That view matters: 3,186 of the
+bundle's 4,623 redirection rows, and 3 of its 9 lineal references, sit on the 485 over-window
+exclusion texts. Each cross-reference is one unit, so the artifact's `units_kept` and
+`units_total` record per text how many the model reads, and the Realized line reports the totals.
+Every destination still reaches training through the bundle's `excluded_codes` and Req 8(b)'s
+activity phrases, which this stage does not touch.
 
 ### 4.2 Units
 
@@ -346,8 +349,8 @@ Each link records or checks the summaries' sha256 (null for a backbone with no p
      `containment_contract`, which each gain a keyword `summaries`. `build_model_from_config` and
      `runtime_contract_for` (`cli/commands/training.py`) pass
      `summaries_identity(cfg.data_loader.tokenization.tokenizer_name)`, the same key the cache
-     uses. The default None means a pre-6b checkpoint's saved hyperparameters rebuild a null
-     contract on load, so the named refusal below, not `on_load_checkpoint`, reports it.
+     uses. With the default None, a pre-6b checkpoint's saved hyperparameters rebuild a null
+     contract on load; either way the named refusal below runs before any load.
    - **Reads.** `validate_supervision_contract(raw, manifest, supervision_mode='repaired', *,
      summaries)` and `load_arm_model(checkpoint_path, bundle, *, summaries, device='cpu')` take
      `summaries` keyword-only with no default, so a missed caller is a TypeError, not a silent
@@ -381,8 +384,15 @@ Each link records or checks the summaries' sha256 (null for a backbone with no p
    - `run_seed_sweep` (`decision/sweep.py`) reads each seed's export provenance
      (`provenance_path(artifacts.table)`) and requires its `backbone`, `revision`, descriptions
      sha256, `summaries` and `max_length` to equal the `ArmSpec`'s, refusing the seed otherwise.
-     Until now `ArmSpec`'s D9 fields were declared and checked only against the text-only table;
-     this ties them to what each seed read, for every D9 field, not only the summaries.
+     The check runs right after `runner.run`, before `store.put` and any panel read, as the
+     dimension check does: a refusal at the first seed leaves the selection log empty, and one at
+     a later seed leaves the earlier seeds' reads logged with no `ArmRecord`, as a dimension
+     refusal does today. Until now `ArmSpec`'s D9 fields were declared and checked only against
+     the text-only table; this ties them to what each seed read, for every D9 field.
+   - Limits: `tools regressor-panel` pairs raw parquets and checks no provenance, and `decide`'s
+     `check_arm` re-checks only the text-only provenance, since a `SeedRun` keeps no export
+     provenance. A seed table's summaries are therefore checked by `run_seed_sweep` alone, and a
+     record assembled outside it, as the synthetic decision fixtures are, is never checked.
 
 An arm's text identity is then (descriptions sha256, summaries sha256), and the bundle's
 description fingerprint never moves (S2).
@@ -411,9 +421,10 @@ calls), `supervision/checkpoints.py`, `cli/commands/training.py` (`build_model_f
 `tests/fixtures/decision.py`; `tests/unit/test_tokenization_cache.py` (the null-summaries sidecar
 test, the test that patches the deleted `SUMMARIES`, and any cache test whose texts exceed its
 window); `test_export.py`; `test_arm_encoder.py`; `test_cli_commands.py`; `test_cli_training.py`;
-`test_naics_model.py`; `test_decision_sweep.py` (its seed tables gain export provenance);
-`test_decision_store.py`; and every other test that builds a contract, a provenance,
-`TextOnlyRef` or `ArmSpec`.
+`test_naics_model.py`; `test_checkpoint_contract.py` (its direct `validate_supervision_contract`
+calls); `test_decision_rule.py` (its direct `ArmSpec`); `test_decision_sweep.py` (its seed
+tables gain export provenance); `test_decision_store.py`; and every other test that builds a
+contract, a provenance, `TextOnlyRef` or `ArmSpec`.
 
 ## 5. Error handling
 
@@ -438,15 +449,21 @@ Guarantees rather than refusals:
 
 ## 6. Testing
 
-Tests are written red to green. Unit tests download nothing: CI has neither `data/` nor the MiniLM
-cache. Tokenizer-dependent unit tests use a stub or tiny tokenizer, and selection tests inject a
-stub embedder.
+Tests are written red to green. CI has no `data/` and no MiniLM weights, but it downloads MiniLM's
+tokenizer, which the existing cache, export and arm-encoder fixtures load. New resolver and unit
+tests use a stub or tiny tokenizer where they can, and selection tests inject a stub embedder.
 
-**The seam.** An autouse fixture in `tests/conftest.py` sets `WINDOW_SUMMARIES` to one entry, the
-MiniLM backbone mapped to a dummy pin (a path that does not exist, a fixed fake sha256, window
-128). Fixture descriptions fit the window, so the resolver never reads the dummy (4.7, step 1),
-while every identity site records the dummy's sha256. A site that records None instead fails from
-the first task, not at the Exit. A registered marker opts a test out of the fixture: the
+**The seam.** An autouse fixture in `tests/conftest.py` mutates `WINDOW_SUMMARIES` in place
+(`monkeypatch.setitem`, after removing any other entry with `monkeypatch.delitem`) so that it
+holds one entry: the MiniLM backbone mapped to a dummy pin (a path that does not exist, a fixed
+fake sha256, window 128). Tests reach the dict as `window_summaries.WINDOW_SUMMARIES`, never by
+`from … import WINDOW_SUMMARIES`, so every patch acts on the one dict the identity sites read.
+Fixture descriptions fit the window, so the resolver never reads the dummy (4.7, step 1), while
+every identity site records the dummy's sha256. A site that records None instead fails from the
+first task, not at the Exit, provided its test names the MiniLM backbone: the identity-site tests
+(the sidecar, both provenances, the contracts) use MiniLM-named fixtures such as
+`five_code_token_config` and `text_only_comparator_table`, never `tiny-bert` or
+`tiny-backbone`, whose identity is None. A registered marker opts a test out of the fixture: the
 committed-artifact test and the local-only tests below need the real pin. A test that needs "no
 pin" deletes the entry with `monkeypatch.delitem` or uses an unpinned backbone name.
 
@@ -462,6 +479,12 @@ pin" deletes the entry with `monkeypatch.delitem` or uses an unpinned backbone n
   with a reordered, a repeated and an edited unit; texts that fit pass through unchanged.
 - **Build:** the temporary-file validation runs before the move, so a failing invariant leaves no
   artifact; the overwrite refusal is a FileExistsError.
+- **Cache substitution:** a cache built over descriptions with one over-window text, under a
+  test-local pin (`monkeypatch.setitem` on `WINDOW_SUMMARIES`) pointing at a temporary CSV with
+  the right sha256 and a window equal to the test's `max_length`, stores that text's
+  `input_ids` as `tokenize_field` of its summary; with the pin deleted, the build raises. The
+  dummy pin cannot serve here, since the resolver would try to read it. This is the test that
+  fails if `_build_tokenization_cache` records the pin without applying it.
 - **Cache identity:** changing only the pin rebuilds the cache (`monkeypatch.setitem` on
   `WINDOW_SUMMARIES`, replacing the test that patched `SUMMARIES`); changing only the markers
   rebuilds it (plan 8's missing test, `_cache_identity`); the sidecar records
@@ -476,7 +499,8 @@ pin" deletes the entry with `monkeypatch.delitem` or uses an unpinned backbone n
   loads.
 - **Decision records:** the store reads `summaries_sha256` and refuses a provenance without it;
   `check_text_only` refuses a summaries mismatch; `run_seed_sweep` refuses a seed whose export
-  provenance differs from the `ArmSpec` in any of its five fields.
+  provenance differs from the `ArmSpec` in any of its five fields, and a first-seed refusal
+  leaves the selection log empty.
 - **The committed artifact** (opted out of the seam): its sha256 equals the pin's; `(code,
   channel)` is unique; every `summary_tokens` is at most `window`; every channel is one of the
   three.
@@ -497,10 +521,12 @@ This runs locally. It trains nothing and reads no split, so the selection log ga
    rebuild them.
 2. Pass `supervision.manifest_path=CLONE` as a `key=value` override to every command that reads
    the bundle (steps 4 and 6). Never commit it.
-3. Run `HF_HUB_OFFLINE=1 uv run naics-embedder data summaries`. In one commit, add the CSV and its
-   provenance, the MiniLM entry in `WINDOW_SUMMARIES` with the printed sha256, and the
-   committed-artifact and local-only tests.
-4. Build the tokenization cache as `NAICSDataModule.prepare_data` does, with a short script: load
+3. Run `HF_HUB_OFFLINE=1 uv run naics-embedder data summaries`. Add the CSV and its provenance,
+   the MiniLM entry in `WINDOW_SUMMARIES` with the printed sha256, and the committed-artifact and
+   local-only tests; run those tests, the full suite and `./scripts/format_code.sh --check` on the
+   touched files; then commit them together.
+4. Under `HF_HUB_OFFLINE=1`, build the tokenization cache as `NAICSDataModule.prepare_data` does,
+   with a short script: load
    `conf/config.yaml` with the `CLONE` override, validate the bundle, and call
    `tokenization_cache(code_token_config(cfg), description_fingerprint=…, codebook_fingerprint=…)`
    with the manifest's fingerprints. The resolver logs 162, 106 and 485 replaced texts, and the
@@ -528,10 +554,16 @@ This runs locally. It trains nothing and reads no split, so the selection log ga
     sha256;
   - :334-338 says "Every tokenizing path truncates to the window"; over-window channel texts now
     read as their summaries, and no channel text is truncated;
-  - the Cache Regeneration list (:414) names format, markers and summaries.
-- `utils/input_window.py`: its module docstring says the same as :334-338 and changes with it.
+  - the Cache Regeneration list (:414) names format, markers and summaries;
+  - :437-439, the checkpoint contract's fields, adds `summaries`.
+- Docstrings that say every tokenizing path truncates: the `utils/input_window.py` module
+  docstring; `InputWindowRecord` (`supervision/schema.py:182-183`), whose counts stay the bundle's
+  but no longer describe what truncation shortens; and `tokenization_cache.py:48` and `:66`. Each
+  says instead that over-window channel texts read as their summaries, and that truncation is a
+  backstop for queries.
 - `docs/usage.md`: the `tools text-only-table` paragraph (:211-216), which says each channel is
-  truncated to the window, and a new `data summaries` entry.
+  truncated to the window; the `tools export-table` provenance list (:273-275), which adds
+  `tokenizer` and the refusal of a pre-6b checkpoint; and a new `data summaries` entry.
 - `CLAUDE.md`: the data commands (a `data summaries` line beside `data roles`) and the directory
   tree (`panels/window_summaries.py`, `data/window_summaries.py`, `conf/data/window_summaries.csv`).
 - `docs/api/window_summaries.md` and `docs/.nav.yml`.
@@ -575,9 +607,8 @@ This runs locally. It trains nothing and reads no split, so the selection log ga
     reads and exact resume refuse a mismatch.
   - Rejected: no record. A checkpoint trained on truncated text could be exported under summaries
     and paired with a comparator that read them, which breaks D9 unseen.
-  - Rejected: the model deriving the value from `base_model_name`. Nothing ties that name to the
-    tokenizer the cache reads, and after a pin change an old checkpoint would fail on load with an
-    exact-resume message instead of the named refusal.
+  - Rejected: the model deriving the value from `base_model_name`. Nothing ties that name to
+    `data_loader.tokenization.tokenizer_name`, the key the cache, export and reads use.
 - **Seed check.**
   - Chosen: `run_seed_sweep` compares each seed's export provenance with the `ArmSpec`.
   - Rejected: comparing with the current pin, which a seed loaded from an earlier run need not
@@ -596,11 +627,13 @@ This runs locally. It trains nothing and reads no split, so the selection log ga
 > Roadmap: specs/naics-embedding-roadmap.md, Stage 6b — on plan completion, tick the stage and
 > re-validate later stages against what shipped.
 
-**Switch at merge.** Every `channels-v3` cache rebuilds once. Every checkpoint, exported table and
-text-only table made before this stage is refused by export, reads, the HGCN feeder and `decide`;
-weights-only loading still works. Plan 8's Exit numbers stay as the floor its finding records
-(`specs/findings/shared-encoder-first-reading.md`). Stage 7 trains and builds its text-only table
-on the summaries.
+**Switch at merge.** Every `channels-v3` cache rebuilds once. A checkpoint made before this stage
+is refused by exact resume, export, the outcome read and the HGCN feeder; an exported table by
+`ArmEncoder.from_files` and `run_seed_sweep`; a text-only table by the store, and so by
+`run_seed_sweep` and `decide`. Weights-only loading still works, and `tools regressor-panel`,
+which checks no provenance, still pairs pre-6b tables (4.8, link 5). Plan 8's Exit numbers stay
+as the floor its finding records (`specs/findings/shared-encoder-first-reading.md`). Stage 7
+trains and builds its text-only table on the summaries.
 
 **Realized.** Plan completion records, in the roadmap's Stage 6b entry, the artifact's sha256, the
 rows per channel and the mean share of source tokens kept.
