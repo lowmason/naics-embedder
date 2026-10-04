@@ -68,6 +68,12 @@ def _build_tokenization_cache(
     (``panels/window_summaries.py``), so no channel text is truncated. Every channel, titles
     included, is padded to ``max_length``, which may not exceed the backbone's trained window
     (None is the window).
+
+    Raises:
+        ValueError: If ``max_length`` exceeds the backbone's trained input window (Req 9), or as
+            ``resolve_channel_texts``: a channel text is over the window and the backbone has no
+            pinned summaries, the pin fits a window other than ``max_length``, or the artifact
+            fails one of the resolver's checks.
     '''
 
     max_length = check_window(tokenizer_name, max_length)

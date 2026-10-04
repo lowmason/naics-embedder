@@ -11,7 +11,8 @@ are a subset of its text's, and leakage needs no sealed read (spec 4.4).
 sha256 every identity site records: the token cache's sidecar, the checkpoint contract, the export
 and text-only provenances, and the decision store. ``resolve_channel_texts`` is the only place
 summaries enter. The token cache and the text-only builder call it, and it checks the artifact's
-invariants against the descriptions on every call. The module loads no model and imports no torch.
+invariants against the descriptions on every call that finds an over-window text. The module loads
+no model and imports no torch.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -195,7 +196,8 @@ def text_units(channel: str, text: str, count: TokenCounter, budget: int) -> Lis
         The units.
 
     Raises:
-        ValueError: If a title, an examples entry or a level-3 piece is over the budget.
+        ValueError: If a title, an examples entry or a level-3 piece is over the budget, or the
+            channel is none of the four.
     '''
 
     if channel == 'title':

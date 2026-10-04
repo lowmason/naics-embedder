@@ -28,7 +28,7 @@ from naics_embedder.panels.text_only import provenance_path, text_only_fingerpri
 from naics_embedder.supervision.artifacts import sha256_file
 
 # -------------------------------------------------------------------------------------------------
-# Text-only provenance
+# Table provenance (text-only and export)
 # -------------------------------------------------------------------------------------------------
 
 def provenance_fields(

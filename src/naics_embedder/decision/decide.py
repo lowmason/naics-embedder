@@ -5,8 +5,8 @@ Before any number is computed, every arm is checked:
 
 - it has at least ``min_seeds`` seeds, each read once on each of the three panels;
 - every stored artifact still hashes to its reference;
-- its text-only table's stored provenance matches the arm's backbone, revision, descriptions
-  and window (D9);
+- its text-only table's stored provenance matches the arm's backbone, revision, descriptions,
+  summaries and window (D9);
 - each run's log records are validation reads that name the run, its table and its text-only
   table by the fingerprints the store recorded;
 - all arms read the same panels, with the same data on them and the same fit settings, so Δ

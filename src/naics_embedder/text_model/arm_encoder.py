@@ -149,8 +149,8 @@ class ArmEncoder:
             table_path: The table ``tools export-table`` wrote from it.
             bundle: The configured supervision bundle.
             token_config: The token cache training read (``code_token_config``): its tokenizer
-                and window tokenize the queries. The window must be the one the table was
-                exported at.
+                and window tokenize the queries. Its tokenizer, window and summaries must be the
+                ones the table was exported under.
             device: Where the model runs.
             batch_size: Queries per forward pass.
 

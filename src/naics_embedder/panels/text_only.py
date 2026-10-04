@@ -180,7 +180,10 @@ def build_text_only_table(
         The table's path.
 
     Raises:
-        ValueError: If ``max_length`` exceeds the backbone's trained input window (Req 9).
+        ValueError: If ``max_length`` exceeds the backbone's trained input window (Req 9), or as
+            ``resolve_channel_texts``: a channel text is over the window and the backbone has no
+            pinned summaries, the pin fits a window other than ``max_length``, or the artifact
+            fails one of the resolver's checks.
     '''
 
     check_window(backbone, max_length)
