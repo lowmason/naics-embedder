@@ -1,6 +1,6 @@
 # Window-fitting summaries — Design Spec
 
-**Status:** APPROVED (2026-10-04)
+**Status:** APPROVED (2026-10-04); revised the same day after a five-lens review
 
 **Roadmap:** `specs/naics-embedding-roadmap.md`, Stage 6b (ROUTING: brainstorming). Source spec
 `specs/naics-embedding.md` at d9126ce. Evidence read at origin/main f5c8307. Paths are under
@@ -16,16 +16,17 @@ today (`text_model/fields.py`, `tokenize_field`, `truncation=True`). Replace tha
 with frozen extractive summaries that fit the window, so that Stage 7 trains the reference
 configuration, and fixes δ, on texts no tokenizer cuts. The summaries live in their own committed,
 hash-pinned artifact, which the tokenization cache and the D9 text-only comparator both read, and
-whose hash every link from checkpoint to decision record carries.
+whose hash every link from checkpoint to decision record carries and checks.
 
 ## 2. Scope
 
 ### 2.1 In scope
 
 - Req 9, input windows, under the user's ruling of 2026-10-03 (S1): no channel text is truncated.
-- Req 3, leakage: no summary can contain a held-out query (4.4).
+- Req 3, leakage: no segment of any summary matches a held-out query, exactly or as a
+  near-duplicate, under Req 3's per-segment check (4.4).
 - D9: the comparator reads the arm's text, now identified by the descriptions' and the
-  summaries' hashes (4.8).
+  summaries' hashes, and the seed sweep checks each seed's table against that identity (4.8).
 - Three parts of plan 8's deferred entries (section 10).
 
 ### 2.2 Out of scope
@@ -33,8 +34,10 @@ whose hash every link from checkpoint to decision record carries.
 - **Queries.** Index entries and activity phrases go through `tokenize_field` unchanged.
 - **The bundle.** Bundle 301cce28 and its descriptions (sha256 `fe8c54e3…`) stay byte-identical
   (S2). Plan 7's deferred manifest tokenizer revision keeps its trigger.
-- **Stage 9:** summaries for other backbones or windows. The pin is keyed by backbone (4.6), so
-  Stage 9 adds entries; it does not change this design.
+- **Stage 9:** summaries for other backbones. The pin is keyed by backbone (4.6), so Stage 9 adds
+  entries. Selection runs under each backbone's own frozen weights (4.3), so two candidates can
+  read different summaries of one text; whether Stage 9 fixes a common selection backbone is its
+  own brainstorm's call.
 - **Training and panel reads.** The Exit trains nothing and reads no split (section 7).
 - **The rest of plan 8's deferred entries.**
 
@@ -53,12 +56,14 @@ From the session brief, not re-triaged:
 
 From the brainstorm, the user's answers on 2026-10-04:
 
-- **S5. Method.** Extractive, for every channel. A summary is whole source units, in source
-  order; no word is written that the source does not contain in that unit.
+- **S5. Method.** Extractive, for every channel. A summary is whole source units, verbatim and in
+  source order, each at most once.
 - **S6. Selection.** Backbone centrality (4.3).
 - **S7. Design.** Sections 4.1–4.9 as presented: the units, the artifact, a code pin rather than a
   config key, one resolver for both readers, and the summaries' hash in the checkpoint contract,
-  both provenances and the decision records.
+  both provenances and the decision records. The review's corrections (the model's contract
+  input, the resolver's order, the test seam, the in-order check and the sweep's per-seed check)
+  refine that design without changing it.
 
 ## 4. Design
 
@@ -70,7 +75,7 @@ special tokens included, without truncation. Only over-window texts get summarie
 text is read verbatim.
 
 Measured on 2026-10-04 on the descriptions `fe8c54e3…` under MiniLM's tokenizer (revision
-1110a243) at the 128-token window:
+1110a243) at the 128-token window, and reproduced by the review:
 
 | Channel | Present | Over the window | Over, unmarked | Levels 2–3 over |
 |---|---:|---:|---:|---:|
@@ -86,16 +91,26 @@ MiniLM's tokenizer, so a summary's text budget is the window minus the two speci
 two marker tokens: **124 tokens**. The budget is computed from the tokenizer and the marker, never
 hard-coded.
 
+**Exclusions (Req 8).** Req 8(a) and Verification "Exclusions" were discharged at generation in
+Stage 5, on the bundle's exclusion text, which S2 keeps unchanged. A summary of an exclusion text
+is a source-order subset of its cross-references, so it never duplicates one; like truncation
+today, it leaves some out of the model's view of the channel. Every destination still reaches
+training through the bundle's `excluded_codes` and Req 8(b)'s activity phrases, which this stage
+does not touch.
+
 ### 4.2 Units
 
 A summary is built from units, and every unit boundary is a boundary of the leakage segmenter
 (`panels/leakage.py`: a description or exclusion text splits after `.` or `;` followed by
-whitespace, `_SENTENCE_BREAK`; the examples channel splits at `'; '`, `EXAMPLES_SEPARATOR`). That
-property carries the leakage argument (4.4).
+whitespace; the examples channel splits at `'; '`, `EXAMPLES_SEPARATOR`). That property carries
+the leakage argument (4.4). The segmenter's break pattern becomes the public name
+`SENTENCE_BREAK` in `panels/leakage.py`, so the unit builder and the leakage checker share one
+definition.
 
 - **title:** the whole title is one unit. A title over the window cannot be summarized, so the
   build raises; none is over under MiniLM.
-- **examples:** the entries, split at `EXAMPLES_SEPARATOR`.
+- **examples:** the entries, split at `EXAMPLES_SEPARATOR`. An entry over the budget raises; on
+  2026-10-04 the longest was 46 tokens.
 - **description and excluded:** the segmenter's pieces, merged into units at three levels:
   1. **sentence:** a unit closes at a piece that ends in `.`, or, for excluded, in `.` or `;`, so
      that each cross-reference is one unit;
@@ -103,16 +118,24 @@ property carries the leakage argument (4.4).
   3. **piece:** each segmenter piece is a unit.
 
   At levels 1 and 2 a piece closes a unit only when the unit's parentheses balance (as many `(` as
-  `)`) and the piece does not end in an abbreviation or a list numeral: `U.S.`, `i.e.`, `e.g.`,
-  `etc.`, `No.`, `vs.`, a bare numeral such as `1.`, or a parenthesized one such as `(1);`. The
-  probe's reference pattern for that test was
-  `(?:\bU\.S|\bi\.e|\be\.g|\betc|\bNo|\bvs|^\d+|\s\d+|\(\d+\))[.;]$`. A text's units are its level-1
-  units; a unit over the budget is re-split at level 2, and a level-2 unit over the budget at
-  level 3. A level-3 piece over the budget raises. On 2026-10-04 no piece of any over-window text
-  exceeded 124 tokens.
+  `)`) and the piece does not match this pattern, which is normative:
 
-The segmenter's break pattern becomes a public name in `panels/leakage.py` (`SENTENCE_BREAK`), so
-the unit builder and the leakage checker share one definition.
+  ```python
+  r'(?:\bU\.S|\bi\.e|\be\.g|\betc|\bNo|\bvs|(?:^|\s)\d{1,2}|\(\d{1,2}\))[.;]$'
+  ```
+
+  That is, it does not end in `U.S.`, `i.e.`, `e.g.`, `etc.`, `No.` or `vs.`, or in a one- or
+  two-digit list numeral such as `1.` or `(1);`. A piece that ends in a code or a year, such as
+  `… in Industry 111113.`, closes a unit. On the over-window texts this pattern gives the same
+  units as the broader probe pattern did.
+
+  A text's units are its level-1 units; a unit over the budget is re-split at level 2, and a
+  level-2 unit over the budget at level 3. A level-3 piece over the budget raises. On 2026-10-04
+  the longest piece of any over-window text was 94 tokens (description) and 79 (excluded).
+
+`panels/window_summaries.py` imports `marker` from `text_model/fields.py`, a module with no
+imports of its own, to compute the budget. It is the first `panels` module to import from
+`text_model`, and it adds no cycle.
 
 ### 4.3 Selection (S6)
 
@@ -131,10 +154,20 @@ The greedy selection:
    window (each candidate tokenized as it would be read, special tokens included).
 3. Stop when no remaining unit fits, or none raises the cosine strictly.
 
-Exact float ties go to the earlier unit. The kept units are emitted in source order, joined by
-`' '` (description, excluded) or `EXAMPLES_SEPARATOR` (examples). Every non-final source unit ends
-in `.` or `;`, and the source's last unit can only be last in a summary, so the segmenter
-re-splits each summary into exactly its kept pieces.
+Exact float ties go to the earlier unit. The plateau stop in step 3 is intended: adding a unit
+that moves the summary's vector away from the text's makes it a worse summary, so a summary can
+end well under the window. The provenance reports how often that happens (4.5).
+
+The kept units are emitted in source order, joined by `' '` (description, excluded) or
+`EXAMPLES_SEPARATOR` (examples). The segmenter then re-splits each summary into exactly its kept
+pieces:
+
+- **description and excluded:** every non-final source unit ends in `.` or `;`, since
+  `SENTENCE_BREAK` splits only after them, and the source's last unit can only be last in a
+  summary;
+- **examples:** no entry contains `EXAMPLES_SEPARATOR`, because the split consumed every
+  occurrence, and `'; '` cannot straddle a join, because no proper prefix of it equals a proper
+  suffix. Examples entries need not end in `.` or `;`, so no test may assert that they do.
 
 **Why centrality.** The cache's channel vector is a mean-pooled embedding, and truncation damages
 exactly that vector. Centrality keeps the units whose pooled vector best approximates the whole
@@ -154,24 +187,29 @@ description's first sentence in 115 of 162 texts without being told to.
 
 **Determinism.** A rebuild on the build platform reproduces the selection. On another platform a
 float near-tie could flip a choice, so the committed artifact is the authority, checked by its
-invariants (fit, subset, keys; 4.7), never by rebuild equality.
+invariants (4.7), never by rebuild equality.
 
 ### 4.4 Leakage without a sealed read
 
 Each summary's segments, as `training_text_segments` cuts them (`text_segments` for description
 and excluded, its normalized entries for examples), are a subset of its source text's segments
 (4.2, 4.3). Bundle 301cce28's build checked every segment of the descriptions `fe8c54e3…` against
-the validation and test queries, exactly and as near-duplicates, and recorded
-`index_roles_no_leakage: true` in its manifest. The near-duplicate test compares a query with a
-whole segment, and no segment changes, so no held-out query can match a summary. The resolver
-re-checks the subset property on every read (4.7). No step of this stage reads a validation or
-test query.
+the validation and test queries, exactly and as near-duplicates (`verify_role_leakage`,
+`panels/index_roles.py`), and recorded `index_roles_no_leakage: true` in its manifest. The
+near-duplicate test compares a query with a whole segment, and no segment changes, so no held-out
+query can match any of a summary's segments.
+
+Word spans that cross a join between two kept units are not checked, just as spans across
+adjacent source sentences, or across the joined rows of today's exclusion text, are not checked;
+checking them would need a sealed read (S4). The resolver re-checks the subset property, and S5's
+in-order property, on every read (4.7). No step of this stage reads a validation or test query.
 
 ### 4.5 The artifact
 
 `conf/data/window_summaries.csv`, committed, one row per summarized `(code, channel)`, with
 `conf/data/window_summaries_provenance.json` beside it, as `index_roles.csv` and
-`regressor_heldout_groups.csv` have theirs. UTF-8, written and read with Polars.
+`regressor_heldout_groups.csv` have theirs. UTF-8, written with Polars and read with an explicit
+`SUMMARIES_SCHEMA` (as `panels/index_roles.py` reads its table), so that `code` stays a string.
 
 | Column | Type | Meaning |
 |---|---|---|
@@ -185,114 +223,153 @@ test query.
 | `units_kept` | int | units in the summary |
 | `units_total` | int | the text's units after any re-split |
 
-Rows are sorted by `channel`, then `code`. `(code, channel)` is unique. Inherited descriptions
-repeat a source text under several codes and get identical summaries, one row per code.
+Rows are sorted by `channel`, then `code`. `(code, channel)` is unique. Identical source texts get
+identical summaries, one row per code; inherited descriptions are usually reworded, so no test
+may assume a parent and child share one.
 
 The provenance records:
 
 - `descriptions`: the path and sha256 (`fe8c54e3…`);
-- `backbone`, `revision`, `tokenizer` (the name) and the tokenizer's revision;
+- `backbone`, `revision`, `tokenizer` (the name) and the tokenizer's revision, which is
+  `load_backbone`'s snapshot revision, since the tokenizer and the model load from one snapshot;
 - `window` and the text budget per channel;
 - `units` and `selection`: the rule names (`sentence-clause-piece-v1`, `centrality-v1`) and their
-  settings (mean pooling, token weights, CPU, float32);
-- per channel: texts present, over the window and summarized, and the mean share of source tokens
-  kept;
+  settings (the normative pattern, mean pooling, token weights, CPU, float32);
+- per channel: texts present, over the window and summarized; the mean share of source tokens
+  kept; the minimum and the 10th percentile of `summary_tokens`; and how many summaries ended at
+  the plateau stop with a unit that still fit;
 - `artifact_sha256`, `library_versions` and `generated_at`.
 
 ### 4.6 The pin and the build command
 
-**Pin.** A code constant in `panels/window_summaries.py`, keyed by backbone like `TRAINED_WINDOWS`:
+**Pin.** Code constants in `panels/window_summaries.py`, keyed by backbone like `TRAINED_WINDOWS`:
 
 ```python
+WINDOW_SUMMARIES_PATH = 'conf/data/window_summaries.csv'  # resolved like every './conf/...' path
+
 @dataclass(frozen=True)
 class SummariesPin:
-    path: str     # 'conf/data/window_summaries.csv', resolved like every './conf/...' path
+    path: str
     sha256: str
-    window: int   # 128
+    window: int
 
-WINDOW_SUMMARIES: Dict[str, SummariesPin] = {
-    'sentence-transformers/all-MiniLM-L6-v2': SummariesPin(...),
-}
+WINDOW_SUMMARIES: Dict[str, SummariesPin] = {}  # the MiniLM entry lands with the artifact
 ```
 
 `summaries_identity(backbone)` returns the pin's sha256, or None when no pin exists for the
-backbone. It replaces `SUMMARIES` in `text_model/dataloader/tokenization_cache.py`, which is
-deleted. Changing the summaries is a reviewed code change, as recording a new trained window is.
+backbone. Every identity site calls it at call time and never binds `WINDOW_SUMMARIES` or a pin at
+import, so a test's patch reaches every site (section 6). It replaces `SUMMARIES` in
+`text_model/dataloader/tokenization_cache.py`, which is deleted. Changing the summaries is a
+reviewed code change, as recording a new trained window is.
+
+**Bootstrapping.** `WINDOW_SUMMARIES` has no MiniLM entry until the Exit commits the artifact
+(section 7, step 3); that commit adds the entry, with the artifact's sha256, and the tests that
+need the real pin. Until then `summaries_identity` returns None in production, and a cache build
+on the real descriptions raises (texts over the window, no pin), which is intended.
 
 **Build.** `naics-embedder data summaries` (`cli/commands/data.py`) calls
 `data/window_summaries.py`:
 
 - options: `--descriptions` (default `./data/naics_descriptions.parquet`), `--backbone` (default
-  `data_loader.tokenization.tokenizer_name`), `--output` (default the pin's path) and `--force`;
+  the training config's `data_loader.tokenization.tokenizer_name`, read from `conf/config.yaml`
+  with `load_config`), `--output` (default `WINDOW_SUMMARIES_PATH`) and `--force`;
 - reads the descriptions, loads the backbone from the local HF cache (`local_files_only`), takes
   the window from `TRAINED_WINDOWS`, builds the units (4.2) and selects (4.3);
-- before writing, checks every invariant the resolver checks (4.7) and that every over-window text
-  has a row;
-- writes the CSV and its provenance, and prints the artifact's sha256 for the pin;
-- refuses to overwrite an existing artifact without `--force`, as `data roles` does.
+- writes the CSV to a temporary file beside `--output`, builds
+  `SummariesPin(path=<temporary file>, sha256=<its sha256>, window=<the window>)`, and runs
+  `resolve_channel_texts` on the descriptions with that pin, which checks every invariant of 4.7
+  against the bytes about to be committed;
+- only then moves the CSV into place, writes its provenance, and prints the sha256 for the pin;
+- refuses to overwrite an existing artifact without `--force` by raising FileExistsError, which
+  the CLI catches and reports with exit code 1, as `data roles` does. A second backbone passes its
+  own `--output`; the refusal stops a collision.
 
 Like `data roles`, it runs once and its output is committed; neither `data preprocess` nor
 `data all` runs it.
 
 ### 4.7 The resolver and its readers
 
-`resolve_channel_texts(descriptions, tokenizer, backbone, max_length, *, pin=None)` in
+`resolve_channel_texts(descriptions, tokenizer, backbone, max_length, *, pin=DEFAULT)` in
 `panels/window_summaries.py` returns the descriptions with every over-window channel text (4.1,
-under `tokenizer` at `max_length`) replaced by its summary. `pin` defaults to
-`WINDOW_SUMMARIES.get(backbone)`; tests pass their own. It is torch-free, logs how many texts per
-channel it replaced, and is the only place summaries enter:
+under `tokenizer` at `max_length`) replaced by its summary. `pin` defaults to a sentinel meaning
+`WINDOW_SUMMARIES.get(backbone)`, looked up at call time; an explicit None means no pin. It is
+torch-free, logs how many texts per channel it replaced, and is the only place summaries enter:
 
-1. **The tokenization cache.** `_build_tokenization_cache` resolves the descriptions, then
-   tokenizes them as now. `tokenize_field` keeps `truncation=True` as a backstop for queries; for
-   channels it never triggers.
-2. **The text-only builder.** `build_text_only_table` (`panels/text_only.py`) resolves with the
-   same marked-fit rule, then embeds unmarked, as today. A summary that fits with its marker fits
-   without it, so the comparator reads the arm's texts, markers aside (D9).
+1. **The tokenization cache.** `_build_tokenization_cache` resolves the descriptions under
+   `cfg.tokenizer_name` with the tokenizer it loads, then tokenizes them as now. `tokenize_field`
+   keeps `truncation=True` as a backstop for queries; for channels it never triggers.
+2. **The text-only builder.** `build_text_only_table` (`panels/text_only.py`) resolves under its
+   `backbone` argument, with the tokenizer `load_backbone` returned and its `max_length`, by the
+   same marked-fit rule; then it embeds unmarked, as today. A summary that fits with its marker
+   fits without it, so the comparator reads the arm's texts, markers aside (D9).
 
-It raises ValueError, naming the code and channel where there is one, when:
+The resolver works in this order, raising ValueError (naming the code and channel where there is
+one) at the first failure:
 
-- the artifact's sha256 is not the pin's;
-- an over-window text has no row, or its row's `source_sha256` is not the text's, or its `window`
-  is not `max_length`;
-- a row names a text that is not over the window, or a code or channel the descriptions lack
-  (the row set must equal the over-window set);
-- texts are over the window and no pin exists for the backbone, or the pin's window is not
-  `max_length` (a configured 64 raises rather than truncating);
-- a summary's segments are not a subset of its source's (4.4);
-- after substitution, any marked channel text, titles included, is still over the window.
+1. Compute the over-window set. If it is empty, return the descriptions unchanged, with no pin
+   lookup, no artifact read and no window check.
+2. Otherwise require a pin, and require the pin's window to equal `max_length` (a configured 64
+   raises rather than truncating).
+3. Read the artifact (a missing file raises, naming its resolved absolute path) and require its
+   sha256 to be the pin's.
+4. Require the row set to equal the over-window set: every over-window text has a row, and no row
+   names a text that is not over the window, or a code or channel the descriptions lack.
+5. Per row, require `source_sha256` to be the text's sha256 and `window` to be `max_length`.
+6. Per row, require S5: the summary's raw pieces (`SENTENCE_BREAK` pieces for description and
+   excluded, `EXAMPLES_SEPARATOR` entries for examples) form an in-order subsequence of the
+   source's raw pieces, each source piece used at most once (a two-pointer match), and its
+   normalized segments are a subset of the source's (4.4). This needs no tokenizer and catches a
+   reordered, repeated or edited unit.
+7. After substitution, require every marked channel text, titles included, to fit the window.
 
-The last check enforces "no channel text is truncated" on every cache build and every text-only
-build. It also catches a tokenizer revision that counts differently from the one the artifact was
-built with. A backbone whose texts all fit needs no pin.
+Step 7 enforces "no channel text is truncated" on every cache build and every text-only build. It
+also catches a tokenizer revision that counts differently from the one the artifact was built
+with. Whole-unit structure is the build's construction (4.2), tested in unit tests; the resolver
+does not rebuild units.
 
 **Cache identity.** The sidecar's `summaries` entry becomes `summaries_identity(tokenizer_name)`.
 Every `channels-v3` cache built so far records null, so each rebuilds once. `CACHE_FORMAT` stays
 `channels-v3`: the channel encoding does not change. When a sidecar does not match, the load
-messages name the identity keys that differ, with both values, instead of only the fingerprints
-(plan 8's polish item, `tokenization_cache.py:256-262`).
+messages (`load_verified_tokenization_cache`, `tokenization_cache.py:262-266`, and the no-locking
+refusal in `tokenization_cache`) name the identity keys that differ, with both values, instead of
+only the fingerprints (plan 8's polish item).
 
 ### 4.8 The identity chain
 
 Each link records or checks the summaries' sha256 (null for a backbone with no pin):
 
 1. **The checkpoint contract.** `CheckpointContract` (`supervision/checkpoints.py`) gains
-   `summaries: Optional[str] = None`, absent from every contract saved before this stage, which
-   therefore reads as null: those checkpoints trained on truncated text. `contract_for_bundle`
-   and `validate_supervision_contract` take the run's or the read's value,
-   `summaries_identity(tokenizer_name)` of its `code_token_config`. Consequently:
-   - exact resume (`validate_checkpoint_contract`) refuses a checkpoint trained under other
-     summaries;
-   - export and reads (`load_arm_model` through `validate_supervision_contract`) refuse one, and
-     the message names the summaries field;
-   - weights-only migration compares only the encoder record, so a pre-6b checkpoint can still
-     seed a run.
-2. **The export provenance** (`text_model/export.py`) records `summaries` from
-   `summaries_identity` and, new, `tokenizer`: `token_config.tokenizer_name` (plan 8's
-   failure-handling item, its tokenizer-name part).
-3. **`ArmEncoder.from_files`** (`text_model/arm_encoder.py`) also refuses a table whose
-   provenance's `summaries` differs from the checkpoint contract's, or whose `tokenizer` differs
-   from `token_config.tokenizer_name`, or that lacks either key. Today it checks the window only.
-4. **The text-only provenance** (`panels/text_only.py`) records `summaries`.
+   `summaries: Optional[str] = None`. It is absent from every contract saved before this stage,
+   which therefore reads as null: those checkpoints trained on truncated text.
+   - **Training.** `NAICSContrastiveModel` gains a constructor input `summaries: Optional[str] =
+     None`, saved with its hyperparameters and passed to both `contract_for_bundle` and
+     `containment_contract`, which each gain a keyword `summaries`. `build_model_from_config` and
+     `runtime_contract_for` (`cli/commands/training.py`) pass
+     `summaries_identity(cfg.data_loader.tokenization.tokenizer_name)`, the same key the cache
+     uses. The default None means a pre-6b checkpoint's saved hyperparameters rebuild a null
+     contract on load, so the named refusal below, not `on_load_checkpoint`, reports it.
+   - **Reads.** `validate_supervision_contract(raw, manifest, supervision_mode='repaired', *,
+     summaries)` and `load_arm_model(checkpoint_path, bundle, *, summaries, device='cpu')` take
+     `summaries` keyword-only with no default, so a missed caller is a TypeError, not a silent
+     None. `export_code_table` and `ArmEncoder.from_files` pass
+     `summaries_identity(token_config.tokenizer_name)`; `tests/unit/test_export.py` calls
+     `load_arm_model` directly and is updated.
+   - **Consequences.** Exact resume (`validate_checkpoint_contract`) refuses a checkpoint trained
+     under other summaries, legacy containment included. Export and reads refuse one, and the
+     message names the summaries field. The HGCN feeder (`generate_embeddings_from_checkpoint`)
+     refuses a pre-6b checkpoint through `validate_exact_resume` with `runtime_contract_for`'s
+     contract; it needs no edit. Weights-only migration compares only the encoder record, so a
+     pre-6b checkpoint can still seed a run.
+2. **The export provenance** (`text_model/export.py`) records `summaries`, from
+   `summaries_identity(token_config.tokenizer_name)`, and, new, `tokenizer`:
+   `token_config.tokenizer_name` (plan 8's failure-handling item, its tokenizer-name part).
+3. **`ArmEncoder.from_files`** (`text_model/arm_encoder.py`) refuses, before the model loads as
+   its other provenance checks do, a table whose provenance lacks `summaries` or `tokenizer`, or
+   whose `summaries` differs from `summaries_identity(token_config.tokenizer_name)`, or whose
+   `tokenizer` differs from `token_config.tokenizer_name`. `load_arm_model`'s contract check
+   against the same value then closes the chain to the checkpoint.
+4. **The text-only provenance** (`panels/text_only.py`) records `summaries`, from
+   `summaries_identity(backbone)`.
 5. **The decision records.**
    - `decision/store.py` reads `summaries_sha256` from a text-only provenance's `summaries` key
      beside the four fields it reads today. A provenance without the key, which means every
@@ -301,6 +378,11 @@ Each link records or checks the summaries' sha256 (null for a backbone with no p
      required and nullable, so a record cannot omit it.
    - `check_text_only` (`decision/decide.py`) compares five fields: backbone, revision,
      descriptions sha256, summaries sha256 and window.
+   - `run_seed_sweep` (`decision/sweep.py`) reads each seed's export provenance
+     (`provenance_path(artifacts.table)`) and requires its `backbone`, `revision`, descriptions
+     sha256, `summaries` and `max_length` to equal the `ArmSpec`'s, refusing the seed otherwise.
+     Until now `ArmSpec`'s D9 fields were declared and checked only against the text-only table;
+     this ties them to what each seed read, for every D9 field, not only the summaries.
 
 An arm's text identity is then (descriptions sha256, summaries sha256), and the bundle's
 description fingerprint never moves (S2).
@@ -309,36 +391,49 @@ description fingerprint never moves (S2).
 
 **New:**
 
-- `panels/window_summaries.py`: units (4.2), `SummariesPin`, `WINDOW_SUMMARIES`,
-  `summaries_identity`, the artifact reader and `resolve_channel_texts` (4.7). Torch-free.
+- `panels/window_summaries.py`: the units (4.2), `WINDOW_SUMMARIES_PATH`, `SummariesPin`,
+  `WINDOW_SUMMARIES`, `summaries_identity`, `SUMMARIES_SCHEMA`, the artifact reader and
+  `resolve_channel_texts` (4.7). Torch-free.
 - `data/window_summaries.py`: the centrality selection (4.3) and the artifact and provenance
   writer behind `data summaries`. It imports torch and transformers.
 - `conf/data/window_summaries.csv` and `conf/data/window_summaries_provenance.json`.
 - `tests/unit/test_window_summaries.py` (and a build test module if the plan splits them).
 - `docs/api/window_summaries.md` and its `docs/.nav.yml` entry.
 
-**Edited:** `panels/leakage.py` (`SENTENCE_BREAK`), `panels/text_only.py`,
+**Edited source:** `panels/leakage.py` (`SENTENCE_BREAK`), `panels/text_only.py`,
 `text_model/dataloader/tokenization_cache.py`, `text_model/export.py`,
-`text_model/arm_encoder.py`, `supervision/checkpoints.py`, the two `contract_for_bundle` callers
-(`text_model/naics_model.py`, `cli/commands/training.py`), `decision/records.py`,
-`decision/store.py`, `decision/decide.py`, `cli/commands/data.py`, and the tests and fixtures that
-build contracts, provenances, `TextOnlyRef` or `ArmSpec`.
+`text_model/arm_encoder.py`, `text_model/naics_model.py` (the constructor input and both contract
+calls), `supervision/checkpoints.py`, `cli/commands/training.py` (`build_model_from_config`,
+`runtime_contract_for`), `cli/commands/data.py`, `decision/records.py`, `decision/store.py`,
+`decision/decide.py`, `decision/sweep.py`, and the `utils/input_window.py` module docstring.
+
+**Edited tests:** `tests/conftest.py` (the seam, section 6); `tests/fixtures/shared_encoder.py`;
+`tests/fixtures/decision.py`; `tests/unit/test_tokenization_cache.py` (the null-summaries sidecar
+test, the test that patches the deleted `SUMMARIES`, and any cache test whose texts exceed its
+window); `test_export.py`; `test_arm_encoder.py`; `test_cli_commands.py`; `test_cli_training.py`;
+`test_naics_model.py`; `test_decision_sweep.py` (its seed tables gain export provenance);
+`test_decision_store.py`; and every other test that builds a contract, a provenance,
+`TextOnlyRef` or `ArmSpec`.
 
 ## 5. Error handling
 
-Named refusals, all ValueError:
+Named refusals, ValueError unless stated:
 
-- **Build:** a title over the window; a level-3 piece over the budget; an invariant of 4.7 failing
-  before the write; an existing artifact without `--force`; a backbone with no recorded window.
-- **Resolver:** each case of 4.7.
-- **Contract:** a summaries mismatch on exact resume, export or read.
-- **Arm encoder:** a table provenance whose `summaries` or `tokenizer` differs, or is absent.
+- **Build:** a title over the window; an examples entry or a level-3 piece over the budget; a
+  backbone with no recorded window; any resolver check on the bytes about to be committed; an
+  existing artifact without `--force` (FileExistsError, exit code 1 at the CLI).
+- **Resolver:** each step of 4.7, in that order.
+- **Contract:** a summaries mismatch on exact resume, export, read or the HGCN feeder; a caller
+  that omits `summaries` (TypeError).
+- **Arm encoder:** a table provenance whose `summaries` or `tokenizer` differs or is absent.
 - **Decision records:** a text-only provenance without `summaries`; `check_text_only` on a
-  summaries mismatch.
+  summaries mismatch; `run_seed_sweep` on a seed whose export provenance differs from the
+  `ArmSpec`.
 
 Guarantees rather than refusals:
 
 - A cache sidecar whose `summaries` differs rebuilds the cache, as a format or marker change does.
+- Descriptions whose texts all fit pass the resolver with no pin and no artifact read.
 - Weights-only migration ignores summaries (4.8).
 
 ## 6. Testing
@@ -347,57 +442,96 @@ Tests are written red to green. Unit tests download nothing: CI has neither `dat
 cache. Tokenizer-dependent unit tests use a stub or tiny tokenizer, and selection tests inject a
 stub embedder.
 
+**The seam.** An autouse fixture in `tests/conftest.py` sets `WINDOW_SUMMARIES` to one entry, the
+MiniLM backbone mapped to a dummy pin (a path that does not exist, a fixed fake sha256, window
+128). Fixture descriptions fit the window, so the resolver never reads the dummy (4.7, step 1),
+while every identity site records the dummy's sha256. A site that records None instead fails from
+the first task, not at the Exit. A registered marker opts a test out of the fixture: the
+committed-artifact test and the local-only tests below need the real pin. A test that needs "no
+pin" deletes the entry with `monkeypatch.delitem` or uses an unpinned backbone name.
+
 - **Units:** every unit boundary is a segmenter boundary, on crafted texts with `U.S.`, `i.e.`,
-  numbered lists, `;` inside parentheses and cross-references; the level-2 and level-3
-  re-splits; the raise for a piece over the budget and for a title over the window.
+  numbered lists, `;` inside parentheses, cross-references, and `… in Industry 111113.` as a
+  non-final piece (it closes a unit); the level-2 and level-3 re-splits; the raises for a level-3
+  piece over the budget, an examples entry over the budget and a title over the window.
 - **Selection:** with a stub embedder, the greedy keeps the expected units; exact ties go to the
-  earlier unit; both stop rules hold; output is in source order and fits with its marker.
-- **Resolver:** substitution; every refusal of 4.7; texts that fit pass through unchanged; a
-  backbone with no pin and no over-window text passes.
-- **Cache identity:** changing only the summaries rebuilds the cache; changing only the markers
-  rebuilds it (plan 8's missing test, `_cache_identity`); the mismatch message names the
-  differing keys.
+  earlier unit; both stop rules hold, the plateau stop included; output is in source order and
+  fits with its marker.
+- **Resolver:** substitution; a pinned backbone with no over-window text passes without reading
+  its artifact (the path does not exist); every refusal of 4.7, each at its step, the S5 check
+  with a reordered, a repeated and an edited unit; texts that fit pass through unchanged.
+- **Build:** the temporary-file validation runs before the move, so a failing invariant leaves no
+  artifact; the overwrite refusal is a FileExistsError.
+- **Cache identity:** changing only the pin rebuilds the cache (`monkeypatch.setitem` on
+  `WINDOW_SUMMARIES`, replacing the test that patched `SUMMARIES`); changing only the markers
+  rebuilds it (plan 8's missing test, `_cache_identity`); the sidecar records
+  `summaries_identity(MINILM)`; the mismatch message names the differing keys.
 - **Text-only builder:** it reads resolved texts, and its provenance records `summaries`.
-- **Contract:** a raw contract without `summaries` reads as null; exact resume and
-  `validate_supervision_contract` refuse a mismatch; weights-only loading does not compare it.
+- **Contract:** a raw contract without `summaries` reads as null; the model passes its
+  `summaries` to both contract builders; exact resume refuses a mismatch, a containment
+  checkpoint included; `validate_supervision_contract` refuses one; weights-only loading does not
+  compare it; the HGCN feeder refuses a checkpoint trained under other summaries.
 - **Export and arm encoder:** the export provenance records `summaries` and `tokenizer`;
-  `from_files` refuses a provenance with other or absent summaries or tokenizer.
+  `from_files` refuses a provenance with other or absent summaries or tokenizer before the model
+  loads.
 - **Decision records:** the store reads `summaries_sha256` and refuses a provenance without it;
-  `check_text_only` refuses a summaries mismatch; the decision fixtures carry the field.
-- **The committed artifact:** its sha256 equals the pin's; `(code, channel)` is unique; every
-  `summary_tokens` is at most `window`; every channel is one of the three.
-- **Local-only, skipped without the cached backbone or `data/naics_descriptions.parquet`:** on the
-  real descriptions, the resolver accepts the committed artifact (which re-tokenizes every row and
-  re-checks fit and the subset property), and replaces 162, 106 and 485 texts.
+  `check_text_only` refuses a summaries mismatch; `run_seed_sweep` refuses a seed whose export
+  provenance differs from the `ArmSpec` in any of its five fields.
+- **The committed artifact** (opted out of the seam): its sha256 equals the pin's; `(code,
+  channel)` is unique; every `summary_tokens` is at most `window`; every channel is one of the
+  three.
+- **Local-only, opted out of the seam, skipped without the cached backbone or
+  `data/naics_descriptions.parquet`:** on the real descriptions the resolver accepts the committed
+  artifact, which re-tokenizes every row and re-checks fit, S5 and the subset property, and
+  replaces 162, 106 and 485 texts.
 
 ## 7. Exit procedure
 
 This runs locally. It trains nothing and reads no split, so the selection log gains no record.
+`CLONE` below is the cloned bundle's manifest path.
 
 1. Clone bundle 301cce28 and `data/naics_descriptions.parquet` (sha256 `fe8c54e3…`) from the main
-   checkout into the worktree's `data/` with `cp -cR` and `cp -c`. Never symlink or rebuild them.
-   Clone plan 8's Exit checkpoint and arm table from the main checkout's
-   `checkpoints/plan8_exit/` the same way.
-2. Point `supervision.manifest_path` at the clone with a `key=value` override on every command.
-   Never commit it.
-3. Run `HF_HUB_OFFLINE=1 uv run naics-embedder data summaries`. Commit the CSV and its
-   provenance, and set the pin's sha256.
-4. Build the tokenization cache through `tokenization_cache(code_token_config(cfg), …)` under the
-   bundle's fingerprints, as `NAICSDataModule.prepare_data` does. The resolver logs 162, 106 and
-   485 replaced texts, and the sidecar's `summaries` is the pin's sha256.
-5. Run `HF_HUB_OFFLINE=1 uv run naics-embedder tools text-only-table`. Its provenance's `summaries`
-   is the pin's sha256.
-6. Run `tools export-table` on plan 8's Exit checkpoint. It refuses: the checkpoint was trained
-   under null summaries.
+   checkout into the worktree's `data/` with `cp -cR` and `cp -c`, and plan 8's
+   `checkpoints/plan8_exit/` (`last.ckpt`, `arm_table.parquet`, `text_only.parquet` and their
+   provenance files) into the worktree's `checkpoints/plan8_exit/` with `cp -c`. Never symlink or
+   rebuild them.
+2. Pass `supervision.manifest_path=CLONE` as a `key=value` override to every command that reads
+   the bundle (steps 4 and 6). Never commit it.
+3. Run `HF_HUB_OFFLINE=1 uv run naics-embedder data summaries`. In one commit, add the CSV and its
+   provenance, the MiniLM entry in `WINDOW_SUMMARIES` with the printed sha256, and the
+   committed-artifact and local-only tests.
+4. Build the tokenization cache as `NAICSDataModule.prepare_data` does, with a short script: load
+   `conf/config.yaml` with the `CLONE` override, validate the bundle, and call
+   `tokenization_cache(code_token_config(cfg), description_fingerprint=…, codebook_fingerprint=…)`
+   with the manifest's fingerprints. The resolver logs 162, 106 and 485 replaced texts, and the
+   sidecar's `summaries` is the pin's sha256. This run is the leakage evidence: the subset and S5
+   checks passed on all 753 rows, and the manifest records `index_roles_no_leakage: true` (4.4).
+5. Run `HF_HUB_OFFLINE=1 uv run naics-embedder tools text-only-table --descriptions
+   data/naics_descriptions.parquet --output checkpoints/plan9_exit/text_only.parquet`. Its
+   provenance's `summaries` is the pin's sha256.
+6. Show the chain's refusals and records with a short script and one command:
+   - `ArtifactStore(<tmp root>).put_text_only` on step 5's table returns a `TextOnlyRef` whose
+     `summaries_sha256` is the pin's sha256, and refuses plan 8's `text_only.parquet`, whose
+     provenance has no `summaries` key;
+   - `ArmEncoder.from_files` on plan 8's `last.ckpt` and `arm_table.parquet` refuses before the
+     model loads: the table's provenance records null summaries and no tokenizer;
+   - `HF_HUB_OFFLINE=1 uv run naics-embedder tools export-table --checkpoint
+     checkpoints/plan8_exit/last.ckpt --output <tmp path> supervision.manifest_path=CLONE` refuses:
+     the checkpoint was trained under null summaries.
 7. Run `uv run pytest` (the local-only tests included), `./scripts/format_code.sh --check --all`
    and `uv run mkdocs build --strict`.
 
 ## 8. Documentation
 
-- `docs/text_training.md`: over-window channel texts are summarized, not truncated (it still says
-  they are tail-truncated until Stage 6b); the Cache Regeneration list names format, markers and
-  summaries.
-- `docs/usage.md`: the `data summaries` command.
+- `docs/text_training.md`:
+  - :71-73 says the sidecar's `summaries` entry is "null until Stage 6b"; it becomes the pin's
+    sha256;
+  - :334-338 says "Every tokenizing path truncates to the window"; over-window channel texts now
+    read as their summaries, and no channel text is truncated;
+  - the Cache Regeneration list (:414) names format, markers and summaries.
+- `utils/input_window.py`: its module docstring says the same as :334-338 and changes with it.
+- `docs/usage.md`: the `tools text-only-table` paragraph (:211-216), which says each channel is
+  truncated to the window, and a new `data summaries` entry.
 - `CLAUDE.md`: the data commands (a `data summaries` line beside `data roles`) and the directory
   tree (`panels/window_summaries.py`, `data/window_summaries.py`, `conf/data/window_summaries.csv`).
 - `docs/api/window_summaries.md` and `docs/.nav.yml`.
@@ -437,9 +571,17 @@ This runs locally. It trains nothing and reads no split, so the selection log ga
   - Rejected: a `data_loader.tokenization` key with a pinned hash, which every construction site
     would have to pass.
 - **Checkpoints.**
-  - Chosen: the contract records the summaries; export, reads and exact resume refuse a mismatch.
+  - Chosen: the contract records the summaries, from a model input that training passes; export,
+    reads and exact resume refuse a mismatch.
   - Rejected: no record. A checkpoint trained on truncated text could be exported under summaries
     and paired with a comparator that read them, which breaks D9 unseen.
+  - Rejected: the model deriving the value from `base_model_name`. Nothing ties that name to the
+    tokenizer the cache reads, and after a pin change an old checkpoint would fail on load with an
+    exact-resume message instead of the named refusal.
+- **Seed check.**
+  - Chosen: `run_seed_sweep` compares each seed's export provenance with the `ArmSpec`.
+  - Rejected: comparing with the current pin, which a seed loaded from an earlier run need not
+    match.
 - **Format.**
   - Chosen: CSV beside a provenance JSON, as the repo's other committed tables are.
   - Rejected: parquet, which a review cannot diff.
@@ -447,8 +589,7 @@ This runs locally. It trains nothing and reads no split, so the selection log ga
   - Chosen: the frozen artifact's logic in `panels/`, its build in `data/`, as the role table and
     the held-out groups are split. `text_model` and `data` already import `panels`, and
     `panels/__init__.py` imports nothing, so nothing cycles.
-  - Rejected: `utils/`, which imports nothing above it today, while the units need
-    `panels/leakage.py`.
+  - Rejected: `utils/`, which does not import `panels`, while the units need `panels/leakage.py`.
 
 ## 10. Rollout note
 
@@ -456,13 +597,17 @@ This runs locally. It trains nothing and reads no split, so the selection log ga
 > re-validate later stages against what shipped.
 
 **Switch at merge.** Every `channels-v3` cache rebuilds once. Every checkpoint, exported table and
-text-only table made before this stage is refused by export, reads and `decide`; weights-only
-loading still works. Plan 8's Exit numbers stay as the floor its finding records
+text-only table made before this stage is refused by export, reads, the HGCN feeder and `decide`;
+weights-only loading still works. Plan 8's Exit numbers stay as the floor its finding records
 (`specs/findings/shared-encoder-first-reading.md`). Stage 7 trains and builds its text-only table
 on the summaries.
 
 **Realized.** Plan completion records, in the roadmap's Stage 6b entry, the artifact's sha256, the
 rows per channel and the mean share of source tokens kept.
+
+**Re-validation** at plan completion touches at least: Stage 9 (summaries are keyed by backbone,
+the tokenizer included, not by window alone), Stage 10 (an arm table's provenance carries
+`summaries` and `tokenizer`) and Stage 12 (`ArmEncoder.from_files` checks both).
 
 **Deferred items,** handled through /deferred at plan completion:
 
@@ -470,8 +615,8 @@ rows per channel and the mean share of source tokens kept.
   discharged (4.8, links 2 and 3). The rest stays.
 - Plan 8's "encoder, fusion and cache tests leave gaps": its markers-only sidecar test is
   discharged (section 6). The rest stays.
-- Plan 8's "code and docs polish": the cache's load messages (4.7) and the `docs/text_training.md`
-  note on Stage 6b (section 8) are discharged. The rest stays.
+- Plan 8's "code and docs polish": the cache's load messages (4.7), its `docs/text_training.md`
+  note on Stage 6b and the Cache Regeneration list (section 8) are discharged. The rest stays.
 - Plan 7's manifest tokenizer revision keeps its trigger: no bundle is rebuilt.
 
 **Model routing.** writing-plans for plan 9 runs in a fresh Opus session from this spec;
