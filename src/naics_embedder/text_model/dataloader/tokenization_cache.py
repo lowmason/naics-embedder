@@ -14,7 +14,7 @@ import polars as pl
 import torch
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from naics_embedder.panels.window_summaries import summaries_identity
+from naics_embedder.panels.window_summaries import resolve_channel_texts, summaries_identity
 from naics_embedder.text_model.fields import CHANNELS, marker, tokenize_field
 from naics_embedder.utils.config import TokenizationConfig
 from naics_embedder.utils.input_window import check_window
@@ -60,17 +60,22 @@ def _build_tokenization_cache(
     '''
     Build tokenization cache from descriptions file.
 
-    Every channel, titles included, is truncated and padded to ``max_length``, which may not
-    exceed the backbone's trained window (None is the window).
+    Every channel text over the window is first replaced by its pinned window-fitting summary
+    (``panels/window_summaries.py``), so no channel text is truncated. Every channel, titles
+    included, is padded to ``max_length``, which may not exceed the backbone's trained window
+    (None is the window).
     '''
 
     max_length = check_window(tokenizer_name, max_length)
     logger.info('Building tokenization cache...')
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    descriptions = resolve_channel_texts(
+        pl.read_parquet(descriptions_path), tokenizer, tokenizer_name, max_length
+    )
 
     # DataFrame iterator
-    df_iter = pl.read_parquet(descriptions_path).sort('index').iter_rows(named=True)
+    df_iter = descriptions.sort('index').iter_rows(named=True)
 
     # Tokenization cache
     cache, cnt = {}, {'title': 0, 'description': 0, 'excluded': 0, 'examples': 0}

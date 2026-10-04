@@ -14,7 +14,7 @@ import pytest
 import torch
 from transformers import BertConfig, BertModel, BertTokenizerFast
 
-from naics_embedder.panels import text_only
+from naics_embedder.panels import text_only, window_summaries
 from naics_embedder.panels.text_only import (
     CHANNELS,
     build_text_only_table,
@@ -23,7 +23,9 @@ from naics_embedder.panels.text_only import (
     provenance_path,
     text_only_fingerprint,
 )
+from naics_embedder.panels.window_summaries import summaries_identity, text_sha256
 from naics_embedder.utils.input_window import TRAINED_WINDOWS
+from tests.fixtures.window_summaries import pin_artifact
 
 pytestmark = pytest.mark.unit
 
@@ -155,6 +157,51 @@ def test_the_table_and_its_provenance_are_written(tmp_path, monkeypatch, model, 
     assert set(provenance['library_versions']) == {'torch', 'transformers', 'polars'}
     # The name a regressor read logs the table by, so a logged read matches this file
     assert provenance['matrix_fingerprint'] == text_only_fingerprint(table)
+
+def test_the_table_reads_an_over_window_text_as_its_summary(
+    tmp_path, monkeypatch, model, tokenizer
+):
+    monkeypatch.setitem(TRAINED_WINDOWS, 'tiny-bert', 16)
+    # 19 tokens marked, over the 16-token window; the summary is 10
+    text = 'grows soybeans. grows canola. raises cattle. not here. soybean farming.'
+    summary = 'grows soybeans. raises cattle.'
+    row = {
+        'code': '111110',
+        'channel': 'description',
+        'source_sha256': text_sha256(text),
+        'window': 16,
+        'summary': summary,
+        'source_tokens': 19,
+        'summary_tokens': 10,
+        'units_kept': 2,
+        'units_total': 5,
+    }
+    pin = pin_artifact(tmp_path / 'window_summaries.csv', [row], window=16)
+    monkeypatch.setitem(window_summaries.WINDOW_SUMMARIES, 'tiny-bert', pin)
+    descriptions = tmp_path / 'naics_descriptions.parquet'
+    _descriptions([('111110', 'soybean farming', text, None, None)]).write_parquet(descriptions)
+
+    path = build_text_only_table(
+        descriptions,
+        tmp_path / 'text_only.parquet',
+        backbone='tiny-bert',
+        max_length=16,
+        model=model,
+        tokenizer=tokenizer,
+    )
+
+    expected = _encode(
+        _descriptions([('111110', 'soybean farming', summary, None, None)]), model, tokenizer
+    )
+    np.testing.assert_array_equal(pl.read_parquet(path).drop('code').to_numpy(), expected)
+    assert json.loads(provenance_path(path).read_text())['summaries'] == pin.sha256
+
+def test_the_provenance_records_the_backbones_summaries(text_only_comparator_table):
+    provenance = json.loads(provenance_path(text_only_comparator_table).read_text())
+
+    # The seam's dummy pin for MiniLM (tests/conftest.py)
+    assert provenance['summaries'] == summaries_identity(provenance['backbone'])
+    assert provenance['summaries'] is not None
 
 def test_a_max_length_beyond_the_trained_window_is_refused(tmp_path, monkeypatch, model, tokenizer):
     monkeypatch.setitem(TRAINED_WINDOWS, 'tiny-bert', 8)

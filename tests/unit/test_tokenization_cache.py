@@ -19,7 +19,7 @@ import torch
 from transformers import AutoTokenizer
 
 from naics_embedder.panels import window_summaries
-from naics_embedder.panels.window_summaries import SummariesPin, summaries_identity
+from naics_embedder.panels.window_summaries import SummariesPin, summaries_identity, text_sha256
 from naics_embedder.text_model.dataloader.tokenization_cache import (
     _acquire_lock,
     _build_tokenization_cache,
@@ -31,7 +31,9 @@ from naics_embedder.text_model.dataloader.tokenization_cache import (
     load_verified_tokenization_cache,
     tokenization_cache,
 )
+from naics_embedder.text_model.fields import tokenize_field
 from naics_embedder.utils.config import TokenizationConfig
+from tests.fixtures.window_summaries import pin_artifact
 
 FINGERPRINTS = {'description_fingerprint': 'd' * 64, 'codebook_fingerprint': 'c' * 64}
 
@@ -534,7 +536,7 @@ class TestCacheInvalidation:
             'index': [0],
             'code': ['311111'],
             'title': ['Dog Food'],
-            'description': ['A ' * 200],  # Long description
+            'description': ['A ' * 40],  # Long, and still inside both windows
             'excluded': [''],
             'examples': [''],
         }
@@ -897,3 +899,66 @@ def test_a_stale_sidecar_is_refused_naming_each_key_that_differs(
         assert f"'summaries': ('{recorded}', '{expected}')" in message
         # Only the keys that differ, with both values
         assert 'description_fingerprint' not in message
+
+# -------------------------------------------------------------------------------------------------
+# Window-fitting summaries
+# -------------------------------------------------------------------------------------------------
+
+MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
+# 36 tokens marked, over a 32-token window; the summary is 12
+OVER_WINDOW = (
+    'Farms grow corn. Farms grow wheat. Farms sell grain. Farms buy seed. Farms hire labor. '
+    'Farms rent land. Farms store crops. Farms ship feed.'
+)
+SUMMARY = 'Farms grow corn. Farms sell grain.'
+
+@pytest.fixture
+def over_window_descriptions(tmp_path):
+    path = tmp_path / 'descriptions.parquet'
+    pl.DataFrame(
+        {
+            'index': [0],
+            'code': ['311111'],
+            'title': ['Dog Food'],
+            'description': [OVER_WINDOW],
+            'excluded': [None],
+            'examples': [None],
+        },
+        schema_overrides={
+            'excluded': pl.Utf8,
+            'examples': pl.Utf8
+        },
+    ).write_parquet(path)
+    return path
+
+@pytest.mark.unit
+def test_an_over_window_text_is_cached_as_its_pinned_summary(
+    tmp_path, monkeypatch, over_window_descriptions
+):
+    # The seam's MiniLM pin names no file; this test's pin names one, at the test's window
+    row = {
+        'code': '311111',
+        'channel': 'description',
+        'source_sha256': text_sha256(OVER_WINDOW),
+        'window': 32,
+        'summary': SUMMARY,
+        'source_tokens': 36,
+        'summary_tokens': 12,
+        'units_kept': 2,
+        'units_total': 8,
+    }
+    pin = pin_artifact(tmp_path / 'window_summaries.csv', [row], window=32)
+    monkeypatch.setitem(window_summaries.WINDOW_SUMMARIES, MINILM, pin)
+
+    cache = _build_tokenization_cache(str(over_window_descriptions), MINILM, 32)
+
+    expected = tokenize_field(AutoTokenizer.from_pretrained(MINILM), 'description', SUMMARY, 32)
+    assert torch.equal(cache[0]['description']['input_ids'], expected['input_ids'])
+    assert cache[0]['description']['present'] is True
+
+@pytest.mark.unit
+def test_an_over_window_text_without_a_pin_is_refused(monkeypatch, over_window_descriptions):
+    monkeypatch.delitem(window_summaries.WINDOW_SUMMARIES, MINILM)
+
+    with pytest.raises(ValueError, match="code 311111's description is over the 32-token window"):
+        _build_tokenization_cache(str(over_window_descriptions), MINILM, 32)
