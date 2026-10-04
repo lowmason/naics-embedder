@@ -334,17 +334,19 @@ positives, and parent retrieval never scores them.
 
 **Input window.** The manifest's `input_window` records the backbone's trained window: 128 tokens
 for `sentence-transformers/all-MiniLM-L6-v2`, from its model card. Per text channel it records
-the present texts, the texts beyond the window and their share. A channel text whose marked form
-is over the window is read as its window-fitting summary (roadmap Stage 6b): whole sentences,
-clauses or examples entries of the text, chosen once by `naics-embedder data summaries` and
-committed as `conf/data/window_summaries.csv`. `WINDOW_SUMMARIES` (`panels/window_summaries.py`)
-pins the artifact by sha256, and the tokenization cache and the text-only comparator both read
-their texts through `resolve_channel_texts`, which checks the artifact on every call. No channel
-text is truncated; truncation stays a backstop for queries. Under MiniLM at 128 tokens, 162
-descriptions, 106 examples texts and 485 exclusion texts are summarized. The checkpoint contract,
-the export and text-only provenances and the decision records carry the summaries' sha256. An
-absent channel is null in the descriptions, and the tokenization cache encodes it as the empty
-string, never as a placeholder.
+the present texts, the texts beyond the window and their share. A description, examples or
+excluded text whose marked form is over the window is read as its window-fitting summary (roadmap
+Stage 6b): whole sentences, clauses or examples entries of the text, chosen once by
+`naics-embedder data summaries` and committed as `conf/data/window_summaries.csv`.
+`WINDOW_SUMMARIES` (`panels/window_summaries.py`) pins the artifact by sha256, and the
+tokenization cache and the text-only comparator both read their texts through
+`resolve_channel_texts`, which checks the artifact on every call that finds an over-window text.
+No channel text is truncated; truncation stays a backstop for queries. Under MiniLM at 128
+tokens, 162 descriptions, 106 examples texts and 485 exclusion texts are summarized; the manifest
+counts unmarked text, so its counts are lower (153, 105 and 464). The checkpoint contract, the
+export and text-only provenances and the decision records carry the summaries' sha256. An absent
+channel is null in the descriptions, and the tokenization cache encodes it as the empty string,
+never as a placeholder.
 
 ### Three Independent Axes
 

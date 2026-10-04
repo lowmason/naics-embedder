@@ -98,16 +98,16 @@ uv run naics-embedder data roles --source-dir ~/Downloads/Data
 ### `data summaries`
 
 Build the window-fitting summaries of over-long channel texts, once per backbone (roadmap
-Stage 6b). Every channel text whose marked form (`'description: …'`, special tokens included) is
-over the backbone's trained window is summarized by whole units of the text: its sentences, or
-clauses and segmenter pieces of an over-long sentence, or its examples entries. The frozen
-backbone (from the local Hugging Face cache) keeps, greedily, the units whose pooled vectors best
-approximate the whole text's, in source order, while the marked summary fits. Every unit boundary
-is a boundary of the leakage segmenter, so a summary's segments are a subset of its text's and
-the leakage checks need no sealed read. The artifact is checked as every reader checks it before
-it is moved into place; commit it with the pin the command prints, in `WINDOW_SUMMARIES`
-(`panels/window_summaries.py`). An existing artifact is replaced only with `--force`, and a new
-artifact needs a new pin.
+Stage 6b). Every description, examples or excluded text whose marked form (`'description: …'`,
+special tokens included) is over the backbone's trained window is summarized by whole units of
+the text: its sentences, or clauses and segmenter pieces of an over-long sentence, or its
+examples entries. The frozen backbone (from the local Hugging Face cache) keeps, greedily, the
+units whose pooled vectors best approximate the whole text's, in source order, while the marked
+summary fits. Every unit boundary is a boundary of the leakage segmenter, so a summary's segments
+are a subset of its text's and the leakage checks need no sealed read. The artifact is checked as
+every reader checks it before it is moved into place; commit it with the pin the command prints,
+in `WINDOW_SUMMARIES` (`panels/window_summaries.py`). An existing artifact is replaced only with
+`--force`, and a new artifact needs a new pin.
 
 **Generates:** `conf/data/window_summaries.csv`, `conf/data/window_summaries_provenance.json`
 
@@ -241,8 +241,8 @@ backbone comes from the local Hugging Face cache (default: `text_only.backbone` 
 `conf/data/regressor_panel.yaml`). A channel text over the backbone's trained input window is
 read as its window-fitting summary, as the arm reads it, so no channel text is truncated, and
 `text_only.max_length` may not exceed the window (Req 9). The provenance records the summaries'
-sha256 (`summaries`), which the decision store checks against the arm's (D9). The regressor panel
-reduces the table to the arm's dimension by PCA.
+sha256 (`summaries`). The decision store records it, and `check_text_only` compares it with the
+arm's (D9). The regressor panel reduces the table to the arm's dimension by PCA.
 
 **Generates:** the table and `<stem>_provenance.json` beside it
 
