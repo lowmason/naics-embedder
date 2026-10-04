@@ -71,16 +71,18 @@ HF_HUB_OFFLINE=1 nohup uv run naics-embedder train training.trainer.max_epochs=1
 
 - The run started at 22:10:39 EDT on 2026-10-03 (`logs/plan8_train.start`).
 - The training summary is stamped `2026-10-03T22:40:25.575560`.
-- A watcher found the process gone at 22:40:40 EDT, after 29.9 minutes of wall-clock time.
+- A watcher, polling every 15 s, found the process gone at 22:40:40 EDT, about 30 minutes after the
+  start.
 - The memory footprint grew from 11 GiB to a peak of 23.0 GiB across the epoch. The MPS limit is
   47.74 GiB.
 
 **Progress and loss.**
 
-- The training dataset held 3,181 rows. The run trained on them in 199 batches of 16, in 28:29, then
-  ran 199 validation batches.
-- Training averaged 0.12 batches per second, against 0.22 for the probe at `fef1a38` below. The
-  run shared the machine with the final verification's test suites and the Codex review.
+- The training dataset held 3,181 rows. The run trained on them in 199 batches of 16, in 24:00.
+- Training ran at 0.14 batches per second, against 0.22 for the probe at `fef1a38` below. The run
+  shared the machine with the final verification's test suites and the Codex review.
+- Validation then ran over its 3,181 rows in 199 batches, taking 4:26 and ending at 22:40:20. The
+  epoch's progress bar closed at 28:29.
 - The checkpoint records epoch 0 and global step 100, with `accumulate_grad_batches: 2`.
 - The last logged `val/contrastive_loss` is −1.042767. It is in-sample and selects nothing.
 
@@ -118,7 +120,7 @@ HF_HUB_OFFLINE=1 nohup uv run naics-embedder train training.trainer.max_epochs=1
   - torch 2.9.1's checkpoint does not replay the MPS random state, so with dropout on the recompute
     drew new masks.
   - On a two-layer probe, the gradients' relative difference from those without checkpointing was
-    1.78. A second seed differed by 1.85.
+    1.78. For scale, gradients under another seed's dropout masks differed by 1.85.
   - Checkpointing now runs non-reentrant, with a context that replays the MPS state. On the real
     MiniLM, the worst relative gradient difference fell from 1.594 to 0.000.
 - **Probe at `fef1a38`.** Its first steps peaked at 10.0 GiB and ran at about 4.5 s per batch.
