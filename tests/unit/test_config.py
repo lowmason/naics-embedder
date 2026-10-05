@@ -31,6 +31,7 @@ from naics_embedder.utils.config import (
     SupervisionRuntimeConfig,
     TextOnlyConfig,
     TokenizationConfig,
+    TrainerConfig,
     load_config,
 )
 from tests.fixtures.regressor_panel import BRANCH_RECORD
@@ -791,6 +792,34 @@ def test_structural_preference_config_bounds(field, value, message):
 
     with pytest.raises(ValidationError, match=message):
         StructuralPreferenceConfig(**data)
+
+# -------------------------------------------------------------------------------------------------
+# Trainer settings (spec 4.2 and 4.5)
+# -------------------------------------------------------------------------------------------------
+
+def test_the_trainer_precision_is_bf16_mixed_by_default_and_as_shipped(valid_config_dict):
+    # R9: the reference trains at bf16-mixed on CUDA; off CUDA the trainer runs 32-true
+    assert TrainerConfig().precision == 'bf16-mixed'
+    assert Config.model_validate(valid_config_dict).training.trainer.precision == 'bf16-mixed'
+
+@pytest.mark.parametrize('precision', ['32', '16', '16-mixed', 'bf16', 'bf16-mixed'])
+def test_the_precision_validator_still_accepts_its_values(precision):
+    assert TrainerConfig(precision=precision).precision == precision
+
+@pytest.mark.parametrize('precision', ['bf16-true', '16-true'])
+def test_no_run_can_select_a_true_half_precision(precision):
+    with pytest.raises(ValidationError, match='precision must be one of'):
+        TrainerConfig(precision=precision)
+
+@pytest.mark.parametrize('devices', [2, 8])
+def test_more_than_one_device_is_refused(devices):
+    '''Spec 4.5 and section 5: training runs on one device, because its code cache is per
+    process.'''
+
+    with pytest.raises(ValidationError, match=f'devices must be 1, not {devices}') as excinfo:
+        Config().override({'training.trainer.devices': devices})
+
+    assert _error_locs_and_types(excinfo) == [(('training', 'trainer', 'devices'), 'value_error')]
 
 # -------------------------------------------------------------------------------------------------
 # GraphConfig Tests

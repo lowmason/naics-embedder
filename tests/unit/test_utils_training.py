@@ -36,9 +36,10 @@ def _build_config(tmp_path: Path) -> Config:
 
 @pytest.mark.unit
 def test_detect_hardware_cuda_collects_gpu_memory(monkeypatch):
+    # The device check returns the CUDA precision it is given (utils/backend.get_device)
     monkeypatch.setattr(
         'naics_embedder.utils.training.get_device',
-        lambda log_info=False: ('cuda', '16-mixed', 2),
+        lambda log_info=False, *, cuda_precision: ('cuda', cuda_precision, 2),
     )
     monkeypatch.setattr(torch.cuda, 'is_available', lambda: True, raising=False)
     monkeypatch.setattr(
@@ -46,24 +47,30 @@ def test_detect_hardware_cuda_collects_gpu_memory(monkeypatch):
         lambda: {'total_gb': 24.0},
     )
 
-    info = detect_hardware(log_info=True)
+    info = detect_hardware(log_info=True, cuda_precision='32')
 
     assert info.accelerator == 'cuda'
-    assert info.precision == '16-mixed'
+    assert info.precision == '32'
     assert info.gpu_memory == {'total_gb': 24.0}
 
 @pytest.mark.unit
 def test_detect_hardware_cpu_fallback(monkeypatch):
-    monkeypatch.setattr(
-        'naics_embedder.utils.training.get_device',
-        lambda log_info=False: ('cpu', '32-true', 1),
-    )
+    received = []
+
+    def fake_get_device(log_info=False, *, cuda_precision):
+        received.append(cuda_precision)
+        return 'cpu', '32-true', 1
+
+    monkeypatch.setattr('naics_embedder.utils.training.get_device', fake_get_device)
     monkeypatch.setattr(torch.cuda, 'is_available', lambda: False, raising=False)
 
     info = detect_hardware()
 
     assert info.accelerator == 'cpu'
+    assert info.precision == '32-true'
     assert info.gpu_memory is None
+    # The CUDA precision a caller that names none passes on: the shipped bf16-mixed
+    assert received == ['bf16-mixed']
 
 @pytest.mark.unit
 def test_get_gpu_memory_info_returns_stats(monkeypatch):
@@ -154,10 +161,13 @@ def test_create_trainer_propagates_train_epoch_to_datamodule(tmp_path):
     assert any(isinstance(cb, TrainDatasetEpochCallback) for cb in trainer.callbacks)
 
 @pytest.mark.unit
-def test_create_trainer_multi_gpu_uses_ddp(monkeypatch, tmp_path):
+def test_create_trainer_runs_on_one_device_at_the_detected_precision(monkeypatch, tmp_path):
+    '''No DDP (spec 4.5: the code cache is per process): one device on a two-GPU host, even for a
+    devices value that skipped the config's refusal, at the precision detect_hardware resolved.'''
+
     cfg = _build_config(tmp_path)
-    cfg.training.trainer.devices = 2
-    hardware = HardwareInfo(accelerator='cuda', precision='16-mixed', num_devices=2)
+    cfg.training.trainer.devices = 2  # Attribute assignment skips the validator
+    hardware = HardwareInfo(accelerator='cuda', precision='32', num_devices=2)
     checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -167,20 +177,15 @@ def test_create_trainer_multi_gpu_uses_ddp(monkeypatch, tmp_path):
 
         def __init__(self, **kwargs):
             captured.update(kwargs)
-            self.kwargs = kwargs
-
-    class DummyStrategy:
-
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
 
     monkeypatch.setattr('naics_embedder.utils.training.pyl.Trainer', DummyTrainer)
-    monkeypatch.setattr('pytorch_lightning.strategies.DDPStrategy', DummyStrategy)
 
-    trainer, _, _ = create_trainer(cfg, hardware, checkpoint_dir)
-    assert isinstance(captured['strategy'], DummyStrategy)
-    assert captured['devices'] == 2
-    assert isinstance(trainer, DummyTrainer)
+    create_trainer(cfg, hardware, checkpoint_dir)
+
+    assert (captured['accelerator'], captured['devices']) == ('cuda', 1)
+    # Lightning's own choice on one device, never a DDP strategy
+    assert captured.get('strategy', 'auto') == 'auto'
+    assert captured['precision'] == '32'
 
 @pytest.mark.unit
 def test_collect_training_result(tmp_path):

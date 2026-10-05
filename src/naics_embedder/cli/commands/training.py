@@ -11,6 +11,7 @@ public help output.
 '''
 
 import logging
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -266,6 +267,26 @@ def generate_embeddings_from_checkpoint(
 
     return output_path
 
+# -------------------------------------------------------------------------------------------------
+# Training
+# -------------------------------------------------------------------------------------------------
+
+def _stdin_is_terminal() -> bool:
+    '''
+    Whether stdin is a terminal, so that a question can be asked and answered.
+
+    A remote launch reads stdin from ``/dev/null`` (spec 4.6), where ``typer.confirm`` would abort
+    a finished run. A closed stdin (``sys.stdin`` is None) or a closed stream is no terminal
+    either.
+    '''
+    stdin = sys.stdin
+    if stdin is None:
+        return False
+    try:
+        return stdin.isatty()
+    except ValueError:  # A closed stream
+        return False
+
 def train(
     config_file: Annotated[
         str,
@@ -345,19 +366,6 @@ def train(
     console.rule('[bold green]Training NAICS Embedder[/bold green]')
 
     try:
-        # Detect hardware using centralized utility
-        logger.info('Determining infrastructure...')
-        hardware = detect_hardware(log_info=True)
-
-        # Log GPU memory if available
-        if hardware.gpu_memory:
-            logger.info(
-                f'GPU Memory: {hardware.gpu_memory["reserved_gb"]:.1f} GB used / '
-                f'{hardware.gpu_memory["total_gb"]:.1f} GB total '
-                f'({hardware.gpu_memory["utilization_pct"]:.1f}% utilization, '
-                f'{hardware.gpu_memory["free_gb"]:.1f} GB free)'
-            )
-
         # Load configuration
         logger.info('Loading configuration...')
         cfg = Config.from_yaml(config_file)
@@ -373,6 +381,20 @@ def train(
             if override_dict:
                 logger.info('')
                 cfg = cfg.override(override_dict)
+
+        # Detect hardware once the config is final: on CUDA the trainer runs at the configured
+        # training.trainer.precision, elsewhere at 32-true (spec 4.2)
+        logger.info('Determining infrastructure...')
+        hardware = detect_hardware(log_info=True, cuda_precision=cfg.training.trainer.precision)
+
+        # Log GPU memory if available
+        if hardware.gpu_memory:
+            logger.info(
+                f'GPU Memory: {hardware.gpu_memory["reserved_gb"]:.1f} GB used / '
+                f'{hardware.gpu_memory["total_gb"]:.1f} GB total '
+                f'({hardware.gpu_memory["utilization_pct"]:.1f}% utilization, '
+                f'{hardware.gpu_memory["free_gb"]:.1f} GB free)'
+            )
 
         # Mandatory supervision gate: validate the bundle before any DataModule, checkpoint, or
         # model work. There is no fallback to legacy files, and no mode without a bundle (D2).
@@ -549,23 +571,12 @@ def train(
         # Initialize Trainer
         logger.info('Initializing PyTorch Lightning Trainer...\n')
 
-        # Use only 1 device as specified in config, even if multiple GPUs are available
-        devices_to_use = cfg.training.trainer.devices if hasattr(
-            cfg.training.trainer, 'devices'
-        ) else 1
-
-        # If using multiple devices, need to handle unused parameters in DDP
-        strategy = 'auto'
-        if devices_to_use > 1 and hardware.accelerator in ['cuda', 'gpu']:
-            from pytorch_lightning.strategies import DDPStrategy
-
-            strategy = DDPStrategy(find_unused_parameters=True)
-
+        # One device: the config refuses devices > 1, because the code cache is per process
+        # (spec 4.5), and no strategy is passed, so Lightning never picks DDP
         trainer = pyl.Trainer(
             max_epochs=cfg.training.trainer.max_epochs,
             accelerator=hardware.accelerator,
-            devices=devices_to_use,
-            strategy=strategy,
+            devices=1,
             precision=hardware.precision,  # type: ignore
             gradient_clip_val=cfg.training.trainer.gradient_clip_val,
             accumulate_grad_batches=cfg.training.trainer.accumulate_grad_batches,
@@ -646,11 +657,17 @@ def train(
             f'f{summary_paths.get("yaml", summary_paths.get("json"))}[/cyan]\n'
         )
 
-        # Prompt to generate embeddings for HGCN training
-        console.print('\n[bold cyan]Generate embeddings for HGCN training?[/bold cyan]')
-        generate_embeddings = typer.confirm(
-            'Generate embeddings parquet file from this checkpoint?', default=False
-        )
+        # Ask about embeddings for HGCN training (the feeder stays until Stage 11), but only on a
+        # terminal: a remote launch reads stdin from /dev/null, where typer.confirm would abort the
+        # finished run (spec 4.5, "Stays"). Without one, the answer is the question's default, no.
+        generate_embeddings = False
+        if _stdin_is_terminal():
+            console.print('\n[bold cyan]Generate embeddings for HGCN training?[/bold cyan]')
+            generate_embeddings = typer.confirm(
+                'Generate embeddings parquet file from this checkpoint?', default=False
+            )
+        else:
+            logger.info('stdin is not a terminal: no HGCN embeddings question, so none generated')
 
         if generate_embeddings:
             logger.info('Generating embeddings from checkpoint...')

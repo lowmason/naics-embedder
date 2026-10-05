@@ -1,7 +1,10 @@
+import io
+import os
 from types import SimpleNamespace
 
 import click
 import pytest
+import torch
 import typer
 from typer.testing import CliRunner
 
@@ -13,6 +16,7 @@ from naics_embedder.supervision.checkpoints import (
     shared_encoder_architecture,
 )
 from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
+from naics_embedder.utils import training as utils_training
 from naics_embedder.utils.config import Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
@@ -22,6 +26,22 @@ MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
 CONFIGURED_ENCODER = shared_encoder_architecture(
     fusion='masked_mean', dimension=16, backbone=MINILM
 )
+HGCN_QUESTION = 'Generate embeddings parquet file from this checkpoint?'
+
+def _stub_host(monkeypatch, *, cuda: bool) -> None:
+    '''Run train's real hardware check on a stubbed host: one CUDA GPU, or a CPU (no MPS).'''
+
+    monkeypatch.setattr(training, 'detect_hardware', utils_training.detect_hardware)
+    monkeypatch.setattr(torch.cuda, 'is_available', lambda: cuda, raising=False)
+    monkeypatch.setattr(torch.cuda, 'device_count', lambda: int(cuda), raising=False)
+    monkeypatch.setattr(torch.backends, 'mps', SimpleNamespace(is_available=lambda: False))
+    # The one call detect_hardware makes into the CUDA runtime
+    monkeypatch.setattr(utils_training, 'get_gpu_memory_info', lambda: None)
+
+def _closed_stream() -> io.StringIO:
+    stream = io.StringIO()
+    stream.close()
+    return stream
 
 @pytest.fixture
 def cli_runner():
@@ -57,7 +77,9 @@ def training_env(monkeypatch, tmp_path):
     monkeypatch.setattr(training, 'validate_exact_resume', fake_validate_exact_resume)
 
     hardware = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
-    monkeypatch.setattr(training, 'detect_hardware', lambda log_info=False: hardware)
+    monkeypatch.setattr(
+        training, 'detect_hardware', lambda log_info=False, cuda_precision=None: hardware
+    )
 
     def build_cfg():
         cfg = Config()
@@ -372,6 +394,101 @@ def test_training_error_handling_exits(training_env):
         training.train(skip_validation=True)
 
     assert excinfo.value.exit_code == 1
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('overrides', 'expected'),
+    [(None, 'bf16-mixed'), (["training.trainer.precision='32'"], '32')],
+    ids=['default', 'configured'],
+)
+def test_train_honors_the_configured_precision_on_cuda(
+    training_env, monkeypatch, overrides, expected
+):
+    '''Spec 4.2 and section 6: on CUDA (a stubbed device check) the trainer runs at
+    training.trainer.precision, full precision included, on one device.'''
+
+    _stub_host(monkeypatch, cuda=True)
+
+    training.train(skip_validation=True, overrides=overrides)
+
+    trainer_kwargs = training_env.trainer.kwargs
+    assert (trainer_kwargs['accelerator'], trainer_kwargs['precision']) == ('cuda', expected)
+    assert trainer_kwargs['devices'] == 1
+    assert trainer_kwargs.get('strategy', 'auto') == 'auto'
+
+@pytest.mark.unit
+def test_train_runs_at_32_true_off_cuda(training_env, monkeypatch):
+    '''Off CUDA the trainer keeps 32-true, whatever training.trainer.precision says (spec 4.2).'''
+
+    _stub_host(monkeypatch, cuda=False)
+
+    training.train(skip_validation=True, overrides=['training.trainer.precision=16-mixed'])
+
+    trainer_kwargs = training_env.trainer.kwargs
+    assert (trainer_kwargs['accelerator'], trainer_kwargs['precision']) == ('cpu', '32-true')
+
+@pytest.mark.unit
+def test_train_refuses_more_than_one_device(training_env):
+    '''Spec 4.5 and section 5: devices > 1 exits 1 before anything is built.'''
+
+    with pytest.raises(typer.Exit) as excinfo:
+        training.train(skip_validation=True, overrides=['training.trainer.devices=2'])
+
+    assert excinfo.value.exit_code == 1
+    # The config refuses the value before the supervision gate runs
+    assert training_env.events == []
+    assert training_env.trainer is None
+
+@pytest.mark.unit
+def test_train_does_not_prompt_without_a_terminal(cli_runner, training_env, monkeypatch):
+    '''A remote launch reads stdin from /dev/null: a finished run asks nothing and exits 0
+    (spec 4.5, "Stays"; section 5).'''
+
+    questions = []
+    monkeypatch.setattr(training.typer, 'confirm', lambda *args, **_: questions.append(args))
+
+    result = cli_runner.invoke(cli_app, ['train'], input='', catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert training_env.trainer.fit_calls
+    assert questions == []
+    assert 'Generate embeddings' not in click.unstyle(result.output).replace('\n', '')
+
+@pytest.mark.unit
+def test_train_asks_the_hgcn_question_on_a_terminal(training_env, monkeypatch):
+    '''The question stays (Stage 11): on a terminal it is asked once, defaulting to no.'''
+
+    questions = []
+
+    def confirm(text, default):
+        questions.append((text, default))
+        return False
+
+    monkeypatch.setattr(training.typer, 'confirm', confirm)
+    monkeypatch.setattr(training, '_stdin_is_terminal', lambda: True)
+
+    training.train(skip_validation=True)
+
+    assert questions == [(HGCN_QUESTION, False)]
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('make_stdin', 'expected'),
+    [
+        (lambda: SimpleNamespace(isatty=lambda: True), True),
+        (lambda: open(os.devnull), False),
+        (lambda: None, False),
+        (_closed_stream, False),
+    ],
+    ids=['terminal', 'dev-null', 'no-stdin', 'closed'],
+)
+def test_stdin_is_a_terminal_only_when_it_is_one(request, monkeypatch, make_stdin, expected):
+    stdin = make_stdin()
+    if hasattr(stdin, 'close'):
+        request.addfinalizer(stdin.close)
+    monkeypatch.setattr(training, 'sys', SimpleNamespace(stdin=stdin))
+
+    assert training._stdin_is_terminal() is expected
 
 @pytest.mark.unit
 def test_training_passes_curriculum_horizon_to_datamodule(training_env):

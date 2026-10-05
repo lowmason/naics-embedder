@@ -159,7 +159,7 @@ training:
     max_epochs: 10
     accelerator: auto
     devices: 1
-    precision: "16-mixed"
+    precision: "bf16-mixed"  # On CUDA; elsewhere the trainer runs at 32-true
     gradient_clip_val: 1.0
     accumulate_grad_batches: 2
     log_every_n_steps: 10

@@ -1024,9 +1024,14 @@ class TrainerConfig(BaseModel):
     accelerator: str = Field(
         default='auto', description='Training accelerator (auto, gpu, cpu, mps)'
     )
-    devices: int = Field(default=1, gt=0, description='Number of devices to use')
+    devices: int = Field(
+        default=1,
+        gt=0,
+        description='Number of devices; training runs on one, since the code cache is per process',
+    )
     precision: str = Field(
-        default='16-mixed', description='Training precision (32, 16-mixed, bf16-mixed)'
+        default='bf16-mixed',
+        description='Training precision on CUDA (32, 16-mixed, bf16-mixed); elsewhere 32-true',
     )
     gradient_clip_val: float = Field(default=1.0, gt=0, description='Gradient clipping value')
     accumulate_grad_batches: int = Field(
@@ -1045,6 +1050,18 @@ class TrainerConfig(BaseModel):
         valid = ['auto', 'gpu', 'cpu', 'mps', 'cuda']
         if v not in valid:
             raise ValueError(f'accelerator must be one of {valid}')
+        return v
+
+    @field_validator('devices')
+    @classmethod
+    def validate_devices(cls, v: int) -> int:
+        '''Refuse more than one device (spec 4.5): each process would hold its own code cache.'''
+
+        if v > 1:
+            raise ValueError(
+                f'devices must be 1, not {v}: training runs on one device, because the code '
+                'cache is per process'
+            )
         return v
 
     @field_validator('precision')

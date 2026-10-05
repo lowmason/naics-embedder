@@ -9,7 +9,7 @@ common operations into reusable components. These utilities handle hardware
 detection, configuration parsing, checkpoint management, and trainer creation.
 
 Functions:
-    detect_hardware: Detect available accelerators and optimal precision.
+    detect_hardware: Detect the accelerator and the precision the trainer runs at.
     get_gpu_memory_info: Query current GPU memory usage.
     parse_config_overrides: Parse and validate command-line config overrides.
     resolve_checkpoint: Resolve checkpoint path from user input.
@@ -43,7 +43,8 @@ class HardwareInfo:
 
     Attributes:
         accelerator: The accelerator type (cuda, mps, cpu).
-        precision: Recommended precision setting (16-mixed, 32-true).
+        precision: The precision the trainer runs at: the configured CUDA precision on CUDA,
+            32-true elsewhere.
         num_devices: Number of available devices.
         gpu_memory: Optional GPU memory information dictionary.
     '''
@@ -98,25 +99,29 @@ class TrainingResult:
 # Hardware Detection
 # -------------------------------------------------------------------------------------------------
 
-def detect_hardware(log_info: bool = False) -> HardwareInfo:
+def detect_hardware(log_info: bool = False, *, cuda_precision: str = 'bf16-mixed') -> HardwareInfo:
     '''
-    Detect available hardware and recommend training settings.
+    Detect available hardware and the precision the trainer runs at.
 
-    Queries the system for CUDA, MPS, or CPU availability and returns
-    appropriate accelerator and precision settings for PyTorch Lightning.
+    Queries the system for CUDA, MPS, or CPU availability and returns the
+    accelerator and precision settings for PyTorch Lightning.
 
     Args:
         log_info: If True, log detailed hardware information.
+        cuda_precision: The precision on CUDA; ``train`` passes ``training.trainer.precision``
+            (spec 4.2). Off CUDA the trainer runs at ``32-true``.
 
     Returns:
         HardwareInfo with detected accelerator, precision, device count,
         and optional GPU memory information.
 
     Example:
-        >>> hw = detect_hardware(log_info=True)
+        >>> hw = detect_hardware(log_info=True, cuda_precision='bf16-mixed')
         >>> print(f'Training on {hw.accelerator} with {hw.precision} precision')
     '''
-    accelerator, precision, num_devices = get_device(log_info=log_info)
+    accelerator, precision, num_devices = get_device(
+        log_info=log_info, cuda_precision=cuda_precision
+    )
     gpu_memory = None
 
     if accelerator in ['cuda', 'gpu'] and torch.cuda.is_available():
@@ -332,21 +337,12 @@ def create_trainer(
     if callbacks:
         all_callbacks.extend(callbacks)
 
-    # Determine devices and strategy
-    devices_to_use = getattr(cfg.training.trainer, 'devices', 1)
-    strategy = 'auto'
-
-    if devices_to_use > 1 and hardware.accelerator in ['cuda', 'gpu']:
-        from pytorch_lightning.strategies import DDPStrategy
-
-        strategy = DDPStrategy(find_unused_parameters=True)
-
-    # Create trainer
+    # Create trainer on one device: the config refuses devices > 1, because the code cache is per
+    # process (spec 4.5), and no strategy is passed, so Lightning never picks DDP
     trainer = pyl.Trainer(
         max_epochs=cfg.training.trainer.max_epochs,
         accelerator=hardware.accelerator,
-        devices=devices_to_use,
-        strategy=strategy,
+        devices=1,
         precision=hardware.precision,  # type: ignore
         gradient_clip_val=cfg.training.trainer.gradient_clip_val,
         accumulate_grad_batches=cfg.training.trainer.accumulate_grad_batches,
