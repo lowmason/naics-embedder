@@ -1,22 +1,19 @@
 '''
-Stage-3 checkpoint contracts: exact resume and explicit weights-only migration.
+Stage-3 checkpoint contracts: exact resume, and the checks of export and reads.
 
-A repaired checkpoint records the supervision contract it was trained under and the encoder
-architecture its weights belong to. Exact resume restores optimizer, epoch, curriculum, and
-sampler state, so it requires an identical contract. A checkpoint of the same architecture under
-other supervision can only contribute allowlisted encoder weights, through an explicit
-weights-only migration that leaves all training state freshly initialized.
+A checkpoint records the supervision contract it was trained under and the encoder architecture
+its weights belong to. Exact resume restores optimizer, epoch, curriculum, and sampler state, so
+it requires an identical contract. Nothing loads a checkpoint under any other contract: there is
+no weights-only migration (roadmap D2).
 
-Another architecture can do neither. A checkpoint saved before Stage 6 has no encoder record and
-reads as the legacy four-copy layout, and nothing migrates it into the shared encoder (roadmap
-D2).
+A checkpoint saved before Stage 6 has no encoder record and reads as the legacy four-copy layout,
+and nothing migrates it into the shared encoder (roadmap D2).
 '''
 
 # -------------------------------------------------------------------------------------------------
 # Imports
 # -------------------------------------------------------------------------------------------------
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Tuple
 
@@ -30,17 +27,6 @@ from naics_embedder.supervision.schema import (
 )
 
 CHECKPOINT_KEY = 'stage3_supervision'
-LEGACY_CONTAINMENT_BUNDLE_ID = 'legacy-containment'
-UNVERSIONED_CODEBOOK_FINGERPRINT = 'unversioned'
-WEIGHTS_ONLY_ALLOWED_PREFIXES = ('encoder.', )
-WEIGHTS_ONLY_EXCLUDED_PREFIXES = (
-    'loss_fn.',
-    'hierarchy_loss_fn.',
-    'lambdarank_loss_fn.',
-    'structural_preference_loss_fn.',
-    'ground_truth_distances',
-    'norm_adaptive_margin.',
-)
 D2_REFUSAL = (
     'a checkpoint of another encoder architecture cannot load, and nothing migrates it: '
     'four-copy checkpoints cannot load into the shared encoder (roadmap D2)'
@@ -114,18 +100,8 @@ class CheckpointContract(BaseModel):
     # checkpoints trained on truncated text
     summaries: Optional[str] = None
 
-@dataclass(frozen=True)
-class MigrationReport:
-    '''Parameter groups a weights-only migration loaded, skipped, or left freshly initialized.'''
-
-    loaded: Tuple[str, ...]
-    skipped: Tuple[str, ...]
-    missing: Tuple[str, ...]
-    unexpected: Tuple[str, ...]
-
 def contract_for_bundle(
     manifest: Any,
-    supervision_mode: str = 'repaired',
     *,
     encoder: EncoderArchitecture,
     summaries: Optional[str],
@@ -138,40 +114,14 @@ def contract_for_bundle(
     '''
 
     return CheckpointContract(
-        supervision_mode=supervision_mode,
+        # The one mode left: legacy containment is deleted (roadmap D2)
+        supervision_mode='repaired',
         contract_version=manifest.contract_version,
         bundle_id=manifest.bundle_id,
         codebook_fingerprint=manifest.codebook_fingerprint,
         encoder=encoder,
         summaries=summaries,
     )
-
-def containment_contract(
-    *,
-    encoder: EncoderArchitecture,
-    summaries: Optional[str],
-) -> CheckpointContract:
-    '''
-    The tag every legacy-containment checkpoint carries.
-
-    It can never equal a repaired contract, so containment checkpoints cannot exact-resume into
-    repaired training.
-    '''
-
-    return CheckpointContract(
-        supervision_mode='legacy_containment',
-        bundle_id=LEGACY_CONTAINMENT_BUNDLE_ID,
-        codebook_fingerprint=UNVERSIONED_CODEBOOK_FINGERPRINT,
-        encoder=encoder,
-        summaries=summaries,
-    )
-
-def saved_encoder(raw: Optional[Dict[str, Any]]) -> EncoderArchitecture:
-    '''A saved contract's encoder record. No contract, or no record, is the four-copy layout.'''
-
-    if raw is None:
-        return LEGACY_ENCODER
-    return CheckpointContract.model_validate(raw).encoder
 
 def _differences(saved: CheckpointContract,
                  expected: CheckpointContract) -> Dict[str, Tuple[Any, Any]]:
@@ -223,7 +173,6 @@ def validate_exact_resume(path: str | Path, runtime: CheckpointContract) -> None
 def validate_supervision_contract(
     raw: Optional[Dict[str, Any]],
     manifest: Any,
-    supervision_mode: str = 'repaired',
     *,
     summaries: Optional[str],
 ) -> CheckpointContract:
@@ -237,7 +186,6 @@ def validate_supervision_contract(
     Args:
         raw: The checkpoint's saved contract, or None.
         manifest: The configured bundle's manifest.
-        supervision_mode: The configured supervision mode.
         summaries: The sha256 of the summaries the read applies; keyword-only with no default,
             so a caller cannot omit it.
 
@@ -252,86 +200,10 @@ def validate_supervision_contract(
     if raw is None:
         raise ValueError(f'legacy checkpoint has no Stage-3 contract; {D2_REFUSAL}')
     saved = CheckpointContract.model_validate(raw)
-    configured = contract_for_bundle(
-        manifest, supervision_mode, encoder=saved.encoder, summaries=summaries
-    )
+    configured = contract_for_bundle(manifest, encoder=saved.encoder, summaries=summaries)
     if saved != configured:
         raise ValueError(
             'supervision contract mismatch (saved, configured): '
             f'{_differences(saved, configured)}'
         )
     return saved
-
-# -------------------------------------------------------------------------------------------------
-# Weights-only migration
-# -------------------------------------------------------------------------------------------------
-
-def load_weights_only(
-    model: torch.nn.Module,
-    path: str | Path,
-    *,
-    encoder: EncoderArchitecture,
-) -> MigrationReport:
-    '''
-    Load only allowlisted encoder weights; never optimizer, epoch, curriculum, or sampler state.
-
-    The saved encoder record (an absent one counts as four-copy) must equal ``encoder`` before any
-    parameter is read (roadmap D2). Loss buffers and legacy structural matrices are skipped;
-    bundle-derived buffers stay as the runtime bundle built them.
-
-    Args:
-        model: The freshly built runtime model.
-        path: The checkpoint to migrate from.
-        encoder: The runtime model's encoder record.
-
-    Raises:
-        ValueError: If the checkpoint's encoder record differs from ``encoder``; if it has no
-            state dict; if it carries parameters that are neither allowlisted nor known-excluded,
-            or allowlisted parameters with mismatched shapes; or if it contributes no allowlisted
-            parameter at all.
-    '''
-
-    checkpoint = _load_checkpoint(path)
-    saved = saved_encoder(checkpoint.get(CHECKPOINT_KEY))
-    if saved != encoder:
-        raise ValueError(
-            f'weights-only encoder mismatch (saved, runtime): {(saved, encoder)}; {D2_REFUSAL}'
-        )
-    source = checkpoint.get('state_dict')
-    if not isinstance(source, dict):
-        raise ValueError('weights-only checkpoint has no state_dict')
-    target = model.state_dict()
-    loaded: Dict[str, torch.Tensor] = {}
-    skipped = []
-    unexpected = []
-    for name, value in source.items():
-        if name.startswith(WEIGHTS_ONLY_ALLOWED_PREFIXES):
-            if name not in target or target[name].shape != value.shape:
-                unexpected.append(name)
-            else:
-                loaded[name] = value
-        elif name.startswith(WEIGHTS_ONLY_EXCLUDED_PREFIXES):
-            skipped.append(name)
-        else:
-            unexpected.append(name)
-    if unexpected:
-        raise ValueError(
-            f'weights-only checkpoint has unexpected parameter groups: {sorted(unexpected)}'
-        )
-    if not loaded:
-        raise ValueError(
-            f'weights-only checkpoint {path} has no allowlisted encoder parameters to load'
-        )
-    model.load_state_dict(loaded, strict=False)
-    missing = tuple(
-        sorted(
-            name for name in target
-            if name.startswith(WEIGHTS_ONLY_ALLOWED_PREFIXES) and name not in loaded
-        )
-    )
-    return MigrationReport(
-        loaded=tuple(sorted(loaded)),
-        skipped=tuple(sorted(skipped)),
-        missing=missing,
-        unexpected=(),
-    )

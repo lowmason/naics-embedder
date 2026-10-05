@@ -28,17 +28,13 @@ from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
     EncoderArchitecture,
-    MigrationReport,
-    containment_contract,
     contract_for_bundle,
-    load_weights_only,
     shared_encoder_architecture,
     validate_exact_resume,
 )
 from naics_embedder.text_model.dataloader.datamodule import (
     NAICSDataModule,
     TrainDatasetEpochCallback,
-    legacy_token_fingerprints,
 )
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.export import code_token_config, encode_token_rows
@@ -65,34 +61,21 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------------------------------
-# Model Construction and Checkpoint Migration
+# Model Construction
 # -------------------------------------------------------------------------------------------------
 
 def build_model_from_config(
     cfg: Config,
     runtime_contract: CheckpointContract,
-    bundle: Optional[ValidatedSupervisionBundle],
+    bundle: ValidatedSupervisionBundle,
 ) -> NAICSContrastiveModel:
     '''
-    Construct a fresh model for the configured supervision mode.
+    Construct a fresh model under the validated bundle.
 
-    Repaired models take supervision only from the validated bundle: legacy structural inputs
-    (distance matrix, relations parquet, LambdaRank weight) are never passed. Explicit legacy
-    containment reads the old distance matrix and relations file for evaluation only.
+    The model takes supervision only from the bundle: legacy structural inputs (distance matrix,
+    relations parquet, LambdaRank weight) are never passed.
     '''
 
-    if cfg.supervision.mode == 'repaired':
-        supervision_inputs = {
-            'supervision_manifest_path': cfg.supervision.manifest_path,
-            'supervision_bundle': bundle,
-        }
-    else:
-        supervision_inputs = {
-            'supervision_manifest_path': None,
-            'supervision_bundle': None,
-            'distance_matrix_path': cfg.data_loader.streaming.distance_matrix_parquet,
-            'relations_parquet_path': cfg.data_loader.streaming.relations_parquet,
-        }
     structural_preference = cfg.loss.structural_preference
     return NAICSContrastiveModel(
         base_model_name=cfg.model.base_model_name,
@@ -129,8 +112,9 @@ def build_model_from_config(
         false_negative_config=cfg.false_negatives.model_dump(),
         parent_eval_top_k=cfg.model.parent_eval_top_k,
         child_eval_top_k=cfg.model.child_eval_top_k,
+        supervision_manifest_path=cfg.supervision.manifest_path,
         supervision_contract_version=cfg.supervision.contract_version,
-        supervision_mode=cfg.supervision.mode,
+        supervision_bundle=bundle,
         structural_preference_weight=structural_preference.weight,
         structural_preference_margin=structural_preference.margin,
         structural_preference_temperature=structural_preference.temperature,
@@ -138,19 +122,7 @@ def build_model_from_config(
         # The key the token cache resolves under (spec 4.8)
         summaries=summaries_identity(cfg.data_loader.tokenization.tokenizer_name),
         checkpoint_contract=runtime_contract,
-        **supervision_inputs,
     )
-
-def announce_legacy_containment() -> None:
-    '''Prominently tag a legacy-containment run in logs and on the console.'''
-
-    message = (
-        'LEGACY CONTAINMENT: not contract-compliant Stage-3 training. Only local unmined '
-        'contrastive learning and supervision-independent regularizers run; checkpoints are '
-        'tagged legacy-containment and can never exact-resume into repaired training.'
-    )
-    logger.warning(message)
-    console.print(f'[bold red]{message}[/bold red]\n')
 
 def encoder_architecture_for(cfg: Config) -> EncoderArchitecture:
     '''
@@ -166,41 +138,18 @@ def encoder_architecture_for(cfg: Config) -> EncoderArchitecture:
         backbone=cfg.model.base_model_name,
     )
 
-def runtime_contract_for(
-    cfg: Config, bundle: Optional[ValidatedSupervisionBundle]
-) -> CheckpointContract:
+def runtime_contract_for(cfg: Config, bundle: ValidatedSupervisionBundle) -> CheckpointContract:
     '''
     The checkpoint contract of the configured run, its encoder record and summaries included.
 
-    The supervision gate returns no bundle only for explicit legacy containment. Training's exact
-    resume and the HGCN feeder compare this whole contract with a checkpoint's; export and reads
-    take the encoder record from the checkpoint instead (spec 4.4).
+    Training's exact resume and the HGCN feeder compare this whole contract with a checkpoint's;
+    export and reads take the encoder record from the checkpoint instead (spec 4.4).
     '''
 
-    encoder = encoder_architecture_for(cfg)
-    summaries = summaries_identity(cfg.data_loader.tokenization.tokenizer_name)
-    if bundle is None:
-        return containment_contract(encoder=encoder, summaries=summaries)
     return contract_for_bundle(
-        bundle.manifest, cfg.supervision.mode, encoder=encoder, summaries=summaries
-    )
-
-def log_migration_report(report: MigrationReport) -> None:
-    '''Report what a weights-only migration loaded, skipped, and left freshly initialized.'''
-
-    logger.info(
-        f'Weights-only migration: loaded {len(report.loaded)} encoder tensors, skipped '
-        f'{len(report.skipped)} excluded tensors, {len(report.missing)} encoder tensors freshly '
-        f'initialized, {len(report.unexpected)} unexpected'
-    )
-    for name in report.skipped:
-        logger.info(f'  • skipped (excluded group): {name}')
-    for name in report.missing:
-        logger.warning(f'  • freshly initialized (absent from checkpoint): {name}')
-    console.print(
-        f'[cyan]Weights-only migration:[/cyan] loaded {len(report.loaded)}, skipped '
-        f'{len(report.skipped)}, freshly initialized {len(report.missing)}; optimizer, epoch, '
-        'curriculum, and sampler state start fresh\n'
+        bundle.manifest,
+        encoder=encoder_architecture_for(cfg),
+        summaries=summaries_identity(cfg.data_loader.tokenization.tokenizer_name),
     )
 
 # -------------------------------------------------------------------------------------------------
@@ -214,9 +163,8 @@ def generate_embeddings_from_checkpoint(
 
     Loads a trained model checkpoint, runs inference on all NAICS codes, and
     writes the resulting embeddings to a parquet file compatible with HGCN
-    training. The checkpoint must carry the supervision contract of the configured run: the
-    repaired contract of its validated bundle, or (only under explicit legacy containment) the
-    legacy-containment tag. Untagged legacy or mismatched checkpoints are refused.
+    training. The checkpoint must carry the supervision contract of the configured run, the
+    contract of its validated bundle; a checkpoint without one, or with another, is refused.
 
     Args:
         checkpoint_path: Filesystem path to the PyTorch Lightning checkpoint
@@ -249,25 +197,13 @@ def generate_embeddings_from_checkpoint(
 
     logger.info(f'Output: {output_path}')
 
-    # The checkpoint must carry the contract of the configured run: the validated repaired bundle,
-    # or the explicit legacy-containment tag
+    # The checkpoint must carry the contract of the configured run's validated bundle
     bundle = require_valid_supervision_bundle(config)
     validate_exact_resume(checkpoint_path, runtime_contract_for(config, bundle))
-    if bundle is None:
-        announce_legacy_containment()
-        load_overrides = {}
-        token_fingerprints = legacy_token_fingerprints(
-            config.data_loader.streaming.descriptions_parquet
-        )
-    else:
-        load_overrides = {
-            'supervision_manifest_path': str(bundle.manifest_path),
-            'supervision_bundle': bundle,
-        }
-        token_fingerprints = {
-            'description_fingerprint': bundle.manifest.description_fingerprint,
-            'codebook_fingerprint': bundle.manifest.codebook_fingerprint,
-        }
+    token_fingerprints = {
+        'description_fingerprint': bundle.manifest.description_fingerprint,
+        'codebook_fingerprint': bundle.manifest.codebook_fingerprint,
+    }
 
     # Load device
     device = pick_device('auto')  # Auto-detect device
@@ -278,7 +214,8 @@ def generate_embeddings_from_checkpoint(
     model = NAICSContrastiveModel.load_from_checkpoint(
         checkpoint_path,
         map_location=device,
-        **load_overrides,
+        supervision_manifest_path=str(bundle.manifest_path),
+        supervision_bundle=bundle,
     )
     model.eval()
     model.to(device)
@@ -349,9 +286,8 @@ def train(
         typer.Option(
             '--checkpoint-load-mode',
             help=(
-                'exact: resume optimizer/epoch/curriculum state (requires a matching supervision '
-                'contract); weights_only: load allowlisted encoder weights of the same encoder '
-                'architecture into a fresh run'
+                'exact, the one mode: resume optimizer/epoch/curriculum state (requires a '
+                'matching supervision contract); nothing migrates weights (D2)'
             ),
         ),
     ] = CheckpointLoadMode.EXACT,
@@ -386,10 +322,9 @@ def train(
         ckpt_path: Optional checkpoint path to resume training. Use ``last`` to
             automatically pick up the latest checkpoint for the configured
             experiment. Specify a full path for cross-experiment resumption.
-        checkpoint_load_mode: ``exact`` resumes full training state and requires the
-            checkpoint's supervision contract to match the runtime bundle; ``weights_only``
-            loads allowlisted encoder weights of the same encoder architecture into a fresh run
-            starting at epoch zero.
+        checkpoint_load_mode: ``exact``, the one mode, resumes full training state and requires
+            the checkpoint's supervision contract to match the runtime bundle. The weights-only
+            migration is deleted (roadmap D2); the option keeps its name and default.
         skip_validation: Skip advisory pre-flight checks for data files and tokenization
             cache. The mandatory supervision bundle gate is never skipped.
         overrides: Optional list of key-value override strings. Use dot notation
@@ -440,17 +375,13 @@ def train(
                 cfg = cfg.override(override_dict)
 
         # Mandatory supervision gate: validate the bundle before any DataModule, checkpoint, or
-        # model work. There is no fallback from repaired training to legacy files; only an
-        # explicit legacy_containment mode runs without a bundle.
+        # model work. There is no fallback to legacy files, and no mode without a bundle (D2).
         bundle = require_valid_supervision_bundle(cfg)
         runtime_contract = runtime_contract_for(cfg, bundle)
-        if bundle is None:
-            announce_legacy_containment()
-        else:
-            logger.info(
-                f'Supervision bundle {runtime_contract.bundle_id} '
-                f'({runtime_contract.contract_version}) validated'
-            )
+        logger.info(
+            f'Supervision bundle {runtime_contract.bundle_id} '
+            f'({runtime_contract.contract_version}) validated'
+        )
 
         # Run advisory pre-flight validation
         if not skip_validation:
@@ -547,7 +478,6 @@ def train(
             val_split=cfg.data_loader.val_split,
             n_epochs=cfg.data_loader.n_epochs,
             seed=cfg.seed,
-            supervision_mode=cfg.supervision.mode,
             supervision_manifest_path=cfg.supervision.manifest_path,
             supervision_contract_version=cfg.supervision.contract_version,
             supervision_bundle=bundle,
@@ -565,29 +495,20 @@ def train(
 
         if checkpoint_info.exists:
             console.print(f'[green]✓[/green] Using checkpoint: [cyan]{checkpoint_path}[/cyan]\n')
-        elif checkpoint_load_mode is CheckpointLoadMode.WEIGHTS_ONLY:
-            # An explicit migration with nothing to migrate must not silently train from scratch
-            raise ValueError(
-                '--checkpoint-load-mode weights_only requires --ckpt-path naming an existing '
-                f'checkpoint; none found for {ckpt_path!r}'
-            )
         elif ckpt_path:
             console.print(f'[yellow]Warning:[/yellow] Checkpoint not found at {ckpt_path}')
             console.print('Starting training from scratch.\n')
 
-        # Exact resume restores optimizer, epoch, curriculum, and sampler state, so it requires the
-        # checkpoint's supervision contract to match before anything is constructed.
-        exact_resume = bool(checkpoint_path) and checkpoint_load_mode is CheckpointLoadMode.EXACT
+        # Exact resume, the one checkpoint load mode, restores optimizer, epoch, curriculum, and
+        # sampler state, so it requires the checkpoint's supervision contract to match before
+        # anything is constructed.
+        exact_resume = bool(checkpoint_path)
         if exact_resume:
             validate_exact_resume(checkpoint_path, runtime_contract)
 
         # Initialize a fresh model; Lightning restores exact-resume state in trainer.fit
         logger.info('Initializing Model with evaluation metrics...\n')
         model = build_model_from_config(cfg, runtime_contract, bundle)
-
-        if checkpoint_path and not exact_resume:
-            report = load_weights_only(model, checkpoint_path, encoder=runtime_contract.encoder)
-            log_migration_report(report)
 
         # Setup callbacks
         logger.info('Setting up callbacks and checkpointing...\n')
@@ -668,10 +589,8 @@ def train(
             f'[bold yellow]Training for {cfg.training.trainer.max_epochs} epochs...[/bold yellow]\n'
         )
 
-        # Only exact resume passes the checkpoint to trainer.fit(); a weights-only migration has
-        # already loaded its encoder weights and must start fresh at epoch zero
-        trainer_ckpt_path = checkpoint_path if exact_resume else None
-        trainer.fit(model, datamodule, ckpt_path=trainer_ckpt_path)
+        # Exact resume passes the checkpoint to trainer.fit(); a fresh run passes None
+        trainer.fit(model, datamodule, ckpt_path=checkpoint_path)
 
         # Training complete
         logger.info('Training complete!')

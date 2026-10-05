@@ -7,7 +7,6 @@ seed: 42
 # Stage-3 supervision: one immutable, validated bundle is the only authority for code identity,
 # structural facts, exclusions, and training pairs.
 supervision:
-  mode: repaired  # Options: repaired, legacy_containment (explicit, tagged, never exact-resumes)
   contract_version: stage3-supervision-v2
   manifest_path: null  # data supervision prints the exact immutable path to set before training
 

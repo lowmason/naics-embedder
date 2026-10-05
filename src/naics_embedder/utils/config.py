@@ -593,25 +593,31 @@ class DecisionConfig(BaseModel):
     min_seeds: int = Field(default=5, ge=5, description='Req 5: each arm runs at least 5 seeds')
 
 class SupervisionRuntimeConfig(BaseModel):
-    '''Which supervision contract training runs under, and the one authoritative bundle.'''
+    '''
+    Which supervision contract training runs under, and the one authoritative bundle.
+
+    Training is always repaired: legacy containment and its ``mode`` key are deleted (roadmap D2).
+    '''
 
     model_config = ConfigDict(extra='forbid')
 
-    mode: Literal['repaired', 'legacy_containment'] = 'repaired'
     manifest_path: Optional[str] = Field(
         default=None,
         description=(
             'Immutable bundle manifest printed by `naics-embedder data supervision`; required '
-            'before repaired training'
+            'before training'
         ),
     )
     contract_version: Literal['stage3-supervision-v2'] = CONTRACT_VERSION
 
 class CheckpointLoadMode(str, Enum):
-    '''How a training run may use a checkpoint.'''
+    '''
+    How a training run uses a checkpoint: exact resume, the one mode.
+
+    The weights-only migration is deleted (roadmap D2); the option keeps its name and default.
+    '''
 
     EXACT = 'exact'
-    WEIGHTS_ONLY = 'weights_only'
 
 # -------------------------------------------------------------------------------------------------
 # Data Loader Configuration
@@ -716,8 +722,8 @@ class StreamingConfig(BaseModel):
         default=None,
         gt=0.0,
         description=(
-            'Legacy-containment only: constant sampling weight for excluded codes. Repaired '
-            'Stage-3 training rejects it: an explicit exclusion is never a negative.'
+            'Legacy constant sampling weight for excluded codes, which training rejects: an '
+            'explicit exclusion is never a negative.'
         ),
     )
 
@@ -984,8 +990,8 @@ class LossConfig(BaseModel):
         ge=0,
         le=1.0,
         description=(
-            'Legacy LambdaRank weight, retained only for legacy containment and so repaired '
-            'configurations can be rejected with a migration message'
+            'Legacy LambdaRank weight, retained only so a configuration that sets it is '
+            'rejected with a migration message'
         ),
     )
     radius_reg_weight: float = Field(
@@ -1409,8 +1415,8 @@ class GraphConfig(BaseModel):
 # Main Configuration
 # -------------------------------------------------------------------------------------------------
 
-# Streaming paths that only legacy containment reads. Repaired training reads structural facts
-# and training pairs from the supervision bundle.
+# Legacy streaming paths, which training never reads: it reads structural facts and training
+# pairs from the supervision bundle.
 LEGACY_STREAMING_PATHS = (
     'distances_parquet',
     'distance_matrix_parquet',
@@ -1451,33 +1457,31 @@ class Config(BaseModel):
     )
     supervision: SupervisionRuntimeConfig = Field(
         default_factory=SupervisionRuntimeConfig,
-        description='Stage-3 supervision mode and authoritative bundle',
+        description='Stage-3 supervision contract and authoritative bundle',
     )
 
     @model_validator(mode='after')
     def validate_supervision_contract(self) -> 'Config':
-        '''Repaired training rejects settings whose semantics the repaired contract replaced.'''
-        if self.supervision.mode == 'repaired':
-            if self.loss.rank_order_weight is not None:
+        '''Training rejects settings whose semantics the repaired contract replaced.'''
+        if self.loss.rank_order_weight is not None:
+            raise ValueError(
+                'loss.rank_order_weight is a legacy LambdaRank setting; '
+                'configure loss.structural_preference instead'
+            )
+        if self.data_loader.streaming.phase1_exclusion_weight is not None:
+            raise ValueError(
+                'data_loader.streaming.phase1_exclusion_weight is invalid: an explicit '
+                'exclusion is never a negative'
+            )
+        for name in LEGACY_STREAMING_PATHS:
+            if getattr(self.data_loader.streaming, name) != (
+                StreamingConfig.model_fields[name].default
+            ):
                 raise ValueError(
-                    'loss.rank_order_weight is a legacy LambdaRank setting; '
-                    'configure loss.structural_preference instead'
+                    f'data_loader.streaming.{name} is a legacy path, which training never '
+                    'reads: structural facts and training pairs come from the bundle at '
+                    'supervision.manifest_path. Remove the key'
                 )
-            if self.data_loader.streaming.phase1_exclusion_weight is not None:
-                raise ValueError(
-                    'data_loader.streaming.phase1_exclusion_weight is invalid in repaired mode; '
-                    'an explicit exclusion is never a negative'
-                )
-            for name in LEGACY_STREAMING_PATHS:
-                if getattr(self.data_loader.streaming, name) != (
-                    StreamingConfig.model_fields[name].default
-                ):
-                    raise ValueError(
-                        f'data_loader.streaming.{name} is a legacy path, which repaired training '
-                        'never reads: structural facts and training pairs come from the bundle '
-                        'at supervision.manifest_path. Remove the key, or set supervision.mode '
-                        'to legacy_containment'
-                    )
         return self
 
     @classmethod

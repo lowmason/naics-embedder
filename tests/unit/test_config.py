@@ -666,7 +666,6 @@ def valid_config_dict():
 def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
     cfg = Config.model_validate(valid_config_dict)
 
-    assert cfg.supervision.mode == 'repaired'
     assert cfg.supervision.manifest_path is None
     assert cfg.supervision.contract_version == 'stage3-supervision-v2'
     assert cfg.loss.structural_preference == StructuralPreferenceConfig()
@@ -701,10 +700,7 @@ def test_a_fusion_or_dimension_outside_its_set_is_refused(key, value):
     assert _error_locs_and_types(excinfo) == [(('model', key.split('.')[1]), 'literal_error')]
 
 def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
-    valid_config_dict['supervision'] = {
-        'mode': 'repaired',
-        'manifest_path': '/tmp/bundle/manifest.json',
-    }
+    valid_config_dict['supervision'] = {'manifest_path': '/tmp/bundle/manifest.json'}
     valid_config_dict['loss']['rank_order_weight'] = 0.35
 
     with pytest.raises(
@@ -714,10 +710,7 @@ def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
         Config.model_validate(valid_config_dict)
 
 def test_repaired_config_rejects_high_exclusion_weight(valid_config_dict):
-    valid_config_dict['supervision'] = {
-        'mode': 'repaired',
-        'manifest_path': '/tmp/bundle/manifest.json',
-    }
+    valid_config_dict['supervision'] = {'manifest_path': '/tmp/bundle/manifest.json'}
     valid_config_dict['data_loader']['streaming']['phase1_exclusion_weight'] = 100.0
 
     with pytest.raises(
@@ -747,18 +740,6 @@ def test_overrides_cannot_point_repaired_training_at_a_legacy_path():
     with pytest.raises(ValidationError, match='data_loader.streaming.relations_parquet'):
         Config().override({'data_loader.streaming.relations_parquet': './data/other.parquet'})
 
-def test_legacy_containment_is_the_only_mode_accepting_legacy_keys(valid_config_dict):
-    valid_config_dict['supervision'] = {'mode': 'legacy_containment'}
-    valid_config_dict['loss']['rank_order_weight'] = 0.35
-    valid_config_dict['data_loader']['streaming']['phase1_exclusion_weight'] = 100.0
-    valid_config_dict['data_loader']['streaming']['relations_parquet'] = './data/other.parquet'
-
-    cfg = Config.model_validate(valid_config_dict)
-
-    assert cfg.supervision.mode == 'legacy_containment'
-    assert cfg.loss.rank_order_weight == 0.35
-    assert cfg.data_loader.streaming.relations_parquet == './data/other.parquet'
-
 @pytest.mark.parametrize(
     'supervision',
     [
@@ -777,8 +758,19 @@ def test_supervision_runtime_config_rejects_unknown_values(supervision):
     with pytest.raises(ValidationError):
         SupervisionRuntimeConfig(**supervision)
 
-def test_checkpoint_load_modes_are_explicit():
-    assert [mode.value for mode in CheckpointLoadMode] == ['exact', 'weights_only']
+def test_supervision_mode_is_a_removed_key(valid_config_dict):
+    '''D2: training is always repaired, so the mode key is refused, even at its old default.'''
+
+    valid_config_dict['supervision']['mode'] = 'repaired'
+
+    with pytest.raises(ValidationError) as excinfo:
+        Config.model_validate(valid_config_dict)
+
+    assert _error_locs_and_types(excinfo) == [(('supervision', 'mode'), 'extra_forbidden')]
+
+def test_exact_resume_is_the_only_checkpoint_load_mode():
+    # D2 deleted the weights-only migration; --checkpoint-load-mode keeps its name and default
+    assert [mode.value for mode in CheckpointLoadMode] == ['exact']
 
 @pytest.mark.parametrize(
     ('field', 'value', 'message'),

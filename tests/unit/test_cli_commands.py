@@ -760,10 +760,12 @@ def test_export_table_exports_under_the_configured_bundle_and_cache(
     assert 'arm_provenance.json' in result.output.replace('\n', '')
 
 @pytest.mark.unit
-def test_export_table_refuses_legacy_containment(monkeypatch, runner, tmp_path, default_config):
+def test_export_table_refuses_the_removed_supervision_mode(
+    monkeypatch, runner, tmp_path, default_config
+):
 
     def never(*_args, **_kwargs):
-        raise AssertionError('legacy containment reached the export')
+        raise AssertionError('a supervision mode reached the export')
 
     monkeypatch.setattr(tools_cli, 'export_code_table', never)
 
@@ -776,7 +778,9 @@ def test_export_table_refuses_legacy_containment(monkeypatch, runner, tmp_path, 
     )
 
     assert result.exit_code == 1
-    assert 'legacy containment has none' in ' '.join(result.output.split())
+    # D2: training is always repaired, so the config refuses the key as an extra input
+    message = ' '.join(click.unstyle(result.output).split())
+    assert 'supervision.mode Extra inputs are not permitted' in message
 
 @pytest.mark.unit
 def test_export_table_refuses_an_override_without_a_value(runner, tmp_path, default_config):

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import click
 import pytest
 import typer
 from typer.testing import CliRunner
@@ -9,11 +10,10 @@ from naics_embedder.cli.commands import training
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
-    MigrationReport,
     shared_encoder_architecture,
 )
 from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
-from naics_embedder.utils.config import CheckpointLoadMode, Config
+from naics_embedder.utils.config import Config
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
 
@@ -47,7 +47,7 @@ def training_env(monkeypatch, tmp_path):
 
     def fake_gate(cfg):
         context.events.append('supervision_gate')
-        return None if cfg.supervision.mode == 'legacy_containment' else context.bundle
+        return context.bundle
 
     monkeypatch.setattr(training, 'require_valid_supervision_bundle', fake_gate)
 
@@ -269,14 +269,6 @@ def test_the_summaries_follow_the_tokenizer_and_not_the_base_model(training_env)
     assert model_kwargs['summaries'] is not None
 
 @pytest.mark.unit
-def test_a_containment_run_records_the_summaries_too(training_env):
-    training.train(skip_validation=True, overrides=['supervision.mode=legacy_containment'])
-
-    contract = training_env.trainer.fit_calls[0]['model'].kwargs['checkpoint_contract']
-    assert contract.supervision_mode == 'legacy_containment'
-    assert contract.summaries == summaries_identity(MINILM)
-
-@pytest.mark.unit
 def test_exact_resume_contract_mismatch_fails_before_training(training_env, monkeypatch):
     training_env.checkpoint_info = CheckpointInfo(path='foo.ckpt', is_same_stage=True, exists=True)
 
@@ -292,55 +284,41 @@ def test_exact_resume_contract_mismatch_fails_before_training(training_env, monk
     assert training_env.trainer is None
 
 @pytest.mark.unit
-def test_weights_only_never_passes_checkpoint_to_trainer(training_env, monkeypatch):
-    training_env.checkpoint_info = CheckpointInfo(
-        path='legacy.ckpt',
-        is_same_stage=False,
-        exists=True,
-    )
-    reports = []
+def test_weights_only_is_no_longer_a_checkpoint_load_mode(cli_runner, training_env):
+    '''D2: --checkpoint-load-mode keeps one value, exact; weights_only is a usage error.'''
 
-    def fake_load_weights_only(model, path, *, encoder):
-        assert path == 'legacy.ckpt'
-        assert encoder == CONFIGURED_ENCODER
-        report = MigrationReport(
-            loaded=('encoder.weight', ),
-            skipped=('loss_fn.buffer', ),
-            missing=(),
-            unexpected=(),
-        )
-        reports.append(report)
-        return report
-
-    monkeypatch.setattr(training, 'load_weights_only', fake_load_weights_only)
-
-    training.train(
-        ckpt_path='last',
-        checkpoint_load_mode=CheckpointLoadMode.WEIGHTS_ONLY,
-        skip_validation=True,
+    result = cli_runner.invoke(
+        cli_app, ['train', '--ckpt-path', 'last', '--checkpoint-load-mode', 'weights_only']
     )
 
-    assert reports
-    assert training_env.exact_resume_calls == []
-    assert training_env.trainer.fit_calls[0]['ckpt_path'] is None
+    assert result.exit_code == 2
+    assert 'weights_only' in click.unstyle(result.output).replace('\n', '')
+    assert training_env.trainer is None
 
 @pytest.mark.unit
-def test_weights_only_without_an_existing_checkpoint_is_fatal(training_env, monkeypatch):
-    training_env.checkpoint_info = CheckpointInfo(path=None, is_same_stage=False, exists=False)
-    monkeypatch.setattr(
-        training,
-        'load_weights_only',
-        lambda *_args, **_kwargs: pytest.fail('nothing to migrate'),
+def test_the_remote_launch_line_still_parses(cli_runner, training_env):
+    '''`--ckpt-path last --checkpoint-load-mode exact` exact-resumes, as it did before D2.'''
+
+    training_env.checkpoint_info = CheckpointInfo(path='foo.ckpt', is_same_stage=True, exists=True)
+
+    result = cli_runner.invoke(
+        cli_app,
+        ['train', '--ckpt-path', 'last', '--checkpoint-load-mode', 'exact'],
+        catch_exceptions=False,
     )
 
+    assert result.exit_code == 0
+    assert training_env.trainer.fit_calls[0]['ckpt_path'] == 'foo.ckpt'
+    assert [path for path, _ in training_env.exact_resume_calls] == ['foo.ckpt']
+
+@pytest.mark.unit
+def test_train_refuses_the_removed_supervision_mode(training_env):
     with pytest.raises(typer.Exit) as excinfo:
-        training.train(
-            ckpt_path='missing.ckpt',
-            checkpoint_load_mode=CheckpointLoadMode.WEIGHTS_ONLY,
-            skip_validation=True,
-        )
+        training.train(skip_validation=True, overrides=['supervision.mode=legacy_containment'])
 
     assert excinfo.value.exit_code == 1
+    # The config refuses the key before the supervision gate runs
+    assert training_env.events == []
     assert training_env.trainer is None
 
 @pytest.mark.unit
@@ -366,63 +344,24 @@ def test_supervision_gate_failure_stops_before_any_construction(training_env, mo
     assert training_env.events == ['supervision_gate']
 
 @pytest.mark.unit
-def test_cli_legacy_containment_is_prominently_tagged(
-    cli_runner, training_env, monkeypatch, caplog
-):
-    cfg = training.Config.from_yaml('unused.yaml')
-    cfg.supervision.mode = 'legacy_containment'
-    cfg.supervision.manifest_path = None
-    cfg.loss.rank_order_weight = 0.35
-    cfg.data_loader.streaming.phase1_exclusion_weight = 100.0
-    monkeypatch.setattr(
-        training.Config,
-        'from_yaml',
-        classmethod(lambda cls, path: cfg),
-    )
-
-    result = cli_runner.invoke(cli_app, ['train'], catch_exceptions=False)
-
-    assert result.exit_code == 0
-    assert 'LEGACY CONTAINMENT' in caplog.text or 'LEGACY CONTAINMENT' in result.output
-    model = training_env.trainer.fit_calls[0]['model']
-    assert model.kwargs['supervision_mode'] == 'legacy_containment'
-    assert model.kwargs['checkpoint_contract'].bundle_id == 'legacy-containment'
-
-@pytest.mark.unit
-def test_legacy_containment_uses_legacy_inputs_without_a_bundle(training_env, monkeypatch):
-    cfg = training.Config.from_yaml('unused.yaml')
-    cfg.supervision.mode = 'legacy_containment'
-    cfg.supervision.manifest_path = None
-    monkeypatch.setattr(training.Config, 'from_yaml', classmethod(lambda cls, path: cfg))
-
-    training.train(skip_validation=True)
-
-    fit = training_env.trainer.fit_calls[0]
-    model_kwargs = fit['model'].kwargs
-    assert model_kwargs['supervision_manifest_path'] is None
-    assert model_kwargs['supervision_bundle'] is None
-    assert model_kwargs['distance_matrix_path'] == cfg.data_loader.streaming.distance_matrix_parquet
-    assert model_kwargs['relations_parquet_path'] == cfg.data_loader.streaming.relations_parquet
-    assert fit['datamodule'].kwargs['supervision_mode'] == 'legacy_containment'
-    assert fit['datamodule'].kwargs['supervision_bundle'] is None
-
-@pytest.mark.unit
 def test_repaired_model_and_datamodule_receive_bundle_supervision(training_env):
     training.train(skip_validation=True)
 
     fit = training_env.trainer.fit_calls[0]
     model_kwargs = fit['model'].kwargs
     datamodule_kwargs = fit['datamodule'].kwargs
-    assert model_kwargs['supervision_mode'] == 'repaired'
     assert model_kwargs['supervision_manifest_path'].endswith('manifest.json')
     assert model_kwargs['supervision_bundle'] is training_env.bundle
     assert model_kwargs['checkpoint_contract'].bundle_id == 'bundle-a'
     assert model_kwargs['structural_preference_weight'] == 0.35
     assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('masked_mean', 16)
     assert 'selection_seed' not in model_kwargs
-    for legacy_key in ('rank_order_weight', 'distance_matrix_path', 'relations_parquet_path'):
+    # D2: training is always repaired, so neither receives a mode
+    for legacy_key in (
+        'supervision_mode', 'rank_order_weight', 'distance_matrix_path', 'relations_parquet_path'
+    ):
         assert legacy_key not in model_kwargs
-    assert datamodule_kwargs['supervision_mode'] == 'repaired'
+    assert 'supervision_mode' not in datamodule_kwargs
     assert datamodule_kwargs['supervision_bundle'] is training_env.bundle
 
 @pytest.mark.unit

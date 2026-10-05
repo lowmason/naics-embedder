@@ -147,12 +147,6 @@ def test_supervision_gate_requires_a_manifest_in_repaired_mode(hierarchy_descrip
     assert any('naics-embedder data supervision' in step for step in excinfo.value.remediation)
 
 @pytest.mark.unit
-def test_supervision_gate_skips_explicit_legacy_containment():
-    cfg = Config.model_validate({'supervision': {'mode': 'legacy_containment'}})
-
-    assert require_valid_supervision_bundle(cfg) is None
-
-@pytest.mark.unit
 def test_supervision_gate_returns_the_validated_bundle(
     production_bundle, hierarchy_descriptions_parquet
 ):
@@ -187,32 +181,10 @@ def test_supervision_gate_rejects_a_tampered_bundle(
 @pytest.mark.unit
 def test_repaired_data_paths_do_not_require_legacy_artifacts(tmp_path):
     # Structural facts and training pairs come from the bundle, which the supervision gate
-    # validates; legacy long-form paths are only read in legacy containment.
+    # validates; no mode reads the legacy long-form paths (roadmap D2).
     cfg = Config()
     cfg.data_loader.streaming.descriptions_parquet = _touch(tmp_path / 'descriptions.parquet')
     cfg.data_loader.streaming.distances_parquet = str(tmp_path / 'missing_distances.parquet')
     cfg.data_loader.streaming.triplets_parquet = str(tmp_path / 'missing_triplets')
 
     assert validate_data_paths(cfg).valid
-
-    cfg.supervision.mode = 'legacy_containment'
-    result = validate_data_paths(cfg)
-    assert result.valid is False
-    assert any('Distances file not found' in err for err in result.errors)
-
-@pytest.mark.unit
-def test_missing_legacy_artifacts_name_no_command_that_cannot_build_them(tmp_path):
-    # `data triplets` builds nothing (M8) and `data all` builds only a bundle, so neither
-    # supplies a missing legacy artifact
-    cfg = Config.model_validate({'supervision': {'mode': 'legacy_containment'}})
-    streaming = cfg.data_loader.streaming
-    streaming.descriptions_parquet = _touch(tmp_path / 'descriptions.parquet')
-    for name in ('distances_parquet', 'distance_matrix_parquet', 'relations_parquet'):
-        setattr(streaming, name, str(tmp_path / f'missing_{name}'))
-    streaming.triplets_parquet = str(tmp_path / 'missing_triplets')
-
-    errors = validate_data_paths(cfg).errors
-
-    assert len(errors) == 4
-    assert all('naics-embedder data supervision' in error for error in errors)
-    assert not any('data triplets' in error or 'data all' in error for error in errors)

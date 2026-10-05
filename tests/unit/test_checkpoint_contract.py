@@ -1,6 +1,8 @@
+import importlib
+import importlib.util
+
 import pytest
 import torch
-from torch import nn
 
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.checkpoints import (
@@ -8,10 +10,7 @@ from naics_embedder.supervision.checkpoints import (
     LEGACY_ENCODER,
     CheckpointContract,
     EncoderArchitecture,
-    containment_contract,
     contract_for_bundle,
-    load_weights_only,
-    saved_encoder,
     shared_encoder_architecture,
     validate_checkpoint_contract,
     validate_exact_resume,
@@ -36,13 +35,6 @@ def runtime_contract(summaries) -> CheckpointContract:
         encoder=SHARED,
         summaries=summaries,
     )
-
-@pytest.fixture
-def tiny_repaired_model() -> nn.Module:
-    model = nn.Module()
-    model.encoder = nn.Sequential(nn.Linear(2, 3), nn.Linear(3, 2))
-    model.current_curriculum_flags = {}
-    return model
 
 def _save(path, contract=None, **payload):
     '''Save a checkpoint holding ``payload``, under ``contract`` when one is given.'''
@@ -144,14 +136,15 @@ def test_a_contract_saved_before_stage_6b_reads_as_null_summaries(runtime_contra
 
     assert CheckpointContract.model_validate(saved).summaries is None
 
-def test_a_containment_checkpoint_under_other_summaries_cannot_exact_resume(tmp_path, summaries):
-    runtime = containment_contract(encoder=SHARED, summaries=summaries)
+def test_a_checkpoint_under_other_summaries_cannot_exact_resume_naming_the_field(
+    tmp_path, runtime_contract, summaries
+):
     path = _save(
-        tmp_path / 'containment.ckpt', containment_contract(encoder=SHARED, summaries=None)
+        tmp_path / 'truncated.ckpt', runtime_contract.model_copy(update={'summaries': None})
     )
 
     with pytest.raises(ValueError, match='exact resume') as refusal:
-        validate_exact_resume(path, runtime)
+        validate_exact_resume(path, runtime_contract)
 
     assert f"'summaries': (None, '{summaries}')" in str(refusal.value)
 
@@ -172,8 +165,6 @@ def test_a_caller_that_omits_the_summaries_is_a_type_error(validated_bundle, sum
         validate_supervision_contract(saved, manifest)
     with pytest.raises(TypeError):
         contract_for_bundle(manifest, encoder=SHARED)
-    with pytest.raises(TypeError):
-        containment_contract(encoder=SHARED)
 
 # -------------------------------------------------------------------------------------------------
 # The encoder record (spec 4.4)
@@ -185,8 +176,6 @@ def test_an_absent_encoder_record_reads_as_the_legacy_four_copy_layout(runtime_c
 
     assert CheckpointContract.model_validate(saved).encoder == LEGACY_ENCODER
     assert LEGACY_ENCODER == EncoderArchitecture(layout='four-copy')
-    assert saved_encoder(saved) == LEGACY_ENCODER
-    assert saved_encoder(None) == LEGACY_ENCODER
 
 @pytest.mark.parametrize(
     'record',
@@ -308,130 +297,51 @@ def test_the_supervision_check_refuses_a_checkpoint_without_a_contract(validated
     assert D2_REFUSAL in str(excinfo.value)
 
 # -------------------------------------------------------------------------------------------------
-# Weights-only migration
+# D2: legacy containment and the weights-only migration are gone
 # -------------------------------------------------------------------------------------------------
 
-def test_weights_only_loads_allowlisted_encoder_and_resets_training_state(
-    tmp_path, runtime_contract, tiny_repaired_model
-):
-    encoder_key = next(
-        name for name in tiny_repaired_model.state_dict() if name.startswith('encoder.')
-    )
-    path = _save(
-        tmp_path / 'checkpoint.ckpt',
-        runtime_contract,
-        state_dict={
-            encoder_key: torch.ones_like(tiny_repaired_model.state_dict()[encoder_key]),
-            'lambdarank_loss_fn.tree_distances': torch.ones((3, 3)),
-            'unexpected.weight': torch.ones(1),
-        },
-        optimizer_states=[{
-            'state': {
-                'x': 1
-            }
-        }],
-        epoch=9,
-        global_step=123,
-    )
+def test_the_contract_helpers_take_no_supervision_mode(validated_bundle, summaries):
+    '''Every contract is repaired, so neither helper takes a mode.'''
 
-    with pytest.raises(ValueError, match='unexpected.weight'):
-        load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+    manifest = validated_bundle.manifest
+    saved = contract_for_bundle(manifest, encoder=SHARED, summaries=summaries)
 
-def test_weights_only_reports_loaded_skipped_and_missing_without_restoring_state(
-    tmp_path, runtime_contract, tiny_repaired_model
-):
-    target = tiny_repaired_model.state_dict()
-    encoder_keys = sorted(name for name in target if name.startswith('encoder.'))
-    loaded_key = encoder_keys[0]
-    initial_flags = dict(tiny_repaired_model.current_curriculum_flags)
-    # The same architecture under another bundle, which weights-only still serves (D2)
-    path = _save(
-        tmp_path / 'other-bundle.ckpt',
-        runtime_contract.model_copy(update={'bundle_id': 'bundle-b'}),
-        state_dict={
-            loaded_key: torch.full_like(target[loaded_key], 0.25),
-            'loss_fn.legacy_buffer': torch.ones(1),
-        },
-        optimizer_states=[{
-            'state': {
-                'legacy': 1
-            }
-        }],
-        epoch=9,
-        global_step=123,
-    )
+    with pytest.raises(TypeError):
+        contract_for_bundle(manifest, 'repaired', encoder=SHARED, summaries=summaries)
+    with pytest.raises(TypeError):
+        validate_supervision_contract(saved.model_dump(), manifest, 'repaired', summaries=summaries)
+    assert saved.supervision_mode == 'repaired'
 
-    report = load_weights_only(tiny_repaired_model, path, encoder=SHARED)
+D2_DELETIONS = [
+    'naics_embedder.supervision.mode',
+    'naics_embedder.supervision.checkpoints:containment_contract',
+    'naics_embedder.supervision.checkpoints:LEGACY_CONTAINMENT_BUNDLE_ID',
+    'naics_embedder.supervision.checkpoints:UNVERSIONED_CODEBOOK_FINGERPRINT',
+    'naics_embedder.supervision.checkpoints:load_weights_only',
+    'naics_embedder.supervision.checkpoints:MigrationReport',
+    'naics_embedder.supervision.checkpoints:saved_encoder',
+    'naics_embedder.supervision.checkpoints:WEIGHTS_ONLY_ALLOWED_PREFIXES',
+    'naics_embedder.supervision.checkpoints:WEIGHTS_ONLY_EXCLUDED_PREFIXES',
+    'naics_embedder.cli.commands.training:announce_legacy_containment',
+    'naics_embedder.cli.commands.training:log_migration_report',
+    'naics_embedder.text_model.dataloader.datamodule:legacy_token_fingerprints',
+    'naics_embedder.text_model.dataloader.datamodule:_collate_legacy',
+    'naics_embedder.text_model.dataloader.datamodule:SUPERVISION_MODES',
+    'naics_embedder.text_model.naics_model:NAICSContrastiveModel._legacy_containment_training_step',
+    'naics_embedder.text_model.naics_model:NAICSContrastiveModel._load_ground_truth_distances',
+    'naics_embedder.utils.config:CheckpointLoadMode.WEIGHTS_ONLY',
+]
 
-    assert report.loaded == (loaded_key, )
-    assert report.skipped == ('loss_fn.legacy_buffer', )
-    assert report.missing == tuple(encoder_keys[1:])
-    assert report.unexpected == ()
-    assert tiny_repaired_model.current_curriculum_flags == initial_flags
-    assert torch.equal(
-        tiny_repaired_model.state_dict()[loaded_key],
-        torch.full_like(target[loaded_key], 0.25),
-    )
+@pytest.mark.parametrize('path', D2_DELETIONS)
+def test_d2_deleted_containment_and_the_weights_only_migration(path):
+    '''Roadmap D2: nothing contains a legacy run, and nothing migrates a checkpoint's weights.'''
 
-def test_weights_only_rejects_a_checkpoint_with_no_encoder_weights(
-    tmp_path, runtime_contract, tiny_repaired_model
-):
-    path = _save(
-        tmp_path / 'loss_only.ckpt',
-        runtime_contract,
-        state_dict={'loss_fn.legacy_buffer': torch.ones(1)},
-    )
-
-    with pytest.raises(ValueError, match='no allowlisted encoder parameters'):
-        load_weights_only(tiny_repaired_model, path, encoder=SHARED)
-
-def test_weights_only_loads_a_checkpoint_trained_under_other_summaries(
-    tmp_path, runtime_contract, tiny_repaired_model
-):
-    # Weights-only compares the encoder record alone, so a pre-6b checkpoint can seed a run
-    key = sorted(name for name in tiny_repaired_model.state_dict()
-                 if name.startswith('encoder.'))[0]
-    path = _save(
-        tmp_path / 'truncated.ckpt',
-        runtime_contract.model_copy(update={'summaries': None}),
-        state_dict={key: torch.zeros_like(tiny_repaired_model.state_dict()[key])},
-    )
-
-    report = load_weights_only(tiny_repaired_model, path, encoder=SHARED)
-
-    assert report.loaded == (key, )
-
-def test_weights_only_rejects_shape_mismatched_encoder_weights(
-    tmp_path, runtime_contract, tiny_repaired_model
-):
-    path = _save(
-        tmp_path / 'mismatched.ckpt',
-        runtime_contract,
-        state_dict={'encoder.0.weight': torch.ones((5, 5))},
-    )
-
-    with pytest.raises(ValueError, match='encoder.0.weight'):
-        load_weights_only(tiny_repaired_model, path, encoder=SHARED)
-
-@pytest.mark.parametrize(
-    'saved',
-    [
-        None,
-        LEGACY_ENCODER,
-        shared_encoder_architecture(fusion='masked_mean', dimension=8, backbone=MINILM),
-    ],
-)
-def test_weights_only_refuses_another_encoder_before_reading_any_parameter(
-    tmp_path, runtime_contract, tiny_repaired_model, saved
-):
-    target = tiny_repaired_model.state_dict()
-    key = sorted(name for name in target if name.startswith('encoder.'))[0]
-    before = target[key].clone()
-    contract = None if saved is None else runtime_contract.model_copy(update={'encoder': saved})
-    path = _save(tmp_path / 'other.ckpt', contract, state_dict={key: torch.full_like(before, 0.25)})
-
-    with pytest.raises(ValueError, match='weights-only encoder mismatch') as excinfo:
-        load_weights_only(tiny_repaired_model, path, encoder=SHARED)
-
-    assert D2_REFUSAL in str(excinfo.value)
-    assert torch.equal(tiny_repaired_model.state_dict()[key], before)
+    module, _, attribute = path.partition(':')
+    if not attribute:
+        assert importlib.util.find_spec(module) is None
+        return
+    *owners, name = attribute.split('.')
+    owner = importlib.import_module(module)
+    for part in owners:
+        owner = getattr(owner, part)
+    assert not hasattr(owner, name)

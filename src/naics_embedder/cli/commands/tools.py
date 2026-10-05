@@ -842,14 +842,10 @@ def _run_bundle(cfg: Config) -> ValidatedSupervisionBundle:
     The configured supervision bundle, through ``train``'s gate.
 
     Raises:
-        ValueError: Under legacy containment, which has no bundle (P27).
         ValidationError: As ``require_valid_supervision_bundle``.
     '''
 
-    bundle = require_valid_supervision_bundle(cfg)
-    if bundle is None:
-        raise ValueError('export and reads need a supervision bundle; legacy containment has none')
-    return bundle
+    return require_valid_supervision_bundle(cfg)
 
 @app.command('export-table')
 def export_table(

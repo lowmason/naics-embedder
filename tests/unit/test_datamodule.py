@@ -2,7 +2,7 @@
 Unit tests for NAICSDataModule and collate_fn.
 
 Tests cover:
-- collate_fn batching and padding logic
+- collate_fn batching over candidate pools
 - Multi-level supervision expansion
 - Sampling metadata accumulation
 - NAICSMapDataset indexing and __getitem__
@@ -134,7 +134,7 @@ def test_collate_does_not_mutate_input_and_uses_invalid_rows(make_repaired_batch
     long = make_repaired_batch_item(candidate_code_ids=[201, 202, 203])
     original_short = copy.deepcopy(short)
 
-    batch = collate_fn([short, long], supervision_mode='repaired')
+    batch = collate_fn([short, long])
 
     assert len(short['candidate_pool']) == 1
     assert short['candidate_pool'][0]['negative_code_id'] == 101
@@ -183,7 +183,6 @@ def test_repaired_collate_marks_invalid_rows_absent(make_repaired_batch_item):
     batch = collate_fn(
         [make_repaired_batch_item([101]),
          make_repaired_batch_item([201, 202, 203])],
-        supervision_mode='repaired',
     )
 
     for channel in ('title', 'description', 'excluded', 'examples'):
@@ -194,7 +193,7 @@ def test_repaired_collate_marks_invalid_rows_absent(make_repaired_batch_item):
 def test_collate_carries_every_candidate_field_in_one_order(make_repaired_batch_item):
     item = make_repaired_batch_item(candidate_code_ids=[103, 101, 102])
 
-    batch = collate_fn([item], supervision_mode='repaired')
+    batch = collate_fn([item])
 
     assert batch['candidate_code_id'].tolist() == [[103, 101, 102]]
     assert batch['candidate_sampling_provenance_id'].tolist() == [[2, 2, 2]]
@@ -208,7 +207,7 @@ def test_repaired_collate_pads_proposals_and_flattens_candidates_row_major(
     short = make_repaired_batch_item(candidate_code_ids=[7])
     long = make_repaired_batch_item(candidate_code_ids=[9, 8])
 
-    batch = collate_fn([short, long], supervision_mode='repaired')
+    batch = collate_fn([short, long])
 
     assert batch['k_candidates'] == 2
     assert batch['batch_size'] == 2
@@ -219,13 +218,13 @@ def test_repaired_collate_pads_proposals_and_flattens_candidates_row_major(
 
 def test_repaired_collate_rejects_legacy_items(make_batch_item):
     with pytest.raises(ValueError, match='candidate_pool'):
-        collate_fn([make_batch_item('111', '11', ['222'])], supervision_mode='repaired')
+        collate_fn([make_batch_item('111', '11', ['222'])])
 
 def test_repaired_collate_uses_the_smallest_selection_k(make_repaired_batch_item):
     first = make_repaired_batch_item(candidate_code_ids=[1, 2, 3])
     second = make_repaired_batch_item(candidate_code_ids=[4, 5])
 
-    batch = collate_fn([first, second], supervision_mode='repaired')
+    batch = collate_fn([first, second])
 
     assert batch['selection_k'] == 2
 
@@ -234,36 +233,13 @@ def test_repaired_collate_requires_a_positive_selection_k(make_repaired_batch_it
     item['selection_k'] = 0
 
     with pytest.raises(ValueError, match='selection_k'):
-        collate_fn([item], supervision_mode='repaired')
+        collate_fn([item])
 
-def test_legacy_collate_pads_without_mutating_input(make_batch_item):
-    short = make_batch_item('111', '11', ['222'])
-    long = make_batch_item('555', '55', ['666', '777'])
+def test_collate_takes_no_supervision_mode(make_repaired_batch_item):
+    '''D2: every batch is repaired, so the collate has no mode to choose.'''
 
-    batch = collate_fn([short, long], supervision_mode='legacy_containment')
-
-    assert len(short['negatives']) == 1
-    assert batch['negative_codes'] == [['222', '222'], ['666', '777']]
-
-def test_legacy_containment_ignores_all_candidates(make_batch_item):
-    item = make_batch_item('111', '11', ['222', '333'])
-    item['all_candidates'] = [
-        {
-            'negative_code': 'SHOULD-NOT-ENTER',
-            'negative_idx': 999,
-            'negative_embedding': item['negatives'][0]['negative_embedding'],
-        }
-    ]
-
-    batch = collate_fn([item], supervision_mode='legacy_containment')
-
-    assert batch['negative_codes'] == [['222', '333']]
-    assert 'all_candidates' not in batch
-    assert 'candidate_inputs' not in batch
-
-def test_collate_rejects_an_unknown_mode(make_repaired_batch_item):
-    with pytest.raises(ValueError, match='supervision mode'):
-        collate_fn([make_repaired_batch_item([1])], supervision_mode='legacy')
+    with pytest.raises(TypeError, match='supervision_mode'):
+        collate_fn([make_repaired_batch_item([1])], supervision_mode='repaired')
 
 # -------------------------------------------------------------------------------------------------
 # Bundle-backed repaired datasets
@@ -352,7 +328,7 @@ def test_repaired_map_dataset_emits_one_bundle_backed_pool(
         _assert_repaired_item(item, index, selection_k=3)
         assert item['difficulty_proposal_indices'] == list(range(len(item['candidate_pool'])))
 
-    batch = collate_fn(items, supervision_mode='repaired')
+    batch = collate_fn(items)
     assert batch['candidate_valid_mask'].sum().item() == sum(
         len(item['candidate_pool']) for item in items
     )
@@ -454,181 +430,37 @@ def test_validation_pools_are_stable_across_training_epochs(
     assert pools(datamodule.val_dataset) == before
 
 # -------------------------------------------------------------------------------------------------
-# Basic Collate Tests
-# -------------------------------------------------------------------------------------------------
-
-def test_collate_stacks_embeddings_correctly(make_batch_item):
-    '''Embeddings should be stacked into proper tensor shapes.'''
-    batch = [
-        make_batch_item('111', '11', ['222', '333']),
-        make_batch_item('444', '44', ['555', '666']),
-    ]
-
-    result = collate_fn(batch, supervision_mode='legacy_containment')
-
-    # Check anchor shape: (batch_size, seq_len)
-    assert result['anchor']['title']['input_ids'].shape == (2, 128)
-    assert result['anchor']['title']['attention_mask'].shape == (2, 128)
-
-    # Check positive shape: (batch_size, seq_len)
-    assert result['positive']['title']['input_ids'].shape == (2, 128)
-
-    # Check negative shape: (batch_size * k_negatives, seq_len)
-    assert result['negatives']['title']['input_ids'].shape == (4, 128)
-
-def test_collate_preserves_all_channels(make_batch_item, channels):
-    '''All four channels should be present in output.'''
-    batch = [make_batch_item('111', '11', ['222'])]
-
-    result = collate_fn(batch, supervision_mode='legacy_containment')
-
-    for channel in channels:
-        assert channel in result['anchor']
-        assert channel in result['positive']
-        assert channel in result['negatives']
-
-def test_collate_includes_metadata(make_batch_item):
-    '''Batch metadata should be included.'''
-    batch = [
-        make_batch_item('111', '11', ['222', '333']),
-        make_batch_item('444', '44', ['555', '666']),
-    ]
-
-    result = collate_fn(batch, supervision_mode='legacy_containment')
-
-    assert result['batch_size'] == 2
-    assert result['k_negatives'] == 2
-    assert result['anchor_code'] == ['111', '444']
-    assert result['positive_code'] == ['11', '44']
-    assert len(result['negative_codes']) == 2
-    assert result['negative_codes'][0] == ['222', '333']
-
-# -------------------------------------------------------------------------------------------------
-# Padding Tests
-# -------------------------------------------------------------------------------------------------
-
-def test_collate_pads_uneven_negatives(make_batch_item):
-    '''Items with fewer negatives should be padded.'''
-    batch = [
-        make_batch_item('111', '11', ['222', '333', '444']),  # 3 negatives
-        make_batch_item('555', '55', ['666']),  # 1 negative
-    ]
-
-    result = collate_fn(batch, supervision_mode='legacy_containment')
-
-    assert result['k_negatives'] == 3
-    # Total negatives: 3 + 3 (padded) = 6
-    assert result['negatives']['title']['input_ids'].shape == (6, 128)
-
-def test_collate_padding_repeats_last_negative(make_batch_item, make_embedding):
-    '''Padding should repeat the last negative.'''
-    # Create item with single known negative
-    item = {
-        'anchor_code': '111',
-        'anchor_embedding': make_embedding(),
-        'positive_code': '11',
-        'positive_embedding': make_embedding(),
-        'negatives': [
-            {
-                'negative_code': 'LAST',
-                'negative_idx': 0,
-                'negative_embedding': make_embedding(),
-                'relation_margin': 0,
-                'distance_margin': 4,
-            }
-        ],
-    }
-
-    # Create item with multiple negatives to force padding
-    item2 = {
-        'anchor_code': '222',
-        'anchor_embedding': make_embedding(),
-        'positive_code': '22',
-        'positive_embedding': make_embedding(),
-        'negatives': [
-            {
-                'negative_code': f'NEG{i}',
-                'negative_idx': i,
-                'negative_embedding': make_embedding(),
-                'relation_margin': 0,
-                'distance_margin': 4,
-            } for i in range(3)
-        ],
-    }
-
-    batch = [item, item2]
-    result = collate_fn(batch, supervision_mode='legacy_containment')
-
-    # After collation, first item should have 3 negatives (padded from 1)
-    assert result['k_negatives'] == 3
-    # The negative_codes for first item should repeat 'LAST'
-    assert result['negative_codes'][0] == ['LAST', 'LAST', 'LAST']
-
-# -------------------------------------------------------------------------------------------------
-# Error Handling Tests
-# -------------------------------------------------------------------------------------------------
-
-def test_collate_raises_on_empty_negatives(make_embedding):
-    '''Batch with no negatives should raise ValueError.'''
-    batch = [
-        {
-            'anchor_code': '111',
-            'anchor_embedding': make_embedding(),
-            'positive_code': '11',
-            'positive_embedding': make_embedding(),
-            'negatives': [],
-        }
-    ]
-
-    with pytest.raises(ValueError, match='no negatives'):
-        collate_fn(batch, supervision_mode='legacy_containment')
-
-def test_collate_handles_single_item_batch(make_batch_item):
-    '''Single item batch should work correctly.'''
-    batch = [make_batch_item('111', '11', ['222', '333'])]
-
-    result = collate_fn(batch, supervision_mode='legacy_containment')
-
-    assert result['batch_size'] == 1
-    assert result['k_negatives'] == 2
-    assert result['anchor']['title']['input_ids'].shape == (1, 128)
-
-# -------------------------------------------------------------------------------------------------
 # Positive Level Tests
 # -------------------------------------------------------------------------------------------------
 
-def test_collate_extracts_positive_level(make_batch_item):
+def test_collate_extracts_positive_level(make_repaired_batch_item):
     '''collate_fn should extract positive_level from batch items.'''
-    batch = [make_batch_item('311111', '31111', ['222'])]
-    # Add positive_level to the item
-    batch[0]['positive_level'] = 5
+    item = make_repaired_batch_item([1])
+    item['positive_level'] = 5
 
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn([item])
 
     assert 'positive_levels' in result
     assert result['positive_levels'] == [5]
 
-def test_collate_infers_positive_level_from_code_length(make_batch_item):
+def test_collate_infers_positive_level_from_code_length(make_repaired_batch_item):
     '''collate_fn should infer positive_level from positive_code length if not present.'''
-    batch = [make_batch_item('311111', '3111', ['222'])]
-    # positive_level not explicitly set, should use len(positive_code)
+    item = make_repaired_batch_item([1])
+    item['positive_code'] = '3111'
 
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn([item])
 
     assert 'positive_levels' in result
     # Default is len(positive_code) = 4
     assert result['positive_levels'] == [4]
 
-def test_collate_multiple_positive_levels(make_batch_item):
+def test_collate_multiple_positive_levels(make_repaired_batch_item):
     '''collate_fn should track positive_levels for multiple items.'''
-    batch = [
-        make_batch_item('311111', '31111', ['222']),
-        make_batch_item('321111', '3211', ['333']),
-    ]
+    batch = [make_repaired_batch_item([1]), make_repaired_batch_item([2])]
     batch[0]['positive_level'] = 5
     batch[1]['positive_level'] = 4
 
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn(batch)
 
     assert result['positive_levels'] == [5, 4]
 
@@ -636,12 +468,9 @@ def test_collate_multiple_positive_levels(make_batch_item):
 # Sampling Metadata Tests
 # -------------------------------------------------------------------------------------------------
 
-def test_collate_accumulates_sampling_metadata(make_batch_item):
+def test_collate_accumulates_sampling_metadata(make_repaired_batch_item):
     '''Sampling metadata should be accumulated across batch items.'''
-    batch = [
-        make_batch_item('111', '11', ['222']),
-        make_batch_item('333', '33', ['444']),
-    ]
+    batch = [make_repaired_batch_item([1]), make_repaired_batch_item([2])]
 
     # Add sampling metadata
     batch[0]['sampling_metadata'] = {
@@ -663,7 +492,7 @@ def test_collate_accumulates_sampling_metadata(make_batch_item):
         'effective_far_weight': 0.5,
     }
 
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn(batch)
 
     assert 'sampling_metadata' in result
     assert result['sampling_metadata']['candidates_near'] == 18
@@ -671,12 +500,9 @@ def test_collate_accumulates_sampling_metadata(make_batch_item):
     assert result['sampling_metadata']['sampled_near'] == 3
     assert result['sampling_metadata']['sampled_far'] == 3
 
-def test_collate_computes_average_weights(make_batch_item):
+def test_collate_computes_average_weights(make_repaired_batch_item):
     '''Effective weights should be averaged across records.'''
-    batch = [
-        make_batch_item('111', '11', ['222']),
-        make_batch_item('333', '33', ['444']),
-    ]
+    batch = [make_repaired_batch_item([1]), make_repaired_batch_item([2])]
 
     batch[0]['sampling_metadata'] = {
         'strategy': 'sans_static',
@@ -697,17 +523,15 @@ def test_collate_computes_average_weights(make_batch_item):
         'effective_far_weight': 0.6,
     }
 
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn(batch)
 
     # Average weights: (0.8 + 0.4) / 2 = 0.6, (0.2 + 0.6) / 2 = 0.4
     assert abs(result['sampling_metadata']['avg_effective_near_weight'] - 0.6) < 1e-6
     assert abs(result['sampling_metadata']['avg_effective_far_weight'] - 0.4) < 1e-6
 
-def test_collate_no_metadata_when_missing(make_batch_item):
+def test_collate_no_metadata_when_missing(make_repaired_batch_item):
     '''No sampling_metadata key when items have no metadata.'''
-    batch = [make_batch_item('111', '11', ['222'])]
-
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn([make_repaired_batch_item([1])])
 
     assert 'sampling_metadata' not in result
 
@@ -909,57 +733,35 @@ def test_map_dataset_includes_sampling_metadata(mock_token_cache):
 # Edge Cases
 # -------------------------------------------------------------------------------------------------
 
-def test_collate_different_sequence_lengths(make_embedding):
+def test_collate_different_sequence_lengths(make_repaired_batch_item, make_embedding):
     '''Batch items with same sequence length should collate.'''
-    channels = ['title', 'description', 'excluded', 'examples']
 
     def make_item(seq_len):
-        embedding = {
-            ch: {
-                'input_ids': torch.randint(0, 1000, (seq_len, )),
-                'attention_mask': torch.ones(seq_len, dtype=torch.long),
-                'present': True,
-            }
-            for ch in channels
-        }
-        return {
-            'anchor_code': '111',
-            'anchor_embedding': embedding,
-            'positive_code': '11',
-            'positive_embedding': embedding,
-            'negatives': [
-                {
-                    'negative_code': '222',
-                    'negative_idx': 0,
-                    'negative_embedding': embedding,
-                    'relation_margin': 0,
-                    'distance_margin': 4,
-                }
-            ],
-        }
+        item = make_repaired_batch_item([1])
+        item['anchor_embedding'] = make_embedding(seq_len)
+        item['positive_embedding'] = make_embedding(seq_len)
+        item['candidate_pool'][0]['negative_embedding'] = make_embedding(seq_len)
+        return item
 
     # Same sequence length should work
-    batch = [make_item(64), make_item(64)]
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn([make_item(64), make_item(64)])
     assert result['anchor']['title']['input_ids'].shape == (2, 64)
 
-def test_collate_preserves_tensor_dtype(make_batch_item):
+def test_collate_preserves_tensor_dtype(make_repaired_batch_item):
     '''Tensor dtypes should be preserved after collation.'''
-    batch = [make_batch_item('111', '11', ['222'])]
-
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn([make_repaired_batch_item([1])])
 
     assert result['anchor']['title']['input_ids'].dtype == torch.long
     assert result['anchor']['title']['attention_mask'].dtype == torch.long
 
-def test_collate_large_batch(make_batch_item):
+def test_collate_large_batch(make_repaired_batch_item):
     '''Should handle larger batches efficiently.'''
-    batch = [make_batch_item(f'{i:03d}', f'{i:02d}', [f'{i + 100}']) for i in range(64)]
+    batch = [make_repaired_batch_item([i + 100]) for i in range(64)]
 
-    result = collate_fn(batch, supervision_mode='legacy_containment')
+    result = collate_fn(batch)
 
     assert result['batch_size'] == 64
-    assert result['anchor']['title']['input_ids'].shape == (64, 128)
+    assert result['anchor']['title']['input_ids'].shape == (64, 2)
 
 # -------------------------------------------------------------------------------------------------
 # NAICSDataModule Setup Tests
@@ -1387,7 +1189,6 @@ def _epoch_aware_datamodule(tmp_path, num_workers: int) -> NAICSDataModule:
         triplets_path=str(tmp_path / 'triplets'),
         batch_size=2,
         num_workers=num_workers,
-        supervision_mode='legacy_containment',  # EpochRecordingDataset emits legacy items
     )
     # More items than one batch, so worker prefetch is in flight when an epoch is cut short
     datamodule.train_dataset = EpochRecordingDataset(n_items=16)

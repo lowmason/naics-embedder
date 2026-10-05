@@ -135,13 +135,10 @@ def _repaired_item(candidate_ids: list[int]) -> dict:
 
 @pytest.fixture
 def repaired_training_batch():
-    batch = collate_fn(
-        [
-            _repaired_item([2, 3, 4]),
-            _repaired_item([2, 3, 4, 4]),
-        ],
-        supervision_mode='repaired',
-    )
+    batch = collate_fn([
+        _repaired_item([2, 3, 4]),
+        _repaired_item([2, 3, 4, 4]),
+    ], )
     assert batch['candidate_valid_mask'][0].tolist() == [True, True, True, False]
     return batch
 
@@ -160,7 +157,6 @@ def tiny_repaired_model(monkeypatch, generated_bundle):
         level_radius_weight=0.0,
         load_balancing_coef=0.0,
         supervision_manifest_path=str(generated_bundle),
-        supervision_mode='repaired',
         structural_preference_weight=0.35,
     )
     model.current_curriculum_flags = {
@@ -285,7 +281,7 @@ def _hierarchy_batch(model):
     )
     for candidate in item['candidate_pool']:
         candidate['negative_code'] = index.id_to_code[candidate['negative_code_id']]
-    return collate_fn([item], supervision_mode='repaired')
+    return collate_fn([item])
 
 MINING = {'enable_hard_negative_mining': True, 'enable_router_guided_sampling': True}
 

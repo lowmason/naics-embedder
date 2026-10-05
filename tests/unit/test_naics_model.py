@@ -20,7 +20,6 @@ Distributed candidate gathering is covered by the Gloo tests in
 import logging
 from unittest.mock import Mock, patch
 
-import polars as pl
 import pytest
 import pytorch_lightning as pyl
 import torch
@@ -171,7 +170,6 @@ def repaired_training_batch():
             _repaired_item(0, 1, 0.5, 1, [2, 3, 4]),
             _repaired_item(2, 0, 2.0, 2, [1, 3, 4, 4]),
         ],
-        supervision_mode='repaired',
     )
 
 # -------------------------------------------------------------------------------------------------
@@ -274,19 +272,19 @@ class TestModelInitialization:
         with pytest.raises(ValueError, match='supervision_manifest_path'):
             NAICSContrastiveModel(**model_config)
 
-    def test_repaired_mode_rejects_legacy_ground_truth_inputs(self, model_config, tmp_path):
-        '''Legacy distance and relation files cannot mix with the bundle authority.'''
+    @pytest.mark.parametrize(
+        ('argument', 'value'),
+        [
+            ('supervision_mode', 'repaired'),
+            ('distance_matrix_path', 'naics_distance_matrix.parquet'),
+            ('relations_parquet_path', 'naics_relations.parquet'),
+        ],
+    )
+    def test_the_containment_arguments_are_gone(self, model_config, argument, value):
+        '''D2: the model is always repaired, so neither a mode nor a legacy input is an argument.'''
 
-        with pytest.raises(ValueError, match='distance_matrix_path'):
-            NAICSContrastiveModel(
-                **model_config,
-                distance_matrix_path=str(tmp_path / 'naics_distance_matrix.parquet'),
-            )
-        with pytest.raises(ValueError, match='relations_parquet_path'):
-            NAICSContrastiveModel(
-                **model_config,
-                relations_parquet_path=str(tmp_path / 'naics_relations.parquet'),
-            )
+        with pytest.raises(TypeError, match=argument):
+            NAICSContrastiveModel(**model_config, **{argument: value})
 
     def test_rejects_mismatched_contract_version(self, model_config):
         '''The bundle must match the expected supervision contract.'''
@@ -296,10 +294,6 @@ class TestModelInitialization:
                 **model_config,
                 supervision_contract_version='stage3-supervision-v0',
             )
-
-    def test_rejects_unknown_supervision_mode(self, model_config):
-        with pytest.raises(ValueError, match='supervision mode'):
-            NAICSContrastiveModel(**model_config, supervision_mode='mystery')
 
     def test_fusion_defaults_to_masked_mean_and_an_unknown_one_is_refused(
         self, naics_model, model_config
@@ -920,16 +914,12 @@ class TestCheckpointContract:
         with pytest.raises(ValueError, match='does not match'):
             NAICSContrastiveModel(**model_config, checkpoint_contract=other)
 
-    def test_the_model_records_its_summaries_in_either_contract(self, model_config):
-        repaired = NAICSContrastiveModel(**model_config, summaries='e' * 64)
-        containment = NAICSContrastiveModel(
-            **model_config, supervision_mode='legacy_containment', summaries='e' * 64
-        )
+    def test_the_model_records_its_summaries_in_its_contract(self, model_config):
+        model = NAICSContrastiveModel(**model_config, summaries='e' * 64)
 
-        assert repaired.checkpoint_contract.summaries == 'e' * 64
-        assert containment.checkpoint_contract.summaries == 'e' * 64
+        assert model.checkpoint_contract.summaries == 'e' * 64
         # Saved with the hyperparameters, so load_from_checkpoint rebuilds the same contract
-        assert repaired.hparams['summaries'] == 'e' * 64
+        assert model.hparams['summaries'] == 'e' * 64
 
     def test_on_save_checkpoint_writes_contract(self, naics_model):
         checkpoint = {}
@@ -1034,121 +1024,21 @@ class TestCheckpointContract:
             NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu', dimension=8)
 
 # -------------------------------------------------------------------------------------------------
-# Test: Explicit legacy containment
+# Test: Legacy containment is deleted (roadmap D2)
 # -------------------------------------------------------------------------------------------------
 
-@pytest.fixture
-def runtime_contract():
-    from naics_embedder.supervision.checkpoints import CheckpointContract
+def test_a_saved_containment_checkpoint_never_restores(naics_model):
+    '''A checkpoint saved under legacy containment, before D2 deleted it, is refused.'''
 
-    return CheckpointContract(
-        supervision_mode='repaired',
-        bundle_id='bundle-a',
-        codebook_fingerprint='a' * 64,
-    )
-
-@pytest.fixture
-def legacy_model(model_config):
-    return NAICSContrastiveModel(
-        **model_config,
-        supervision_mode='legacy_containment',
-    )
-
-@pytest.fixture
-def legacy_batch(sample_training_batch):
-    return sample_training_batch
-
-def test_legacy_containment_drops_hierarchy_diagnostics_on_a_broken_relations_file(
-    model_config, tmp_path
-):
-    relations = tmp_path / 'naics_relations.parquet'
-    pl.DataFrame(
-        {
-            'code_i': ['71', '711', '711'],
-            'code_j': ['711', '7111', '7113'],
-            'relation_id': [1, 1, 0],  # legacy 'excluded' label in place of 'child'
-        }
-    ).write_parquet(relations)
-
-    model = NAICSContrastiveModel(
-        **model_config,
-        supervision_mode='legacy_containment',
-        relations_parquet_path=str(relations),
-    )
-
-    assert model.naics_hierarchy is None
-
-def test_legacy_containment_disables_contaminated_and_reordering_paths(
-    legacy_model, legacy_batch, monkeypatch
-):
-    monkeypatch.setattr(legacy_model, 'log', Mock())
-    forbidden = [
-        ('hard_negative_miner', 'propose'),
-        ('router_guided_miner', 'propose'),
-        ('structural_preference_loss_fn', 'forward'),
-        ('hierarchy_loss_fn', 'forward'),
-    ]
-    for name, method in forbidden:
-        value = getattr(legacy_model, name, None)
-        if value is not None:
-            monkeypatch.setattr(value, method, Mock(side_effect=AssertionError(name)))
-
-    monkeypatch.setattr(
-        legacy_model,
-        '_build_selected_pseudo_related_mask',
-        Mock(side_effect=AssertionError('pseudo-related handling')),
-    )
-
-    loss = legacy_model.training_step(legacy_batch, 0)
-
-    assert torch.isfinite(loss)
-    assert legacy_model.checkpoint_contract.supervision_mode == 'legacy_containment'
-
-def test_containment_checkpoint_cannot_resume_repaired(runtime_contract):
-    containment = runtime_contract.model_copy(
-        update={
-            'supervision_mode': 'legacy_containment',
-            'bundle_id': 'legacy-containment',
-            'codebook_fingerprint': 'unversioned',
-        }
-    )
-
-    assert containment != runtime_contract
-
-def test_legacy_containment_disables_structural_losses_even_with_old_weights(model_config):
-    model_config['hierarchy_weight'] = 0.45
-    model = NAICSContrastiveModel(**model_config, supervision_mode='legacy_containment')
-
-    assert model.hierarchy_loss_fn is None
-    assert model.structural_preference_loss_fn is None
-    assert model.checkpoint_contract.bundle_id == 'legacy-containment'
-    assert model.checkpoint_contract.codebook_fingerprint == 'unversioned'
-
-def test_legacy_containment_logs_integrity_tag(legacy_model, legacy_batch, monkeypatch):
-    log = Mock()
-    monkeypatch.setattr(legacy_model, 'log', log)
-
-    legacy_model.training_step(legacy_batch, 0)
-
-    tags = [
-        call for call in log.call_args_list if call.args[0] == 'train/integrity/legacy_containment'
-    ]
-    assert tags and tags[0].args[1] == 1.0
-
-def test_legacy_containment_validation_uses_local_negatives(legacy_model, legacy_batch):
-    legacy_model.eval()
-    with torch.no_grad():
-        loss = legacy_model.validation_step(legacy_batch, batch_idx=0)
-
-    assert torch.isfinite(loss)
-
-def test_containment_checkpoint_never_restores_into_repaired_model(naics_model, legacy_model):
-    checkpoint = {}
-    legacy_model.on_save_checkpoint(checkpoint)
+    containment = {
+        **naics_model.checkpoint_contract.model_dump(),
+        'supervision_mode': 'legacy_containment',
+        'bundle_id': 'legacy-containment',
+        'codebook_fingerprint': 'unversioned',
+    }
 
     with pytest.raises(ValueError, match='exact resume'):
-        naics_model.on_load_checkpoint(checkpoint)
-    legacy_model.on_load_checkpoint(checkpoint)
+        naics_model.on_load_checkpoint({'stage3_supervision': containment})
 
 # -------------------------------------------------------------------------------------------------
 # Test: Numerical Stability
@@ -1242,10 +1132,7 @@ class TestEdgeCases:
     def test_batch_size_one(self, naics_model):
         '''Test model handles batch size of 1.'''
 
-        batch = collate_fn(
-            [_repaired_item(0, 1, 0.5, 1, [2, 3, 4])],
-            supervision_mode='repaired',
-        )
+        batch = collate_fn([_repaired_item(0, 1, 0.5, 1, [2, 3, 4])])
 
         naics_model.train()
         loss = naics_model.training_step(batch, batch_idx=0)
@@ -1256,10 +1143,7 @@ class TestEdgeCases:
     def test_selection_capacity_failure_is_fatal(self, naics_model):
         '''An anchor without K selectable codes aborts the step; its exclusion adds no capacity.'''
 
-        batch = collate_fn(
-            [_repaired_item(0, 1, 0.5, 1, [2, 3, 4], selection_k=3)],
-            supervision_mode='repaired',
-        )
+        batch = collate_fn([_repaired_item(0, 1, 0.5, 1, [2, 3, 4], selection_k=3)])
 
         naics_model.train()
         with pytest.raises(ValueError, match='anchor code ID 0'):

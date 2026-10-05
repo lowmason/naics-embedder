@@ -10,7 +10,7 @@ begins. Early validation prevents runtime surprises from missing files or
 incompatible data.
 
 Functions:
-    require_valid_supervision_bundle: Mandatory repaired-mode gate before model/checkpoint work.
+    require_valid_supervision_bundle: Mandatory supervision gate before model/checkpoint work.
     validate_data_paths: Verify required data files exist and are accessible.
     validate_parquet_schema: Check parquet file has expected columns.
     validate_tokenization_cache: Verify tokenization cache compatibility.
@@ -120,21 +120,12 @@ class ValidationResult:
 
 DESCRIPTIONS_HINT = '  Run: uv run naics-embedder data all'
 
-# No command writes a legacy long-form file any more: each is a compatibility member of the
-# supervision bundle, under the same file name as its legacy default.
-LEGACY_ARTIFACT_HINT = (
-    '  No command writes this path. Point it at the same-named member of a supervision bundle,\n'
-    '  which `uv run naics-embedder data supervision` builds'
-)
-
 def validate_data_paths(cfg: Config) -> ValidationResult:
     '''
     Verify that required data files exist and are accessible.
 
-    Checks for the existence of description, distance, relation, and triplet
-    parquet files required for training. In repaired mode only the descriptions input is checked
-    here: structural facts and training pairs come from the supervision bundle, which
-    :func:`require_valid_supervision_bundle` validates.
+    Only the descriptions input is checked here: structural facts and training pairs come from
+    the supervision bundle, which :func:`require_valid_supervision_bundle` validates.
 
     Args:
         cfg: Configuration containing data paths.
@@ -150,41 +141,9 @@ def validate_data_paths(cfg: Config) -> ValidationResult:
     '''
     result = ValidationResult.success()
 
-    required_files = {'descriptions': cfg.data_loader.streaming.descriptions_parquet}
-    if cfg.supervision.mode == 'repaired':
-        path = Path(required_files['descriptions'])
-        if not path.exists():
-            result.add_error(f'Descriptions file not found: {path}\n{DESCRIPTIONS_HINT}')
-        return result
-
-    required_files.update(
-        {
-            'distances': cfg.data_loader.streaming.distances_parquet,
-            'distance_matrix': cfg.data_loader.streaming.distance_matrix_parquet,
-            'relations': cfg.data_loader.streaming.relations_parquet,
-        }
-    )
-
-    for name, path_str in required_files.items():
-        path = Path(path_str)
-        if not path.exists():
-            hint = DESCRIPTIONS_HINT if name == 'descriptions' else LEGACY_ARTIFACT_HINT
-            result.add_error(f'{name.capitalize()} file not found: {path_str}\n{hint}')
-
-    # Check triplets directory
-    triplets_path = Path(cfg.data_loader.streaming.triplets_parquet)
-    if triplets_path.is_dir():
-        # Triplet generation organizes files under anchor= directories, so we glob
-        # recursively to detect nested parquet data shards instead of only checking
-        # the top-level directory.
-        parquet_files = list(triplets_path.glob('**/*.parquet'))
-        if not parquet_files:
-            result.add_error(
-                f'Triplets directory is empty: {triplets_path}\n{LEGACY_ARTIFACT_HINT}'
-            )
-    elif not triplets_path.exists():
-        result.add_error(f'Triplets path not found: {triplets_path}\n{LEGACY_ARTIFACT_HINT}')
-
+    path = Path(cfg.data_loader.streaming.descriptions_parquet)
+    if not path.exists():
+        result.add_error(f'Descriptions file not found: {path}\n{DESCRIPTIONS_HINT}')
     return result
 
 # -------------------------------------------------------------------------------------------------
@@ -387,10 +346,6 @@ def validate_training_config(cfg: Config) -> ValidationResult:
     if desc_path.exists():
         result.merge(validate_descriptions_schema(cfg))
 
-    dist_path = Path(cfg.data_loader.streaming.distances_parquet)
-    if cfg.supervision.mode == 'legacy_containment' and dist_path.exists():
-        result.merge(validate_distances_schema(cfg))
-
     # Validate tokenization cache
     result.merge(validate_tokenization_cache(cfg))
 
@@ -441,19 +396,20 @@ def require_valid_config(cfg: Config) -> None:
 # Stage-3 Supervision Gate
 # -------------------------------------------------------------------------------------------------
 
-def require_valid_supervision_bundle(cfg: Config) -> Optional[ValidatedSupervisionBundle]:
+def require_valid_supervision_bundle(cfg: Config) -> ValidatedSupervisionBundle:
     '''
-    Mandatory repaired-mode gate, run before any DataModule, checkpoint, or model work.
+    Mandatory supervision gate, run before any DataModule, checkpoint, or model work.
 
-    Unlike the advisory checks above, this gate cannot be skipped: repaired training fails
-    closed unless ``supervision.manifest_path`` names a bundle that passes every contract,
-    integrity, and relational check and was generated from the configured descriptions.
+    Unlike the advisory checks above, this gate cannot be skipped: training, export and reads
+    fail closed unless ``supervision.manifest_path`` names a bundle that passes every contract,
+    integrity, and relational check and was generated from the configured descriptions. There
+    is no mode without a bundle (roadmap D2).
 
     Args:
         cfg: Training configuration.
 
     Returns:
-        The validated bundle, or None in explicit legacy containment mode.
+        The validated bundle.
 
     Raises:
         ValidationError: If the manifest path is unset or the descriptions input differs from the
@@ -461,8 +417,6 @@ def require_valid_supervision_bundle(cfg: Config) -> Optional[ValidatedSupervisi
         FileNotFoundError: If the manifest does not exist.
         ValueError: If the bundle violates its contract.
     '''
-    if cfg.supervision.mode == 'legacy_containment':
-        return None
     if not cfg.supervision.manifest_path:
         raise ValidationError(
             'Repaired Stage-3 training requires supervision.manifest_path',

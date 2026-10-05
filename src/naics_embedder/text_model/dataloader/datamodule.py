@@ -4,23 +4,18 @@
 
 import logging
 import os
-import pickle
-from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
-import polars as pl
 import pytorch_lightning as pyl
 import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
 from naics_embedder.data.positive_sampling import create_positive_sampler
-from naics_embedder.data.supervision_bundle import build_codebook
 from naics_embedder.supervision.artifacts import (
     ValidatedSupervisionBundle,
-    codebook_fingerprint,
     load_validated_bundle,
     sha256_file,
 )
@@ -32,13 +27,11 @@ from naics_embedder.text_model.dataloader.difficulty_sampler import (
 )
 from naics_embedder.text_model.dataloader.streaming_dataset import (
     IndexDistanceLookup,
-    _get_multi_epoch_cache_path,
     _load_distance_matrix,
     _load_excluded_codes,
     _load_negative_candidates,
     _sample_negatives_phase1,
     build_candidate_pool,
-    build_multi_epoch_triplets,
     build_repaired_multi_epoch_rows,
     load_bundle_candidates,
     repaired_positive_sampler,
@@ -50,8 +43,6 @@ from naics_embedder.utils.config import SamplingConfig, StreamingConfig, Tokeniz
 from naics_embedder.utils.utilities import get_indices_codes
 
 logger = logging.getLogger(__name__)
-
-SUPERVISION_MODES = ('repaired', 'legacy_containment')
 
 # -------------------------------------------------------------------------------------------------
 # Collate function for DataLoader
@@ -129,47 +120,6 @@ def _accumulate_sampling_metadata(batch: List[Dict[str, Any]]) -> Optional[Dict[
     accumulator['avg_effective_far_weight'] = accumulator.pop('effective_far_weight_sum') / records
     return accumulator
 
-def _collate_legacy(batch: List[Dict]) -> Dict:
-    '''Legacy-containment collation: local negatives, repeat-last padding, inputs never mutated.'''
-
-    max_negatives = max(len(item['negatives']) for item in batch) if batch else 0
-    if max_negatives == 0:
-        raise ValueError('Batch contains items with no negatives - cannot create training batch')
-
-    padded_negatives: List[List[Dict[str, Any]]] = []
-    for item in batch:
-        negatives = list(item['negatives'])
-        if not negatives:
-            anchor_code = item.get('anchor_code', 'unknown')
-            raise ValueError(f'Item has no negatives to pad from: {anchor_code}')
-        negatives.extend([negatives[-1]] * (max_negatives - len(negatives)))
-        padded_negatives.append(negatives)
-
-    result = {
-        'anchor': stack_text_inputs([item['anchor_embedding'] for item in batch]),
-        'positive': stack_text_inputs([item['positive_embedding'] for item in batch]),
-        'negatives': stack_text_inputs(
-            [
-                negative['negative_embedding'] for negatives in padded_negatives
-                for negative in negatives
-            ]
-        ),
-        'batch_size': len(batch),
-        'k_negatives': max_negatives,
-        'anchor_code': [item['anchor_code'] for item in batch],
-        'positive_code': [item['positive_code'] for item in batch],
-        'negative_codes': [
-            [negative['negative_code'] for negative in negatives] for negatives in padded_negatives
-        ],
-        'positive_levels': [
-            item.get('positive_level', len(item['positive_code'])) for item in batch
-        ],
-    }
-    sampling_metadata = _accumulate_sampling_metadata(batch)
-    if sampling_metadata:
-        result['sampling_metadata'] = sampling_metadata
-    return result
-
 def _collate_repaired(batch: List[Dict]) -> Dict:
     '''
     Repaired collation: one candidate pool per item, flattened row-major, with explicit invalid
@@ -182,8 +132,8 @@ def _collate_repaired(batch: List[Dict]) -> Dict:
     for item in batch:
         if 'candidate_pool' not in item:
             raise ValueError(
-                'repaired collation requires candidate_pool items; legacy negatives require '
-                "supervision_mode='legacy_containment'"
+                'repaired collation requires candidate_pool items; there are no legacy negatives '
+                '(roadmap D2)'
             )
     max_candidates = max(len(item['candidate_pool']) for item in batch)
     if max_candidates == 0:
@@ -271,21 +221,15 @@ def _collate_repaired(batch: List[Dict]) -> Dict:
         result['sampling_metadata'] = sampling_metadata
     return result
 
-def collate_fn(batch: List[Dict], supervision_mode: str = 'repaired') -> Dict:
+def collate_fn(batch: List[Dict]) -> Dict:
     '''
-    Collate batch items; each item represents a single (anchor, positive).
+    Collate batch items; each item represents a single (anchor, positive) and its candidate pool.
 
     Args:
         batch: Dataset items.
-        supervision_mode: ``'repaired'`` (one candidate pool per item) or the explicit
-            ``'legacy_containment'`` mode (local legacy negatives).
     '''
 
-    if supervision_mode == 'repaired':
-        return _collate_repaired(batch)
-    if supervision_mode == 'legacy_containment':
-        return _collate_legacy(batch)
-    raise ValueError(f'unknown supervision mode {supervision_mode!r}; expected {SUPERVISION_MODES}')
+    return _collate_repaired(batch)
 
 # -------------------------------------------------------------------------------------------------
 # Map-style Dataset for pre-sampled triplets
@@ -792,30 +736,12 @@ class RepairedPhase1Dataset(Dataset):
 # Collate function wrapper to filter None items
 # -------------------------------------------------------------------------------------------------
 
-def _filter_none_collate_fn(
-    batch: List[Optional[Dict]],
-    supervision_mode: str = 'repaired',
-) -> Dict:
+def _filter_none_collate_fn(batch: List[Optional[Dict]]) -> Dict:
     '''Filter out None items before calling the main collate function.'''
     filtered = [item for item in batch if item is not None]
     if not filtered:
         raise ValueError('All items in batch were None - no valid triplets')
-    return collate_fn(filtered, supervision_mode=supervision_mode)
-
-def legacy_token_fingerprints(descriptions_parquet: str) -> Dict[str, str]:
-    '''
-    Tokenization-cache fingerprints computed directly from a descriptions file.
-
-    Used only by legacy containment, which has no supervision bundle manifest to read them from.
-    '''
-
-    descriptions_path = Path(descriptions_parquet)
-    return {
-        'description_fingerprint': sha256_file(descriptions_path),
-        'codebook_fingerprint': codebook_fingerprint(
-            build_codebook(pl.read_parquet(descriptions_path))
-        ),
-    }
+    return collate_fn(filtered)
 
 # -------------------------------------------------------------------------------------------------
 # Epoch propagation to DataLoader worker processes
@@ -866,7 +792,6 @@ class NAICSDataModule(LightningDataModule):
         n_epochs: int = 100,
         max_epochs: int = 30,
         phase1_end: float = 0.3,
-        supervision_mode: str = 'repaired',
         supervision_manifest_path: Optional[str] = None,
         supervision_contract_version: str = CONTRACT_VERSION,
         supervision_bundle: Optional[ValidatedSupervisionBundle] = None,
@@ -874,13 +799,8 @@ class NAICSDataModule(LightningDataModule):
     ):
         super().__init__()
 
-        if supervision_mode not in SUPERVISION_MODES:
-            raise ValueError(
-                f'unknown supervision mode {supervision_mode!r}; expected {SUPERVISION_MODES}'
-            )
-        # Repaired mode requires a validated bundle; it is loaded (and fails closed) in
+        # Training requires a validated bundle; it is loaded (and fails closed) in
         # prepare_data()/setup(), so construction stays side-effect free.
-        self.supervision_mode = supervision_mode
         self.supervision_manifest_path = supervision_manifest_path
         self.supervision_contract_version = supervision_contract_version
         self._bundle: Optional[ValidatedSupervisionBundle] = supervision_bundle
@@ -922,8 +842,8 @@ class NAICSDataModule(LightningDataModule):
         self.train_streaming_cfg = curriculum
         self.val_streaming_cfg = val_curriculum
 
-        # Datasets will be created in setup() after prepare_data() builds caches
-        # Can be NAICSMapDataset (pre-computed) or Phase1MapDataset (on-the-fly)
+        # Datasets will be created in setup() after prepare_data() builds caches: a
+        # RepairedMapDataset (pre-computed) or a RepairedPhase1Dataset (on-the-fly)
         self.train_dataset: Optional[Dataset] = None
         self.val_dataset: Optional[Dataset] = None
         self._token_cache: Optional[Dict[int, Dict[str, Any]]] = None
@@ -936,7 +856,7 @@ class NAICSDataModule(LightningDataModule):
     # ---------------------------------------------------------------------------------------------
 
     def _supervision(self) -> Tuple[ValidatedSupervisionBundle, SupervisionIndex]:
-        '''The validated bundle and its index (repaired mode only; fails closed).'''
+        '''The validated bundle and its index (fails closed).'''
 
         if self._bundle is None:
             if not self.supervision_manifest_path:
@@ -962,16 +882,14 @@ class NAICSDataModule(LightningDataModule):
     def _token_fingerprints(self) -> Dict[str, str]:
         '''Fingerprints the tokenization cache must record to be reused.'''
 
-        if self.supervision_mode == 'repaired':
-            manifest = self._supervision()[0].manifest
-            return {
-                'description_fingerprint': manifest.description_fingerprint,
-                'codebook_fingerprint': manifest.codebook_fingerprint,
-            }
-        return legacy_token_fingerprints(self.tokenization_cfg.descriptions_parquet)
+        manifest = self._supervision()[0].manifest
+        return {
+            'description_fingerprint': manifest.description_fingerprint,
+            'codebook_fingerprint': manifest.codebook_fingerprint,
+        }
 
     def _collate(self):
-        return partial(_filter_none_collate_fn, supervision_mode=self.supervision_mode)
+        return _filter_none_collate_fn
 
     def prepare_data(self):
         '''Build all caches before worker processes are spawned.'''
@@ -983,56 +901,16 @@ class NAICSDataModule(LightningDataModule):
         logger.info('Preparing tokenization cache in main process...')
         tokenization_cache(self.tokenization_cfg, **self._token_fingerprints())
 
-        if self.supervision_mode == 'repaired':
-            if not self.train_streaming_cfg.use_on_the_fly_sampling:
-                bundle, index = self._supervision()
-                for name, cfg in (
-                    ('training', self.train_streaming_cfg),
-                    ('validation', self.val_streaming_cfg),
-                ):
-                    logger.info(f'Preparing repaired {name} rows in main process...')
-                    build_repaired_multi_epoch_rows(
-                        cfg, self.sampling_cfg, bundle, index, self.n_epochs
-                    )
-            return
-
-        # Build codes/indices cache
-        logger.info('Preparing codes/indices cache in main process...')
-        cache_dir = Path(self.tokenization_cfg.descriptions_parquet).parent / 'codes_cache'
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        codes_cache_path = cache_dir / 'codes_indices.pkl'
-
-        if not codes_cache_path.exists():
-            logger.info('Loading codes and indices for caching...')
-            codes = get_indices_codes('codes')
-            code_to_idx = get_indices_codes('code_to_idx')
-
-            with open(codes_cache_path, 'wb') as f:
-                pickle.dump({'codes': codes, 'code_to_idx': code_to_idx}, f)
-            logger.info(f'Cached codes/indices to {codes_cache_path}')
-        else:
-            logger.info('Codes/indices cache already exists')
-
-        # Build multi-epoch triplet caches (only if not using on-the-fly sampling)
         if not self.train_streaming_cfg.use_on_the_fly_sampling:
-            self._build_multi_epoch_cache(self.train_streaming_cfg, 'training')
-            self._build_multi_epoch_cache(self.val_streaming_cfg, 'validation')
-        else:
-            logger.info('On-the-fly sampling enabled, skipping multi-epoch cache build')
-
-    def _build_multi_epoch_cache(self, cfg: StreamingConfig, name: str):
-        '''Build multi-epoch triplet cache for a given config.'''
-        logger.info(f'Preparing multi-epoch triplet cache ({name}) in main process...')
-        cache_path = _get_multi_epoch_cache_path(cfg, self.n_epochs)
-
-        if cache_path.exists():
-            logger.info(f'{name.capitalize()} multi-epoch cache already exists')
-            return
-
-        logger.info(f'Building {name} multi-epoch cache for {self.n_epochs} epochs...')
-        # This will build and save the cache
-        build_multi_epoch_triplets(cfg, self.sampling_cfg, self.n_epochs)
-        logger.info(f'{name.capitalize()} multi-epoch cache built successfully')
+            bundle, index = self._supervision()
+            for name, cfg in (
+                ('training', self.train_streaming_cfg),
+                ('validation', self.val_streaming_cfg),
+            ):
+                logger.info(f'Preparing repaired {name} rows in main process...')
+                build_repaired_multi_epoch_rows(
+                    cfg, self.sampling_cfg, bundle, index, self.n_epochs
+                )
 
     def setup(self, stage: Optional[str] = None):
         '''Load caches and create datasets.'''
@@ -1049,49 +927,7 @@ class NAICSDataModule(LightningDataModule):
 
         # Calculate Phase 1 end epoch for difficulty curriculum
         phase1_end_epoch = int(self.max_epochs * self.phase1_end)
-
-        if self.supervision_mode == 'repaired':
-            self._setup_repaired(phase1_end_epoch)
-            return
-
-        # Load and create training dataset
-        if self.train_dataset is None:
-            if self.train_streaming_cfg.use_on_the_fly_sampling:
-                logger.info('Creating on-the-fly Phase1MapDataset for training...')
-                self.train_dataset = Phase1MapDataset(
-                    cfg=self.train_streaming_cfg,
-                    sampling_cfg=self.sampling_cfg,
-                    token_cache=self._token_cache,
-                    phase1_end_epoch=phase1_end_epoch,
-                )
-            else:
-                logger.info('Loading pre-computed training triplets...')
-                train_triplets = build_multi_epoch_triplets(
-                    self.train_streaming_cfg, self.sampling_cfg, self.n_epochs
-                )
-                logger.info(f'  • Creating training dataset with {len(train_triplets):,} triplets')
-                self.train_dataset = NAICSMapDataset(train_triplets, self._token_cache)
-
-        # Load and create validation dataset
-        # Note: Validation always uses pre-computed for consistency
-        if self.val_dataset is None:
-            if self.val_streaming_cfg.use_on_the_fly_sampling:
-                logger.info('Creating on-the-fly Phase1MapDataset for validation...')
-                self.val_dataset = Phase1MapDataset(
-                    cfg=self.val_streaming_cfg,
-                    sampling_cfg=self.sampling_cfg,
-                    token_cache=self._token_cache,
-                    phase1_end_epoch=phase1_end_epoch,
-                )
-            else:
-                logger.info('Loading pre-computed validation triplets...')
-                val_triplets = build_multi_epoch_triplets(
-                    self.val_streaming_cfg, self.sampling_cfg, self.n_epochs
-                )
-                logger.info(
-                    f'  • Creating validation dataset with {len(val_triplets):,} triplets\n'
-                )
-                self.val_dataset = NAICSMapDataset(val_triplets, self._token_cache)
+        self._setup_repaired(phase1_end_epoch)
 
     def _repaired_dataset(self, cfg: StreamingConfig, phase1_end_epoch: int) -> Dataset:
         bundle, index = self._supervision()

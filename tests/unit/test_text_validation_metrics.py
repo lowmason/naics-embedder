@@ -37,7 +37,8 @@ class ValidationHarness(ValidationMixin, LoggingMixin):
         for component in (self.embedding_eval, self.embedding_stats, self.hierarchy_metrics):
             component.device = 'cpu'
         self.naics_hierarchy = None
-        self.supervision_policy = SimpleNamespace(enable_pseudo_related=False)
+        # No curriculum scheduler, and epoch 0 precedes the false-negative curriculum's start
+        self.curriculum_scheduler = None
         self.ground_truth_distances = target
         self.code_to_idx = {f'n{i}': i for i in range(4)}
         self.validation_embeddings = {f'n{i}': embeddings[i] for i in range(4)}
