@@ -115,3 +115,43 @@ class RecordedTransportRunner:
 @pytest.fixture
 def recorded_transport_runner() -> RecordedTransportRunner:
     return RecordedTransportRunner()
+
+@dataclass(frozen=True)
+class RemoteResumeFixture:
+    root: Path
+    cfg: Config
+    inputs: object
+    directory: Path
+    remote_directory: str
+    transport: RecordedTransport
+
+@pytest.fixture
+def remote_resume_fixture(remote_repo, trained_seeds):
+    from naics_embedder.remote.canonical import canonical_inputs
+
+    root = remote_repo.root
+    manifest = root / 'data/bundles' / trained_seeds.bundle.root.name / 'manifest.json'
+    shutil.copytree(trained_seeds.bundle.root, manifest.parent)
+    shutil.copyfile(
+        trained_seeds.cfg.data_loader.streaming.descriptions_parquet,
+        root / 'data/naics_descriptions.parquet'
+    )
+    original = trained_seeds.directory(1)
+    directory = root / 'checkpoints/remote-fixture'
+    shutil.copytree(original, directory)
+    cfg = trained_seeds.cfg.override(
+        {
+            'seed': 1,
+            'experiment_name': 'remote-fixture',
+            'dirs.checkpoint_dir': 'checkpoints',
+            'supervision.manifest_path': str(manifest.relative_to(root)),
+            'data_loader.streaming.descriptions_parquet': 'data/naics_descriptions.parquet',
+            'training.trainer.accelerator': 'cpu',
+            'training.trainer.precision': '32',
+        }
+    )
+    # The original real callback directory is the simulated instance identity. Never rewrite it.
+    return RemoteResumeFixture(
+        root, cfg, canonical_inputs(root, cfg), directory, str(original.resolve()),
+        RecordedTransport()
+    )
