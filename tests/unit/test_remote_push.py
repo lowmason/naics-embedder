@@ -219,3 +219,15 @@ def test_upload_inputs_uses_transport_interface_without_repo_attribute(remote_wo
     env = remote_workflow_fixture
     upload_inputs(canonical_inputs(env.root, env.repo.config), env.transport)
     assert (env.instance / env.repo.manifest.relative_to(env.root)).exists()
+
+def test_removing_pending_link_propagates_exact_deletion_without_force(remote_workflow_fixture):
+    env = remote_workflow_fixture
+    env.transport.fail_after = 'AGENTS.md'
+    env.transport.push_error = True
+    with pytest.raises(RuntimeError):
+        up(env)
+    (env.root / 'AGENTS.md').unlink()
+    (env.root / 'CLAUDE.md').unlink()
+    env.transport.push_error = False
+    assert up(env).status == 'ready'
+    assert not (env.instance / 'AGENTS.md').is_symlink()

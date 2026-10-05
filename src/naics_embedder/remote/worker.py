@@ -102,6 +102,9 @@ def _generated_name(name: str, ignore: tuple[str, ...]) -> bool:
     parts = Path(name).parts
     if parts[0] in {'.git', '.venv', 'data', 'checkpoints', 'logs', 'outputs', '.remote'}:
         return True
+    # The locked editable build emits this project-specific directory (already Git-ignored).
+    if parts[:2] == ('src', 'naics_embedder.egg-info'):
+        return True
     if _credential_name(name):
         return True
     for pattern in ignore:
@@ -266,6 +269,7 @@ def _owned_remove(root: Path, payload: dict[str, object]) -> dict[str, object]:
     records = {item['path']: item for item in authorized}
     if len(records) != len(authorized) or set(names) != set(records):
         raise ValueError('deletion names must exactly match authorized manifest')
+    previous_records = {}
     if classification == 'previous':
         previous = payload.get('previous')
         current = payload.get('current_paths')
@@ -277,6 +281,7 @@ def _owned_remove(root: Path, payload: dict[str, object]) -> dict[str, object]:
                 raise ValueError('invalid previous manifest')
             _code_name(item['path'])
             previous_names.add(item['path'])
+            previous_records[item['path']] = item
         for name in current:
             _code_name(name)
         if not set(names).issubset(previous_names - set(current)):
@@ -290,6 +295,8 @@ def _owned_remove(root: Path, payload: dict[str, object]) -> dict[str, object]:
             raise ValueError(f'protected code deletion: {name}')
         actual = _code_item(root, name)
         if actual is not None:
+            if actual['kind'] == 'unsafe_symlink' and _pending_link(actual, previous_records):
+                actual['kind'] = 'symlink'
             if actual['kind'] not in ('file', 'symlink') or actual != records[name]:
                 raise ValueError(f'deletion type or bytes changed: {name}')
     for name in names:

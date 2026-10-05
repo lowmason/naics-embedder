@@ -1,5 +1,6 @@
 '''Transport argv and fixed operation boundary tests; no network.'''
 
+import ast
 import json
 import shlex
 import subprocess
@@ -112,7 +113,14 @@ def test_prerequisite_is_system_python_before_upload(recorded_transport_runner):
     transport = SshTransport('u@host', '/not-uploaded', 'rsync', runner)
     transport.probe('transport_prerequisites', {})
     argv = shlex.split(runner.calls[-1].args[-1])
-    assert argv[:2] == ['python3', '-c'] and 'naics_embedder' not in argv[2]
+    assert argv[:2] == ['python3', '-c']
+    imports = []
+    for node in ast.walk(ast.parse(argv[2])):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.append(node.module or '')
+    assert not any(name.startswith('naics_embedder') for name in imports)
     assert runner.calls[-1].kwargs['timeout'] == 700
 
 @pytest.mark.parametrize(
@@ -209,7 +217,14 @@ def test_initial_gates_do_not_require_uploaded_package(recorded_transport_runner
     transport = SshTransport('u@host', '/repo', 'rsync', runner)
     transport.probe(operation, {'path': '.', 'segment_id': 'fixture'})
     argv = shlex.split(runner.calls[-1].args[-1])
-    assert argv[:2] == ['python3', '-c'] and 'naics_embedder' not in argv[2]
+    assert argv[:2] == ['python3', '-c']
+    imports = []
+    for node in ast.walk(ast.parse(argv[2])):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.append(node.module or '')
+    assert not any(name.startswith('naics_embedder') for name in imports)
 
 @pytest.mark.parametrize('path', ['.', './', '', 'data'])
 def test_deletion_root_and_protected_paths_refused(tmp_path, path):
@@ -221,7 +236,14 @@ def test_initial_deletions_use_shared_system_probe(recorded_transport_runner):
     transport = SshTransport('u@host', '/repo', 'rsync', runner)
     transport.remove_code(('src/old.py', ))
     argv = shlex.split(runner.calls[-1].args[-1])
-    assert argv[:2] == ['python3', '-c'] and 'naics_embedder' not in argv[2]
+    assert argv[:2] == ['python3', '-c']
+    imports = []
+    for node in ast.walk(ast.parse(argv[2])):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.append(node.module or '')
+    assert not any(name.startswith('naics_embedder') for name in imports)
 
 def test_uninspectable_tmux_status_refuses(monkeypatch, tmp_path):
     monkeypatch.setattr(
@@ -637,3 +659,45 @@ def test_generic_code_delete_refuses_credential_filenames(name):
     from naics_embedder.remote.transport import safe_files
     with pytest.raises(ValueError, match='credential'):
         safe_files((name, ), code=True)
+
+@pytest.mark.parametrize('rendered', [False, True])
+def test_editable_metadata_pruned_except_previously_pushed_path(tmp_path, rendered):
+    import json
+    import subprocess
+
+    from naics_embedder.remote.transport import _system_probe_code
+    from naics_embedder.remote.worker import run_probe
+    directory = tmp_path / 'src/naics_embedder.egg-info'
+    directory.mkdir(parents=True)
+    (directory / 'PKG-INFO').write_text('previous code')
+    (directory / 'SOURCES.txt').write_text('new metadata')
+    other = tmp_path / 'src/other.egg-info'
+    other.mkdir()
+    (other / 'code.py').write_text('qualified unknown code')
+    payload = dict(
+        repo=str(tmp_path),
+        controlled=True,
+        expected=['src/naics_embedder.egg-info/PKG-INFO'],
+        ignore=[]
+    )
+    if rendered:
+        result = subprocess.run(
+            ['python3', '-c', _system_probe_code('edits')],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10
+        )
+        response = json.loads(result.stdout)
+    else:
+        response = run_probe('edits', payload, tmp_path)
+    assert {item['path']
+            for item in response['files']} == {
+                'src/naics_embedder.egg-info/PKG-INFO', 'src/other.egg-info/code.py'
+            }
+
+def test_generic_deletion_of_editable_metadata_is_protected():
+    from naics_embedder.remote.transport import safe_files
+    with pytest.raises(ValueError, match='protected'):
+        safe_files(('src/naics_embedder.egg-info/PKG-INFO', ), code=True)

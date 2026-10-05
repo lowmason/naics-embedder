@@ -234,3 +234,57 @@ def test_bootstrap_gpu_evidence_rehydrates_tuple_contract(remote_workflow_fixtur
     env.transport.probe = probe
     state = up(env)
     assert state.remote_info.gpu_evidence.compute_capability == (8, 0)
+
+@pytest.mark.parametrize('phase', ['bootstrap', 'inputs'])
+def test_code_changed_after_push_never_becomes_ready(remote_workflow_fixture, phase):
+    env = remote_workflow_fixture
+    original_probe = env.transport.probe
+    original_push = env.transport.push
+
+    def probe(operation, payload):
+        result = original_probe(operation, payload)
+        if phase == 'bootstrap' and operation == 'bootstrap':
+            (env.instance / 'src/tiny.py').write_text('changed after push')
+        return result
+
+    def push(source, destination, files):
+        original_push(source, destination, files)
+        if phase == 'inputs' and any(name.startswith('data/') for name in files):
+            (env.instance / 'src/tiny.py').write_text('changed after push')
+
+    env.transport.probe = probe
+    env.transport.push = push
+    with pytest.raises(ValueError, match='src/tiny.py'):
+        up(env)
+    assert read_state(env.root).status == 'preparing'
+    assert not (env.instance / '.remote/pushes/session.json').exists()
+
+def test_editable_bootstrap_metadata_is_pruned_before_read(remote_workflow_fixture, monkeypatch):
+    from pathlib import Path
+    env = remote_workflow_fixture
+    original_probe = env.transport.probe
+    original_open = Path.open
+
+    def probe(operation, payload):
+        result = original_probe(operation, payload)
+        if operation == 'bootstrap':
+            directory = env.instance / 'src/naics_embedder.egg-info'
+            directory.mkdir()
+            for name in (
+                'PKG-INFO', 'SOURCES.txt', 'dependency_links.txt', 'entry_points.txt',
+                'requires.txt', 'top_level.txt'
+            ):
+                (directory / name).write_text('generated editable metadata')
+        return result
+
+    def guard(path, *args, **kwargs):
+        if 'naics_embedder.egg-info' in path.parts and args and args[0] == 'rb':
+            raise AssertionError('opened newly generated editable metadata')
+        return original_open(path, *args, **kwargs)
+
+    env.transport.probe = probe
+    monkeypatch.setattr(Path, 'open', guard)
+    assert up(env).status == 'ready'
+    assert env.workflow.remote_cfg.instance_scan_ignore == [
+        '__pycache__/', '*.pyc', '.pytest_cache/', '.ipynb_checkpoints/'
+    ]

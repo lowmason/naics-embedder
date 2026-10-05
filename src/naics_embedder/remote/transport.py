@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from naics_embedder.remote.session import GpuEvidence, PullMapping
-from naics_embedder.remote.worker import _credential_name
+from naics_embedder.remote.worker import _credential_name, _generated_name
 
 # -------------------------------------------------------------------------------------------------
 # Tool and path boundaries
@@ -72,7 +72,7 @@ def safe_files(files: tuple[str, ...], code: bool = False) -> bytes:
             raise ValueError(f'credential or git path refused: {name}')
         if code and _credential_name(name):
             raise ValueError(f'credential code deletion refused: {name}')
-        if code and path.parts[0] in {'data', 'checkpoints', 'logs', 'outputs', '.remote', '.venv'}:
+        if code and _generated_name(name, ()):
             raise ValueError(f'protected code deletion: {name}')
     return b''.join(name.encode() + b'\0' for name in files)
 

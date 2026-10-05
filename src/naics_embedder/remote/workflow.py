@@ -9,7 +9,7 @@ from typing import Callable
 from naics_embedder.remote.canonical import canonical_inputs
 from naics_embedder.remote.code_manifest import is_credential_path
 from naics_embedder.remote.config import effective_config
-from naics_embedder.remote.push import push_code, upload_inputs
+from naics_embedder.remote.push import push_code, scan_code, upload_inputs
 from naics_embedder.remote.session import (
     GpuEvidence,
     RemoteInfo,
@@ -157,7 +157,7 @@ class RemoteWorkflow:
             )
             if loss is not None:
                 _atomic_record(self.root / '.remote' / ('loss-' + state.session_id + '.json'), loss)
-            push_code(self.root, state, transport, self.remote_cfg, force)
+            record = push_code(self.root, state, transport, self.remote_cfg, force)
             bootstrap = transport.probe('bootstrap', {})
             if bootstrap.get('gpu_evidence') is not None:
                 evidence = dict(bootstrap['gpu_evidence'])
@@ -179,6 +179,14 @@ class RemoteWorkflow:
             # Revalidate after transfer so a concurrent Mac input edit cannot become ready.
             if canonical_inputs(self.root, cfg).hashes != inputs.hashes:
                 raise ValueError('local canonical inputs changed during transfer')
+            actual = scan_code(transport, record.entries, self.remote_cfg)
+            expected = {item.path: item for item in record.entries}
+            changed = sorted(
+                name for name in actual.keys() | expected.keys()
+                if actual.get(name) != expected.get(name)
+            )
+            if changed:
+                raise ValueError('remote code changed before ready: ' + ', '.join(changed))
             transport.probe(
                 'write_record', {
                     'path': '.remote/pushes/session.json',
