@@ -162,3 +162,35 @@ def test_bootstrap_late_refusals(fake_bootstrap, failure):
         checksum.write_text('#!/bin/bash\n/usr/bin/shasum -a 256 "$1"\n')
     result = subprocess.run(['bash', str(BOOTSTRAP), str(repo)], env=env, capture_output=True)
     assert result.returncode != 0 and result.stderr
+
+class TwoDeviceCuda(FakeCuda):
+
+    def __init__(self, native_by_device):
+        super().__init__()
+        self.native_by_device = native_by_device
+        self.current = None
+
+    @contextmanager
+    def device(self, index):
+        self.selected.append(index)
+        self.current = index
+        try:
+            yield
+        finally:
+            self.current = None
+
+    def is_bf16_supported(self, **kwargs):
+        self.calls.append((self.current, kwargs))
+        return self.native_by_device[self.current]
+
+@pytest.mark.parametrize('native_by_device,passes', [((False, True), False), ((True, False), True)])
+def test_two_device_capability_always_qualifies_logical_zero(native_by_device, passes):
+    cuda = TwoDeviceCuda(native_by_device)
+    if passes:
+        evidence = gpu_evidence(SimpleNamespace(cuda=cuda))
+        assert evidence.logical_index == 0 and evidence.native_bf16
+    else:
+        with pytest.raises(RuntimeError, match='native BF16'):
+            gpu_evidence(SimpleNamespace(cuda=cuda))
+    assert cuda.selected == [0]
+    assert cuda.calls == [(0, {'including_emulation': False})]

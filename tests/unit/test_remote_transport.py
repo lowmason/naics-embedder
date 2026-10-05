@@ -305,3 +305,111 @@ def test_launch_gpu_failure_prevents_tmux(tmp_path, monkeypatch):
                 'script': str(script)
             }, tmp_path
         )
+
+@pytest.mark.parametrize('rendered', [False, True])
+@pytest.mark.parametrize(
+    'diagnostic,stopped', [
+        ('error connecting to /tmp/tmux-1000/default (No such file or directory)', True),
+        ('error connecting to /tmp/tmux-1000/default (Permission denied)', False),
+        ('error connecting to /tmp/tmux-1000/default (Connection refused)', False),
+        ('No such file or directory: unrelated configuration file', False),
+    ]
+)
+def test_missing_server_socket_and_real_inspection_failure(
+    tmp_path, monkeypatch, rendered, diagnostic, stopped
+):
+    import os
+    import sys
+
+    from naics_embedder.remote.transport import _system_probe_code
+    if rendered:
+        bin_dir = tmp_path / 'bin'
+        bin_dir.mkdir()
+        executable = bin_dir / 'tmux'
+        executable.write_text(
+            '#!/bin/sh\nprintf "%s\\n" ' + shlex.quote(diagnostic) + ' >&2\nexit 1\n'
+        )
+        executable.chmod(0o755)
+        result = subprocess.run(
+            [sys.executable, '-I', '-c', _system_probe_code('training')],
+            input=b'{}',
+            env=dict(os.environ, PATH=str(bin_dir)),
+            capture_output=True
+        )
+        if stopped:
+            assert result.returncode == 0, result.stderr.decode()
+            assert json.loads(result.stdout) == {'running': False, 'sessions': []}
+        else:
+            assert result.returncode != 0 and b'unable to inspect' in result.stderr
+    else:
+        monkeypatch.setattr(
+            subprocess, 'run', lambda *args, **kwargs: subprocess.CompletedProcess(
+                [], 1, '', diagnostic
+            )
+        )
+        if stopped:
+            assert run_probe('training', {}, tmp_path) == {'running': False, 'sessions': []}
+        else:
+            with pytest.raises(RuntimeError, match='unable to inspect'):
+                run_probe('training', {}, tmp_path)
+
+@pytest.mark.parametrize('rendered', [False, True])
+def test_status_uses_fixed_session_even_with_segment_metadata(tmp_path, monkeypatch, rendered):
+    import os
+    import sys
+
+    from naics_embedder.remote.transport import _system_probe_code
+    output = 'naics-train\nnaics-other-segment\nunrelated\n'
+    payload = {'segment_id': 'record-20261005'}
+    if rendered:
+        bin_dir = tmp_path / 'bin'
+        bin_dir.mkdir()
+        executable = bin_dir / 'tmux'
+        executable.write_text('#!/bin/sh\nprintf "%s" ' + shlex.quote(output) + '\n')
+        executable.chmod(0o755)
+        result = subprocess.run(
+            [sys.executable, '-I', '-c', _system_probe_code('training')],
+            input=json.dumps(payload).encode(),
+            env=dict(os.environ, PATH=str(bin_dir)),
+            capture_output=True,
+            check=True
+        )
+        reply = json.loads(result.stdout)
+    else:
+        monkeypatch.setattr(
+            subprocess, 'run', lambda *args, **kwargs: subprocess.CompletedProcess(
+                [], 0, output, ''
+            )
+        )
+        reply = run_probe('training', payload, tmp_path)
+    assert reply == {'running': True, 'sessions': ['naics-train']}
+
+def test_launch_and_interrupt_use_one_exact_tmux_target(tmp_path, monkeypatch):
+    from naics_embedder.remote import worker
+    directory = tmp_path / '.remote/segments/record-one'
+    directory.mkdir(parents=True)
+    script = directory / 'launch.sh'
+    script.write_text('exit 0')
+    calls = []
+
+    def recorded(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    monkeypatch.setattr(worker, '_clock', lambda: {'ntp': True})
+    monkeypatch.setattr(worker, 'gpu_evidence', lambda: object())
+    monkeypatch.setattr(subprocess, 'run', recorded)
+    run_probe(
+        'training', {
+            'action': 'launch',
+            'segment_id': 'record-one',
+            'script': str(script)
+        }, tmp_path
+    )
+    run_probe('training', {'action': 'interrupt', 'segment_id': 'record-two'}, tmp_path)
+    assert calls[0][0][:6] == [
+        'tmux', 'new-session', '-d', '-s', 'naics-train',
+        'bash ' + shlex.quote(str(script)) + ' < /dev/null'
+    ]
+    assert calls[0][1]['stdin'] == subprocess.DEVNULL
+    assert calls[1][0] == ['tmux', 'send-keys', '-t', 'naics-train', 'C-c']

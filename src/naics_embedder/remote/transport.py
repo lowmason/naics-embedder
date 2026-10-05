@@ -76,8 +76,15 @@ def _contained_files(root: Path, files: tuple[str, ...]) -> None:
             raise ValueError(f'path escapes transfer root: {name}')
 
 def _system_probe_code(operation: str) -> str:
-    from naics_embedder.remote.worker import _inside, _inventory, _remove_code, _training_status
+    from naics_embedder.remote.worker import (
+        TMUX_SESSION,
+        _inside,
+        _inventory,
+        _remove_code,
+        _training_status,
+    )
     preamble = 'import hashlib,json,os,subprocess,sys\nfrom pathlib import Path, PurePosixPath\n'
+    preamble += f'TMUX_SESSION = {TMUX_SESSION!r}\n'
     functions = {
         'inventory': [_inside, _inventory],
         'training': [_training_status],

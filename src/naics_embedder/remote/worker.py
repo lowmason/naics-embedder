@@ -13,6 +13,8 @@ from pathlib import Path
 
 from naics_embedder.remote.session import GpuEvidence, RemoteInfo
 
+TMUX_SESSION = 'naics-train'
+
 # -------------------------------------------------------------------------------------------------
 # Capability and filesystem probes
 # -------------------------------------------------------------------------------------------------
@@ -89,14 +91,20 @@ def _training_status(payload: dict[str, object]) -> dict[str, object]:
         )
     except FileNotFoundError:
         return {'running': False, 'sessions': []}
-    if result.returncode and not any(
-        message in result.stderr for message in ('no server running', 'no sessions')
-    ):
+    diagnostic = result.stderr.strip()
+    missing_socket = (
+        diagnostic.startswith('error connecting to /') and diagnostic.endswith(
+            ' (No such file or directory)'
+        ) and '\n' not in diagnostic
+    )
+    stopped = result.returncode == 1 and (
+        missing_socket or any(
+            message in diagnostic for message in ('no server running', 'no sessions')
+        )
+    )
+    if result.returncode and not stopped:
         raise RuntimeError('unable to inspect tmux training sessions: ' + result.stderr)
-    sessions = [name for name in result.stdout.splitlines() if name.startswith('naics-')]
-    segment = payload.get('segment_id')
-    if segment:
-        sessions = [name for name in sessions if name == 'naics-' + str(segment)]
+    sessions = [name for name in result.stdout.splitlines() if name == TMUX_SESSION]
     return {'running': bool(sessions), 'sessions': sessions}
 
 def _remove_code(root: Path, names: tuple[str, ...]) -> dict[str, object]:
@@ -193,7 +201,7 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
             for char in segment
         ):
             raise ValueError('invalid segment_id')
-        session = 'naics-' + segment
+        session = TMUX_SESSION
         if action == 'launch':
             script = _inside(root, str(payload['script']))
             expected = root / '.remote/segments' / segment
