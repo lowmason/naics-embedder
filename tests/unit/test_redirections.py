@@ -4,6 +4,9 @@ The redirection table and the exclusion channel (Req 8).
 Expected values are worked out by hand from the rules in ``data/redirections.py``.
 '''
 
+import subprocess
+import sys
+
 import polars as pl
 import pytest
 
@@ -65,6 +68,30 @@ PARAGRAPH = 'Excluded from this industry group are soybean farms, classified in 
 )
 def test_activity_phrase_is_the_text_before_the_redirection(text, activity):
     assert activity_phrase(text) == activity
+
+def test_the_build_and_the_loader_share_one_phrase_rule():
+    # The loader recomputes each phrase with the rule the build applied (spec 4.3)
+    from naics_embedder.supervision.activity import activity_phrase as loader_rule
+
+    assert activity_phrase is loader_rule
+
+def test_the_phrase_rule_imports_no_data_module_and_no_torch():
+    '''The bundle loader imports the rule, so it must not pull in the build or a model.'''
+
+    imported = subprocess.run(
+        [
+            sys.executable,
+            '-c',
+            'import sys; import naics_embedder.supervision.activity; '
+            "print(sorted(name for name in sys.modules if name == 'torch' "
+            "or name.split('.')[:2] == ['naics_embedder', 'data']))",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert imported.returncode == 0, imported.stderr
+    assert imported.stdout.strip() == '[]'
 
 def test_named_codes_are_other_codebook_codes_in_order_of_first_appearance():
     text = (

@@ -10,7 +10,8 @@ standard deviation is ``SIGMA`` × √2.5 on every panel, and δ = multiple × t
 the base values exactly: only the effects and the seed draws remain.
 
 The records carry real artifact references (a store under the test's tmp path) and log records
-shaped as the panels write them.
+shaped as the panels write them. A trained arm's runs also carry monitor records shaped as the
+training monitor writes them (``monitor_records``).
 '''
 
 import json
@@ -232,6 +233,46 @@ def _read(panel: str, run_id: str, table: str, text_only: str, time: str) -> Dic
         'detail': detail,
     }
 
+def monitor_records(
+    training_run: str,
+    seed: int,
+    mrrs: Sequence[float],
+    *,
+    time: str,
+    fingerprint: str = PANEL_SET.outcome,
+) -> List[Dict]:
+    '''
+    A training run's monitor records, one per epoch from 0, as ``monitor_reads.jsonl`` holds them:
+    the epoch's MRR, and its read of the outcome panel's validation split as the selection log
+    appended it.
+
+    Each read names the training run, the seed, the epoch and that epoch's code cache, whose
+    fingerprint is never a stored table's.
+    '''
+
+    return [
+        {
+            'mrr': mrr,
+            'read': {
+                'time': time,
+                'event': 'read',
+                'panel': OUTCOME_PANEL,
+                'split': 'validation',
+                'purpose': 'synthetic training run',
+                'fingerprint': fingerprint,
+                'n_queries': 0,
+                'detail': {
+                    'encoder': 'LiveEncoder',
+                    'distance': 'lorentz',
+                    'training_run': training_run,
+                    'seed': seed,
+                    'epoch': epoch,
+                    'table': f'the code cache of {training_run} at epoch {epoch}',
+                },
+            },
+        } for epoch, mrr in enumerate(mrrs)
+    ]
+
 def synthetic_arm(
     store: ArtifactStore,
     directory: Path,
@@ -240,8 +281,15 @@ def synthetic_arm(
     *,
     offsets: Sequence[float] = SEED_OFFSETS,
     text_only_table: Optional[Path] = None,
+    monitor_mrrs: Optional[Sequence[float]] = None,
 ) -> ArmRecord:
-    '''An arm record whose seeds score ``synthetic_scores``, read now.'''
+    '''
+    An arm record whose seeds score ``synthetic_scores``, read now.
+
+    With ``monitor_mrrs``, every seed is a trained run: it names its training run and carries one
+    monitor record per epoch, read now, with those MRRs, and its checkpoint is from the earliest
+    epoch with the highest.
+    '''
 
     directory = Path(directory) / arm_spec.name
     directory.mkdir(parents=True, exist_ok=True)
@@ -254,6 +302,15 @@ def synthetic_arm(
         table = store.put_table(_table(directory, arm_spec.name, seed, arm_spec.dimension))
         scores = synthetic_scores(effects, offset * SIGMA)
         time = datetime.now(timezone.utc).isoformat()
+        trained: Dict = {}
+        if monitor_mrrs is not None:
+            training_run = f'{arm_spec.name}-training-{seed}'
+            trained = {
+                'training_run': training_run,
+                # argmax returns the first of tied maxima: the earliest best epoch
+                'checkpoint_epoch': int(np.argmax(monitor_mrrs)),
+                'monitor_records': monitor_records(training_run, seed, monitor_mrrs, time=time),
+            }
         runs.append(
             SeedRun(
                 seed=seed,
@@ -275,6 +332,7 @@ def synthetic_arm(
                         time
                     ) for panel in PANELS
                 ],
+                **trained,
             )
         )
     return ArmRecord(

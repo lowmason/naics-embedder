@@ -1,6 +1,6 @@
 '''
-A tiny backbone for the shared encoder's tests, so they download nothing (spec §6), and a
-five-code arm built on it.
+A tiny backbone for the shared encoder's tests, so they download nothing (spec §6), and two arms
+built on it.
 
 ``tiny_bert`` builds a one-layer BERT whose vocabulary is MiniLM's, so token rows from the real
 tokenizer fit it. ``tiny_backbone`` makes every ``SharedEncoder`` a test builds load it in place of
@@ -8,12 +8,18 @@ MiniLM.
 
 The arm fixtures train nothing. ``shared_model`` is a d = 16 model of the five-code supervision
 bundle (``tests/fixtures/supervision.py``) on the tiny backbone, and ``shared_checkpoint`` saves it
-as Lightning would. ``text_only_comparator_table`` is a table a read can be pointed at by mistake:
-the text-only comparator's, written by its own builder.
+as Lightning would. ``truncated_checkpoint`` and ``pre_stage7_checkpoint`` save it as checkpoints
+trained before Stage 6b and before Stage 7, which every load refuses. ``text_only_comparator_table``
+is a table a read can be pointed at by mistake: the text-only comparator's, written by its own
+builder.
+
+``reference_arm_model`` is a d = 16 model of the reference bundle, whose 17 codes span levels 2-6
+and whose 11 task queries train Req 11's three terms. ``reference_arm_steps`` holds one epoch of
+its two-stream steps, in the layout ``StepDataset`` hands the training step.
 '''
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
 import polars as pl
 import pytest
@@ -24,6 +30,9 @@ from transformers import AutoTokenizer, BertConfig, BertModel
 from naics_embedder.panels.text_only import build_text_only_table
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
+from naics_embedder.supervision.code_targets import CodeTargets
+from naics_embedder.supervision.queries import build_task_queries
+from naics_embedder.text_model.dataloader.datamodule import StepDataset, tokenize_task_queries
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.export import export_code_table
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
@@ -119,7 +128,6 @@ def shared_model(tiny_backbone, generated_bundle) -> NAICSContrastiveModel:
         lora_dropout=0.0,
         fusion='masked_mean',
         dimension=ARM_DIMENSION,
-        curvature=1.0,
         supervision_manifest_path=str(generated_bundle),
         summaries=summaries_identity(MINILM),
     )
@@ -143,6 +151,58 @@ def truncated_checkpoint(tmp_path, shared_model) -> Path:
     path = tmp_path / 'truncated.ckpt'
     torch.save(checkpoint, path)
     return path
+
+# The fields every contract saved before Stage 7 carried, at their last values, which the contract
+# no longer has (spec 4.5): legacy containment's supervision mode, and the six-term objective's
+# loss and mining versions. None of those contracts names an objective
+PRE_STAGE_7_FIELDS = {
+    'supervision_mode': 'repaired',
+    'structural_preference_loss_version': 'structural-preference-v1',
+    'mining_contract_version': 'negative-selection-v2',
+}
+# P23's refusal of a checkpoint trained before Stage 7, as every load raises it
+PRE_STAGE_7_REFUSAL = r'objective pre-req11, not req11-v1 .*nothing migrates \(D2\)'
+
+def pre_stage_7_contract(contract: Mapping[str, Any]) -> Dict[str, Any]:
+    '''
+    ``contract`` as a model saved it before Stage 7: its supervision identity, encoder record and
+    summaries, with the three fields Stage 7 dropped, and no objective.
+    '''
+
+    kept = ('contract_version', 'bundle_id', 'codebook_fingerprint', 'encoder', 'summaries')
+    return {**{name: contract[name] for name in kept}, **PRE_STAGE_7_FIELDS}
+
+@pytest.fixture
+def pre_stage7_checkpoint(tmp_path, shared_model) -> Path:
+    '''
+    ``shared_model`` saved as a checkpoint trained before Stage 7 (spec 4.5): its contract carries
+    the three fields Stage 7 dropped and names no objective.
+
+    Its hyperparameters hold the old head's curvature, which no model takes now, and no radius
+    bound, so a load that let it through would rebuild the head at the default R (spec 4.2).
+    '''
+
+    checkpoint = lightning_checkpoint(shared_model)
+    checkpoint['stage3_supervision'] = pre_stage_7_contract(checkpoint['stage3_supervision'])
+    checkpoint['hyper_parameters']['curvature'] = 1.0
+    del checkpoint['hyper_parameters']['radius_bound']
+    path = tmp_path / 'pre_stage7.ckpt'
+    torch.save(checkpoint, path)
+    return path
+
+def forbid_model_loads(monkeypatch) -> None:
+    '''
+    From here on, fail the test if a checkpoint's model loads (``load_from_checkpoint``): a refusal
+    of its contract must come first.
+
+    Call it in the test's body, after its fixtures: some of them export a table, which loads one.
+    '''
+
+    def never(*_args, **_kwargs):
+        # AssertionError, so a test's pytest.raises(ValueError) cannot swallow an unwanted load
+        raise AssertionError('the model loaded before its contract was refused')
+
+    monkeypatch.setattr(NAICSContrastiveModel, 'load_from_checkpoint', never)
 
 @pytest.fixture
 def exported_table(tmp_path, shared_checkpoint, validated_bundle, five_code_token_config) -> Path:
@@ -169,3 +229,112 @@ def text_only_comparator_table(tmp_path, five_code_descriptions_parquet) -> Path
         model=tiny_bert(),
         tokenizer=AutoTokenizer.from_pretrained(MINILM),
     )
+
+# -------------------------------------------------------------------------------------------------
+# A shared-encoder arm of the reference bundle (Stage 7)
+#
+# The reference bundle (tests/fixtures/supervision.py) has 17 codes at levels 2-6, four unary pairs
+# and 11 task queries. Its longest marked channel text has 44 tokens, so its token cache uses the
+# shipped 128-token window, which the dummy summaries pin fits. At 4 queries a step an epoch has 3
+# steps: 6, 6 and 5 of the codes as anchors, and 4, 4 and 3 queries.
+# -------------------------------------------------------------------------------------------------
+
+REFERENCE_WINDOW = 128
+REFERENCE_QUERIES_PER_STEP = 4
+
+@pytest.fixture(scope='session')
+def minilm_tokenizer():
+    '''MiniLM's tokenizer: its vocabulary is the only download.'''
+
+    return AutoTokenizer.from_pretrained(MINILM)
+
+@pytest.fixture
+def reference_arm_token_config(tmp_path, reference_bundle) -> TokenizationConfig:
+    '''The reference codes' token cache: MiniLM's tokenizer, a 128-token window, under tmp_path.'''
+
+    parameters = reference_bundle.manifest.generation_parameters
+    return TokenizationConfig(
+        descriptions_parquet=parameters['descriptions_parquet'],
+        tokenizer_name=MINILM,
+        max_length=REFERENCE_WINDOW,
+        output_path=str(tmp_path / 'reference_token_cache' / 'token_cache.pt'),
+    )
+
+def reference_token_rows(token_config: TokenizationConfig,
+                         bundle: ValidatedSupervisionBundle) -> List[Dict[str, Any]]:
+    '''Every reference code's cached token rows, in codebook order.'''
+
+    cache = tokenization_cache(
+        token_config,
+        description_fingerprint=bundle.manifest.description_fingerprint,
+        codebook_fingerprint=bundle.manifest.codebook_fingerprint,
+    )
+    return [cache[code_id] for code_id in range(len(cache))]
+
+@pytest.fixture
+def reference_arm_code_rows(reference_arm_token_config, reference_bundle) -> List[Dict[str, Any]]:
+    return reference_token_rows(reference_arm_token_config, reference_bundle)
+
+def build_reference_model(
+    manifest: Path, bundle: ValidatedSupervisionBundle, **overrides: Any
+) -> NAICSContrastiveModel:
+    '''
+    A d = 16 masked-mean model of the reference bundle, as constructed (in train mode).
+
+    Call it with the tiny backbone in place (``tiny_backbone``). ``overrides`` replace or add
+    constructor arguments.
+    '''
+
+    arguments: Dict[str, Any] = {
+        'base_model_name': MINILM,
+        'lora_r': 2,
+        'lora_alpha': 4,
+        'lora_dropout': 0.0,
+        'fusion': 'masked_mean',
+        'dimension': ARM_DIMENSION,
+        'supervision_manifest_path': str(manifest),
+        'summaries': summaries_identity(MINILM),
+        'supervision_bundle': bundle,
+    }
+    arguments.update(overrides)
+    return NAICSContrastiveModel(**arguments)
+
+@pytest.fixture
+def reference_arm_model(
+    tiny_backbone, reference_manifest, reference_bundle
+) -> NAICSContrastiveModel:
+    '''``build_reference_model`` with its defaults, on the tiny backbone.'''
+
+    return build_reference_model(reference_manifest, reference_bundle)
+
+def reference_step_dataset(
+    bundle: ValidatedSupervisionBundle,
+    code_rows: List[Dict[str, Any]],
+    tokenizer: Any,
+    *,
+    queries_per_step: int = REFERENCE_QUERIES_PER_STEP,
+    seed: int = 0,
+) -> StepDataset:
+    '''The reference bundle's two-stream steps, as training builds them: no epoch set yet.'''
+
+    targets = CodeTargets.from_bundle(bundle)
+    code_ids = {code: code_id for code_id, code in enumerate(targets.codes)}
+    queries = tokenize_task_queries(
+        build_task_queries(bundle), tokenizer, REFERENCE_WINDOW, code_ids
+    )
+    return StepDataset(
+        code_rows=code_rows,
+        code_levels=targets.levels,
+        queries=queries,
+        n_codes=len(targets.codes),
+        seed=seed,
+        queries_per_step=queries_per_step,
+    )
+
+@pytest.fixture
+def reference_arm_steps(reference_bundle, reference_arm_code_rows, minilm_tokenizer) -> StepDataset:
+    '''The reference bundle's steps at epoch 0, under seed 0.'''
+
+    dataset = reference_step_dataset(reference_bundle, reference_arm_code_rows, minilm_tokenizer)
+    dataset.set_epoch(0)
+    return dataset

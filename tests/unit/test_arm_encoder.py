@@ -3,12 +3,14 @@ The arm encoder: queries through the checkpoint's model, codes from its exported
 (spec 4.3).
 '''
 
+import inspect
 import json
 
 import polars as pl
 import pytest
 import torch
 
+import naics_embedder.text_model.arm_encoder as arm_encoder_module
 from naics_embedder.panels.decoding import lorentz_distances
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.regressor import table_fingerprint
@@ -27,8 +29,10 @@ from naics_embedder.text_model.hyperbolic import HyperbolicHead
 from tests.fixtures.shared_encoder import (
     ARM_DIMENSION,
     FIVE_CODES,
+    PRE_STAGE_7_REFUSAL,
     TOKEN_WINDOW,
     five_code_token_rows,
+    forbid_model_loads,
     lightning_checkpoint,
 )
 
@@ -61,22 +65,24 @@ def _table_tangent(table_path) -> torch.Tensor:
 # -------------------------------------------------------------------------------------------------
 
 def test_the_exp_map_lands_on_the_hyperboloid_as_the_heads_does():
-    tangent = torch.randn(6, ARM_DIMENSION) * 0.2
-    tangent[0] = 0.0
-    # Below the head's cap, so the head maps these tangents unchanged
-    assert (torch.linalg.vector_norm(tangent, dim=1) < 2.0).all()
+    # The head bounds every vector, so its bounded tangent is what the export writes and the exp
+    # map reads. Float64, so radii up to the bound compare exactly: x0 is about 1,490 at r = 8
+    directions = torch.randn(6, ARM_DIMENSION, dtype=torch.float64)
+    directions = directions / directions.norm(dim=1, keepdim=True)
+    norms = torch.tensor([0.0, 0.1, 1.0, 5.0, 20.0, 100.0], dtype=torch.float64)
+    head_points = HyperbolicHead()(norms.unsqueeze(1) * directions)
 
-    points = exp_map_origin(tangent)
+    points = exp_map_origin(head_points.tangent)
 
     assert points.dtype == torch.float64
     assert points.shape == (6, ARM_DIMENSION + 1)
     lorentz_norm = -points[:, 0]**2 + (points[:, 1:]**2).sum(dim=1)
-    assert torch.allclose(lorentz_norm, torch.full((6, ), -1.0, dtype=torch.float64), atol=1e-12)
+    # |<x, x>_L + 1| within 1e-9 * x0^2, the "Radius" check's bound
+    assert ((lorentz_norm + 1.0).abs() <= 1e-9 * points[:, 0]**2).all()
     origin = torch.zeros(ARM_DIMENSION + 1, dtype=torch.float64)
     origin[0] = 1.0
     assert torch.equal(points[0], origin)
-    _, head_points = HyperbolicHead()(tangent)
-    assert torch.allclose(points, head_points.to(torch.float64), atol=1e-5)
+    torch.testing.assert_close(points, head_points.embedding, rtol=1e-12, atol=1e-12)
 
 # -------------------------------------------------------------------------------------------------
 # Queries and codes
@@ -90,6 +96,32 @@ def test_a_query_embeds_through_the_same_forward_as_a_code(arm):
         output = arm.model(stack_text_inputs([{QUERY: tokens}], fields=(QUERY, )))
 
     assert torch.equal(arm.encode_queries(['Edamame farming']), exp_map_origin(output['tangent']))
+
+def test_queries_encode_through_the_query_path_the_training_monitor_shares(arm, monkeypatch):
+    '''One query path, so a live read and a read of the export put a query at one point.'''
+
+    shared = arm_encoder_module.encode_query_texts
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(inspect.signature(shared).bind(*args, **kwargs).arguments)
+        return shared(*args, **kwargs)
+
+    monkeypatch.setattr(arm_encoder_module, 'encode_query_texts', spy)
+
+    queries = arm.encode_queries(QUERIES)
+
+    assert calls == [
+        {
+            'model': arm.model,
+            'tokenizer': arm.tokenizer,
+            'texts': QUERIES,
+            'max_length': arm.max_length,
+            'batch_size': arm.batch_size,
+        }
+    ]
+    expected = shared(arm.model, arm.tokenizer, QUERIES, arm.max_length)
+    assert torch.equal(queries, exp_map_origin(expected))
 
 def test_codes_decode_from_the_table_in_the_order_asked(arm, exported_table):
     tangent = _table_tangent(exported_table)
@@ -157,23 +189,23 @@ def test_an_edited_table_is_refused(
             shared_checkpoint, exported_table, validated_bundle, five_code_token_config
         )
 
-def test_a_checkpoint_at_another_curvature_is_refused(
-    tmp_path, shared_model, exported_table, validated_bundle, five_code_token_config
+def test_a_pre_stage_7_checkpoint_is_refused_on_read_before_its_model_loads(
+    monkeypatch, pre_stage7_checkpoint, exported_table, validated_bundle, five_code_token_config
 ):
-    '''Spec §6: curvature other than 1 is refused (R8).'''
+    '''Spec 4.5: the outcome read refuses it on its objective, and nothing migrates it (D2).'''
 
-    checkpoint = lightning_checkpoint(shared_model)
-    checkpoint['hyper_parameters']['curvature'] = 2.0
-    curved = tmp_path / 'curved.ckpt'
-    torch.save(checkpoint, curved)
-    # The provenance names the curved checkpoint, so its checks pass and R8's guard is what fires
+    # The provenance names the pre-Stage-7 checkpoint, so its checks pass and only the
+    # checkpoint's contract can refuse it
     path = provenance_path(exported_table)
     provenance = json.loads(path.read_text())
-    provenance['checkpoint']['sha256'] = sha256_file(curved)
+    provenance['checkpoint']['sha256'] = sha256_file(pre_stage7_checkpoint)
     path.write_text(json.dumps(provenance))
+    forbid_model_loads(monkeypatch)
 
-    with pytest.raises(ValueError, match='curvature 2'):
-        ArmEncoder.from_files(curved, exported_table, validated_bundle, five_code_token_config)
+    with pytest.raises(ValueError, match=PRE_STAGE_7_REFUSAL):
+        ArmEncoder.from_files(
+            pre_stage7_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
 
 def test_a_text_only_table_is_refused_before_any_model_loads(
     no_model_load, shared_checkpoint, text_only_comparator_table, validated_bundle,

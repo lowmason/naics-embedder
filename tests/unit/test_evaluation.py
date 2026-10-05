@@ -418,6 +418,51 @@ class TestHierarchyMetrics:
         assert result['ndcg@5'] >= 0.0 and result['ndcg@5'] <= 1.0
         assert result['ndcg@10'] >= 0.0 and result['ndcg@10'] <= 1.0
 
+    def test_ndcg_ranking_without_enough_valid_codes_is_zero_over_no_queries(self, test_device):
+        '''An anchor needs max(k_values) valid codes. When none has them, each NDCG@k is a zero
+        tensor (HGCN detaches it) over 0 queries.'''
+        metrics = HierarchyMetrics()
+        # Each anchor has 2 valid codes, fewer than max(k_values) = 3, though NDCG@2 is defined
+        tree_distances = torch.tensor(
+            [
+                [0.0, 1.0, 2.0],
+                [1.0, 0.0, 1.0],
+                [2.0, 1.0, 0.0],
+            ],
+            device=test_device,
+        )
+
+        result = metrics.ndcg_ranking(tree_distances * 2.0, tree_distances, k_values=[2, 3])
+
+        assert set(result) == {'ndcg@2', 'ndcg@2_n_queries', 'ndcg@3', 'ndcg@3_n_queries'}
+        for k in [2, 3]:
+            assert isinstance(result[f'ndcg@{k}'], torch.Tensor)
+            assert result[f'ndcg@{k}'].item() == 0.0
+            assert result[f'ndcg@{k}_n_queries'] == 0
+
+    def test_ndcg_ranking_counts_only_the_anchors_it_keeps(self, test_device):
+        '''An anchor with fewer valid codes than max(k_values) is skipped at every k, and the
+        queries counted are the anchors kept.'''
+        metrics = HierarchyMetrics()
+        # Anchor 0's codes 1 and 2 lie below min_distance (0.1), so it has 1 valid code, fewer than
+        # max(k_values) = 2; anchors 1 and 2 have exactly 2, and anchor 3 has 3
+        tree_distances = torch.tensor(
+            [
+                [0.0, 0.05, 0.05, 2.0],
+                [0.05, 0.0, 1.0, 2.0],
+                [0.05, 1.0, 0.0, 2.0],
+                [2.0, 2.0, 2.0, 0.0],
+            ],
+            device=test_device,
+        )
+
+        # Embedding distances proportional to the tree's rank each kept anchor's codes perfectly
+        result = metrics.ndcg_ranking(tree_distances * 2.0, tree_distances, k_values=[1, 2])
+
+        for k in [1, 2]:
+            assert result[f'ndcg@{k}'].item() == pytest.approx(1.0)
+            assert result[f'ndcg@{k}_n_queries'] == 3
+
 # -------------------------------------------------------------------------------------------------
 # EmbeddingStatistics Tests
 # -------------------------------------------------------------------------------------------------

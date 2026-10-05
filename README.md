@@ -4,326 +4,156 @@
 
 [![PyPI Version](https://img.shields.io/pypi/v/naics-embedder)](https://pypi.org/project/naics-embedder/) [![GitHub Release](https://img.shields.io/github/v/release/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/releases) [![PyPI Downloads](https://img.shields.io/pypi/dm/naics-embedder)](https://pypi.org/project/naics-embedder/) [![License](https://img.shields.io/github/license/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/blob/main/LICENSE) [![Documentation](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/docs.yml) [![Tests](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml/badge.svg)](https://github.com/lowmason/naics-embedder/actions/workflows/tests.yml) [![Coverage](https://codecov.io/gh/lowmason/naics-embedder/branch/main/graph/badge.svg)](https://github.com/lowmason/naics-embedder/main/graph) [![Issues](https://img.shields.io/github/issues/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/issues) [![Last Commit](https://img.shields.io/github/last-commit/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/commits/main) [![Contributors](https://img.shields.io/github/contributors/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder/graphs/contributors) [![Repo size](https://img.shields.io/github/repo-size/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder) [![Top language](https://img.shields.io/github/languages/top/lowmason/naics-embedder)](https://github.com/lowmason/naics-embedder)
 
-------------------------------------------------------------------------
 
-This project implements a unified hyperbolic representation learning framework for the **North American Industry Classification System (NAICS)**. The system combines a shared text encoder over marked text fields, masked fusion, hyperbolic contrastive learning, and a hyperbolic graph refinement stage to produce geometry-aware embeddings aligned with the hierarchical structure of the NAICS taxonomy.
+The system learns a shared hyperbolic space for NAICS codes and activity queries. One
+LoRA-adapted transformer reads marked fields; masked fusion and one linear projection produce
+live direction and radius. Text training optimizes query decoding, code geometry and radius
+jointly. Optional HGCN refinement then uses the explicit parent–child graph.
 
-The final output is a set of **Lorentz-model hyperbolic embeddings** suitable for similarity search, hierarchical modeling, graph-based reasoning, and downstream machine learning applications.
+## Architecture
 
-------------------------------------------------------------------------
+1. **Shared text encoding:** the same backbone reads title, description, examples, exclusions
+   and queries. Absent code fields never enter the backbone.
+2. **Fusion and projection:** masked mean by default, attention or MoE as options, then one
+   `Linear(384, d)`, where d is 8, 16 or 32 (default 16).
+3. **Text objective:** task cross-entropy, code-to-code soft-target cross-entropy and radial
+   error, with an auxiliary load-balancing term only under MoE.
+4. **HGCN refinement:** the separate graph curriculum and triplet objective refine the exported
+   code geometry. Adoption is decided on the three evaluation panels.
 
-## 1. System Architecture Overview
-
-The system consists of four sequential stages:
-
-1. **Shared text encoding** – one LoRA-adapted transformer reads the title, description, examples and exclusions, each marked with its field, and reads queries through the same layers.
-2. **Fusion and projection** – a masked mean over the present channels (attention pooling and a Mixture-of-Experts are options, the MoE an ablation only), then one linear map to dimension d ∈ {8, 16, 32}.
-3. **Hyperbolic contrastive learning** – projection into Lorentz space and optimization with Decoupled Contrastive Learning (DCL).
-4. **Hyperbolic Graph Convolutional Refinement (HGCN)** – structure-aware refinement using the explicit NAICS parent–child graph.
-
-Each stage is designed to preserve or enhance the hierarchical geometry of NAICS codes.
-
-------------------------------------------------------------------------
-
-## 2. Stage 1 — Shared Text Encoding
-
-Each NAICS code includes four distinct text fields:
-
-- Title: Short code name ⟶ Concise category identification
-- Description: Detailed explanation of what the code encompasses ⟶ Rich semantic content
-- Examples: Representative businesses in this category ⟶ Concrete instantiations
-- Excluded: Codes explicitly NOT in this category ⟶ Disambiguation and boundaries
-
-Every field goes through one shared transformer (LoRA-adapted), marked with its name (`title: …`), so one backbone tells the fields apart. A query is a fifth field, `query`, read by the same layers, so queries and codes share one space. An absent field never enters the backbone. Each present field is mean-pooled into one vector, and these vectors are the fusion stage's input.
-
-------------------------------------------------------------------------
-
-## 3. Stage 2 — Fusion and Projection
-
-The present channels' vectors are fused into one (`model.fusion`):
-
-- **Masked mean** (default): the mean over the present channels, with no parameters.
-- **Attention pooling**: a learned weighting over the present channels.
-- **Mixture-of-Experts** (an ablation only): the masked mean routed through top-2 experts, with an auxiliary load-balancing loss.
-
-Exactly one linear map then takes the fused vector to dimension d ∈ {8, 16, 32} (`model.dimension`, default 16).
-
-------------------------------------------------------------------------
-
-## 4. Stage 3 — Hyperbolic Contrastive Learning (Lorentz Model)
-
-To align the latent space with the hierarchical structure of NAICS, embeddings are projected into **Lorentz-model hyperbolic space** via the exponential map.
-
-### 4.1 The Hyperbolic Head
-
-The d-dimensional vector is a tangent vector at the origin. A parameter-free head caps its norm at 2 and maps it onto the hyperboloid:
-
-- Uses the exponential map at the origin
-- Curvature c = 1 by default (`loss.curvature`, not learned); export and reads refuse any other
-- Ensures numerical stability
-
-The result is a Lorentz embedding (E_hyp) with d + 1 coordinates. The export (`tools export-table`) writes the tangent coordinates, `e0 … e{d-1}`: Req 2's form.
-
-### 4.2 Decoupled Contrastive Learning (DCL) Loss
-
-Contrastive learning is performed using **Decoupled Contrastive Learning (DCL)** with **Lorentzian geodesic distances**:
-
-d(u, v) = arcosh(-\<u, v\>\_L)
-
-The DCL loss decouples the positive and negative terms:
-
-L = (-pos_sim + logsumexp(neg_sims)).mean()
-
-This formulation provides better gradient flow and numerical stability compared to standard InfoNCE.
-
-Negatives include:
-
-- unrelated codes,
-- hierarchically distant codes,
-- false negatives detected via periodic clustering (masked with -inf).
-
-### 4.3 False Negative Mitigation
-
-A curriculum-based procedure removes semantically similar negatives once the embedding space stabilizes:
-
-1. Generate embeddings for the dataset.
-2. Cluster embeddings (e.g., via KMeans).
-3. Identify negatives sharing the cluster label with the anchor.
-4. Exclude these from the contrastive denominator.
-
-This prevents the model from incorrectly separating close hierarchical neighbors.
-
-------------------------------------------------------------------------
-
-## 5. Stage 4 — Hyperbolic Graph Convolutional Refinement (HGCN)
-
-To fully integrate the explicit hierarchical relationships of NAICS, the system applies a **Hyperbolic Graph Convolutional Network** as a refinement stage.
-
-### 5.1 Graph Structure
-
-Nodes represent NAICS codes, and edges represent parent–child relationships in the taxonomy.
-
-### 5.2 HGCN Layers
-
-The refinement module includes:
-
-- Two hyperbolic graph convolutional layers
-- Tangent-space aggregation and message passing
-- Learnable curvature shared across layers
-- Exponential and logarithmic maps for manifold transitions
-
-### 5.3 Refinement Objectives
-
-The model optimizes a combined loss:
-
-#### a. Hyperbolic Triplet Loss
-
-Ensures that:
-
-- anchor–positive distance \< anchor–negative distance
-- distances use Lorentz geodesics
-
-#### b. Per-Level Radial Regularization
-
-Encourages embeddings at the same hierarchical level to maintain similar hyperbolic radii.
-
-This aligns global and local geometric structure with the NAICS taxonomy.
-
-### 5.4 Validation Metrics
-
-HGCN validation logs the same structural statistics as the text model:
-
-- Cophenetic correlation + pair counts
-- Structural Spearman v1 (`structural_spearman_v1`) and unique-pair counts
-- NDCG\@K (configurable list, default `5/10/20`)
-- Hyperbolic distortion statistics
-
-These are logged for the record only (Req 6): no progress bar shows them and nothing selects on
-them. Req 6's stratified diagnostics come from `tools diagnostics` (section 5.5).
-
-`structural-spearman-v1` validates square symmetric distance matrices, averages each mirrored
-pair in CPU float64, and uses only the strict upper triangle (`i < j`), excluding the diagonal.
-After filtering canonical target distances at `min_distance` (default `0.1`), SciPy computes
-Spearman correlation with average ranks for exact ties. Counts distinguish all unordered pairs
-from those retained by the filter.
-
-Malformed off-diagonal values, shapes, dtypes, thresholds, or asymmetry raise
-`StructuralMetricInputError`. Valid but undefined correlations have an explicit status/reason
-and serialize as JSON `null`; they are not logged as numeric zero or `NaN` in Lightning.
-
-Historical unversioned fields (`spearman`, `spearman_correlation`, `val/spearman_correlation`,
-and `val_spearman_correlation`) are `legacy-ordinal-rank-v0`: order-sensitive ordinal-rank
-results, not valid tied-rank Spearman coefficients. They are not directly comparable with v1.
-Historical files remain untouched, and new reports do not dual-write legacy keys. See the
-[metric contract](docs/overview.md#structural-spearman-v1) and the
-[text](docs/text_training.md) and [HGCN](docs/hgcn_training.md) artifact documentation.
-
-### 5.5 Diagnostics and Decisions
-
-Report Req 6's structural diagnostics on any 2,125-code table in the export form (tangent
-coordinates at the origin for a hyperbolic arm):
-
-``` bash
-uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \
-  --codebook data/supervision/stage3-supervision-v2/<bundle-id>/naics_codebook.parquet
+```text
+Marked fields/queries -> shared LoRA backbone -> masked fusion -> Linear(384, d)
+    -> live radius and direction -> task + code-to-code + radial terms
+    -> earliest best outcome-MRR checkpoint -> tangent table -> optional HGCN
+    -> outcome, regressor-seen and regressor-heldout decision
 ```
 
-The report covers sector separation, within-sector rank correlation, MAP over ancestors, NDCG
-with integer lowest-common-ancestor grades, the Pearson correlation of distance with D*, and
-parent retrieval without the 522 unary pairs. It has no thresholds and no pass/fail. Whether a
-change is adopted, graph refinement included, is decided under Req 5's rule on the outcome and
-regressor panels: `tools margins` fixes each panel's margin from a reference arm, and
-`tools decide` compares the arms (see the [usage guide](docs/usage.md#tools-decide)).
+## Live Radius and the Objective
 
-------------------------------------------------------------------------
+For projection v with norm a and direction u, the parameter-free head computes
+`r = R * tanh(a / R)` with `R = model.radius_bound` (default 8), then maps r u to the
+unit-curvature Lorentz hyperboloid. Zero v maps to the origin. Text curvature is fixed at 1,
+with no curvature setting. Training distances use the stable polar form in float32; panel
+reads reconstruct Lorentz points and compute distances on the CPU in float64.
 
-## 6. Final Output
+`task_loss` decodes each training query to its named code targets. Its candidates are every
+code at the query's level plus every explicit referring code. `code_code_loss` matches a
+softmax of negative taxonomy distance over all codes except the anchor and its unary partner.
+`radial_loss` softly targets `radial_step * (level - 1)` while keeping gradients through each
+radius. Both code-code and radial weights default to 1. Task and code-code logit scales are
+learned independently, start at 1 and are clamped to [0.01, 100] without weight decay.
 
-Upon completion of all four stages, the system produces:
+There is no text DCL loss, negative miner, false-negative clustering or phase curriculum.
+The reference uses two streams: every code anchor and every eligible query once per epoch.
+With 11,039 queries and 128 queries per step, the reference epoch has 87 steps. A detached code
+cache is refreshed at fit start and epoch end; each step replaces its anchor rows with live
+embeddings. The training-pairs bundle member stays validated but is unread by text training.
 
-- High-fidelity hyperbolic embeddings in Lorentz space
-- Representations consistent with both text semantics and hierarchical relationships
-- Embeddings suitable for:
-  - hierarchical search and retrieval
-  - clustering and visualization
-  - downstream machine learning tasks
-  - graph-based analytics
+## Monitor and Artifacts
 
-------------------------------------------------------------------------
+After each cache refresh, the outcome validation panel's float64 MRR becomes `val/outcome_mrr`.
+It selects the earliest best epoch and controls plateau scheduling and early stopping. The
+model writes `monitor_reads.jsonl` and `epoch_summary.jsonl` beside the checkpoints. The summary
+contains MRR, three term losses, total loss, both scales and per-level radius mean/SD.
 
-## 7. Architecture Diagram
+The selected checkpoint is `epoch=NNN.ckpt`; `last.ckpt` holds the latest training state.
+Checkpoints identify objective `req11-v1`, bundle, encoder, preprocessing, seed and 21 run
+settings. Old objectives are refused before model loading; there is no weights-only migration.
+See [the training guide](docs/text_training.md) for the exact contracts and resume rules.
 
-``` text
-+-------------------------------+
-|     Shared Text Encoder       |
-|  (one LoRA backbone; marked   |
-|   fields and queries)         |
-+---------------+---------------+
-                |
-                v
-+-------------------------------+
-|  Masked Fusion + Linear(→ d)  |
-|  (MoE only as an ablation)    |
-+---------------+---------------+
-                |
-                v
-+-------------------------------+
-|   Hyperbolic Head             |
-|   (cap, Lorentz exp map, c=1) |
-+---------------+---------------+
-                |
-                v
-+-------------------------------+
-| Hyperbolic Contrastive Loss   |
-| (DCL + Lorentz Distance +    |
-|  False Negative Masking)     |
-+---------------+---------------+
-                |
-                v
-+-------------------------------+
-|          HGCN Refinement      |
-|  (Tangent-Space GNN + Curv.)  |
-+---------------+---------------+
-                |
-                v
-+-------------------------------+
-| Final Lorentz Hyperbolic Emb. |
-+-------------------------------+
-```
+## Quick Start
 
-------------------------------------------------------------------------
-
-## 8. Onboarding Guide
-
-### 8.0 Initial Setup
-
-Clone the repository:
-
-``` bash
+```bash
 git clone https://github.com/lowmason/naics-embedder.git
 cd naics-embedder
-```
-
-Install uv:
-
-``` bash
-pip3 install uv
-```
-
-Install dependencies:
-
-``` bash
-uv synv
-```
-
-### 8.1 Download and preprocess NAICS data
-
-Prepare the NAICS dataset with four text channels, then build the immutable Stage-3 supervision
-bundle (structural facts, explicit exclusions, and training pairs, all validated together):
-
-``` bash
-uv run naics-embedder data preprocess
-uv run naics-embedder data supervision
-```
-
-Or:
-
-``` bash
+uv sync
 uv run naics-embedder data all
+uv run naics-embedder train --config conf/config.yaml   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-`data supervision` prints `Supervision manifest: <path>`. The former `data relations`,
-`data distances`, and `data triplets` commands now print a migration notice and exit with status
-1 without building anything.
+`data all` prints the immutable manifest path. The mandatory gate validates the bundle before
+model or data-loader construction. `--skip-validation` only skips advisory checks. Retired
+`data relations`, `data distances` and `data triplets` commands build nothing and exit 1.
 
-### 8.2 Training the Contrastive Model
+CUDA uses `bf16-mixed` for the backbone; fusion, projection, geometry and losses remain float32.
+CPU and MPS use `32-true`. The text Trainer uses one device.
 
-The text encoder uses the Structure-Aware Dynamic Curriculum (SADC) scheduler by default. It progresses through three phases in a single run—structural initialization, geometric refinement, and false-negative mitigation—activating the appropriate sampling flags automatically.
-
-Run training with the base config and the printed manifest:
-
-``` bash
-uv run naics-embedder train --config conf/config.yaml \
-  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+```bash
+uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools visualize   --summary checkpoints/reference/epoch_summary.jsonl
 ```
 
-Training validates the bundle before anything else and fails closed on any mismatch. See
-[Stage-3 Supervision Integrity](docs/text_training.md#stage-3-supervision-integrity) for the
-operator workflow, exact resume versus weights-only checkpoint migration, legacy containment, and
-the rollout gates.
+Resume only `last`, with the same experiment directory, bundle, encoder, preprocessing, seed
+and settings. A supplementary check compares saved constructor hyperparameters with the
+current configuration: LoRA rank, alpha and dropout, plus expert count, top-k, hidden dimension
+and load-balancing coefficient when MoE fusion is active. Missing required values are refused.
+The arm identity retains its 21 `run_settings` keys. An early-stopped run exits 1 with
+`early stopping ended the run at epoch k`;
+a spent epoch budget trains no further epochs. Changing the budget or other settings requires
+a fresh run directory. The code cache is rebuilt, and both JSONL files continue from the
+restored epoch.
 
-### 8.3 Running HGCN Refinement
+## Export and Radius Verification
 
-Train the refinement model:
+Export the earliest highest-MRR checkpoint identified by the monitor. This example uses epoch 1:
 
-``` bash
-uv run naics-embedder train-hgcn --config configs/hgcn.yaml
+```bash
+uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-------------------------------------------------------------------------
+The table has `code`, `index`, `level`, and bounded tangent coordinates `e0` through `e{d-1}`
+in codebook order. Provenance binds it to the checkpoint and preprocessing identities.
+The radius report checks live gradients, per-level spread, sector radii, manifold validity,
+distance precision and nonzero gradients for the three terms and both scales. A failed
+criterion writes the report and exits 1; the report does not read an evaluation panel.
 
-## 9. Using the Final Embeddings
+## Three-Panel Campaign
 
-### 9.1 Similarity Search
+Train ten seeds with the same reference settings, then run `tools sweep` over their complete
+run directories. It checks every seed before its first export or decision read. Each seed
+contributes outcome validation and the regressor panel's seen and held-out regimes at level 6;
+the arm record carries the monitor reads that selected its checkpoint.
 
-Use Lorentzian distance:
+Fix reference margins with `tools margins --multiple 3` before candidate monitor or decision
+reads. `tools decide` applies Req 5's paired resampling, non-inferiority, superiority and tie
+order. The panel test splits stay sealed. See
+[the reference campaign](docs/text_training.md#reference-campaign) for complete commands.
 
-``` python
-dist = lorentz_distance(x, y)
+## Graph Refinement and Structural Diagnostics
+
+HGCN retains its four-phase graph curriculum, triplet objective and curvature utilities. Set
+its bundle manifest in `conf/graph.yaml`, then run:
+
+```bash
+uv run python -m naics_embedder.graph_model.hgcn
 ```
 
-Lower values indicate closer hierarchical or semantic similarity.
+See [HGCN training](docs/hgcn_training.md) for input artifacts and graph configuration.
+HGCN structural statistics remain descriptive. `tools diagnostics` reports Req 6's sector
+separation, within-sector rank correlation, ancestor MAP, LCA-graded NDCG, distance/D* Pearson
+correlation and parent retrieval without unary pairs. They neither select the text checkpoint
+nor replace a three-panel decision.
 
-### 9.2 Visualization
+`structural-spearman-v1` validates symmetric distance matrices, averages mirrored values in
+CPU float64 and uses strict upper-triangle pairs with average ranks for exact ties. Undefined
+results have an explicit status and JSON `null`. Historical unversioned Spearman fields are
+`legacy-ordinal-rank-v0` and are not directly comparable. See the
+[metric contract](docs/overview.md#structural-spearman-v1).
 
-Project to tangent space or Poincaré ball for plotting.
+## Development
 
-### 9.3 Downstream ML
+The project pins Python 3.12 for its locked environment. Tests use fixture bundles and tiny
+models; they do not perform the real training or selection campaign.
 
-Final embeddings can be used as features for:
+```bash
+uv run pytest -n auto -q
+uv run ruff check src/ tests/
+./scripts/format_code.sh --check --all
+uv run mkdocs build --strict
+```
 
-- classification models,
-- clustering algorithms (in hyperbolic or tangent space),
-- retrieval and recommendation systems.
-
-------------------------------------------------------------------------
+The suite collects 2,315 tests in 83 unit files and one integration file. Actual skip counts
+depend on local data and hardware capabilities, including MPS. Coverage is measured separately,
+not inferred from collection counts. See [tests/README.md](tests/README.md) for test contracts and
+[CLAUDE.md](CLAUDE.md) for project conventions.

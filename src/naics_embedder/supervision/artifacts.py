@@ -21,6 +21,7 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from naics_embedder.supervision.activity import activity_phrase
 from naics_embedder.supervision.schema import (
     CONTRACT_VERSION,
     CROSS_SECTOR_RELATION_ID,
@@ -444,7 +445,9 @@ def validate_redirection_table(redirections: pl.DataFrame, codes: Collection[str
     table order. Every row comes from a known source and names codebook codes other than its
     own, and ``lineal_codes`` holds exactly the named codes that are the row's code's ancestors
     or descendants. Only a cross-reference row that names a code and is not withheld may carry
-    an activity phrase.
+    an activity phrase, and every row that is not withheld carries exactly the phrase the
+    build's rule gives: ``activity_phrase(text)`` on a cross-reference row that names a code,
+    else none. The two rules fix every row's ``activity``.
     '''
 
     if redirections.schema != pl.Schema(REDIRECTIONS_SCHEMA):
@@ -478,6 +481,12 @@ def validate_redirection_table(redirections: pl.DataFrame, codes: Collection[str
             raise ValueError(
                 f'{where} carries an activity phrase, which only a cross-reference row that '
                 'names a code and is not withheld may carry'
+            )
+        expected = activity_phrase(row['text']) if redirects else None
+        if not row['withheld'] and row['activity'] != expected:
+            raise ValueError(
+                f'{where}: its activity phrase is {row["activity"]!r}, but its text gives '
+                f'{expected!r}'
             )
 
 def validate_redirection_exclusions(redirections: pl.DataFrame, pair_facts: pl.DataFrame) -> None:

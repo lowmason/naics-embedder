@@ -1,169 +1,38 @@
-'''
-Metrics visualization and investigation tools.
-
-Provides functions to visualize training metrics and investigate hierarchy correlations.
-'''
-
-# -------------------------------------------------------------------------------------------------
-# Imports
-# -------------------------------------------------------------------------------------------------
+'''Visualize a run's durable monitor and epoch health summary (P20).'''
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+
+from naics_embedder.text_model.epoch_summary import read_epoch_summary
 
 try:
-    import matplotlib
-
-    matplotlib.use('Agg')
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
-
-try:
-    from naics_embedder.tools._visualize_metrics import (
-        create_visualizations,
-        parse_log_file,
-        print_analysis,
-    )
+    from naics_embedder.tools._visualize_metrics import HAS_MATPLOTLIB, create_visualizations
 
     HAS_VISUALIZE = True
 except ImportError:
-    HAS_VISUALIZE = False
+    HAS_VISUALIZE = HAS_MATPLOTLIB = False
 
-try:
-    from naics_embedder.tools._investigate_hierarchy import (
-        analyze_correlation_issues,
-        analyze_ground_truth_distances,
-        check_evaluation_sample_size,
-    )
-
-    HAS_INVESTIGATE = True
-except ImportError:
-    HAS_INVESTIGATE = False
-
-# -------------------------------------------------------------------------------------------------
-# Visualize metrics
-# -------------------------------------------------------------------------------------------------
-
-def visualize_metrics(
-    stage: str = '02_text',
-    log_file: Optional[Path] = None,
-    output_dir: Optional[Path] = None,
-    project_root: Optional[Path] = None,
-) -> Dict:
+def visualize_metrics(summary: Path, output_dir: Optional[Path] = None) -> Dict[str, Any]:
     '''
-    Visualize training metrics from log files.
+    Plot MRR, loss means, logit scales and each level's radius mean and SD from an epoch summary.
 
     Args:
-        stage: Stage name to filter (e.g., '02_text')
-        log_file: Path to log file (default: logs/train_sequential.log)
-        output_dir: Output directory for plots (default: outputs/visualizations/)
-        project_root: Project root directory (default: current working directory)
+        summary: The run's ``epoch_summary.jsonl``.
+        output_dir: Plot directory; by default ``visualizations`` beside the summary.
 
     Returns:
-        Dictionary with metrics and output file path
+        The parsed rows (``metrics``), ``num_epochs`` and the PNG's ``output_file`` path.
+
+    Raises:
+        FileNotFoundError: If the summary is absent.
+        ValueError: If its rows are invalid or no epoch was recorded.
+        ImportError: If visualization dependencies are unavailable.
     '''
 
-    if project_root is None:
-        project_root = Path.cwd()
-
-    if log_file is None:
-        log_file = project_root / 'logs' / 'train_sequential.log'
-
-    if output_dir is None:
-        output_dir = project_root / 'outputs' / 'visualizations'
-
-    if not log_file.exists():
-        raise FileNotFoundError(f'Log file not found: {log_file}')
-
-    if not HAS_VISUALIZE:
+    if not HAS_VISUALIZE or not HAS_MATPLOTLIB:
         raise ImportError('Visualization tools not available. Missing dependencies.')
-
-    # Parse metrics
-    metrics = parse_log_file(log_file, stage=stage)
-
-    if not metrics:
-        raise ValueError(f"No metrics found for stage '{stage}' in log file!")
-
-    # Create visualizations
-    if HAS_MATPLOTLIB:
-        create_visualizations(metrics, output_dir, stage)
-        output_file = output_dir / f'{stage}_metrics.png'
-    else:
-        output_file = None
-        print('⚠️  Matplotlib not available. Skipping visualization creation.')
-
-    # Print analysis
-    print_analysis(metrics, stage)
-
-    # Print summary table
-    print('\n' + '=' * 90)
-    print('METRICS SUMMARY TABLE')
-    print('=' * 90)
-    print(f"{'Epoch':<8} {'Radius':<15} {'Dist CV':<10} {'Collapse':<10}")
-    print('-' * 90)
-    for m in metrics:
-        epoch = m.get('epoch', 'N/A')
-        radius = f"{m.get('radius_mean', 0):.2f}±{m.get('radius_std', 0):.2f}"
-        dist_cv = f"{m.get('dist_cv', 0):.4f}" if 'dist_cv' in m else 'N/A'
-        collapse = 'Yes' if m.get('collapse', False) else 'No'
-        print(f'{epoch:<8} {radius:<15} {dist_cv:<10} {collapse:<10}')
-    print()
-
-    return {
-        'metrics': metrics,
-        'output_file': output_file,
-        'stage': stage,
-        'num_epochs': len(metrics),
-    }
-
-# -------------------------------------------------------------------------------------------------
-# Investigate hierarchy preservation metrics
-# -------------------------------------------------------------------------------------------------
-
-def investigate_hierarchy(
-    distance_matrix_path: Optional[Path] = None,
-    config_path: Optional[Path] = None,
-    project_root: Optional[Path] = None,
-) -> Dict:
-    '''
-    Investigate why hierarchy preservation correlations might be low.
-
-    Args:
-        distance_matrix_path: Path to ground truth distance matrix
-        config_path: Path to config file
-        project_root: Project root directory
-
-    Returns:
-        Dictionary with investigation results
-    '''
-
-    if project_root is None:
-        project_root = Path.cwd()
-
-    if distance_matrix_path is None:
-        distance_matrix_path = project_root / 'data' / 'naics_distance_matrix.parquet'
-
-    if config_path is None:
-        config_path = project_root / 'conf' / 'config.yaml'
-
-    if not HAS_INVESTIGATE:
-        raise ImportError('Investigation tools not available. Missing dependencies.')
-
-    results = {}
-
-    # Analyze ground truth distances
-    distances = analyze_ground_truth_distances(distance_matrix_path)
-    results['distance_matrix_analyzed'] = distances is not None
-
-    # Check evaluation config
-    if config_path.exists():
-        eval_sample_size = check_evaluation_sample_size(config_path)
-        results['eval_sample_size'] = eval_sample_size
-    else:
-        results['eval_sample_size'] = None
-
-    # Provide analysis
-    analyze_correlation_issues()
-
-    return results
+    summary = Path(summary)
+    metrics = read_epoch_summary(summary)
+    directory = Path(output_dir) if output_dir is not None else summary.parent / 'visualizations'
+    output_file = create_visualizations(metrics, directory)
+    return {'metrics': metrics, 'output_file': output_file, 'num_epochs': len(metrics)}

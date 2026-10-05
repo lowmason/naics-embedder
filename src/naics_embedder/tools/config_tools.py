@@ -1,68 +1,70 @@
 '''
 Configuration display tools.
 
-Display current training and curriculum configuration.
+Display the training configuration a run would use: the file, validated over the defaults.
 '''
 
 from pathlib import Path
+from typing import Union
 
 import yaml
+from pydantic import ValidationError
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
+
+from naics_embedder.utils.config import Config
+from naics_embedder.utils.training import FULL_PRECISION, run_settings
 
 console = Console()
 
-def show_current_config(config_path: str = './conf/config.yaml'):
+def show_current_config(config_path: Union[str, Path] = './conf/config.yaml') -> bool:
     '''
-    Display current training and curriculum configuration.
+    Display the training configuration a run would use.
+
+    The file is validated as ``Config`` over the defaults, so every value shown is one a run reads,
+    and a file that sets a key the configuration no longer has is refused, not shown (spec 4.5).
+    The panel lists the run's name, seed and inputs, then the settings every run records
+    (``run_settings``, P21), with the configured accelerator and the precision rule (P31).
 
     Args:
         config_path: Path to main configuration file
+
+    Returns:
+        True when the configuration was displayed. False when an error was printed instead: the
+        file is missing, or ``Config`` refuses it. ``tools config`` then exits 1.
     '''
 
     config_path_obj = Path(config_path)
     if not config_path_obj.exists():
-        console.print(f'[bold red]Error:[/bold red] Config file not found: {config_path}')
-        return
+        console.print(
+            f'[bold red]Error:[/bold red] Config file not found: {escape(str(config_path))}'
+        )
+        return False
 
-    # Load configurations
-    config = load_config(config_path)
+    try:
+        cfg = Config.from_yaml(config_path)
+    except (ValidationError, yaml.YAMLError) as error:
+        console.print('[bold red]Error:[/bold red] not a valid configuration:')
+        console.print(config_path, markup=False, highlight=False)
+        console.print(str(error), markup=False, highlight=False)
+        return False
 
-    batch_size = config['data_loader']['batch_size']
-    accumulate = config['training']['trainer']['accumulate_grad_batches']
-    num_workers = config['data_loader']['num_workers']
-    learning_rate = config['training']['learning_rate']
-    weight_decay = config['training']['weight_decay']
-    warmup_steps = config['training']['warmup_steps']
-    precision = config['training']['trainer']['precision']
-    max_epochs = config['training']['trainer']['max_epochs']
-    curriculum = config.get('curriculum', {})
+    trainer = cfg.training.trainer
+    # A run trains at the configured precision on CUDA, and at full precision elsewhere (P31)
+    precision = f'{trainer.precision} on CUDA, {FULL_PRECISION} elsewhere'
+    settings = run_settings(cfg, accelerator=trainer.accelerator, precision=precision)
 
     current_config = [
-        '\n[blue]Main Configuration (conf/config.yaml):[/blue]\n',
-        f'[cyan]Effective batch size:[/cyan] {batch_size * accumulate}',
-        f'  • [bold]batch_size:[/bold] {batch_size}',
-        f'  • [bold]accumulate_grad_batches:[/bold] {accumulate}\n',
-        '[cyan]Data loader:[/cyan]',
-        f'  • [bold]num_workers:[/bold] {num_workers}\n',
-        '[cyan]Training:[/cyan]',
-        f'  • [bold]learning_rate:[/bold] {learning_rate}',
-        f'  • [bold]weight_decay:[/bold] {weight_decay}',
-        f'  • [bold]warmup_steps:[/bold] {warmup_steps}',
-        f'  • [bold]precision:[/bold] {precision}',
-        f'  • [bold]max_epochs:[/bold] {max_epochs}\n',
-        '[cyan]Structure-Aware Dynamic Curriculum:[/cyan]',
-        f'  • [bold]phase1_end:[/bold] {curriculum.get("phase1_end", "-")} (Structural)',
-        f'  • [bold]phase2_end:[/bold] {curriculum.get("phase2_end", "-")} (Geometric)',
-        f'  • [bold]phase3_end:[/bold] {curriculum.get("phase3_end", "-")} (False Negatives)',
-        f'  • [bold]tree_distance_alpha:[/bold] {curriculum.get("tree_distance_alpha", "-")}',
-        f'  • [bold]sibling_distance_threshold:[/bold] '
-        f'{curriculum.get("sibling_distance_threshold", "-")}',
-        f'  • [bold]fn_curriculum_start_epoch:[/bold] '
-        f'{curriculum.get("fn_curriculum_start_epoch", "-")}',
-        f'  • [bold]fn_cluster_every_n_epochs:[/bold] '
-        f'{curriculum.get("fn_cluster_every_n_epochs", "-")}',
-        f'  • [bold]fn_num_clusters:[/bold] {curriculum.get("fn_num_clusters", "-")}\n',
+        f'\n[blue]Configuration ({escape(str(config_path))}):[/blue]\n',
+        '[cyan]Run:[/cyan]',
+        f'  • [bold]experiment_name:[/bold] {escape(cfg.experiment_name)}',
+        f'  • [bold]seed:[/bold] {cfg.seed}',
+        f'  • [bold]supervision.manifest_path:[/bold] {escape(str(cfg.supervision.manifest_path))}',
+        '  • [bold]descriptions_parquet:[/bold] '
+        f'{escape(cfg.data_loader.streaming.descriptions_parquet)}\n',
+        '[cyan]Run settings:[/cyan]',
+        *[f'  • [bold]{name}:[/bold] {escape(str(value))}' for name, value in settings.items()],
     ]
 
     console.print(
@@ -73,6 +75,7 @@ def show_current_config(config_path: str = './conf/config.yaml'):
             expand=True,
         )
     )
+    return True
 
 def load_config(config_path: str = './conf/config.yaml'):
     '''Load main configuration file.'''

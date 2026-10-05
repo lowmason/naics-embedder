@@ -11,6 +11,9 @@ import pytest
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from naics_embedder.text_model.dataloader.datamodule import DEFAULT_QUERIES_PER_STEP
+from naics_embedder.text_model.loss import LogitScale
+from naics_embedder.utils import config as config_module
 from naics_embedder.utils.config import (
     CheckpointLoadMode,
     Config,
@@ -23,16 +26,16 @@ from naics_embedder.utils.config import (
     OutcomePanelConfig,
     RegressorBranchRecord,
     RegressorPanelConfig,
-    SamplingConfig,
-    SansStaticConfig,
     StreamingConfig,
-    StructuralPreferenceConfig,
     SupervisionBuildConfig,
     SupervisionRuntimeConfig,
     TextOnlyConfig,
     TokenizationConfig,
+    TrainerConfig,
     load_config,
+    parse_override_value,
 )
+from naics_embedder.utils.training import parse_config_overrides
 from tests.fixtures.regressor_panel import BRANCH_RECORD
 
 # -------------------------------------------------------------------------------------------------
@@ -481,41 +484,6 @@ class TestConfigErrorHandling:
             load_config(DirConfig, 'invalid_structure.yaml')
 
 @pytest.mark.unit
-class TestSamplingConfig:
-
-    def test_sampling_defaults(self):
-        cfg = SamplingConfig()
-
-        assert cfg.strategy == 'sadc'
-        assert cfg.sans_static.near_distance_threshold == 4.0
-
-    def test_invalid_bucket_weights_raise(self):
-        with pytest.raises(ValidationError):
-            SamplingConfig(
-                sans_static=SansStaticConfig(
-                    near_bucket_weight=0.0,
-                    far_bucket_weight=0.0,
-                )
-            )
-
-@pytest.mark.unit
-class TestDataLoaderConfig:
-    '''The data loader's pre-sampled epoch count, which the datamodule builds its rows from.'''
-
-    def test_n_epochs_defaults_to_100_and_the_shipped_config_keeps_it(self, valid_config_dict):
-        assert DataLoaderConfig().n_epochs == 100
-        assert valid_config_dict['data_loader']['n_epochs'] == 100
-
-    def test_n_epochs_must_be_positive(self):
-        with pytest.raises(ValidationError) as excinfo:
-            DataLoaderConfig(n_epochs=0)
-
-        assert _error_locs_and_types(excinfo) == [(('n_epochs', ), 'greater_than')]
-
-    def test_n_epochs_can_be_overridden(self):
-        assert Config().override({'data_loader.n_epochs': 1}).data_loader.n_epochs == 1
-
-@pytest.mark.unit
 class TestSupervisionBuildConfig:
     '''The supervision bundle build configuration.'''
 
@@ -666,12 +634,8 @@ def valid_config_dict():
 def test_base_config_parses_as_repaired_pre_generation(valid_config_dict):
     cfg = Config.model_validate(valid_config_dict)
 
-    assert cfg.supervision.mode == 'repaired'
     assert cfg.supervision.manifest_path is None
     assert cfg.supervision.contract_version == 'stage3-supervision-v2'
-    assert cfg.loss.structural_preference == StructuralPreferenceConfig()
-    assert cfg.loss.rank_order_weight is None
-    assert cfg.data_loader.streaming.phase1_exclusion_weight is None
 
 def test_the_model_fuses_by_masked_mean_at_dimension_16(valid_config_dict):
     cfg = Config.model_validate(valid_config_dict)
@@ -700,64 +664,24 @@ def test_a_fusion_or_dimension_outside_its_set_is_refused(key, value):
     # A Literal refusal: before the keys are declared, the same override fails as extra_forbidden
     assert _error_locs_and_types(excinfo) == [(('model', key.split('.')[1]), 'literal_error')]
 
-def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
-    valid_config_dict['supervision'] = {
-        'mode': 'repaired',
-        'manifest_path': '/tmp/bundle/manifest.json',
-    }
-    valid_config_dict['loss']['rank_order_weight'] = 0.35
-
-    with pytest.raises(
-        ValidationError,
-        match='rank_order_weight.*structural_preference',
-    ):
-        Config.model_validate(valid_config_dict)
-
-def test_repaired_config_rejects_high_exclusion_weight(valid_config_dict):
-    valid_config_dict['supervision'] = {
-        'mode': 'repaired',
-        'manifest_path': '/tmp/bundle/manifest.json',
-    }
-    valid_config_dict['data_loader']['streaming']['phase1_exclusion_weight'] = 100.0
-
-    with pytest.raises(
-        ValidationError,
-        match='phase1_exclusion_weight.*an explicit exclusion is never a negative',
-    ):
-        Config.model_validate(valid_config_dict)
-
-def test_overrides_cannot_reintroduce_legacy_keys_in_repaired_mode():
-    with pytest.raises(ValidationError, match='rank_order_weight'):
-        Config().override({'loss.rank_order_weight': 0.35})
+def test_the_radius_bound_is_8_by_default_and_as_shipped(valid_config_dict):
+    # Spec 4.2 and 4.5: R = 8, so a six-digit code at its target r = 5 keeps dr/dν ≈ 0.61
+    assert Config().model.radius_bound == 8.0
+    assert Config.model_validate(valid_config_dict).model.radius_bound == 8.0
+    assert valid_config_dict['model']['radius_bound'] == 8
 
 @pytest.mark.parametrize(
-    'name',
-    ['distances_parquet', 'distance_matrix_parquet', 'relations_parquet', 'triplets_parquet'],
+    ('value', 'error'),
+    [(0.0, 'greater_than'), (-1.0, 'greater_than'), (float('inf'), 'finite_number')],
 )
-def test_repaired_config_rejects_a_legacy_streaming_path(valid_config_dict, name):
-    # Repaired training reads structure and training pairs from the bundle only
-    valid_config_dict['data_loader']['streaming'][name] = './data/elsewhere'
+def test_a_radius_bound_that_is_not_positive_and_finite_is_refused(value, error):
+    '''Spec section 5: a radius bound at or below 0 is refused; so is an infinite one.'''
 
-    with pytest.raises(
-        ValidationError, match=f'data_loader.streaming.{name} is a legacy path.*manifest_path'
-    ):
-        Config.model_validate(valid_config_dict)
+    with pytest.raises(ValidationError) as excinfo:
+        Config().override({'model.radius_bound': value})
 
-def test_overrides_cannot_point_repaired_training_at_a_legacy_path():
-    with pytest.raises(ValidationError, match='data_loader.streaming.relations_parquet'):
-        Config().override({'data_loader.streaming.relations_parquet': './data/other.parquet'})
-
-def test_legacy_containment_is_the_only_mode_accepting_legacy_keys(valid_config_dict):
-    valid_config_dict['supervision'] = {'mode': 'legacy_containment'}
-    valid_config_dict['loss']['rank_order_weight'] = 0.35
-    valid_config_dict['data_loader']['streaming']['phase1_exclusion_weight'] = 100.0
-    valid_config_dict['data_loader']['streaming']['relations_parquet'] = './data/other.parquet'
-
-    cfg = Config.model_validate(valid_config_dict)
-
-    assert cfg.supervision.mode == 'legacy_containment'
-    assert cfg.loss.rank_order_weight == 0.35
-    assert cfg.data_loader.streaming.relations_parquet == './data/other.parquet'
+    # Pinned on the type: before the key is declared, the same override fails as extra_forbidden
+    assert _error_locs_and_types(excinfo) == [(('model', 'radius_bound'), error)]
 
 @pytest.mark.parametrize(
     'supervision',
@@ -777,28 +701,372 @@ def test_supervision_runtime_config_rejects_unknown_values(supervision):
     with pytest.raises(ValidationError):
         SupervisionRuntimeConfig(**supervision)
 
-def test_checkpoint_load_modes_are_explicit():
-    assert [mode.value for mode in CheckpointLoadMode] == ['exact', 'weights_only']
+def test_supervision_mode_is_a_removed_key(valid_config_dict):
+    '''D2: training is always repaired, so the mode key is refused, even at its old default.'''
+
+    valid_config_dict['supervision']['mode'] = 'repaired'
+
+    with pytest.raises(ValidationError) as excinfo:
+        Config.model_validate(valid_config_dict)
+
+    assert _error_locs_and_types(excinfo) == [(('supervision', 'mode'), 'extra_forbidden')]
+
+def test_exact_resume_is_the_only_checkpoint_load_mode():
+    # D2 deleted the weights-only migration; --checkpoint-load-mode keeps its name and default
+    assert [mode.value for mode in CheckpointLoadMode] == ['exact']
+
+# -------------------------------------------------------------------------------------------------
+# The old objective's removed keys (spec 4.5; P22)
+# -------------------------------------------------------------------------------------------------
+
+# Spec 4.5's removed keys, plus P22's two (loss.rank_order_weight and data_loader.num_workers), each
+# at its old default, so a value the old configuration accepted is refused too. A removed section
+# is set empty.
+REMOVED_KEYS = {
+    'supervision.mode': 'repaired',
+    'curriculum': {},
+    'sampling': {},
+    'false_negatives': {},
+    'data_loader.batch_size': 32,
+    'data_loader.num_workers': 4,
+    'data_loader.val_split': 0.05,
+    'data_loader.n_epochs': 100,
+    'data_loader.streaming.seed': 42,
+    'data_loader.streaming.n_negatives': 24,
+    'data_loader.streaming.use_phase1_sampling': True,
+    'data_loader.streaming.phase1_alpha': 1.5,
+    'data_loader.streaming.phase1_exclusion_weight': None,
+    'data_loader.streaming.use_on_the_fly_sampling': False,
+    'data_loader.streaming.n_candidates': 48,
+    'data_loader.streaming.n_negatives_phase1': 24,
+    'data_loader.streaming.phase1_easy_start': 0.7,
+    'data_loader.streaming.phase1_easy_end': 0.2,
+    'data_loader.streaming.phase1_semi_start': 0.2,
+    'data_loader.streaming.phase1_semi_end': 0.4,
+    'data_loader.streaming.distances_parquet': './data/naics_distances.parquet',
+    'data_loader.streaming.distance_matrix_parquet': './data/naics_distance_matrix.parquet',
+    'data_loader.streaming.relations_parquet': './data/naics_relations.parquet',
+    'data_loader.streaming.triplets_parquet': './data/naics_training_pairs',
+    'model.eval_sample_size': 500,
+    'model.eval_every_n_epochs': 1,
+    'model.parent_eval_top_k': 1,
+    'model.child_eval_top_k': 5,
+    'loss.temperature': 0.07,
+    'loss.curvature': 1.0,
+    'loss.base_margin': 0.5,
+    'loss.hierarchy_weight': 0.1,
+    'loss.structural_preference': {},
+    'loss.rank_order_weight': None,
+    'loss.radius_reg_weight': 0.01,
+    'loss.level_radius_weight': 0.05,
+    'training.warmup_steps': 500,
+    'training.use_warmup_cosine': False,
+}
+
+@pytest.mark.parametrize(('key', 'value'), list(REMOVED_KEYS.items()), ids=list(REMOVED_KEYS))
+def test_a_removed_key_is_refused_as_extra(valid_config_dict, key, value):
+    '''Spec 4.5: the shipped YAML with a removed key, or an override that sets one, is refused as an
+    unknown key, so no run reads a setting of the old objective.'''
+
+    loc = tuple(key.split('.'))
+    section = valid_config_dict
+    for part in loc[:-1]:
+        section = section[part]
+    section[loc[-1]] = value
+
+    with pytest.raises(ValidationError) as from_yaml:
+        Config.model_validate(valid_config_dict)
+    with pytest.raises(ValidationError) as from_override:
+        Config().override({key: value})
+
+    assert _error_locs_and_types(from_yaml) == [(loc, 'extra_forbidden')]
+    assert _error_locs_and_types(from_override) == [(loc, 'extra_forbidden')]
+
+def test_the_text_streaming_config_holds_only_the_text_fields():
+    '''P22: data_loader.streaming is TextStreamingConfig; StreamingConfig, with the sampling fields
+    HGCN's cache reads, belongs to graph_model alone.'''
+
+    text_streaming = config_module.TextStreamingConfig
+
+    assert list(text_streaming.model_fields) == [
+        'descriptions_parquet', 'tokenizer_name', 'max_length'
+    ]
+    assert type(Config().data_loader.streaming) is text_streaming
+    assert StreamingConfig not in _models_reachable_from(Config)
+    # StreamingConfig keeps the fields hgcn_datamodule._streaming_cfg_from_loader sets
+    assert set(StreamingConfig.model_fields) >= {
+        'descriptions_parquet', 'relations_parquet', 'triplets_parquet', 'n_negatives', 'seed'
+    }
+
+# -------------------------------------------------------------------------------------------------
+# StreamingConfig's ratio checks, kept unchanged for HGCN (P22)
+# -------------------------------------------------------------------------------------------------
+
+class TestStreamingConfigValidation:
+    '''Tests for config validation.'''
+
+    @pytest.mark.unit
+    def test_valid_config_ratios(self):
+        '''Valid ratio configs should pass validation.'''
+        cfg = StreamingConfig(
+            phase1_easy_start=0.60,
+            phase1_easy_end=0.30,
+            phase1_semi_start=0.30,
+            phase1_semi_end=0.40,
+        )
+        # Should not raise
+        assert cfg.phase1_easy_start == 0.60
+
+    @pytest.mark.unit
+    def test_invalid_start_ratios_sum(self):
+        '''Start ratios summing > 1.0 should fail validation.'''
+        with pytest.raises(ValueError, match='phase1_easy_start.*phase1_semi_start.*<= 1.0'):
+            StreamingConfig(
+                phase1_easy_start=0.70,
+                phase1_semi_start=0.40,  # Sum = 1.1 > 1.0
+            )
+
+    @pytest.mark.unit
+    def test_invalid_end_ratios_sum(self):
+        '''End ratios summing > 1.0 should fail validation.'''
+        with pytest.raises(ValueError, match='phase1_easy_end.*phase1_semi_end.*<= 1.0'):
+            StreamingConfig(
+                phase1_easy_end=0.50,
+                phase1_semi_end=0.60,  # Sum = 1.1 > 1.0
+            )
+
+    @pytest.mark.unit
+    def test_n_negatives_phase1_cannot_exceed_candidates(self):
+        '''n_negatives_phase1 > n_candidates should fail validation.'''
+        with pytest.raises(ValueError, match='n_negatives_phase1.*n_candidates'):
+            StreamingConfig(
+                n_candidates=24,
+                n_negatives_phase1=48,  # More than candidates
+            )
+
+# -------------------------------------------------------------------------------------------------
+# Trainer settings (spec 4.2 and 4.5)
+# -------------------------------------------------------------------------------------------------
+
+def test_the_trainer_precision_is_bf16_mixed_by_default_and_as_shipped(valid_config_dict):
+    # R9: the reference trains at bf16-mixed on CUDA; off CUDA the trainer runs 32-true
+    assert TrainerConfig().precision == 'bf16-mixed'
+    assert Config.model_validate(valid_config_dict).training.trainer.precision == 'bf16-mixed'
+
+@pytest.mark.parametrize('precision', ['32', '16', '16-mixed', 'bf16', 'bf16-mixed'])
+def test_the_precision_validator_still_accepts_its_values(precision):
+    assert TrainerConfig(precision=precision).precision == precision
+
+@pytest.mark.parametrize('precision', ['bf16-true', '16-true'])
+def test_no_run_can_select_a_true_half_precision(precision):
+    with pytest.raises(ValidationError, match='precision must be one of'):
+        TrainerConfig(precision=precision)
+
+@pytest.mark.parametrize('devices', [2, 8])
+def test_more_than_one_device_is_refused(devices):
+    '''Spec 4.5 and section 5: training runs on one device, because its code cache is per
+    process.'''
+
+    with pytest.raises(ValidationError, match=f'devices must be 1, not {devices}') as excinfo:
+        Config().override({'training.trainer.devices': devices})
+
+    assert _error_locs_and_types(excinfo) == [(('training', 'trainer', 'devices'), 'value_error')]
+
+# -------------------------------------------------------------------------------------------------
+# The objective's added and changed keys (spec 4.5 and section 5; P5, P22)
+# -------------------------------------------------------------------------------------------------
+
+INF = float('inf')
+NAN = float('nan')
+
+# Spec 4.5's added keys and the keys it changes, at the defaults the spec states (R7, 4.1-4.5)
+SPEC_DEFAULTS = {
+    'experiment_name': 'reference',
+    'data_loader.queries_per_step': 128,
+    'loss.code_code_weight': 1.0,
+    'loss.radial_weight': 1.0,
+    'loss.target_temperature': 1.0,
+    'loss.radial_step': 1.0,
+    'loss.logit_scale_init': 1.0,
+    'loss.logit_scale_range': [0.01, 100.0],
+    'training.learning_rate': 1e-4,
+    'training.weight_decay': 0.01,
+    'training.warmup_epochs': 1,
+    'training.lr_plateau_factor': 0.5,
+    'training.lr_plateau_patience': 2,
+    'training.early_stopping_patience': 5,
+    'training.trainer.max_epochs': 40,
+    'training.trainer.accumulate_grad_batches': 1,
+    'training.trainer.precision': 'bf16-mixed',
+}
+
+def _dotted(source: Any, key: str) -> Any:
+    '''The value at a dotted key, in a Config or in the YAML's dict.'''
+
+    for part in key.split('.'):
+        source = source[part] if isinstance(source, dict) else getattr(source, part)
+    return source
+
+@pytest.mark.parametrize(('key', 'value'), list(SPEC_DEFAULTS.items()), ids=list(SPEC_DEFAULTS))
+def test_an_added_or_changed_key_has_the_specs_default_in_the_model_and_the_yaml(
+    valid_config_dict, key, value
+):
+    '''P5: the Pydantic default is the spec's, and the shipped YAML states the same value.'''
+
+    assert _dotted(Config(), key) == value
+    # The YAML sets the key itself: a missing key would validate to the default
+    _dotted(valid_config_dict, key)
+    assert _dotted(Config.model_validate(valid_config_dict), key) == value
+
+def test_the_configured_queries_per_step_default_is_the_datamodules():
+    assert DataLoaderConfig().queries_per_step == DEFAULT_QUERIES_PER_STEP
 
 @pytest.mark.parametrize(
-    ('field', 'value', 'message'),
+    ('key', 'value', 'error'),
     [
-        ('temperature', 0.0, 'temperature'),
-        ('margin', -0.1, 'margin'),
-        ('tie_tolerance', -0.1, 'tie_tolerance'),
+        ('data_loader.queries_per_step', 0, 'greater_than_equal'),
+        ('data_loader.queries_per_step', -1, 'greater_than_equal'),
+        ('data_loader.queries_per_step', 1.5, 'int_from_float'),
+        ('loss.code_code_weight', -0.1, 'greater_than_equal'),
+        ('loss.code_code_weight', INF, 'finite_number'),
+        ('loss.radial_weight', -1.0, 'greater_than_equal'),
+        ('loss.radial_weight', NAN, 'finite_number'),
+        ('loss.target_temperature', 0.0, 'greater_than'),
+        ('loss.target_temperature', -1.0, 'greater_than'),
+        ('loss.target_temperature', INF, 'finite_number'),
+        ('loss.radial_step', 0.0, 'greater_than'),
+        ('loss.radial_step', -0.5, 'greater_than'),
+        ('loss.radial_step', INF, 'finite_number'),
+        ('loss.logit_scale_init', INF, 'finite_number'),
+        ('loss.logit_scale_init', NAN, 'finite_number'),
+        ('loss.logit_scale_range', [0.01], 'too_short'),
+        ('loss.logit_scale_range', [0.01, 1.0, 100.0], 'too_long'),
+        ('training.warmup_epochs', -1, 'greater_than_equal'),
+        ('training.warmup_epochs', 0.5, 'int_from_float'),
+        ('training.lr_plateau_factor', 0.0, 'greater_than'),
+        ('training.lr_plateau_factor', -0.5, 'greater_than'),
+        ('training.lr_plateau_factor', 1.0, 'less_than'),
+        ('training.lr_plateau_factor', 1.5, 'less_than'),
+        ('training.lr_plateau_patience', -1, 'greater_than_equal'),
+        ('training.early_stopping_patience', 0, 'greater_than_equal'),
+        ('training.early_stopping_patience', -1, 'greater_than_equal'),
     ],
 )
-def test_structural_preference_config_bounds(field, value, message):
-    data = {
-        'weight': 0.35,
-        'margin': 0.1,
-        'temperature': 1.0,
-        'tie_tolerance': 1e-6,
-    }
-    data[field] = value
+def test_an_added_key_outside_its_range_is_refused(key, value, error):
+    '''Spec section 5 and P22: queries_per_step below 1, a weight below 0, a temperature or step at
+    or below 0, a non-finite value, an epoch count below 0, a plateau factor outside (0, 1), an
+    early-stopping patience below 1.'''
 
-    with pytest.raises(ValidationError, match=message):
-        StructuralPreferenceConfig(**data)
+    with pytest.raises(ValidationError) as excinfo:
+        Config().override({key: value})
+
+    # Pinned on the type: before the key is declared, the same override fails as extra_forbidden
+    assert _error_locs_and_types(excinfo) == [(tuple(key.split('.')), error)]
+
+@pytest.mark.parametrize(
+    'bounds',
+    [[1.0, 1.0], [100.0, 0.01], [0.0, 100.0], [-1.0, 100.0], [0.01, INF], [NAN, 100.0]],
+    ids=['one-point', 'reversed', 'zero', 'negative', 'infinite', 'nan'],
+)
+def test_a_logit_scale_range_that_is_empty_or_not_positive_is_refused(bounds):
+    '''Spec section 5: the range must satisfy 0 < low < high, with finite ends.'''
+
+    with pytest.raises(ValidationError, match='logit_scale_range') as excinfo:
+        Config().override({'loss.logit_scale_range': bounds})
+
+    assert _error_locs_and_types(excinfo) == [(('loss', 'logit_scale_range'), 'value_error')]
+
+@pytest.mark.parametrize('init', [0.001, 1000.0], ids=['below', 'above'])
+def test_a_logit_scale_init_outside_its_range_is_refused(init):
+    '''P22: both scales start at logit_scale_init, which must lie inside logit_scale_range.'''
+
+    with pytest.raises(ValidationError, match='logit_scale_init') as excinfo:
+        Config().override({'loss.logit_scale_init': init})
+
+    assert _error_locs_and_types(excinfo) == [(('loss', ), 'value_error')]
+
+@pytest.mark.parametrize(
+    ('key', 'value'),
+    [
+        ('data_loader.queries_per_step', 1),
+        ('loss.code_code_weight', 0.0),
+        ('loss.radial_weight', 0.0),
+        ('loss.logit_scale_init', 0.01),
+        ('loss.logit_scale_init', 100.0),
+        ('training.warmup_epochs', 0),
+        ('training.lr_plateau_patience', 0),
+        ('training.early_stopping_patience', 1),
+    ],
+)
+def test_an_added_key_at_the_edge_of_its_range_is_accepted(key, value):
+    assert _dotted(Config().override({key: value}), key) == value
+
+@pytest.mark.parametrize(
+    ('init', 'low', 'high'),
+    [
+        (1.0, 0.01, 100.0),
+        (0.01, 0.01, 100.0),
+        (100.0, 0.01, 100.0),
+        (0.5, 0.25, 2.0),
+        (1.0, 1.0, 1.0),
+        (1.0, 2.0, 0.5),
+        (1.0, 0.0, 100.0),
+        (1.0, -1.0, 100.0),
+        (0.001, 0.01, 100.0),
+        (1000.0, 0.01, 100.0),
+        (INF, 0.01, 100.0),
+        (1.0, 0.01, INF),
+        (NAN, 0.01, 100.0),
+        (1.0, NAN, 100.0),
+    ],
+)
+def test_the_logit_scale_keys_refuse_exactly_what_the_logit_scale_refuses(init, low, high):
+    '''P22: a config that validates never fails when the model builds its logit scales, and the
+    config refuses nothing they accept.'''
+
+    try:
+        LogitScale(init, low, high)
+    except ValueError:
+        builds = False
+    else:
+        builds = True
+    try:
+        Config().override({'loss.logit_scale_init': init, 'loss.logit_scale_range': [low, high]})
+    except ValidationError:
+        validates = False
+    else:
+        validates = True
+
+    assert validates is builds
+
+@pytest.mark.parametrize(
+    ('text', 'value'),
+    [
+        ('[0.05, 50]', [0.05, 50]),
+        ('[0.01, 100.0]', [0.01, 100.0]),
+        ('[1, 100]', [1, 100]),
+        ('1e-4', 1e-4),
+        ('0.5', 0.5),
+        ('128', 128),
+        ('true', True),
+        ('bf16-mixed', 'bf16-mixed'),
+        ('reference', 'reference'),
+        ('[not, a, list', '[not, a, list'),
+    ],
+)
+def test_an_override_parses_a_list_with_decimals_and_every_other_value_as_before(text, value):
+    '''A list with a decimal point was a string, which the logit-scale range refused.'''
+
+    parsed = parse_override_value(text)
+
+    assert parsed == value
+    assert type(parsed) is type(value)
+
+def test_the_logit_scale_range_can_be_overridden_on_the_command_line():
+    overrides, invalid = parse_config_overrides(['loss.logit_scale_range=[0.05, 50]'])
+
+    assert invalid == []
+    assert Config().override(overrides).loss.logit_scale_range == [0.05, 50.0]
 
 # -------------------------------------------------------------------------------------------------
 # GraphConfig Tests
@@ -838,10 +1106,14 @@ class TestGraphConfig:
 def test_every_tokenizing_config_defaults_to_the_trained_window():
     assert TokenizationConfig().max_length == 128
     assert StreamingConfig().max_length == 128
+    assert config_module.TextStreamingConfig().max_length == 128
     assert TextOnlyConfig().max_length == 128
 
 @pytest.mark.unit
-@pytest.mark.parametrize('config_class', [TokenizationConfig, StreamingConfig, TextOnlyConfig])
+@pytest.mark.parametrize(
+    'config_class',
+    ['TokenizationConfig', 'StreamingConfig', 'TextStreamingConfig', 'TextOnlyConfig'],
+)
 def test_a_max_length_beyond_the_trained_window_is_refused(config_class):
     with pytest.raises(ValidationError, match='trained input window'):
-        config_class(max_length=512)
+        getattr(config_module, config_class)(max_length=512)

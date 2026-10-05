@@ -9,10 +9,13 @@ and −5 is not non-inferior.
 '''
 
 import json
+import re
+from datetime import datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
-from naics_embedder.decision.decide import decide, fix_margins
+from naics_embedder.decision.decide import check_arm, decide, fix_margins
 from naics_embedder.decision.records import (
     ArmRecord,
     DecisionRecord,
@@ -421,3 +424,282 @@ def test_a_changed_artifact_is_refused(store, tmp_path, reference, margins):
 
     with pytest.raises(ValueError, match='changed since it was stored'):
         _decide([arm, reference], margins, store)
+
+# -------------------------------------------------------------------------------------------------
+# Monitor records (Req 4; spec 4.4)
+# -------------------------------------------------------------------------------------------------
+
+# Every trained seed's monitor MRR by epoch: epochs 1 and 2 tie for the highest
+MONITOR_MRRS = (0.2, 0.5, 0.5, 0.4)
+
+@pytest.fixture
+def trained(store, tmp_path):
+    return synthetic_arm(
+        store, tmp_path, spec('trained', dimension=32), {}, monitor_mrrs=MONITOR_MRRS
+    )
+
+def _run(data, seed=3):
+    return data['runs'][seed]
+
+def _monitor_record(data, seed=3, epoch=2):
+    return _run(data, seed)['monitor_records'][epoch]
+
+def _monitor_read(data, seed=3, epoch=2):
+    return _monitor_record(data, seed, epoch)['read']
+
+def test_a_trained_run_keeps_its_earliest_epoch_with_the_highest_monitor_mrr(
+    store, reference, margins, trained
+):
+    '''Spec 4.4: the kept checkpoint is the earliest epoch with the highest MRR, ties included.'''
+
+    for run in trained.runs:
+        assert run.training_run == f'trained-training-{run.seed}'
+        assert [record['mrr'] for record in run.monitor_records] == list(MONITOR_MRRS)
+        assert run.checkpoint_epoch == 1
+
+    check_arm(trained, store, min_seeds=5)
+    # Neither arm is adopted, and the lower dimension stands
+    assert _decide([trained, reference], margins, store).chosen == 'reference'
+
+def test_a_monitor_read_may_name_a_table_other_than_the_exported_one(store, trained):
+    '''
+    A read names its epoch's code cache, which equals the exported table only when both were
+    encoded on the CPU (spec 4.4's agreement test); the campaign trains on CUDA.
+    '''
+
+    for run in trained.runs:
+        selected = run.monitor_records[run.checkpoint_epoch]['read']['detail']
+        assert selected['table'] != run.table.matrix_fingerprint
+
+    check_arm(trained, store, min_seeds=5)
+
+def _shuffle_the_records(data):
+    '''Seed 3's records at epochs 2, 0, 1 and 3, in that order.'''
+
+    records = _run(data)['monitor_records']
+    records[:] = [records[epoch] for epoch in (2, 0, 1, 3)]
+
+def test_the_earliest_best_epoch_is_read_from_the_epochs_not_the_records_order(store, trained):
+    '''
+    The first record is epoch 2, tied for the highest MRR with epoch 1, so neither the first best
+    record's epoch (2) nor its position (0) is the earliest best epoch.
+    '''
+
+    arm = _edited(trained, _shuffle_the_records)
+
+    shuffled = arm.runs[3]
+    epochs = [record['read']['detail']['epoch'] for record in shuffled.monitor_records]
+    assert (epochs, shuffled.checkpoint_epoch) == ([2, 0, 1, 3], 1)
+    check_arm(arm, store, min_seeds=5)
+
+def _repeat_an_epoch(data):
+    _run(data)['monitor_records'].append(_monitor_record(data, epoch=1))
+
+# What follows 'trained seed 3: ' in each refusal
+NO_TRAINING_RUN = 'on a run that names no training run'
+MALFORMED = 'a monitor record is malformed: '
+NOT_A_MONITOR_READ = "; the monitor reads the outcome panel's validation split \\(Req 4\\)"
+
+@pytest.mark.parametrize(
+    'edit, message',
+    [
+        (
+            lambda data: _run(data).update(training_run=None),
+            f'monitor records and a checkpoint epoch {NO_TRAINING_RUN}',
+        ),
+        (
+            lambda data: _run(data).update(training_run=None, checkpoint_epoch=None),
+            f'monitor records {NO_TRAINING_RUN}',
+        ),
+        (
+            lambda data: _run(data).update(training_run=None, monitor_records=[]),
+            f'a checkpoint epoch {NO_TRAINING_RUN}',
+        ),
+        (
+            lambda data: _run(data).update(monitor_records=[]),
+            'training run trained-training-3 has no monitor records',
+        ),
+        (
+            lambda data: _monitor_record(data).update(extra=1),
+            f"{MALFORMED}it must be an object with exactly 'mrr' and 'read'",
+        ),
+        (
+            lambda data: _monitor_record(data).update(mrr='0.5'),
+            f'{MALFORMED}its mrr is not a finite number',
+        ),
+        (
+            lambda data: _monitor_record(data).update(mrr=True),
+            f'{MALFORMED}its mrr is not a finite number',
+        ),
+        (
+            lambda data: _monitor_record(data).update(mrr=float('inf')),
+            f'{MALFORMED}its mrr is not a finite number',
+        ),
+        (
+            lambda data: _monitor_record(data).update(mrr=float('nan')),
+            f'{MALFORMED}its mrr is not a finite number',
+        ),
+        (
+            lambda data: _monitor_read(data)['detail'].pop('epoch'),
+            f'{MALFORMED}its read names no non-negative integer epoch',
+        ),
+        (
+            lambda data: _monitor_read(data)['detail'].update(epoch=-1),
+            f'{MALFORMED}its read names no non-negative integer epoch',
+        ),
+        (
+            # On epoch 1's record: True == 1, so only the type check tells them apart
+            lambda data: _monitor_read(data, epoch=1)['detail'].update(epoch=True),
+            f'{MALFORMED}its read names no non-negative integer epoch',
+        ),
+        (
+            lambda data: _monitor_read(data).update(panel='regressor_seen'),
+            "a monitor record logs 'read' on the regressor_seen panel's validation split"
+            f'{NOT_A_MONITOR_READ}',
+        ),
+        (
+            lambda data: _monitor_read(data).update(split='test'),
+            f"a monitor record logs 'read' on the outcome panel's test split{NOT_A_MONITOR_READ}",
+        ),
+        (
+            lambda data: _monitor_read(data).update(event='open'),
+            "a monitor record logs 'open' on the outcome panel's validation split"
+            f'{NOT_A_MONITOR_READ}',
+        ),
+        (
+            lambda data: _monitor_read(data)['detail'].update(training_run='another-run'),
+            "a monitor read names another \\['training_run'\\]",
+        ),
+        (
+            lambda data: _monitor_read(data)['detail'].update(seed=4),
+            "a monitor read names another \\['seed'\\]",
+        ),
+        (
+            lambda data: _monitor_read(data).update(fingerprint='other-roles'),
+            "a monitor read names another \\['fingerprint'\\]",
+        ),
+        (_repeat_an_epoch, 'the monitor records repeat the epochs \\[1\\]'),
+    ],
+    ids=[
+        'records-and-an-epoch-without-a-training-run',
+        'records-without-a-training-run',
+        'an-epoch-without-a-training-run',
+        'a-training-run-without-records',
+        'another-key',
+        'a-text-mrr',
+        'a-boolean-mrr',
+        'an-infinite-mrr',
+        'a-nan-mrr',
+        'no-epoch',
+        'a-negative-epoch',
+        'a-boolean-epoch',
+        'another-panel',
+        'a-test-split',
+        'an-open-event',
+        'another-training-run',
+        'another-seed',
+        'another-fingerprint',
+        'a-repeated-epoch',
+    ],
+)
+def test_a_runs_monitor_records_must_be_its_own_outcome_validation_reads(
+    store, trained, edit, message
+):
+    '''Spec §5: monitor records that are not the run's outcome validation reads are refused.'''
+
+    arm = _edited(trained, edit)
+
+    with pytest.raises(ValueError, match=f'^trained seed 3: {message}'):
+        check_arm(arm, store, min_seeds=5)
+
+@pytest.mark.parametrize('epoch', [None, 0, 2, 3], ids=['none', 'earlier', 'a-later-tie', 'later'])
+def test_a_checkpoint_from_any_other_epoch_than_the_earliest_best_is_refused(store, trained, epoch):
+    '''Spec §5: the run's earliest epoch with the highest MRR must be its checkpoint's, ties too.'''
+
+    arm = _edited(trained, lambda data: _run(data).update(checkpoint_epoch=epoch))
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f'^trained seed 3: the earliest epoch with the highest monitor MRR, 0.5, is 1, but '
+            f'the checkpoint is from epoch {epoch}'
+        ),
+    ):
+        check_arm(arm, store, min_seeds=5)
+
+@pytest.mark.parametrize(
+    'field, value, error',
+    [('training_run', '', 'string_too_short'), ('checkpoint_epoch', -1, 'greater_than_equal')],
+    ids=['a-blank-training-run', 'a-negative-checkpoint-epoch'],
+)
+def test_a_run_with_a_blank_training_run_or_a_negative_epoch_does_not_load(
+    trained, field, value, error
+):
+    with pytest.raises(ValidationError, match=f'runs\\.3\\.{field}\\n.*{error}'):
+        _edited(trained, lambda data: _run(data).update({field: value}))
+
+def test_a_monitor_read_before_the_margins_were_fixed_is_refused(
+    store, tmp_path, reference, margins
+):
+    early = (margins.fixed_at - timedelta(minutes=1)).isoformat()
+    arm = _edited(
+        synthetic_arm(store, tmp_path, spec('early', dimension=32), {}, monitor_mrrs=MONITOR_MRRS),
+        lambda data: _monitor_read(data).update(time=early),
+    )
+    # Its decision reads all came after the margins
+    reads = [datetime.fromisoformat(log['time']) for run in arm.runs for log in run.log_records]
+    assert min(reads) >= margins.fixed_at
+
+    with pytest.raises(
+        ValueError,
+        match=f'^early seed 3 read at {re.escape(early)}, before the margins were fixed',
+    ):
+        _decide([arm, reference], margins, store)
+
+def test_a_decision_record_carries_every_trained_runs_monitor_reads(store, tmp_path):
+    '''
+    Spec 4.4: every validation read that selected anything reaches the decision record. The
+    reference's monitor reads predate its margins, and its runs are exempt from the check.
+    '''
+
+    reference = synthetic_arm(store, tmp_path, spec('reference'), {}, monitor_mrrs=MONITOR_MRRS)
+    margins = fix_margins(reference, 2.0, 'trained margins', store, min_seeds=5)
+    candidate = synthetic_arm(
+        store, tmp_path, spec('candidate', dimension=32), {}, monitor_mrrs=MONITOR_MRRS
+    )
+    monitored = [
+        datetime.fromisoformat(record['read']['time']) for run in reference.runs
+        for record in run.monitor_records
+    ]
+    assert max(monitored) < margins.fixed_at
+    path = write_record(_decide([candidate, reference], margins, store), tmp_path / 'decision.json')
+
+    record = read_record(path, DecisionRecord)
+
+    carried = [*record.arms, record.margins.reference]
+    for written, arm in zip(carried, [candidate, reference, reference]):
+        assert written.runs == arm.runs
+        for run in written.runs:
+            assert len(run.monitor_records) == len(MONITOR_MRRS)
+
+MONITOR_FIELDS = ('training_run', 'checkpoint_epoch', 'monitor_records')
+
+def test_a_record_written_before_runs_carried_monitor_reads_still_loads(
+    store, tmp_path, reference, margins
+):
+    candidate = synthetic_arm(store, tmp_path, spec('candidate', dimension=32), {})
+    path = write_record(_decide([candidate, reference], margins, store), tmp_path / 'decision.json')
+    data = json.loads(path.read_text(encoding='utf-8'))
+    for arm in [*data['arms'], data['margins']['reference']]:
+        for run in arm['runs']:
+            for field in MONITOR_FIELDS:
+                del run[field]
+    old = tmp_path / 'written-before.json'
+    old.write_text(json.dumps(data), encoding='utf-8')
+
+    record = read_record(old, DecisionRecord)
+
+    for arm in [*record.arms, record.margins.reference]:
+        for run in arm.runs:
+            assert (run.training_run, run.checkpoint_epoch, run.monitor_records) == (None, None, [])
+        check_arm(arm, store, min_seeds=5)

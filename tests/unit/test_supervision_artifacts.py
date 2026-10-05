@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 
 import polars as pl
@@ -6,6 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from naics_embedder.data.create_triplets import build_training_pairs
+from naics_embedder.data.redirections import activity_phrase
 from naics_embedder.data.supervision_bundle import (
     build_codebook,
     build_pair_facts,
@@ -17,6 +19,7 @@ from naics_embedder.data.supervision_bundle import (
 )
 from naics_embedder.panels.index_roles import verify_role_leakage
 from naics_embedder.supervision.artifacts import (
+    METADATA_BUNDLE,
     REDIRECTIONS_SCHEMA,
     REQUIRED_VALIDATION_RESULTS,
     load_validated_bundle,
@@ -497,6 +500,23 @@ def test_loader_rejects_a_missing_member(generated_bundle):
     with pytest.raises(ValueError, match='training_pairs artifact missing'):
         load_validated_bundle(generated_bundle)
 
+def test_loader_rejects_mixed_bundle_metadata(generated_bundle):
+    manifest = json.loads(generated_bundle.read_text())
+    member = manifest['artifacts']['pair_facts']['files'][0]
+    pair_path = generated_bundle.parent / member['path']
+    table = pq.read_table(pair_path)
+    metadata = dict(table.schema.metadata or {})
+    metadata[METADATA_BUNDLE] = b'bundle-b'
+    pq.write_table(table.replace_schema_metadata(metadata), pair_path)
+    member['sha256'] = sha256_file(pair_path)
+    generated_bundle.write_text(json.dumps(manifest, indent=2))
+
+    with pytest.raises(ValueError, match='pair_facts.*bundle-a.*bundle-b'):
+        load_validated_bundle(
+            generated_bundle,
+            expected_contract='stage3-supervision-v2',
+        )
+
 def test_loader_rejects_rehashed_inconsistent_pair_facts(generated_bundle):
     _rewrite_member(
         generated_bundle,
@@ -776,6 +796,50 @@ def test_loader_rejects_a_rehashed_redirection_naming_another_code(generated_bun
         ValueError, match='redirections .*bundle-a.*1 named pairs are not exclusions'
     ):
         load_validated_bundle(generated_bundle)
+
+@pytest.mark.parametrize('phrase', ['Growing peanut', None], ids=['another-phrase', 'no-phrase'])
+def test_loader_rejects_a_rehashed_redirection_whose_phrase_its_text_does_not_give(
+    generated_bundle, phrase
+):
+    # Row 0's text, 'Growing peanuts--are classified in Industry 111113.', gives 'Growing peanuts'
+    _rewrite_member(
+        generated_bundle,
+        'redirections',
+        lambda frame: frame.with_columns(
+            activity=pl.when(pl.col('reference_id') == 0).then(pl.lit(phrase, pl.Utf8)).otherwise(
+                'activity'
+            )
+        ),
+    )
+    refusal = (
+        f"redirection 0 (111111): its activity phrase is {phrase!r}, but its text gives "
+        "'Growing peanuts'"
+    )
+
+    with pytest.raises(ValueError, match=re.escape(f'redirections (bundle-a): {refusal}')):
+        load_validated_bundle(generated_bundle)
+
+def test_bundle_refuses_a_redirection_whose_phrase_its_text_does_not_give(
+    tmp_path, build_bundle, redirections_fixture
+):
+    # Row 1's text, 'Canola crushing--are classified in Industry 111112.', gives 'Canola crushing'
+    misread = redirections_fixture.with_columns(
+        activity=pl.when(pl.col('reference_id') == 1).then(pl.lit('Canola')).otherwise('activity')
+    )
+    refusal = "redirection 1 (222222): its activity phrase is 'Canola', but its text gives"
+
+    with pytest.raises(ValueError, match=re.escape(refusal)):
+        build_bundle(bundle_id='misread', redirections=misread)
+    assert list(tmp_path.iterdir()) == []
+
+@pytest.mark.parametrize('manifest', ['generated_bundle', 'hierarchy_manifest'])
+def test_the_fixture_bundles_carry_the_phrases_their_texts_give(request, manifest):
+    bundle = load_validated_bundle(request.getfixturevalue(manifest))
+    redirections = pl.read_parquet(bundle.artifact_path('redirections'))
+
+    for row in redirections.filter(~pl.col('withheld')).iter_rows(named=True):
+        redirects = row['source'] == 'cross_reference' and bool(row['named_codes'])
+        assert row['activity'] == (activity_phrase(row['text']) if redirects else None)
 
 @pytest.mark.parametrize('member', ['index_roles', 'redirections'])
 def test_loader_requires_both_members(generated_bundle, member):

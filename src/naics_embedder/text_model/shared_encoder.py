@@ -16,6 +16,9 @@ Each field's present texts go to the backbone in chunks of at most ``max_texts_p
 trimmed to its own longest text. So no absent text, and no padding column beyond a chunk's longest
 text, enters the backbone. Presence comes from each field's ``present`` flag, never from the
 attention mask (Req 9).
+
+Under autocast only the backbone runs in reduced precision. The pooled vectors are cast to float32,
+and fusion, the projection and the head run with autocast off (spec 4.2).
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -108,7 +111,7 @@ class SharedEncoder(nn.Module):
         num_experts: The number of experts, under ``moe`` only.
         top_k: The experts each code is routed to, under ``moe`` only.
         moe_hidden_dim: The experts' hidden width, under ``moe`` only.
-        curvature: The head's curvature.
+        radius_bound: R, the head's bound on every radius (``model.radius_bound``).
         use_gradient_checkpointing: Recompute the backbone's activations in the backward pass.
         max_texts_per_call: The most texts one backbone call carries. It bounds a call's memory.
             With dropout off it leaves every output unchanged up to float noise; with dropout on it
@@ -130,7 +133,7 @@ class SharedEncoder(nn.Module):
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
-        curvature: float = 1.0,
+        radius_bound: float = 8.0,
         use_gradient_checkpointing: bool = True,
         max_texts_per_call: int = MAX_TEXTS_PER_CALL,
     ):
@@ -178,9 +181,8 @@ class SharedEncoder(nn.Module):
             moe_hidden_dim=moe_hidden_dim,
         )
         self.projection = nn.Linear(self.hidden_size, dimension)
-        self.head = HyperbolicHead(curvature=curvature)
+        self.head = HyperbolicHead(radius_bound=radius_bound)
         self.dimension = dimension
-        self.curvature = curvature
         self.max_texts_per_call = max_texts_per_call
 
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -202,8 +204,10 @@ class SharedEncoder(nn.Module):
                 ``present`` (B,), as ``stack_text_inputs`` builds them.
 
         Returns:
-            ``embedding`` (B, d + 1), the Lorentz point; ``tangent`` (B, d), the capped tangent
-            vector at the origin; and ``gate_probs`` and ``top_k_indices`` under ``moe`` only.
+            ``embedding`` (B, d + 1), the Lorentz point; ``tangent`` (B, d), the bounded tangent
+            vector at the origin; ``radius`` (B,) and ``direction`` (B, d), its r and û; and
+            ``gate_probs`` and ``top_k_indices`` under ``moe`` only. Every float output is float32
+            under autocast too.
 
         Raises:
             ValueError: If the batch has no field, a field outside the marker set, or a field
@@ -231,9 +235,18 @@ class SharedEncoder(nn.Module):
         )
 
         pooled = self._pool_present(channel_inputs, fields, present)
-        fused = self.fusion(pooled, present)
-        tangent, embedding = self.head(self.projection(fused.vector))
-        output = {'embedding': embedding, 'tangent': tangent}
+        # Only the backbone runs in reduced precision: fusion, the projection and the head run in
+        # float32 with autocast off. Under moe, an expert's output then has the dtype of the
+        # buffer it is added into
+        with torch.autocast(device_type=pooled.device.type, enabled=False):
+            fused = self.fusion(pooled.float(), present)
+            points = self.head(self.projection(fused.vector))
+        output = {
+            'embedding': points.embedding,
+            'tangent': points.tangent,
+            'radius': points.radius,
+            'direction': points.direction,
+        }
         if fused.gate_probs is not None:
             output['gate_probs'] = fused.gate_probs
             output['top_k_indices'] = fused.top_k_indices

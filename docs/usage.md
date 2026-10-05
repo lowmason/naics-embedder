@@ -1,24 +1,14 @@
 # CLI Usage Guide
 
-This guide covers all available CLI commands for the NAICS Embedder system.
-
-## Overview
-
-The NAICS Embedder CLI is organized into three main command groups:
-
-- **`data`** - Data generation and preprocessing commands
-- **`tools`** - Utility tools for configuration, GPU optimization, and metrics
-- **`train`** - Model training with the dynamic SADC curriculum
+The CLI has `data` and `tools` groups plus the top-level `train` command. Use `--help` on any
+command for its exact options. Operator examples below require the named generated artifacts.
 
 ## Installation
 
-The CLI is available as the `naics-embedder` command after installation:
-
 ```bash
+uv sync
 uv run naics-embedder --help
 ```
-
----
 
 ## Data Commands
 
@@ -146,71 +136,25 @@ uv run naics-embedder data regressor-groups --codebook PATH/naics_codebook.parqu
 
 ### `tools config`
 
-Display current training configuration, including the Structure-Aware Dynamic Curriculum (SADC) schedule.
-
-```bash
-uv run naics-embedder tools config
-```
-
-**Options:**
-- `--config PATH` - Path to base config YAML file (default: `conf/config.yaml`)
+Display the configuration validated over defaults, including run inputs and settings. The
+command exits 1 on a missing or invalid file.
 
 ```bash
 uv run naics-embedder tools config --config conf/config.yaml
 ```
 
-### `tools gpu`
-
-Optimize training configuration for available GPU memory. Suggests optimal `batch_size` and `accumulate_grad_batches` based on your GPU.
-
-```bash
-# Auto-detect GPU memory
-uv run naics-embedder tools gpu --auto
-
-# Specify GPU memory manually
-uv run naics-embedder tools gpu --gpu-memory 24
-
-# Apply suggested configuration
-uv run naics-embedder tools gpu --auto --apply
-```
-
-**Options:**
-- `--gpu-memory FLOAT` - GPU memory in GB (e.g., 24 for RTX 6000, 80 for A100)
-- `--auto` - Auto-detect GPU memory
-- `--target-effective-batch INT` - Target effective batch size (default: 256)
-- `--apply` - Apply suggested configuration to config files
-- `--config PATH` - Path to base config YAML file (default: `conf/config.yaml`)
-
 ### `tools visualize`
 
-Visualize training metrics from log files. Creates comprehensive visualizations and analysis of training metrics including:
-- Hyperbolic radius over time, and its spread
-- Training and validation loss
-- Embedding diversity metrics
-
-The structural statistics the logs still record are not shown: they are diagnostics (Req 6),
-reported by `tools diagnostics`.
+Plot the durable epoch summary. One `epoch_metrics.png` has four panels: monitor MRR, term and
+total losses, both learned scales, and per-level radius means with SD bands. Structural metrics
+are separate diagnostics. The tool reads no console logs or evaluation panels.
 
 ```bash
-uv run naics-embedder tools visualize --stage 02_text
+uv run naics-embedder tools visualize   --summary checkpoints/reference/epoch_summary.jsonl   --output-dir outputs/visualizations/reference
 ```
 
-**Options:**
-- `--stage, -s STR` - Stage name to filter (e.g., `02_text`, default: `02_text`)
-- `--log-file PATH` - Path to log file (default: `logs/train_sequential.log`)
-- `--output-dir PATH` - Output directory for plots (default: `outputs/visualizations/`)
-
-### `tools investigate`
-
-Investigate why hierarchy preservation correlations might be low. Analyzes ground truth distances, evaluation configuration, and provides recommendations.
-
-```bash
-uv run naics-embedder tools investigate
-```
-
-**Options:**
-- `--distance-matrix PATH` - Path to ground truth distance matrix (default: `data/naics_distance_matrix.parquet`)
-- `--config PATH` - Path to config file (default: `conf/config.yaml`)
+- `--summary PATH` is required: the run's `epoch_summary.jsonl`.
+- `--output-dir PATH` defaults to `visualizations` beside the summary.
 
 ### `tools outcome-baseline`
 
@@ -289,61 +233,100 @@ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
 
 ### `tools export-table`
 
-Export an arm's 2,125-code table in Req 2's form (roadmap Stage 6). Every code goes through the
-checkpoint's model in eval mode. The table holds `code`, `index` and `level`, then
-`e0 … e{d-1}` (float64): each code's tangent vector at the origin, capped at norm 2, in the
-bundle's codebook order.
+Export a checkpoint's 2,125-code table as `code`, `index`, `level`, then float64 bounded tangent
+coordinates `e0` through `e{d-1}`, in codebook order. Each code goes through the checkpoint's
+model in eval mode. The current text objective uses unit curvature and
+`r = R * tanh(norm(v) / R)`, rather than a cap at 2.
 
-The command resolves the bundle and the token cache as `train` does, from `--config` and
-`key=value` overrides. The checkpoint's supervision contract must match the bundle. Its encoder
-record is its own, so a d = 8 checkpoint exports under a d = 16 config. A checkpoint trained at a
-curvature other than 1, or of the four-copy encoder (roadmap D2), is refused. So is a checkpoint
-trained under other window-fitting summaries than the tokenizer's pin, such as one trained
-before Stage 6b on truncated text: the refusal names `summaries`.
+The supervision contract must match the configured bundle. The checkpoint's encoder record is
+its own, so a dimension-8 checkpoint can export under a dimension-16 config. Pre-`req11-v1`
+checkpoints are refused before model loading. Different window summaries or tokenizer pins are
+refused. Export writes `<stem>_provenance.json`, with checkpoint and contract identities,
+backbone revision, tokenizer/window/summaries identities, descriptions hash and table fingerprint.
 
-**Generates:** the table and `<stem>_provenance.json` beside it. The provenance records the
-checkpoint's sha256 and contract, the backbone's revision, the tokenizer, the window, the
-descriptions' sha256, `summaries`, and the table's sha256 and `matrix_fingerprint`. A read
-(`tools outcome-panel`) refuses a table whose provenance records no `summaries` or `tokenizer`,
-or other ones than its own.
+Use the monitor's selected checkpoint; epoch 1 is an example here:
 
 ```bash
-uv run naics-embedder tools export-table --checkpoint checkpoints/sadc_default/last.ckpt \
-  --output data/arm_table.parquet supervision.manifest_path=/absolute/path/to/manifest.json
+uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-**Options:**
-- `--checkpoint PATH` - The arm's checkpoint
-- `--output PATH` - Where to write the table
-- `--config PATH` - Config naming the bundle and the token cache (default: `conf/config.yaml`)
-- `KEY=VALUE ...` - Config overrides, as `train` takes them; one without `=` is refused, where
-  `train` warns and skips it
+- `--checkpoint PATH`, `--output PATH` are required.
+- `--config PATH` defaults to `conf/config.yaml`.
+- `KEY=VALUE ...` overrides bundle/token-cache configuration. An argument without `=` is refused.
 
 ### `tools outcome-panel`
 
-Score an arm on the outcome panel's validation split under its own distance (`lorentz` for the
-hyperbolic head). Queries are marked `query:` and go through the checkpoint's model. Codes are
-decoded from the table `tools export-table` wrote from that checkpoint, and the table's provenance
-must name both. The read is appended to the selection log with the table's `matrix_fingerprint`
-(`table`) and the checkpoint's sha256 (`checkpoint`). The test split stays sealed: this command
-has no `--split`.
+Score the outcome validation split through the checkpoint's query encoder and the table exported
+from that checkpoint. The read logs table fingerprint and checkpoint hash. Provenance must match
+the checkpoint and preprocessing pins. The test split stays sealed; there is no `--split`.
 
 ```bash
-uv run naics-embedder tools outcome-panel --checkpoint checkpoints/sadc_default/last.ckpt \
-  --table data/arm_table.parquet --purpose 'first live reading' \
-  supervision.manifest_path=/absolute/path/to/manifest.json
+uv run naics-embedder tools outcome-panel --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --purpose 'selected checkpoint validation'   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-**Options:**
-- `--checkpoint PATH`, `--table PATH` - The arm's checkpoint and the table exported from it
-- `--purpose TEXT` - Why this read happens; recorded in the selection log (required)
-- `--config PATH` - Config naming the bundle and the token cache (default: `conf/config.yaml`)
-- `--log PATH` - Selection log (default: `logs/selection_log.jsonl`, from
-  `conf/data/outcome_panel.yaml`)
-- `--output PATH` - Also write the summary as JSON, with the panel's fingerprint, the table's
-  `matrix_fingerprint` and the checkpoint's sha256
-- `KEY=VALUE ...` - Config overrides, as `train` takes them; one without `=` is refused, where
-  `train` warns and skips it
+- `--checkpoint PATH`, `--table PATH`, `--purpose TEXT` are required.
+- `--config PATH` defaults to `conf/config.yaml`.
+- `--log PATH` defaults to the outcome-panel configuration's selection log.
+- `--output PATH` also writes JSON with panel/table/checkpoint identities and scores.
+- `KEY=VALUE ...` takes the same config overrides as export.
+
+### `tools sweep`
+
+Keep the store and JSON records under `~/naics-artifacts`, outside every worktree.
+Build one arm record from complete trained seed directories. Before the first export or decision
+read, the runner checks every seed's epoch coverage, panel fingerprint, training-run id, seed,
+21 settings, earliest best checkpoint and exact saved best score. Both last and selected
+checkpoints must also match the current config in their saved LoRA rank/alpha/dropout and active
+MoE expert count/top-k/hidden dimension/load-balancing coefficient. Missing required values are
+refused; the arm retains its 21-key settings identity. A selected epoch with a
+versioned sibling is ambiguous and refused. The arm's backbone revision is resolved independently
+from its cached backbone; it cannot be copied from the text-only comparator.
+
+```bash
+mkdir -p ~/naics-artifacts/records/stage7
+uv run naics-embedder tools sweep --runs 'checkpoints/reference-seed-{seed}' \
+  --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --seed 6 --seed 7 --seed 8 --seed 9 --seed 10 \
+  --text-only data/reference/text_only.parquet --store ~/naics-artifacts \
+  --output ~/naics-artifacts/records/stage7/reference.json --purpose 'reference campaign validation' \
+  --name reference --accelerator cuda \
+  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+```
+
+- `--runs TEXT` is required and must contain `{seed}`.
+- `--seed INT` is required and repeatable; seed ids must be distinct. Decisions need at least five.
+- `--text-only PATH`, `--store PATH`, `--output PATH`, `--purpose TEXT` are required.
+- `--name TEXT` defaults to `reference`.
+- `--accelerator TEXT` defaults to `cuda`: the training accelerator for run-settings comparison,
+  even when exports and reads run on the Mac.
+- `--log PATH` overrides the selection log; `--config PATH` defaults to `conf/config.yaml`.
+- `KEY=VALUE ...` configures the bundle, encoder and training settings of the arm.
+
+Each seed exports its selected checkpoint and reads outcome validation plus the seen and held-out
+regressor regimes at level 6. The record stores all monitor reads, selected epoch and training-run
+id, as well as decision reads and content-addressed artifacts. Test splits stay sealed. Fix
+reference margins before candidate monitor or decision reads; see
+[the campaign workflow](text_training.md#reference-campaign).
+
+### `tools radius-report`
+
+Read a checkpoint and its exported table on the CPU, without reading an evaluation panel. The
+report checks live anchor-radius gradients, per-level SD > 1e-3, positive distinct sector radii
+and their least gap, manifold error at the largest radius, and chunked all-pairs float32/float64
+distance agreement. It reports nonzero gradient norms for all three weighted terms and both
+scales on the saved seed's epoch-zero, step-zero batch.
+
+```bash
+uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+```
+
+- `--checkpoint PATH`, `--table PATH` are required and must have matching provenance.
+- `--output PATH` also writes the JSON report.
+- `--config PATH` defaults to `conf/config.yaml`; `KEY=VALUE ...` supplies config overrides.
+
+A failed criterion writes the report and exits 1. Distance relative error must be at most 1e-3
+on noncoincident pairs. Coincident tangents must have zero float32 training distance; their
+float64 residual is reported separately. Largest-radius manifold error must be at most
+`1e-9 * x0**2`. This is a verification report, not a panel decision.
 
 ### `tools margins`
 
@@ -351,13 +334,16 @@ Fix each panel's non-inferiority margin δ from a reference arm (Req 5): δ is `
 the reference's across-seed standard deviation of the panel's decision statistic (roadmap D10:
 per-query MRR on the outcome panel, and the `covariates+embedding` comparator's mean squared
 error on each regressor regime at level 6). Fix the margins before any other arm of the decision
-reads a panel: a decision refuses every run that read before its margins were fixed.
+reads a panel, including its training monitor reads: a decision refuses every run that read
+before its margins were fixed.
 
 **Generates:** the margin record (JSON)
 
 ```bash
-uv run naics-embedder tools margins --reference reference.json --multiple 0.5 \
-  --name reference-margins --store ~/naics-artifacts --output margins.json
+uv run naics-embedder tools margins \
+  --reference ~/naics-artifacts/records/stage7/reference.json --multiple 3 \
+  --name reference-margins --store ~/naics-artifacts \
+  --output ~/naics-artifacts/records/stage7/margins.json
 ```
 
 **Options:**
@@ -386,9 +372,12 @@ references, the margins, every comparison with both intervals, the non-dominated
 order, the chosen arm, and each arm's reported gains over the sparse comparators
 
 ```bash
-uv run naics-embedder tools decide --arm candidate.json --arm reference.json \
-  --margins margins.json --name dimension-8 --question "Is dimension 8 enough?" \
-  --store ~/naics-artifacts --output decision.json
+uv run naics-embedder tools decide \
+  --arm ~/naics-artifacts/records/stage7/candidate.json \
+  --arm ~/naics-artifacts/records/stage7/reference.json \
+  --margins ~/naics-artifacts/records/stage7/margins.json \
+  --name dimension-8 --question "Is dimension 8 enough?" \
+  --store ~/naics-artifacts --output ~/naics-artifacts/records/stage7/decision.json
 ```
 
 **Options:**
@@ -429,119 +418,61 @@ uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperboli
 
 ### `train`
 
-Train the contrastive encoder with the Structure-Aware Dynamic Curriculum (SADC). The scheduler
-drives phase transitions automatically—no curriculum files or chain configs are needed.
+Train the shared reference encoder with task, code-to-code and radial terms. The epoch has two
+streams and a per-epoch code cache; it has no text curriculum or validation loader. The outcome
+validation monitor's `val/outcome_mrr` selects the earliest best checkpoint and drives plateau
+scheduling and early stopping.
 
 ```bash
-uv run naics-embedder train --config conf/config.yaml
+uv run naics-embedder train --config conf/config.yaml   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-**Options:**
-- `--config PATH` - Path to base config YAML file (default: `conf/config.yaml`)
-- `--ckpt-path PATH` - Path to checkpoint file to resume from, or `"last"` to auto-detect the latest checkpoint in the experiment directory
-- `--skip-validation` - Skip pre-flight validation of data files and caches
-- `OVERRIDES...` - Config overrides (e.g., `training.learning_rate=1e-4 data_loader.batch_size=64`)
+- `--config PATH` defaults to `conf/config.yaml`.
+- `--ckpt-path PATH` supplies an exact checkpoint; `last` resolves the current experiment's
+  latest checkpoint. Continue only `last`, rather than rewinding to an older kept epoch.
+- `--checkpoint-load-mode TEXT` accepts only `exact`; pre-objective checkpoints and weights-only
+  migration are refused.
+- `--skip-validation` skips advisory data/cache checks. The immutable supervision gate always runs.
+- `KEY=VALUE ...` overrides configuration, such as `data_loader.queries_per_step=64` or
+  `training.learning_rate=1e-5`. A fresh run needs a distinct experiment name.
 
-**Examples:**
+Defaults are experiment `reference`, dimension 16, masked mean, radius bound 8 and 128 queries
+per step. CUDA uses `bf16-mixed` for the backbone while fusion, projection, head, distances and
+losses stay float32. CPU and MPS use `32-true`. Text training uses one device; `devices > 1` is
+refused. `training.trainer.val_check_interval` is retained but unread.
+
+Fresh starts refuse used checkpoint directories. Exact resume requires the same experiment
+directory, bundle, encoder, preprocessing, seed and all 21 run settings, including the epoch
+budget. A supplementary saved-constructor check compares LoRA rank/alpha/dropout always, and
+MoE expert count/top-k/hidden dimension/load-balancing coefficient under active MoE fusion,
+before model/data construction. Missing required values fail closed; inactive MoE controls are
+ignored. The code cache is rebuilt; `monitor_reads.jsonl` and `epoch_summary.jsonl` retain lines
+through the resumed epoch and then continue. A run that early stopping ended exits 1 with
+`early stopping ended the run at epoch k`. A spent epoch budget is a harmless no-op. Launchers
+must treat the early-stopping message as finished rather than retrying it.
 
 ```bash
-# Standard run with SADC
-uv run naics-embedder train
-
-# Resume from last checkpoint in the experiment
-uv run naics-embedder train --ckpt-path last
-
-# Apply overrides for learning rate and epochs
-uv run naics-embedder train --config conf/config.yaml \
-  training.learning_rate=1e-4 training.trainer.max_epochs=20
+uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-### `train-seq`
-
-Deprecated sequential training workflow retained for legacy stage-chain jobs. Use SADC via
-`train` for new runs; `train-seq` now requires `--legacy` to acknowledge deprecation.
-
-```bash
-uv run naics-embedder train-seq --legacy --num-stages 3
-```
-
-**Options:**
-- `--num-stages, -n INT` - Number of sequential stages to run (default: 3)
-- `--config PATH` - Path to base config YAML file (default: `conf/config.yaml`)
-- `--resume` - Resume from last checkpoint if available
-- `--legacy` - Required to continue using the deprecated workflow
-- `OVERRIDES...` - Config overrides applied to every stage
-
-**Examples:**
-
-```bash
-# Reproduce a historical 3-stage run
-uv run naics-embedder train-seq --legacy --num-stages 3
-```
-
----
-
-## Common Workflows
-
-### Complete Data Pipeline
-
-```bash
-# Generate all required data files
-uv run naics-embedder data all
-```
-
-### Standard Training
-
-```bash
-# Train with the dynamic SADC scheduler
-uv run naics-embedder train
-```
-
-### Dynamic SADC Training
-
-```bash
-# Legacy sequential flow (deprecated)
-uv run naics-embedder train-seq --legacy --num-stages 3
-```
-
-### View Configuration
-
-```bash
-# Display current configuration
-uv run naics-embedder tools config
-```
-
-### Analyze Training Metrics
-
-```bash
-# Visualize training metrics
-uv run naics-embedder tools visualize --stage 02_text
-
-# Investigate hierarchy preservation issues
-uv run naics-embedder tools investigate
-```
-
----
+See [exact resume](text_training.md#exact-resume) for artifacts and guards. The former sequential
+stage-chain workflow is removed. Run HGCN separately with
+`uv run python -m naics_embedder.graph_model.hgcn`; see [HGCN training](hgcn_training.md).
 
 ## Getting Help
-
-For help on any command, use the `--help` flag:
 
 ```bash
 uv run naics-embedder --help
 uv run naics-embedder data --help
 uv run naics-embedder tools --help
 uv run naics-embedder train --help
+uv run naics-embedder tools sweep --help
+uv run naics-embedder tools radius-report --help
+uv run naics-embedder tools visualize --help
 ```
-
----
 
 ## Configuration Files
 
-The CLI reads a single configuration in `conf/config.yaml`:
-
-- **Base Config:** Paths, model hyperparameters, and trainer settings
-- **Curriculum:** `curriculum.*` fields configure SADC phase boundaries and false-negative elimination cadence
-
-See the [Configuration Documentation](api/config.md) for details on configuration structure.
-
+`conf/config.yaml` defines the text encoder, objective, two-stream loader and training settings.
+Panel pins and the selection log are configured under `conf/data/`; HGCN has `conf/graph.yaml`.
+See [the configuration API](api/config.md) and [text training](text_training.md).

@@ -4,55 +4,62 @@
 '''
 CLI commands for training NAICS embedding models.
 
-The ``train`` command is the supported entry point and runs the dynamic
-Structure-Aware Dynamic Curriculum (SADC) workflow. The legacy sequential
-command is retained only for backwards compatibility and is hidden from the
-public help output.
+``train`` trains the text stage: Req 11's three terms over the query and code streams, on a code
+cache refreshed from the live model, with each epoch read by D6's monitor on the outcome panel's
+validation split. That MRR, ``val/outcome_mrr``, keeps the checkpoint, stops the run early and
+steps the learning-rate plateau (spec 4.4).
 '''
 
 import logging
+import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import polars as pl
 import pytorch_lightning as pyl
 import typer
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.loggers import TensorBoardLogger
 from rich.console import Console
 from rich.panel import Panel
+from transformers import AutoTokenizer
 from typing_extensions import Annotated
 
+from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
     EncoderArchitecture,
-    MigrationReport,
-    containment_contract,
     contract_for_bundle,
-    load_weights_only,
     shared_encoder_architecture,
     validate_exact_resume,
 )
-from naics_embedder.text_model.dataloader.datamodule import (
-    NAICSDataModule,
-    TrainDatasetEpochCallback,
-    legacy_token_fingerprints,
-)
+from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.export import code_token_config, encode_token_rows
+from naics_embedder.text_model.mixins import OUTCOME_MRR
+from naics_embedder.text_model.monitor import MONITOR_RECORDS, OutcomeMonitor
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import (
     CheckpointLoadMode,
     Config,
+    OutcomePanelConfig,
+    load_config,
 )
 from naics_embedder.utils.console import configure_logging
 from naics_embedder.utils.training import (
     TrainingResult,
+    create_trainer,
     detect_hardware,
+    effective_precision,
     parse_config_overrides,
+    read_checkpoint,
+    refuse_a_fresh_start_into_a_used_directory,
+    refuse_a_resume_from_another_directory,
+    refuse_a_resume_of_a_stopped_run,
+    refuse_a_resume_under_other_settings,
+    refuse_other_constructor_settings,
     resolve_checkpoint,
+    run_settings,
     save_training_summary,
 )
 from naics_embedder.utils.utilities import STAGE3_EMBEDDING_PREFIX, pick_device
@@ -65,35 +72,27 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------------------------------
-# Model Construction and Checkpoint Migration
+# Model and DataModule Construction
 # -------------------------------------------------------------------------------------------------
 
 def build_model_from_config(
     cfg: Config,
     runtime_contract: CheckpointContract,
-    bundle: Optional[ValidatedSupervisionBundle],
+    bundle: ValidatedSupervisionBundle,
+    *,
+    run_settings: Dict[str, Any],
+    monitor: Optional[OutcomeMonitor],
 ) -> NAICSContrastiveModel:
     '''
-    Construct a fresh model for the configured supervision mode.
+    Construct a fresh model under the validated bundle (P15).
 
-    Repaired models take supervision only from the validated bundle: legacy structural inputs
-    (distance matrix, relations parquet, LambdaRank weight) are never passed. Explicit legacy
-    containment reads the old distance matrix and relations file for evaluation only.
+    The model takes supervision only from the bundle, and every setting from the config: Req 11's
+    three terms and their two logit scales, the radius bound, and the optimizer's AdamW, warmup
+    and plateau (spec 4.5). ``run_settings`` (``utils/training.run_settings``) is saved in its
+    hyperparameters, which the exact-resume guard compares (P19); the monitor reads each epoch
+    and is not saved.
     '''
 
-    if cfg.supervision.mode == 'repaired':
-        supervision_inputs = {
-            'supervision_manifest_path': cfg.supervision.manifest_path,
-            'supervision_bundle': bundle,
-        }
-    else:
-        supervision_inputs = {
-            'supervision_manifest_path': None,
-            'supervision_bundle': None,
-            'distance_matrix_path': cfg.data_loader.streaming.distance_matrix_parquet,
-            'relations_parquet_path': cfg.data_loader.streaming.relations_parquet,
-        }
-    structural_preference = cfg.loss.structural_preference
     return NAICSContrastiveModel(
         base_model_name=cfg.model.base_model_name,
         lora_r=cfg.model.lora.r,
@@ -104,53 +103,84 @@ def build_model_from_config(
         num_experts=cfg.model.moe.num_experts,
         top_k=cfg.model.moe.top_k,
         moe_hidden_dim=cfg.model.moe.hidden_dim,
-        temperature=cfg.loss.temperature,
-        curvature=cfg.loss.curvature,
-        hierarchy_weight=cfg.loss.hierarchy_weight,
-        radius_reg_weight=cfg.loss.radius_reg_weight,
-        level_radius_weight=cfg.loss.level_radius_weight,
+        radius_bound=cfg.model.radius_bound,
+        code_code_weight=cfg.loss.code_code_weight,
+        radial_weight=cfg.loss.radial_weight,
+        target_temperature=cfg.loss.target_temperature,
+        radial_step=cfg.loss.radial_step,
+        logit_scale_init=cfg.loss.logit_scale_init,
+        logit_scale_range=tuple(cfg.loss.logit_scale_range),
         learning_rate=cfg.training.learning_rate,
         weight_decay=cfg.training.weight_decay,
-        warmup_steps=cfg.training.warmup_steps,
+        warmup_epochs=cfg.training.warmup_epochs,
+        lr_plateau_factor=cfg.training.lr_plateau_factor,
+        lr_plateau_patience=cfg.training.lr_plateau_patience,
         load_balancing_coef=cfg.model.moe.load_balancing_coef,
-        eval_every_n_epochs=cfg.model.eval_every_n_epochs,
-        eval_sample_size=cfg.model.eval_sample_size,
-        base_margin=cfg.loss.base_margin,  # pyright: ignore[reportAttributeAccessIssue]
-        tree_distance_alpha=cfg.curriculum.tree_distance_alpha,
-        curriculum_phase1_end=cfg.curriculum.phase1_end,
-        curriculum_phase2_end=cfg.curriculum.phase2_end,
-        curriculum_phase3_end=cfg.curriculum.phase3_end,
-        sibling_distance_threshold=cfg.curriculum.sibling_distance_threshold,
-        curriculum_phase_mode=cfg.curriculum.phase_mode,
-        curriculum_anneal=cfg.curriculum.anneal.model_dump(),
-        fn_curriculum_start_epoch=cfg.curriculum.fn_curriculum_start_epoch,
-        fn_cluster_every_n_epochs=cfg.curriculum.fn_cluster_every_n_epochs,
-        fn_num_clusters=cfg.curriculum.fn_num_clusters,
-        false_negative_config=cfg.false_negatives.model_dump(),
-        parent_eval_top_k=cfg.model.parent_eval_top_k,
-        child_eval_top_k=cfg.model.child_eval_top_k,
+        seed=cfg.seed,
+        run_settings=run_settings,
+        supervision_manifest_path=cfg.supervision.manifest_path,
         supervision_contract_version=cfg.supervision.contract_version,
-        supervision_mode=cfg.supervision.mode,
-        structural_preference_weight=structural_preference.weight,
-        structural_preference_margin=structural_preference.margin,
-        structural_preference_temperature=structural_preference.temperature,
-        structural_preference_tie_tolerance=structural_preference.tie_tolerance,
+        supervision_bundle=bundle,
         # The key the token cache resolves under (spec 4.8)
         summaries=summaries_identity(cfg.data_loader.tokenization.tokenizer_name),
         checkpoint_contract=runtime_contract,
-        **supervision_inputs,
+        monitor=monitor,
     )
 
-def announce_legacy_containment() -> None:
-    '''Prominently tag a legacy-containment run in logs and on the console.'''
+def build_datamodule_from_config(
+    cfg: Config,
+    bundle: ValidatedSupervisionBundle,
+) -> NAICSDataModule:
+    '''
+    Construct the two-stream datamodule of the validated bundle (spec 4.3).
 
-    message = (
-        'LEGACY CONTAINMENT: not contract-compliant Stage-3 training. Only local unmined '
-        'contrastive learning and supervision-independent regularizers run; checkpoints are '
-        'tagged legacy-containment and can never exact-resume into repaired training.'
+    It reads the token cache the export and the reads load (``code_token_config``), so an arm is
+    exported from the token rows it trained on, and it draws each epoch's permutations from the
+    run's seed, ``data_loader.queries_per_step`` queries a step.
+    '''
+
+    return NAICSDataModule(
+        token_config=code_token_config(cfg),
+        seed=cfg.seed,
+        queries_per_step=cfg.data_loader.queries_per_step,
+        supervision_manifest_path=cfg.supervision.manifest_path,
+        supervision_contract_version=cfg.supervision.contract_version,
+        supervision_bundle=bundle,
     )
-    logger.warning(message)
-    console.print(f'[bold red]{message}[/bold red]\n')
+
+def build_monitor_from_config(
+    cfg: Config,
+    bundle: ValidatedSupervisionBundle,
+    checkpoint_dir: Path,
+    *,
+    selection_log: Union[str, Path],
+) -> OutcomeMonitor:
+    '''
+    The run's D6 monitor (spec 4.4): the bundle's outcome panel, its reads logged to
+    ``selection_log`` and kept in ``monitor_reads.jsonl`` in the run's checkpoint directory.
+
+    It tokenizes queries with the token cache's tokenizer and window (``code_token_config``), as
+    an arm's reads do. Building it writes nothing: the first read writes the log, and the first
+    epoch's end the records file.
+
+    Args:
+        cfg: The run's configuration.
+        bundle: The validated bundle, whose ``index_roles`` member holds the panel.
+        checkpoint_dir: The run's checkpoint directory.
+        selection_log: ``conf/data/outcome_panel.yaml``'s ``selection_log``.
+    '''
+
+    token_config = code_token_config(cfg)
+    return OutcomeMonitor(
+        OutcomePanel.from_bundle(bundle, selection_log),
+        AutoTokenizer.from_pretrained(token_config.tokenizer_name),
+        token_config.max_length,
+        Path(checkpoint_dir) / MONITOR_RECORDS,
+        purpose=(
+            f'D6 monitor: the validation MRR that selects an epoch of {cfg.experiment_name} '
+            f'(seed {cfg.seed})'
+        ),
+    )
 
 def encoder_architecture_for(cfg: Config) -> EncoderArchitecture:
     '''
@@ -166,41 +196,18 @@ def encoder_architecture_for(cfg: Config) -> EncoderArchitecture:
         backbone=cfg.model.base_model_name,
     )
 
-def runtime_contract_for(
-    cfg: Config, bundle: Optional[ValidatedSupervisionBundle]
-) -> CheckpointContract:
+def runtime_contract_for(cfg: Config, bundle: ValidatedSupervisionBundle) -> CheckpointContract:
     '''
     The checkpoint contract of the configured run, its encoder record and summaries included.
 
-    The supervision gate returns no bundle only for explicit legacy containment. Training's exact
-    resume and the HGCN feeder compare this whole contract with a checkpoint's; export and reads
-    take the encoder record from the checkpoint instead (spec 4.4).
+    Training's exact resume and the HGCN feeder compare this whole contract with a checkpoint's;
+    export and reads take the encoder record from the checkpoint instead (spec 4.4).
     '''
 
-    encoder = encoder_architecture_for(cfg)
-    summaries = summaries_identity(cfg.data_loader.tokenization.tokenizer_name)
-    if bundle is None:
-        return containment_contract(encoder=encoder, summaries=summaries)
     return contract_for_bundle(
-        bundle.manifest, cfg.supervision.mode, encoder=encoder, summaries=summaries
-    )
-
-def log_migration_report(report: MigrationReport) -> None:
-    '''Report what a weights-only migration loaded, skipped, and left freshly initialized.'''
-
-    logger.info(
-        f'Weights-only migration: loaded {len(report.loaded)} encoder tensors, skipped '
-        f'{len(report.skipped)} excluded tensors, {len(report.missing)} encoder tensors freshly '
-        f'initialized, {len(report.unexpected)} unexpected'
-    )
-    for name in report.skipped:
-        logger.info(f'  • skipped (excluded group): {name}')
-    for name in report.missing:
-        logger.warning(f'  • freshly initialized (absent from checkpoint): {name}')
-    console.print(
-        f'[cyan]Weights-only migration:[/cyan] loaded {len(report.loaded)}, skipped '
-        f'{len(report.skipped)}, freshly initialized {len(report.missing)}; optimizer, epoch, '
-        'curriculum, and sampler state start fresh\n'
+        bundle.manifest,
+        encoder=encoder_architecture_for(cfg),
+        summaries=summaries_identity(cfg.data_loader.tokenization.tokenizer_name),
     )
 
 # -------------------------------------------------------------------------------------------------
@@ -214,9 +221,10 @@ def generate_embeddings_from_checkpoint(
 
     Loads a trained model checkpoint, runs inference on all NAICS codes, and
     writes the resulting embeddings to a parquet file compatible with HGCN
-    training. The checkpoint must carry the supervision contract of the configured run: the
-    repaired contract of its validated bundle, or (only under explicit legacy containment) the
-    legacy-containment tag. Untagged legacy or mismatched checkpoints are refused.
+    training. The checkpoint must carry the supervision contract of the configured run, the
+    contract of its validated bundle; a checkpoint without one, or with another, is refused
+    before its model loads. One trained under another objective, as every checkpoint saved
+    before Stage 7 was, is refused first, and nothing migrates it (spec 4.5, D2).
 
     Args:
         checkpoint_path: Filesystem path to the PyTorch Lightning checkpoint
@@ -249,25 +257,13 @@ def generate_embeddings_from_checkpoint(
 
     logger.info(f'Output: {output_path}')
 
-    # The checkpoint must carry the contract of the configured run: the validated repaired bundle,
-    # or the explicit legacy-containment tag
+    # The checkpoint must carry the contract of the configured run's validated bundle
     bundle = require_valid_supervision_bundle(config)
     validate_exact_resume(checkpoint_path, runtime_contract_for(config, bundle))
-    if bundle is None:
-        announce_legacy_containment()
-        load_overrides = {}
-        token_fingerprints = legacy_token_fingerprints(
-            config.data_loader.streaming.descriptions_parquet
-        )
-    else:
-        load_overrides = {
-            'supervision_manifest_path': str(bundle.manifest_path),
-            'supervision_bundle': bundle,
-        }
-        token_fingerprints = {
-            'description_fingerprint': bundle.manifest.description_fingerprint,
-            'codebook_fingerprint': bundle.manifest.codebook_fingerprint,
-        }
+    token_fingerprints = {
+        'description_fingerprint': bundle.manifest.description_fingerprint,
+        'codebook_fingerprint': bundle.manifest.codebook_fingerprint,
+    }
 
     # Load device
     device = pick_device('auto')  # Auto-detect device
@@ -277,11 +273,11 @@ def generate_embeddings_from_checkpoint(
     logger.info('Loading model from checkpoint...')
     model = NAICSContrastiveModel.load_from_checkpoint(
         checkpoint_path,
-        map_location=device,
-        **load_overrides,
+        map_location='cpu',
+        supervision_manifest_path=str(bundle.manifest_path),
+        supervision_bundle=bundle,
     )
-    model.eval()
-    model.to(device)
+    model.to(device).eval()
     logger.info('Model loaded successfully')
 
     # Load descriptions parquet
@@ -329,6 +325,26 @@ def generate_embeddings_from_checkpoint(
 
     return output_path
 
+# -------------------------------------------------------------------------------------------------
+# Training
+# -------------------------------------------------------------------------------------------------
+
+def _stdin_is_terminal() -> bool:
+    '''
+    Whether stdin is a terminal, so that a question can be asked and answered.
+
+    A remote launch reads stdin from ``/dev/null`` (spec 4.6), where ``typer.confirm`` would abort
+    a finished run. A closed stdin (``sys.stdin`` is None) or a closed stream is no terminal
+    either.
+    '''
+    stdin = sys.stdin
+    if stdin is None:
+        return False
+    try:
+        return stdin.isatty()
+    except ValueError:  # A closed stream
+        return False
+
 def train(
     config_file: Annotated[
         str,
@@ -349,9 +365,9 @@ def train(
         typer.Option(
             '--checkpoint-load-mode',
             help=(
-                'exact: resume optimizer/epoch/curriculum state (requires a matching supervision '
-                'contract); weights_only: load allowlisted encoder weights of the same encoder '
-                'architecture into a fresh run'
+                'exact, the one mode: resume the optimizer, epoch and monitor state (requires '
+                'a matching supervision contract, checkpoint directory and run settings, and a '
+                'run early stopping has not ended); nothing migrates weights (D2)'
             ),
         ),
     ] = CheckpointLoadMode.EXACT,
@@ -368,28 +384,39 @@ def train(
     overrides: Annotated[
         Optional[List[str]],
         typer.Argument(
-            help="Config overrides (e.g., 'training.learning_rate=1e-4 data.batch_size=64')"
+            help=(
+                "Config overrides (e.g., 'training.learning_rate=1e-4 "
+                "data_loader.queries_per_step=64')"
+            )
         ),
     ] = None,
 ):
     '''
-    Train the NAICS text encoder with contrastive learning.
+    Train the NAICS text encoder: Req 11's three terms, selected on the validation MRR (D6).
 
-    Orchestrates the complete training workflow including configuration loading,
-    hardware detection, checkpoint management, and training execution with
-    PyTorch Lightning. Supports resumption from checkpoints and runtime
-    configuration overrides.
+    Loads the configuration, gates the supervision bundle, and builds the two-stream datamodule,
+    the outcome monitor (the bundle's panel, logging to ``conf/data/outcome_panel.yaml``'s
+    ``selection_log``, its records in the checkpoint directory) and the model, which records the
+    run's settings. ``create_trainer``'s trainer keeps the earliest epoch with the highest
+    ``val/outcome_mrr`` and ``last.ckpt``, and stops early on the same MRR.
+
+    Before anything is built, P19's guards refuse a fresh start into a checkpoint directory that
+    is not empty, and an exact resume from a checkpoint saved in another directory, under other
+    run settings or another seed, or of a run that early stopping ended. Each refusal exits 1. A
+    run that spent its epoch budget without an early stop is not refused: its resume trains
+    nothing.
 
     Args:
         config_file: Path to the base YAML configuration file that describes
             data, model, and training settings. Defaults to ``conf/config.yaml``.
         ckpt_path: Optional checkpoint path to resume training. Use ``last`` to
             automatically pick up the latest checkpoint for the configured
-            experiment. Specify a full path for cross-experiment resumption.
-        checkpoint_load_mode: ``exact`` resumes full training state and requires the
-            checkpoint's supervision contract to match the runtime bundle; ``weights_only``
-            loads allowlisted encoder weights of the same encoder architecture into a fresh run
-            starting at epoch zero.
+            experiment. A checkpoint saved in another directory is refused, and so is one of a
+            run that early stopping ended.
+        checkpoint_load_mode: ``exact``, the one mode, resumes full training state and requires
+            the checkpoint's supervision contract, checkpoint directory and run settings to match
+            this run's, and early stopping not to have ended the run. The weights-only migration
+            is deleted (roadmap D2); the option keeps its name and default.
         skip_validation: Skip advisory pre-flight checks for data files and tokenization
             cache. The mandatory supervision bundle gate is never skipped.
         overrides: Optional list of key-value override strings. Use dot notation
@@ -400,9 +427,13 @@ def train(
 
             $ uv run naics-embedder train
 
-        Resume from last checkpoint with custom learning rate::
+        Resume from the last checkpoint, under the settings the run started with::
 
-            $ uv run naics-embedder train --ckpt-path last training.learning_rate=1e-5
+            $ uv run naics-embedder train --ckpt-path last
+
+        Train under another learning rate, as a run of its own::
+
+            $ uv run naics-embedder train experiment_name=lr-1e-5 training.learning_rate=1e-5
     '''
 
     configure_logging('train.log')
@@ -410,19 +441,6 @@ def train(
     console.rule('[bold green]Training NAICS Embedder[/bold green]')
 
     try:
-        # Detect hardware using centralized utility
-        logger.info('Determining infrastructure...')
-        hardware = detect_hardware(log_info=True)
-
-        # Log GPU memory if available
-        if hardware.gpu_memory:
-            logger.info(
-                f'GPU Memory: {hardware.gpu_memory["reserved_gb"]:.1f} GB used / '
-                f'{hardware.gpu_memory["total_gb"]:.1f} GB total '
-                f'({hardware.gpu_memory["utilization_pct"]:.1f}% utilization, '
-                f'{hardware.gpu_memory["free_gb"]:.1f} GB free)'
-            )
-
         # Load configuration
         logger.info('Loading configuration...')
         cfg = Config.from_yaml(config_file)
@@ -439,18 +457,28 @@ def train(
                 logger.info('')
                 cfg = cfg.override(override_dict)
 
+        # Detect hardware once the config is final: on CUDA the trainer runs at the configured
+        # training.trainer.precision, elsewhere at 32-true (spec 4.2)
+        logger.info('Determining infrastructure...')
+        hardware = detect_hardware(log_info=True, cuda_precision=cfg.training.trainer.precision)
+
+        # Log GPU memory if available
+        if hardware.gpu_memory:
+            logger.info(
+                f'GPU Memory: {hardware.gpu_memory["reserved_gb"]:.1f} GB used / '
+                f'{hardware.gpu_memory["total_gb"]:.1f} GB total '
+                f'({hardware.gpu_memory["utilization_pct"]:.1f}% utilization, '
+                f'{hardware.gpu_memory["free_gb"]:.1f} GB free)'
+            )
+
         # Mandatory supervision gate: validate the bundle before any DataModule, checkpoint, or
-        # model work. There is no fallback from repaired training to legacy files; only an
-        # explicit legacy_containment mode runs without a bundle.
+        # model work. There is no fallback to legacy files, and no mode without a bundle (D2).
         bundle = require_valid_supervision_bundle(cfg)
         runtime_contract = runtime_contract_for(cfg, bundle)
-        if bundle is None:
-            announce_legacy_containment()
-        else:
-            logger.info(
-                f'Supervision bundle {runtime_contract.bundle_id} '
-                f'({runtime_contract.contract_version}) validated'
-            )
+        logger.info(
+            f'Supervision bundle {runtime_contract.bundle_id} '
+            f'({runtime_contract.contract_version}) validated'
+        )
 
         # Run advisory pre-flight validation
         if not skip_validation:
@@ -470,8 +498,7 @@ def train(
             f'[bold]Experiment:[/bold] {cfg.experiment_name}',
             f'[bold]Seed:[/bold] {cfg.seed}\n',
             '[cyan]Data:[/cyan]',
-            f'  • Batch size: {cfg.data_loader.batch_size}',
-            f'  • Num workers: {cfg.data_loader.num_workers}\n',
+            f'  • Queries per step: {cfg.data_loader.queries_per_step}\n',
         ]
 
         summary_list_3 = [
@@ -487,7 +514,7 @@ def train(
             f'  • Precision: {hardware.precision}',
         ]
 
-        # Add GPU memory info and batch size suggestions
+        # Add GPU memory info
         summary_list_4 = []
         if hardware.gpu_memory:
             summary_list_4.append('\n[cyan]GPU Memory:[/cyan]')
@@ -497,25 +524,6 @@ def train(
                 f'({hardware.gpu_memory["utilization_pct"]:.1f}% utilization)'
             )
             summary_list_4.append(f'  • Free: {hardware.gpu_memory["free_gb"]:.1f} GB')
-
-            # Conservative batch size suggestion
-            current_batch_size = cfg.data_loader.batch_size
-            if hardware.gpu_memory['free_gb'] > 8.0 and current_batch_size < 12:
-                # Suggest 2x-3x current batch size conservatively
-                suggested_batch = min(12, current_batch_size * 2)
-                if suggested_batch > current_batch_size:
-                    summary_list_4.append('\n[yellow]Batch Size Suggestion:[/yellow]')
-                    summary_list_4.append(f'  • Current: {current_batch_size}')
-                    summary_list_4.append(
-                        f'  • Suggested: {suggested_batch} (conservative estimate)'
-                    )
-                    summary_list_4.append(
-                        '  • [dim]Note: gpu_tools.py estimates are optimistic; '
-                        'reduce suggested values by ~50%[/dim]'
-                    )
-                    summary_list_4.append(
-                        f'  • [dim]Override with: data.batch_size={suggested_batch}[/dim]'
-                    )
 
         summary = '\n'.join(summary_list_1 + summary_list_3 + summary_list_4)
 
@@ -533,29 +541,6 @@ def train(
         logger.info(f'Setting random seed: {cfg.seed}\n')
         pyl.seed_everything(cfg.seed, verbose=False)
 
-        # Initialize DataModule
-        logger.info('Initializing DataModule...')
-
-        datamodule = NAICSDataModule(
-            descriptions_path=cfg.data_loader.streaming.descriptions_parquet,
-            triplets_path=cfg.data_loader.streaming.triplets_parquet,
-            tokenizer_name=cfg.data_loader.tokenization.tokenizer_name,
-            streaming_config=cfg.data_loader.streaming.model_dump(),
-            sampling_config=cfg.sampling.model_dump(),
-            batch_size=cfg.data_loader.batch_size,
-            num_workers=cfg.data_loader.num_workers,
-            val_split=cfg.data_loader.val_split,
-            n_epochs=cfg.data_loader.n_epochs,
-            seed=cfg.seed,
-            supervision_mode=cfg.supervision.mode,
-            supervision_manifest_path=cfg.supervision.manifest_path,
-            supervision_contract_version=cfg.supervision.contract_version,
-            supervision_bundle=bundle,
-            # Must equal the model's curriculum inputs (trainer.max_epochs, curriculum_phase1_end)
-            max_epochs=cfg.training.trainer.max_epochs,
-            phase1_end=cfg.curriculum.phase1_end,
-        )
-
         # Handle checkpoint resumption using centralized utility
         checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
         checkpoint_info = resolve_checkpoint(
@@ -565,143 +550,106 @@ def train(
 
         if checkpoint_info.exists:
             console.print(f'[green]✓[/green] Using checkpoint: [cyan]{checkpoint_path}[/cyan]\n')
-        elif checkpoint_load_mode is CheckpointLoadMode.WEIGHTS_ONLY:
-            # An explicit migration with nothing to migrate must not silently train from scratch
-            raise ValueError(
-                '--checkpoint-load-mode weights_only requires --ckpt-path naming an existing '
-                f'checkpoint; none found for {ckpt_path!r}'
-            )
         elif ckpt_path:
             console.print(f'[yellow]Warning:[/yellow] Checkpoint not found at {ckpt_path}')
             console.print('Starting training from scratch.\n')
 
-        # Exact resume restores optimizer, epoch, curriculum, and sampler state, so it requires the
-        # checkpoint's supervision contract to match before anything is constructed.
-        exact_resume = bool(checkpoint_path) and checkpoint_load_mode is CheckpointLoadMode.EXACT
+        # The settings the model records and an exact resume must match (P21, P31)
+        settings = run_settings(
+            cfg,
+            accelerator=hardware.accelerator,
+            precision=effective_precision(cfg, hardware.accelerator),
+        )
+
+        # P19's guards, before anything is built. Exact resume, the one checkpoint load mode,
+        # restores the optimizer, epoch and monitor state, so it requires the checkpoint's
+        # supervision contract, its checkpoint directory and its run settings to match, and a run
+        # that early stopping has not ended: Lightning does not restore the stop, so that run
+        # would train on (a run that spent its epoch budget without one trains nothing). A fresh
+        # start requires an unused checkpoint directory
+        exact_resume = bool(checkpoint_path)
         if exact_resume:
             validate_exact_resume(checkpoint_path, runtime_contract)
-
-        # Initialize a fresh model; Lightning restores exact-resume state in trainer.fit
-        logger.info('Initializing Model with evaluation metrics...\n')
-        model = build_model_from_config(cfg, runtime_contract, bundle)
-
-        if checkpoint_path and not exact_resume:
-            report = load_weights_only(model, checkpoint_path, encoder=runtime_contract.encoder)
-            log_migration_report(report)
-
-        # Setup callbacks
-        logger.info('Setting up callbacks and checkpointing...\n')
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-        if exact_resume:
-            logger.info('Supervision contract matches - resuming training from checkpoint')
+            saved = read_checkpoint(checkpoint_path)
+            refuse_a_resume_from_another_directory(saved, checkpoint_dir)
+            refuse_a_resume_under_other_settings(saved, settings, seed=cfg.seed)
+            refuse_other_constructor_settings(saved, cfg)
+            refuse_a_resume_of_a_stopped_run(saved, cfg.training.early_stopping_patience)
+            logger.info(
+                'Supervision contract, checkpoint directory and run settings match, and early '
+                'stopping has not ended the run - resuming training from checkpoint'
+            )
             console.print(
                 '[cyan]Resuming training from checkpoint (will continue from saved epoch)[/cyan]\n'
             )
+        else:
+            refuse_a_fresh_start_into_a_used_directory(checkpoint_dir)
 
-        checkpoint_callback = ModelCheckpoint(
-            dirpath=checkpoint_dir,
-            filename='naics-{epoch:02d}-{val/contrastive_loss:.4f}',
-            monitor='val/contrastive_loss',
-            mode='min',
-            save_top_k=3,
-            save_last=True,
+        # Initialize DataModule
+        logger.info('Initializing DataModule...')
+        datamodule = build_datamodule_from_config(cfg, bundle)
+
+        # D6's monitor reads the bundle's outcome panel and logs to its selection log
+        selection_log = load_config(OutcomePanelConfig, 'data/outcome_panel.yaml').selection_log
+        logger.info(f'Initializing the outcome monitor (selection log: {selection_log})...')
+        monitor = build_monitor_from_config(
+            cfg, bundle, checkpoint_dir, selection_log=selection_log
         )
 
-        early_stopping = EarlyStopping(
-            monitor='val/contrastive_loss',
-            patience=3,  # Reduced from 5 to prevent training beyond optimal point
-            mode='min',
-            min_delta=0.0001,  # Minimum improvement required
-            verbose=True,
+        # Initialize a fresh model; Lightning restores exact-resume state in trainer.fit
+        logger.info('Initializing Model...\n')
+        model = build_model_from_config(
+            cfg, runtime_contract, bundle, run_settings=settings, monitor=monitor
         )
 
-        # TensorBoard logger - ensure directory exists first
-        tb_log_dir = Path(cfg.dirs.output_dir) / cfg.experiment_name
-        tb_log_dir.mkdir(parents=True, exist_ok=True)
-
-        tb_logger = TensorBoardLogger(save_dir=cfg.dirs.output_dir, name=cfg.experiment_name)
-
-        # Don't add epoch progress callback - PyTorch Lightning's progress bar
-        # already shows epoch info
-
-        # Initialize Trainer
+        # Initialize Trainer: checkpointing and early stopping on the monitor's MRR (P17)
         logger.info('Initializing PyTorch Lightning Trainer...\n')
-
-        # Use only 1 device as specified in config, even if multiple GPUs are available
-        devices_to_use = cfg.training.trainer.devices if hasattr(
-            cfg.training.trainer, 'devices'
-        ) else 1
-
-        # If using multiple devices, need to handle unused parameters in DDP
-        strategy = 'auto'
-        if devices_to_use > 1 and hardware.accelerator in ['cuda', 'gpu']:
-            from pytorch_lightning.strategies import DDPStrategy
-
-            strategy = DDPStrategy(find_unused_parameters=True)
-
-        trainer = pyl.Trainer(
-            max_epochs=cfg.training.trainer.max_epochs,
-            accelerator=hardware.accelerator,
-            devices=devices_to_use,
-            strategy=strategy,
-            precision=hardware.precision,  # type: ignore
-            gradient_clip_val=cfg.training.trainer.gradient_clip_val,
-            accumulate_grad_batches=cfg.training.trainer.accumulate_grad_batches,
-            log_every_n_steps=cfg.training.trainer.log_every_n_steps,
-            val_check_interval=cfg.training.trainer.val_check_interval,
-            callbacks=[checkpoint_callback, early_stopping,
-                       TrainDatasetEpochCallback()],
-            logger=tb_logger,
-            default_root_dir=cfg.dirs.output_dir,
-        )
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        trainer, checkpoint_callback, early_stopping = create_trainer(cfg, hardware, checkpoint_dir)
 
         # Start training
-        logger.info('Starting model training with evaluation metrics...\n')
-        console.print('[bold cyan]Validation logs:[/bold cyan]')
-        console.print('  • Embedding statistics (norms, distances)')
-        console.print('  • Collapse detection (variance, norm, distance)')
-        # Req 6: a structural statistic is logged for the record, never announced as a headline
-        console.print('  • Structural statistics, for the record only (Req 6)\n')
+        logger.info('Starting model training...\n')
+        console.print('[bold cyan]Selection (D6):[/bold cyan]')
+        console.print(
+            f"  • {OUTCOME_MRR}: the outcome panel's validation MRR, read after each epoch"
+        )
+        console.print(
+            '  • Keeps the earliest epoch with the highest MRR, and last.ckpt; stops after '
+            f'{cfg.training.early_stopping_patience} epochs without a gain\n'
+        )
 
         console.print(
             f'[bold yellow]Training for {cfg.training.trainer.max_epochs} epochs...[/bold yellow]\n'
         )
 
-        # Only exact resume passes the checkpoint to trainer.fit(); a weights-only migration has
-        # already loaded its encoder weights and must start fresh at epoch zero
-        trainer_ckpt_path = checkpoint_path if exact_resume else None
-        trainer.fit(model, datamodule, ckpt_path=trainer_ckpt_path)
+        # Exact resume passes the checkpoint to trainer.fit(); a fresh run passes None
+        trainer.fit(model, datamodule, ckpt_path=checkpoint_path)
 
         # Training complete
         logger.info('Training complete!')
         logger.info(f'Best model checkpoint: {checkpoint_callback.best_model_path}')
 
-        # Check if early stopping was triggered and get the best loss
+        # The kept epoch's MRR, and whether early stopping ended the run
         early_stop_triggered = early_stopping.stopped_epoch > 0
-        best_loss = early_stopping.best_score if early_stopping.best_score is not None else None
+        best_score = checkpoint_callback.best_model_score
+        best_mrr = float(best_score) if best_score is not None else None
 
-        if early_stop_triggered and best_loss is not None:
-            logger.info(
-                f'Early stopping triggered at epoch {early_stopping.stopped_epoch} '
-                f'with best loss: {best_loss:.6f}'
-            )
+        if early_stop_triggered:
+            logger.info(f'Early stopping triggered at epoch {early_stopping.stopped_epoch}')
 
         console.print(
             f'\n[bold green]✓ Training completed successfully![/bold green]\n'
             f'Best checkpoint: [cyan]{checkpoint_callback.best_model_path}[/cyan]\n'
         )
 
-        # Print the loss that decided early stopping as the final metric
-        if best_loss is not None:
+        # Print the MRR that kept the checkpoint as the final metric
+        if best_mrr is not None:
             if early_stop_triggered:
                 label = 'Final evaluation metric (early stopping)'
             else:
                 label = 'Final evaluation metric'
-            console.print(
-                f'[bold]{label}:[/bold] [cyan]val/contrastive_loss = {best_loss:.6f}[/cyan]\n'
-            )
-            logger.info(f'{label}: val/contrastive_loss = {best_loss:.6f}')
+            console.print(f'[bold]{label}:[/bold] [cyan]{OUTCOME_MRR} = {best_mrr:.6f}[/cyan]\n')
+            logger.info(f'{label}: {OUTCOME_MRR} = {best_mrr:.6f}')
 
         # Save final config
         config_output_path = checkpoint_dir / 'config.yaml'
@@ -713,10 +661,10 @@ def train(
             best_checkpoint_path=checkpoint_callback.best_model_path,
             last_checkpoint_path=str(checkpoint_dir / 'last.ckpt'),
             config_path=str(config_output_path),
-            best_loss=float(best_loss) if best_loss is not None else None,
+            best_score=best_mrr,
             stopped_epoch=early_stopping.stopped_epoch if early_stop_triggered else -1,
             early_stopped=early_stop_triggered,
-            metrics={'best_val_loss': float(best_loss) if best_loss is not None else None},
+            metrics={'best_val_outcome_mrr': best_mrr},
         )
 
         summary_paths = save_training_summary(
@@ -724,14 +672,20 @@ def train(
         )
         console.print(
             'Training summary saved: [cyan]'
-            f'f{summary_paths.get("yaml", summary_paths.get("json"))}[/cyan]\n'
+            f'{summary_paths.get("yaml", summary_paths.get("json"))}[/cyan]\n'
         )
 
-        # Prompt to generate embeddings for HGCN training
-        console.print('\n[bold cyan]Generate embeddings for HGCN training?[/bold cyan]')
-        generate_embeddings = typer.confirm(
-            'Generate embeddings parquet file from this checkpoint?', default=False
-        )
+        # Ask about embeddings for HGCN training (the feeder stays until Stage 11), but only on a
+        # terminal: a remote launch reads stdin from /dev/null, where typer.confirm would abort the
+        # finished run (spec 4.5, "Stays"). Without one, the answer is the question's default, no.
+        generate_embeddings = False
+        if _stdin_is_terminal():
+            console.print('\n[bold cyan]Generate embeddings for HGCN training?[/bold cyan]')
+            generate_embeddings = typer.confirm(
+                'Generate embeddings parquet file from this checkpoint?', default=False
+            )
+        else:
+            logger.info('stdin is not a terminal: no HGCN embeddings question, so none generated')
 
         if generate_embeddings:
             logger.info('Generating embeddings from checkpoint...')

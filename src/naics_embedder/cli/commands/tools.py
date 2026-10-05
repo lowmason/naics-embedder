@@ -9,8 +9,7 @@ configuration, visualizing training metrics, and investigating model behavior.
 
 Commands:
     config: Display current training configuration.
-    visualize: Generate visualizations from training log files.
-    investigate: Analyze hierarchy preservation metrics.
+    visualize: Plot the durable monitor and epoch health summary.
     outcome-baseline: Score the lexical stub encoder on the outcome panel's validation split.
     text-only-table: Embed every code's text with the arm's backbone, frozen (roadmap D9).
     regressor-panel: Score an arm on the regressor panel's validation or sealed test split.
@@ -19,22 +18,28 @@ Commands:
     diagnostics: Report Req 6's structural diagnostics over every codebook code.
     export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
     outcome-panel: Score an arm on the outcome panel's validation split (Stage 6).
+    sweep: Read trained seeds on all three validation panels and write an arm record.
+    radius-report: Check radius variation, geometry and loss gradients for a selected checkpoint.
 '''
 
 import json
 import os
+from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Optional
 
+import numpy as np
 import polars as pl
 import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
-from naics_embedder.decision.decide import decide, fix_margins
-from naics_embedder.decision.records import ArmRecord, MarginRecord, read_record, write_record
+from naics_embedder.decision.decide import _check_monitor_records, decide, fix_margins
+from naics_embedder.decision.records import ArmRecord, ArmSpec, MarginRecord, read_record, write_record
 from naics_embedder.decision.rule import TieUnresolvedError
 from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.decision.sweep import run_seed_sweep
 from naics_embedder.metrics.diagnostics import GEOMETRIES, diagnostics_report
 from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
@@ -50,13 +55,17 @@ from naics_embedder.panels.regressor import (
     load_regressor_panel,
     summarize,
 )
-from naics_embedder.panels.text_only import build_text_only_table, provenance_path
-from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
+from naics_embedder.panels.text_only import build_text_only_table, load_backbone, provenance_path
+from naics_embedder.panels.window_summaries import summaries_identity
+from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
+from naics_embedder.text_model.checkpoint_runner import CheckpointRunner
+from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
 from naics_embedder.text_model.export import code_token_config, export_code_table
+from naics_embedder.text_model.radius_report import ANCHOR_GRADIENT_PREFIX, radius_report, term_gradients
 from naics_embedder.tools.config_tools import show_current_config
-from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
+from naics_embedder.tools.metrics_tools import visualize_metrics
 from naics_embedder.utils.config import (
     Config,
     DecisionConfig,
@@ -66,7 +75,7 @@ from naics_embedder.utils.config import (
     load_config,
 )
 from naics_embedder.utils.console import configure_logging
-from naics_embedder.utils.training import parse_config_overrides
+from naics_embedder.utils.training import effective_precision, parse_config_overrides, run_settings
 from naics_embedder.utils.utilities import pick_device
 from naics_embedder.utils.validation import ValidationError, require_valid_supervision_bundle
 
@@ -98,11 +107,12 @@ def config(
     ] = 'conf/config.yaml',
 ):
     '''
-    Display the current training and curriculum configuration.
+    Display the training configuration a run would use.
 
-    Loads the specified configuration file and displays a formatted summary
-    of all settings including data paths, model architecture, training
-    hyperparameters, and loss function weights.
+    Validates the configuration file over the defaults and displays the run's name, seed and
+    inputs, then the settings every run records. A file that sets a key the configuration
+    no longer has is refused (spec 4.5). A missing file, or one the configuration refuses,
+    prints the error and exits 1.
 
     Args:
         config_file: Path to the YAML configuration file to display.
@@ -120,7 +130,8 @@ def config(
 
     configure_logging('tools_config.log')
 
-    show_current_config(config_file)
+    if not show_current_config(config_file):
+        raise typer.Exit(code=1)
 
 # -------------------------------------------------------------------------------------------------
 # Visualize metrics
@@ -128,138 +139,29 @@ def config(
 
 @app.command('visualize')
 def visualize(
-    stage: Annotated[
-        str,
-        typer.Option(
-            '--stage',
-            '-s',
-            help="Stage name to filter (e.g., '02_text')",
-        ),
-    ] = '02_text',
-    log_file: Annotated[
-        Optional[str],
-        typer.Option(
-            '--log-file',
-            help='Path to log file (default: logs/train_sequential.log)',
-        ),
-    ] = None,
-    output_dir: Annotated[
-        Optional[str],
-        typer.Option(
-            '--output-dir',
-            help='Output directory for plots (default: outputs/visualizations/)',
-        ),
-    ] = None,
+    summary: Annotated[str, typer.Option('--summary', help="The run's epoch_summary.jsonl")],
+    output_dir: Annotated[Optional[str],
+                          typer.Option(
+                              '--output-dir',
+                              help='Plot directory (default: visualizations beside the summary)'
+                          )] = None,
 ):
     '''
-    Visualize training metrics from log files.
+    Plot the run's monitor MRR, loss means, logit scales and radius mean and SD per level.
 
-    Parses training log files and generates visualizations showing the
-    progression of key metrics including contrastive loss, hierarchy
-    correlation, embedding statistics, and learning rate schedules.
-
-    Output visualizations are saved as PNG files in the specified output
-    directory.
-
-    Args:
-        stage: Stage identifier used to filter metrics. Use this to focus
-            on a specific training stage like ``02_text``.
-        log_file: Path to the training log file to parse. When omitted,
-            defaults to ``logs/train_sequential.log``.
-        output_dir: Directory for saving visualization files. When omitted,
-            defaults to ``outputs/visualizations/``.
-
-    Example:
-        Visualize metrics from default log::
-
-            $ uv run naics-embedder tools visualize --stage 02_text
-
-        Visualize custom log file::
-
-            $ uv run naics-embedder tools visualize --log-file logs/train.log
+    Read ``epoch_summary.jsonl`` beside the run's checkpoints. The figure is ``epoch_metrics.png``
+    in ``--output-dir``, or ``visualizations`` beside the summary by default.
     '''
 
     configure_logging('tools_visualize.log')
-
     try:
-        log_path = Path(log_file) if log_file else None
-        output_path = Path(output_dir) if output_dir else None
-
-        result = visualize_metrics(stage=stage, log_file=log_path, output_dir=output_path)
-
-        if result.get('output_file'):
-            console.print(
-                '\n[bold green]✓[/bold green] Visualization saved to: '
-                f'[cyan]{result["output_file"]}[/cyan]\n'
-            )
-
-    except Exception as e:
-        console.print(f'[bold red]Error:[/bold red] {e}')
+        result = visualize_metrics(
+            summary=Path(summary), output_dir=Path(output_dir) if output_dir else None
+        )
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+        console.print(f'[bold red]Error:[/bold red] {exc}')
         raise typer.Exit(code=1)
-
-# -------------------------------------------------------------------------------------------------
-# Investigate hierarchy preservation metrics
-# -------------------------------------------------------------------------------------------------
-
-@app.command('investigate')
-def investigate(
-    distance_matrix: Annotated[
-        Optional[str],
-        typer.Option(
-            '--distance-matrix',
-            help='Path to ground truth distance matrix',
-        ),
-    ] = None,
-    config_file: Annotated[
-        Optional[str],
-        typer.Option(
-            '--config',
-            help='Path to config file (default: conf/config.yaml)',
-        ),
-    ] = None,
-):
-    '''
-    Analyze why hierarchy preservation correlations might be low.
-    
-    Investigates potential causes for poor hierarchy preservation metrics
-    by analyzing the ground truth distance matrix, evaluation configuration,
-    and providing diagnostic recommendations.
-    
-    Use this command when training produces unexpectedly low hierarchy
-    correlation metrics to identify configuration or data issues.
-    
-    Args:
-        distance_matrix: Path to the ground truth distance matrix parquet.
-            When omitted, uses the path from the configuration file.
-        config_file: Path to the configuration file. When omitted, uses
-            the default ``conf/config.yaml``.
-    
-    Example:
-        Investigate hierarchy metrics::
-        
-            $ uv run naics-embedder tools investigate
-        
-        Use custom distance matrix::
-        
-            $ uv run naics-embedder tools investigate \\
-                --distance-matrix data/custom_distances.parquet
-    '''
-
-    configure_logging('tools_investigate.log')
-
-    try:
-        dist_path = Path(distance_matrix) if distance_matrix else None
-        config_path = Path(config_file) if config_file else None
-
-        result = investigate_hierarchy(distance_matrix_path=dist_path, config_path=config_path)
-        for key, value in result.items():
-            console.print(f'[bold green]{key}:[/bold green] {value}')
-
-        console.print('\n[bold green]Investigation complete![/bold green]\n')
-
-    except Exception as e:
-        console.print(f'[bold red]Error:[/bold red] {e}')
-        raise typer.Exit(code=1)
+    console.print(f'Epoch metrics: {result["output_file"]} ({result["num_epochs"]} epochs)')
 
 # -------------------------------------------------------------------------------------------------
 # Outcome panel: lexical baseline
@@ -842,14 +744,202 @@ def _run_bundle(cfg: Config) -> ValidatedSupervisionBundle:
     The configured supervision bundle, through ``train``'s gate.
 
     Raises:
-        ValueError: Under legacy containment, which has no bundle (P27).
         ValidationError: As ``require_valid_supervision_bundle``.
     '''
 
-    bundle = require_valid_supervision_bundle(cfg)
-    if bundle is None:
-        raise ValueError('export and reads need a supervision bundle; legacy containment has none')
-    return bundle
+    return require_valid_supervision_bundle(cfg)
+
+def _sweep_spec(cfg: Config, *, name: str, accelerator: str) -> ArmSpec:
+    '''The arm's settings and text identities, from its config and cached backbone (P21, P32).'''
+
+    _, _, revision = load_backbone(cfg.model.base_model_name)
+    return ArmSpec(
+        name=name,
+        components=1,
+        dimension=cfg.model.dimension,
+        geometry='hyperbolic',
+        backbone=cfg.model.base_model_name,
+        backbone_revision=revision,
+        descriptions_sha256=sha256_file(cfg.data_loader.streaming.descriptions_parquet),
+        summaries_sha256=summaries_identity(cfg.data_loader.tokenization.tokenizer_name),
+        max_length=cfg.data_loader.streaming.max_length,
+        settings=run_settings(
+            cfg, accelerator=accelerator, precision=effective_precision(cfg, accelerator)
+        )
+    )
+
+@app.command('sweep')
+def sweep_command(
+    runs: Annotated[str,
+                    typer.Option('--runs', help='Run directory pattern containing {seed}')],
+    seed: Annotated[List[int],
+                    typer.Option('--seed', help='Trained seed to read (repeatable)')],
+    text_only: Annotated[str,
+                         typer.Option('--text-only', help='Frozen-backbone comparator table')],
+    store: Annotated[str, typer.Option('--store', help='Content-addressed artifact store')],
+    output: Annotated[str,
+                      typer.Option('--output', help='New arm record JSON; never overwritten')],
+    purpose: Annotated[str,
+                       typer.Option('--purpose', help='Why these validation reads happen')],
+    name: Annotated[str,
+                    typer.Option('--name', help='Arm name in its decision record')] = 'reference',
+    accelerator: Annotated[str,
+                           typer.Option(
+                               '--accelerator', help='Training accelerator: cuda, mps or cpu'
+                           )] = 'cuda',
+    log: Annotated[
+        Optional[str],
+        typer.Option('--log', help='Selection log (default: the outcome-panel config)')] = None,
+    config_file: Annotated[
+        str, typer.Option('--config', help='Training config YAML')] = 'conf/config.yaml',
+    overrides: Annotated[Optional[List[str]],
+                         typer.Argument(help='Training config overrides, as key=value')] = None,
+):
+    '''
+    Read each trained seed once on all three validation panels and save its arm record.
+
+    Every seed's checkpoints and monitor reads are checked before the first decision read. The
+    record carries the monitor reads that selected each checkpoint. ``--accelerator`` describes
+    training; the export and decision reads use this machine's device.
+    '''
+
+    configure_logging('tools_sweep.log')
+    try:
+        _require_new_record(Path(output))
+        if not purpose.strip():
+            raise ValueError('every selection-log record needs a purpose')
+        if accelerator not in ('cuda', 'mps', 'cpu'):
+            raise ValueError('--accelerator must be cuda, mps or cpu')
+        if '{seed}' not in runs:
+            raise ValueError('--runs must contain {seed}')
+        if len(set(seed)) != len(seed):
+            raise ValueError(f'a seed repeats: {seed}')
+        directories = {number: Path(runs.format(seed=number)) for number in seed}
+        cfg = _run_config(config_file, overrides)
+        bundle = _run_bundle(cfg)
+        spec = _sweep_spec(cfg, name=name, accelerator=accelerator)
+        panel_cfg = load_config(OutcomePanelConfig, 'data/outcome_panel.yaml')
+        log_path = log or panel_cfg.selection_log
+        panel = OutcomePanel.from_bundle(bundle, log_path)
+        runner = CheckpointRunner(
+            cfg, bundle, run_directory=directories.__getitem__, device=pick_device('auto')
+        )
+        for number in seed:
+            selected = runner.check(spec, number)
+            # Reuse check_arm's monitor gate before artifacts or decision reads exist. Only these
+            # fields are read: no fake artifact references or incomplete records are constructed.
+            arm = SimpleNamespace(spec=spec, panels=SimpleNamespace(outcome=panel.fingerprint))
+            run = SimpleNamespace(
+                seed=number,
+                training_run=selected.training_run,
+                checkpoint_epoch=selected.epoch,
+                monitor_records=selected.monitor_records
+            )
+            _check_monitor_records(arm, run)
+        regressor_cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
+        regressor = load_regressor_panel(
+            regressor_cfg,
+            bundle.artifact_path('codebook'),
+            log_path=log_path,
+            levels=[DECISION_LEVEL]
+        )
+        record = run_seed_sweep(
+            spec,
+            seed,
+            runner,
+            outcome_panel=panel,
+            regressor_panel=regressor,
+            text_only_table=text_only,
+            store=ArtifactStore(store),
+            purpose=purpose
+        )
+        write_record(record, output)
+    except (OSError, ValueError, KeyError, ValidationError) as exc:
+        console.print(f'[bold red]Sweep failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(f'Arm record: {output} ({len(record.runs)} seeds)')
+
+@app.command('radius-report')
+def radius_report_command(
+    checkpoint: Annotated[str,
+                          typer.Option('--checkpoint', help='Selected checkpoint to check')],
+    table: Annotated[str, typer.Option('--table', help='Table exported from that checkpoint')],
+    output: Annotated[Optional[str],
+                      typer.Option('--output', help='Radius and gradient report JSON')] = None,
+    config_file: Annotated[str,
+                           typer.Option(
+                               '--config', help='Config naming the bundle and token cache'
+                           )] = 'conf/config.yaml',
+    overrides: Annotated[Optional[List[str]],
+                         typer.Argument(help='Config overrides, as key=value')] = None,
+):
+    '''
+    Check radius variation, geometry and loss gradients for one selected checkpoint.
+
+    Gradients use epoch 0, step 0 of the saved seed and saved query chunk size. The checkpoint
+    and its table must share an export provenance. The report is written even when a measured
+    criterion fails; a failure exits 1. No evaluation split is scored.
+    '''
+
+    configure_logging('tools_radius_report.log')
+    try:
+        if output:
+            _require_writable(Path(output))
+        cfg = _run_config(config_file, overrides)
+        bundle = _run_bundle(cfg)
+        tokens = code_token_config(cfg)
+        # This checks the checkpoint/table and preprocessing identities without a panel read.
+        encoder = ArmEncoder.from_files(checkpoint, table, bundle, tokens, device='cpu')
+        model = encoder.model
+        saved = model.hparams.run_settings or {}
+        data = NAICSDataModule(
+            tokens,
+            seed=model.hparams.seed,
+            queries_per_step=saved.get('queries_per_step', cfg.data_loader.queries_per_step),
+            supervision_manifest_path=str(bundle.manifest_path),
+            supervision_bundle=bundle
+        )
+        data.prepare_data()
+        data.setup('fit')
+        data.set_train_epoch(0)
+        batch = data.train_dataset[0]
+        model.refresh_code_cache(data.code_rows)
+        gradients = term_gradients(model, batch)
+        anchors = [
+            gradients.pop(f'{ANCHOR_GRADIENT_PREFIX}{row}')
+            for row in range(len(batch['codes']['ids']))
+        ]
+        radius = radius_report(pl.read_parquet(table), anchor_radius_gradient=np.array(anchors))
+        inert = [
+            name for name, value in gradients.items() if not (np.isfinite(value) and value > 0)
+        ]
+        report = {
+            'checkpoint': str(Path(checkpoint).resolve()),
+            'table': str(Path(table).resolve()),
+            'seed': int(model.hparams.seed),
+            'epoch': 0,
+            'step': 0,
+            'anchor_ids': batch['codes']['ids'].tolist(),
+            'radius': asdict(radius),
+            'term_gradients': {
+                name: value if np.isfinite(value) else None
+                for name, value in gradients.items()
+            },
+            'inert_terms': inert,
+            'passed': radius.passed and not inert
+        }
+        rendered = json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + '\n'
+        if output:
+            path = Path(output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(rendered)
+        console.print_json(rendered)
+    except (OSError, ValueError, RuntimeError, KeyError, ValidationError) as exc:
+        console.print(f'[bold red]Radius report failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+    if not report['passed']:
+        raise typer.Exit(code=1)
 
 @app.command('export-table')
 def export_table(
@@ -879,11 +969,11 @@ def export_table(
     bundle. Its encoder record is its own, so a d = 8 checkpoint exports under a d = 16 config.
 
     Example:
-        Export a run's last checkpoint::
+        Export a run's selected checkpoint::
 
             $ uv run naics-embedder tools export-table \\
-                --checkpoint checkpoints/sadc_default/last.ckpt \\
-                --output data/plan8/arm_table.parquet supervision.manifest_path=PATH
+                --checkpoint checkpoints/reference/epoch=001.ckpt \\
+                --output data/reference/arm_table.parquet supervision.manifest_path=PATH
     '''
 
     configure_logging('tools_export_table.log')
@@ -949,8 +1039,8 @@ def outcome_panel(
         Read the validation split for an exported table::
 
             $ uv run naics-embedder tools outcome-panel \\
-                --checkpoint checkpoints/sadc_default/last.ckpt \\
-                --table data/plan8/arm_table.parquet --purpose 'Stage 6 Exit reading' \\
+                --checkpoint checkpoints/reference/epoch=001.ckpt \\
+                --table data/reference/arm_table.parquet --purpose 'selected checkpoint validation' \\
                 supervision.manifest_path=PATH
     '''
 

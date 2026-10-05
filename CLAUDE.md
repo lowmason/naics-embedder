@@ -2,494 +2,254 @@
 
 ## Project Overview
 
-**NAICS Hyperbolic Embedding System** is a sophisticated machine learning framework that produces
-hyperbolic embeddings for the North American Industry Classification System (NAICS). The system
-combines a shared text encoder over marked text fields, masked fusion, hyperbolic contrastive
-learning, and hyperbolic graph refinement to create geometry-aware embeddings aligned with the
-hierarchical NAICS taxonomy.
+NAICS Embedder learns a shared hyperbolic space for classification codes and activity queries.
+One LoRA-adapted text backbone, masked fusion and one projection feed a live radius/direction
+head. The text objective jointly learns task retrieval, code geometry and radial structure.
+An optional HGCN stage refines the parent–child graph with its own objective and curriculum.
 
-**Key Technologies:**
-
-- **Language:** Python 3.10+
-- **Package Manager:** `uv` (modern Python package manager)
-- **ML Frameworks:** PyTorch ≥2.4.0, PyTorch Lightning ≥2.4, Transformers ≥4.46,
-  PyTorch Geometric ≥2.7
-- **Data:** Polars ≥1.9 (high-performance DataFrames), PyArrow ≥17.0
-- **Configuration:** Pydantic ≥2.12 (config models), Hydra-style YAML configs
-- **CLI:** Typer ≥0.12 with Rich ≥13.9 formatting
-- **Documentation:** MkDocs ≥1.6 with Material theme ≥9.7
-- **Development:** pytest ≥8.3, ruff ≥0.6, yapf ≥0.43
+The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
+Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
+Python 3.12. The source tree has **103 Python files**; tests have **83 unit** files and one
+integration file. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
 
-The system consists of **four sequential stages**:
+1. **Shared text encoding** (`text_model/fields.py`, `shared_encoder.py`): one LoRA backbone reads
+   marked title, description, examples, exclusions and queries. Blank code fields never enter it.
+2. **Fusion and projection** (`text_model/fusion.py`): masked mean by default, attention or MoE
+   as options, then one `Linear(384, d)` for d in {8, 16, 32}, default 16. MoE is an ablation.
+3. **Live radius and objective** (`text_model/hyperbolic.py`, `loss.py`, `naics_model.py`):
+   `r = R * tanh(norm(v) / R)` with default R = 8, and the projection's direction, form the
+   unit-curvature Lorentz point. Task, code-code and radial terms all retain radius gradients.
+4. **Graph refinement** (`graph_model/hgcn.py`): HGCN uses the graph, triplet/radial objectives
+   and its four-phase graph curriculum. Its curvature utilities remain separate from text.
 
-1. **Shared Text Encoding** (`text_model/shared_encoder.py`, `text_model/fields.py`)
-   - One LoRA-adapted backbone (sentence-transformers/all-MiniLM-L6-v2) reads every field:
-     title, description, excluded, examples, and a query
-   - Each present text is marked with its field (`'title: …'`); absent channels never enter
-     the backbone
-   - Mean-pools one vector per present channel
+The text model has no curvature parameter, DCL term, false-negative clustering, negative miner,
+router-guided sampler, text phase curriculum, distributed cache or in-sample validation loader.
+The HGCN stage retains its graph-specific samplers and curriculum.
 
-2. **Fusion and Projection** (`text_model/fusion.py`)
-   - `model.fusion`: masked mean (default), attention pooling, or `moe`, an ablation that
-     routes the masked mean through `text_model/moe.py`'s experts
-   - Exactly one `Linear(384 → d)` maps the fused vector to `model.dimension`, d in {8, 16, 32}
-
-3. **Hyperbolic Contrastive Learning** (`text_model/naics_model.py`, `text_model/loss.py`)
-   - A parameter-free head caps the tangent at norm 2 and maps it onto the Lorentz hyperboloid
-     (c = 1)
-   - Uses Decoupled Contrastive Learning (DCL) with Lorentzian geodesic distances
-   - Includes false negative mitigation via configurable strategies
-   - Dynamic Structure-Aware Curriculum (SADC) adapts training difficulty
-
-4. **Hyperbolic Graph Convolutional Refinement** (`graph_model/hgcn.py`)
-   - Applies HGCN layers to enforce NAICS parent-child graph structure
-   - 4-phase metric-driven curriculum learning system
-   - Event-driven architecture with adaptive loss and specialized samplers
-   - Combines hyperbolic triplet loss with confidence-based margin adaptation
-
-**Final Output:** High-fidelity Lorentz-model hyperbolic embeddings suitable for hierarchical
-search, clustering, and downstream ML tasks. `tools export-table` writes a checkpoint's
-2,125-code table in Req 2's form: tangent coordinates at the origin, `e0 … e{d-1}`.
+`tools export-table` writes each code's bounded tangent coordinates at the origin, `e0` through
+`e{d-1}`, in Req 2's form. Panel reads reconstruct Lorentz points on the CPU in float64.
+The selected text checkpoint is the earliest epoch with the highest outcome validation MRR.
 
 ## Directory Structure
 
-```bash
-naics-embedder/
-├── src/naics_embedder/       # Main source code (81 Python files)
-│   ├── cli/                  # CLI entry point and command groups
-│   │   ├── commands/         # Command implementations
-│   │   │   ├── data.py       # Data preparation commands
-│   │   │   ├── tools.py      # Utility tools commands
-│   │   │   └── training.py   # Training command
-│   │   └── __init__.py       # Top-level Typer app
-│   ├── data/                 # Data preprocessing and generation
-│   │   ├── download_data.py  # Download and preprocess NAICS data
-│   │   ├── redirections.py   # The redirection table (Req 8) and the exclusion channel
-│   │   ├── window_summaries.py    # Build the window-fitting summaries (data summaries)
-│   │   ├── index_role_table.py    # Draw the frozen index-entry role table (data roles)
-│   │   ├── regressor_group_table.py  # Draw the regressor held-out groups (data regressor-groups)
-│   │   ├── compute_relations.py   # Compute relationship measures
-│   │   ├── compute_distances.py   # Compute graph distance measures
-│   │   └── create_triplets.py     # Create contrastive training triplets
-│   ├── text_model/           # Stage 1-3: Text encoding and contrastive learning
-│   │   ├── fields.py         # The five fields and their markers ('title: …')
-│   │   ├── shared_encoder.py # SharedEncoder: one backbone, fusion, one Linear(384 → d) ⭐
-│   │   ├── fusion.py         # Masked mean, attention pooling, the MoE ablation
-│   │   ├── export.py         # Encode token rows; export the code table (tools export-table)
-│   │   ├── arm_encoder.py    # ArmEncoder: queries through the checkpoint, codes from its table
-│   │   ├── moe.py            # Mixture-of-Experts, read only under fusion: moe
-│   │   ├── hyperbolic.py     # Lorentz ops (with torch.compile)
-│   │   ├── naics_model.py    # PyTorch Lightning module (mixin-based) ⭐
-│   │   ├── mixins/           # ⭐ Functional mixins for NAICSContrastiveModel
-│   │   │   ├── distributed.py   # Global batch sampling for multi-GPU
-│   │   │   ├── loss.py          # Hierarchy, structural preference, radius losses
-│   │   │   ├── curriculum.py    # Hard negative mining; router sampling under moe
-│   │   │   ├── logging.py       # Training/validation metric logging
-│   │   │   ├── validation.py    # Validation step and evaluation
-│   │   │   └── optimizer.py     # Optimizer and scheduler config
-│   │   ├── loss.py           # DCL loss, hierarchy loss, rank-order loss
-│   │   ├── curriculum.py     # Structure-Aware Dynamic Curriculum
-│   │   ├── hard_negative_mining.py    # Hard negative mining (with torch.compile)
-│   │   ├── hyperbolic_clustering.py   # False negative clustering
-│   │   ├── false_negative_strategies.py  # FN strategy configuration
-│   │   ├── evaluation.py     # Embedding evaluation metrics
-│   │   └── dataloader/       # Data loading subsystem
-│   │       ├── streaming_dataset.py   # Streaming Polars datasets
-│   │       ├── datamodule.py          # PyTorch Lightning DataModule
-│   │       └── tokenization_cache.py  # Disk-based tokenization cache
-│   ├── panels/               # Sealed evaluation panels (roadmap Stage 2 onward)
-│   │   ├── leakage.py        # Exact and near-duplicate matching against training text
-│   │   ├── index_roles.py    # Index-entry roles: quotas, eligibility, the frozen table
-│   │   ├── decoding.py       # Text-to-code decoding scores (top-1, MRR, Hit@k, LCA level)
-│   │   ├── selection_log.py  # Append-only log of split reads and test-split openings
-│   │   ├── outcome.py        # OutcomePanel: sealed validation and test query splits
-│   │   ├── lexical_encoder.py  # Training-free trigram stub encoder
-│   │   ├── window_summaries.py  # Window-fitting summaries: units, the pin, the resolver (Req 9)
-│   │   ├── qcew_rows.py      # QCEW national rows: cells, population, dated rows (D7)
-│   │   ├── regressor_splits.py  # The regressor partition and its committed held-out draw
-│   │   ├── ridge.py          # Ridge on standardized features along a penalty grid
-│   │   ├── text_only.py      # The text-only comparator: a frozen-backbone code table (D9)
-│   │   └── regressor.py      # RegressorPanel: two regimes, sealed outer sets, predictions
-│   ├── decision/             # Req 5's decision rule over D8's three panels (roadmap Stage 4)
-│   │   ├── scores.py         # Each panel's per-unit scores and decision statistic (D10)
-│   │   ├── resampling.py     # Paired two-stage bootstrap: units shared, seeds per arm
-│   │   ├── rule.py           # Non-inferiority, superiority, non-dominated set, tie order
-│   │   ├── records.py        # Arm, margin and decision records (JSON, never overwritten)
-│   │   ├── store.py          # Content-addressed artifact store
-│   │   ├── decide.py         # Guards, margins and decisions
-│   │   └── sweep.py          # Seed-sweep driver: N seeds, every panel read, all stored
-│   ├── graph_model/          # Stage 4: HGCN refinement
-│   │   ├── hgcn.py           # Hyperbolic graph convolutional network
-│   │   ├── evaluation.py     # HGCN evaluation metrics
-│   │   ├── curriculum/       # ⭐ Advanced 4-phase curriculum system
-│   │   │   ├── controller.py        # CurriculumController, phase transitions
-│   │   │   ├── event_bus.py         # Event-driven architecture
-│   │   │   ├── adaptive_loss.py     # MACL adaptive loss computation
-│   │   │   ├── sampling.py          # Phase-specific sampling strategies
-│   │   │   ├── monitoring.py        # Training progress analysis & reports
-│   │   │   └── preprocess_curriculum.py  # Curriculum data preprocessing
-│   │   └── dataloader/       # Graph data loading
-│   │       ├── hgcn_streaming_dataset.py  # Graph streaming dataset
-│   │       └── hgcn_datamodule.py         # Graph data module
-│   ├── tools/                # Utility tools for config, metrics, visualization
-│   │   ├── config_tools.py
-│   │   ├── metrics_tools.py
-│   │   ├── _visualize_metrics.py      # Training visualization (executable)
-│   │   └── _investigate_hierarchy.py  # Hierarchy investigation
-│   └── utils/                # Backend utilities, config, console
-│       ├── backend.py        # Device selection, GPU memory detection
-│       ├── compile.py        # ⭐ torch.compile config and CompiledLorentzOps
-│       ├── config.py         # Pydantic config models ⭐
-│       ├── console.py        # Rich console logging, table formatting
-│       ├── hyperbolic.py     # LorentzManifold, CurvatureManager, ManifoldAdapter
-│       ├── input_window.py   # The backbone's trained input window (Req 9)
-│       ├── naics_hierarchy.py  # Code lineage, the tree metric D* (Req 7), unary pairs
-│       ├── training.py       # Hardware detection, checkpoint resolution
-│       ├── validation.py     # Data & config validation system
-│       ├── warnings.py       # Centralized warning management
-│       └── utilities.py      # General helper functions
-├── tests/                    # Comprehensive test suite
-│   ├── conftest.py           # Pytest fixtures
-│   ├── unit/                 # 53 unit test files
-│   │   ├── test_config.py
-│   │   ├── test_curriculum.py
-│   │   ├── test_datamodule.py
-│   │   ├── test_encoder.py
-│   │   ├── test_evaluation.py
-│   │   ├── test_graph_curriculum.py       # Graph curriculum tests
-│   │   ├── test_graph_preprocessing.py
-│   │   ├── test_hard_negative_mining.py
-│   │   ├── test_hyperbolic.py
-│   │   ├── test_loss.py
-│   │   ├── test_moe.py
-│   │   ├── test_naics_model.py
-│   │   ├── test_streaming_dataset.py
-│   │   ├── test_tokenization_cache.py
-│   │   └── ...
-│   └── integration/          # Integration tests
-├── conf/                     # Configuration files
-│   ├── config.yaml           # Base training configuration
-│   ├── data/                 # Data generation configs
-│   │   ├── download.yaml
-│   │   ├── outcome_panel.yaml     # Role fractions, seed, near-duplicate threshold, selection log
-│   │   ├── index_roles.csv        # The frozen index-entry role table (committed)
-│   │   ├── regressor_panel.yaml   # QCEW pins, held-out draw, ridge grid, folds, branch record
-│   │   ├── regressor_heldout_groups.csv  # The regressor panel's held-out groups (committed)
-│   │   ├── window_summaries.csv   # Summaries of over-window channel texts (committed, pinned)
-│   │   ├── decision.yaml          # Decision rule: bootstrap replicates and seed, seed floor
-│   │   ├── relations.yaml
-│   │   ├── distances.yaml
-│   │   └── triplets.yaml
-│   └── data_loader/          # Data loading configs
-│       └── tokenization.yaml
-├── docs/                     # MkDocs documentation
-│   ├── .nav.yml              # Navigation configuration
-│   ├── index.md
-│   ├── overview.md
-│   ├── quickstart.md
-│   ├── usage.md
-│   ├── text_training.md
-│   ├── hgcn_training.md
-│   ├── benchmarks.md
-│   └── api/                  # 32 API reference files (auto-generated)
-├── scripts/                  # Utility scripts
-│   └── format_code.sh        # ruff check --fix + yapf (see Python Formatting)
-├── outputs/                  # Training outputs and visualizations
-│   ├── visualizations/       # Comparative training visualizations
-│   ├── 01_text/, 02_text/, 03_text/, ...  # Experiment directories
-│   └── ...
-├── reports/                  # Generated analysis reports
-│   ├── SADC.md               # Structure-Aware Dynamic Curriculum analysis
-│   ├── hgcn.md               # HGCN analysis
-│   ├── hgcn_curriculum.md    # HGCN curriculum analysis
-│   ├── distance_stats.pdf
-│   ├── relation_stats.pdf
-│   └── triplets_stats.pdf
-├── data/                     # Generated data files (gitignored)
-│   ├── naics_descriptions.parquet
-│   ├── naics_relations.parquet
-│   ├── naics_distances.parquet
-│   └── naics_training_pairs.parquet
-├── checkpoints/              # Model checkpoints (gitignored)
-├── logs/                     # Training logs (gitignored)
-├── .github/workflows/        # CI/CD workflows
-│   ├── docs.yml              # Build and deploy docs to GitHub Pages
-│   └── tests.yml             # Ruff + yapf checks and pytest with coverage (separate jobs)
-├── pyproject.toml            # Project metadata and dependencies
-├── uv.lock                   # Locked dependency versions
-├── mkdocs.yml                # Documentation config
-├── .gitignore
-├── .markdownlint.jsonc       # Markdown linting rules (gitignored, local only)
-├── scratch.ipynb             # Experimentation notebook
-└── README.md
+Paths below are relative to the repository; the tree shows the principal modules.
+
+```text
+src/naics_embedder/
+├── cli/commands/              # data, tools and training CLI commands
+├── data/                      # preprocessing, redirections, bundle generation
+├── supervision/
+│   ├── activity.py            # canonical activity-phrase parser
+│   ├── queries.py             # eligible task queries and target/referring codes
+│   ├── code_targets.py        # dense tree targets and anchor/unary keep mask
+│   ├── artifacts.py           # immutable bundle loading and validation
+│   ├── checkpoints.py         # objective/encoder/preprocessing checkpoint contracts
+│   └── schema.py              # bundle schemas and roles
+├── text_model/
+│   ├── fields.py              # field markers
+│   ├── shared_encoder.py      # one backbone, fusion and projection
+│   ├── fusion.py              # masked mean, attention, MoE
+│   ├── hyperbolic.py           # live-radius head, stable polar distance, Lorentz ops
+│   ├── loss.py                # task_loss, code_code_loss, radial_loss, LogitScale
+│   ├── naics_model.py         # two-stream training, cache and monitor orchestration
+│   ├── monitor.py             # CodeCache, LiveEncoder, OutcomeMonitor
+│   ├── epoch_summary.py       # durable epoch MRR and health values
+│   ├── checkpoint_runner.py   # all-seed preflight and selected-checkpoint export
+│   ├── radius_report.py       # radius and no-inert-terms verification
+│   ├── export.py              # tangent code-table export and provenance
+│   ├── arm_encoder.py         # checkpoint queries and exported code coordinates
+│   ├── moe.py                 # optional experts and load balancing
+│   ├── dataloader/            # two-stream steps, tokenization cache
+│   └── mixins/                # loss, logging and optimizer responsibilities
+├── panels/                    # outcome/regressor panels and selection-log guards
+├── decision/                  # paired resampling, margins, arm records and decisions
+├── graph_model/               # HGCN, graph data loading and four-phase curriculum
+├── metrics/                   # structural and retrieval diagnostics
+├── tools/                     # config display, epoch-summary plotting and metrics API
+└── utils/                     # config, training, input-window and geometry utilities
+
+tests/
+├── unit/                      # 83 unit test files
+├── integration/               # test_reference_training.py
+├── fixtures/                  # tiny models, bundles, panels and runs
+└── conftest.py
+
+conf/config.yaml               # reference text configuration
+conf/graph.yaml                # separate HGCN configuration
+conf/data/                     # frozen panel pins, roles, summaries and held-out groups
+docs/                          # guides and MkDocs API pages
+scripts/format_code.sh         # Ruff fixes/imports, then YAPF layout
 ```
+
+Generated data, checkpoints, logs and reports are separate artifacts. Do not confuse historical
+training logs or a real panel campaign with fixture verification.
 
 ## Key Concepts and Patterns
 
-### 1. Hyperbolic Geometry (Lorentz Model)
+### Shared Fields, Window and Fusion
 
-The system implements **two levels** of hyperbolic geometry support:
+The fields are `title`, `description`, `examples`, `excluded` and `query`. Mark each present
+text before tokenization; every field shares the LoRA adapters. Resolve over-window channel
+text through committed window-fitting summaries; never silently truncate it. Token caches and
+checkpoint contracts record the summary hash. Descriptions and tokenizer/window identities
+belong to the token cache.
 
-**Core Operations (`text_model/hyperbolic.py`):**
+Masked mean has no parameters. Attention starts as masked mean. Under `fusion=moe`, only the
+experts' load-balancing term is added; other fusions do not call it. Exactly one affine map
+produces the d-dimensional projection.
 
-- `LorentzOps` class - Low-level Lorentz model operations
-- **Lorentz Inner Product:** `<x, y>_L = -x[0] * y[0] + x[1:] · y[1:]`
-- **Geodesic Distance:** `d(x, y) = arcosh(-<x, y>_L)`
-- **Exponential Map:** Projects tangent vectors from tangent space to hyperboloid
-- **Logarithmic Map:** Projects hyperboloid points to tangent space
+### Three-Term Objective
 
-**Manifold Abstraction (`utils/hyperbolic.py`):**
+`task_loss` sums softmax probability over each query's named targets. Candidates are every code
+at that query's level plus its referencing codes. Phrase targets omit named codes lineal to the
+referring code; a target/referring-code overlap is refused. Training-role index entries and
+non-withheld phrases supply queries; held-out query text does not enter training.
 
-- `LorentzManifold` class - High-level manifold interface with parallel transport
-- `CurvatureManager` - Phase-aware learnable or fixed curvature management
-- `ManifoldAdapter` - Wrapper with auto-projection and validation
-- `validate_hyperbolic_embeddings` - Numerical validation utilities
+`code_code_loss` matches the softmax of `-D* / target_temperature` over all codebook codes except
+the anchor and its unary partner. It never reads exclusion data. `radial_loss` is mean squared
+error from live radius to `radial_step * (level - 1)`. Both term weights and radial step default
+to 1. Task and code-code logits use independent learned positive scales, clamped to [0.01, 100]
+without weight decay. The total adds MoE balancing only under that fusion.
 
-**torch.compile Support (`utils/compile.py`):**
+### Radius and Precision
 
-- `CompiledLorentzOps` - Drop-in replacement with fused operations
-- `maybe_compile` decorator - Conditional compilation based on config
-- `CompileConfig` - Mode, backend, and dynamic shape settings
-- Compiled ops: exp/log maps, distance, Minkowski dot, projection
+The head computes `r = R * tanh(a / R)`, with a = norm(v), then maps the bounded tangent r u to
+`(cosh(r), sinh(r) u)`. Its origin guard handles zero v. Text curvature is fixed at 1 with no
+setting or learned parameter. Radius r is the radial quantity in text losses, health and reports.
 
-### 2. Text Fields and the Shared Encoder
+Float32 stable polar distances avoid cancellation when two large-radius points are nearby.
+CUDA uses `bf16-mixed` only in the backbone. Fusion, projection, head, distances and losses
+remain float32. CPU and MPS use `32-true`. The text Trainer has one device and refuses more.
+Lorentz operations with curvature arguments and the higher-level manifold utilities remain for
+HGCN/general callers; do not infer a text curvature option from them.
 
-Each NAICS code has **4 text channels**:
+### Two-Stream Epoch and Code Cache
 
-- **Title:** Short name (e.g., "Computer Systems Design Services")
-- **Description:** Detailed description of the industry
-- **Examples:** Example activities and products
-- **Excluded:** Related but excluded activities
+An epoch visits every code anchor and eligible task query once, in seed/epoch permutations.
+The query count and `data_loader.queries_per_step` determine steps; the reference's 11,039
+queries at 128 give 87 steps, over which the 2,125 code anchors are distributed evenly.
+The training-pairs member remains validated in the bundle but is never read by text training.
+HGCN retains its separate streaming/sampling path.
 
-Every channel goes through **one shared LoRA-adapted backbone** (via the PEFT library), marked with
-its field (`'title: Computer Systems Design Services'`), so the backbone can tell the fields apart.
-A query is a fifth field, `query`, read by the same backbone. An absent channel (null or blank)
-never enters the backbone, and fusion masks it (Req 9).
+`refresh_code_cache` runs in eval/no-grad mode at fit start and each epoch end. Its detached
+candidate rows are replaced by the current step's live anchors. The embedding cache is rebuilt
+on resume; the token cache is a separate preprocessing artifact. No text validation loader is
+built.
 
-### 3. Fusion and the Mixture-of-Experts Ablation
+### Model Mixins
 
-`model.fusion` picks how the present channels' vectors become one (`text_model/fusion.py`):
+| Mixin | Responsibility |
+|-------|----------------|
+| `LossMixin` | MoE load balancing under `fusion=moe` |
+| `LoggingMixin` | Epoch loss means, scales and per-level radius mean/SD |
+| `OptimizerMixin` | AdamW, warmup/plateau and post-step scale clamping |
 
-- **`masked_mean`** (default): the mean over present channels, with no parameters
-- **`attention`:** attention pooling over present channels; it starts as the masked mean
-- **`moe`** (an ablation only): the masked mean, then `text_model/moe.py`'s top-2 experts
+The model itself coordinates losses, cache refresh, monitor reads and checkpoint metadata.
 
-Router-guided mining, the load-balancing term and their logs run only under `moe` (spec R10,
-R11). Under any other fusion, the geometric miner takes every mining slot.
+### Monitor, Epoch Summary and Selection
 
-### 3.5. Model Mixin Architecture
+After cache refresh, `OutcomeMonitor` reads outcome validation through `OutcomePanel.score_logged`.
+Its float64 MRR, `val/outcome_mrr`, selects the earliest highest-MRR epoch, controls the plateau
+scheduler and drives early stopping. It records training-run id, seed, epoch and matrix
+fingerprint in the selection log and durable `monitor_reads.jsonl`. Test splits stay sealed.
 
-The `NAICSContrastiveModel` is decomposed into **functional mixins** for maintainability:
+`epoch_summary.jsonl` records the same MRR plus loss/task, code_code, radial and total, both
+logit scales, and radius mean/SD at levels 2–6. MoE includes load-balancing loss. Health values
+come from `_log_health()`'s Python floats, not rounded Lightning callback metrics.
+`tools visualize --summary PATH` writes one `epoch_metrics.png` figure with four panels.
 
-| Mixin | Location | Responsibility |
-|-------|----------|----------------|
-| `DistributedMixin` | `mixins/distributed.py` | Global batch sampling, `all_gather` utilities |
-| `LossMixin` | `mixins/loss.py` | Hierarchy loss, structural preference, radius regularization |
-| `CurriculumMixin` | `mixins/curriculum.py` | Hard negative mining; router-guided sampling under `moe` |
-| `LoggingMixin` | `mixins/logging.py` | Training/validation metric logging |
-| `ValidationMixin` | `mixins/validation.py` | Validation step, embedding evaluation |
-| `OptimizerMixin` | `mixins/optimizer.py` | Optimizer and LR scheduler configuration |
+Structural metrics are no longer text validation or scheduler controls. `tools diagnostics`
+reports Req 6 without thresholds or adoption. HGCN keeps structural logging and its graph
+curriculum. The outcome and two regressor panels decide adoption under Req 5.
 
-**Benefits:**
+### Checkpoint Contract and Exact Resume
 
-- Separation of concerns for easier testing and debugging
-- Each mixin can be modified independently
-- Clear ownership of functionality
-- Reduced file size for the main model class
+The contract identifies objective `req11-v1`, bundle, encoder and preprocessing. Old objective
+checkpoints are refused before model loading in training, export, outcome reads and the HGCN
+feeder. Nothing migrates weights into this objective.
 
-### 4. Dynamic Structure-Aware Curriculum Learning (SADC)
+Exact resume also compares saved constructor hyperparameters against the current config: LoRA
+rank/alpha/dropout always, and MoE expert count/top-k/hidden dimension/load-balancing coefficient
+under active MoE fusion. Missing required values fail closed; inactive MoE controls are ignored.
+Campaign preflight checks both last and selected checkpoints before exports or decision reads.
+The literal 21-key `run_settings` identity and finished artifacts remain unchanged.
 
-**Text Model Curriculum** uses a dynamic, structure-aware approach that adapts based on the
-hierarchical structure of NAICS codes:
+Exact resume requires the same experiment directory, seed and all 21 `run_settings`, including
+budget, precision, clipping and accumulation, as well as the contract. Fresh starts refuse
+used checkpoint directories. Resume only `--ckpt-path last`; an older kept checkpoint can rewind
+records and is not the operator continuation path.
 
-- Dynamically adjusts training difficulty based on code relationships
-- Leverages the tree metric D*; an explicit exclusion is never a negative (Req 8)
-- Adapts negative sampling strategy based on training progress
-- Three-phase system with dynamic transitions
+The cache is rebuilt. Monitor and summary files retain their original lines through the
+restored epoch, prune later interrupted lines and continue. An early-stopped run exits 1 with
+`early stopping ended the run at epoch k`; a launcher must regard it as finished. A spent epoch
+budget is a harmless no-op. Changing max_epochs is a settings mismatch, not an extension.
+`--checkpoint-load-mode` accepts only `exact`.
 
-**Key Files:**
+`training.trainer.val_check_interval` remains a parsed field but is unread by the text Trainer.
+The monitor runs once at epoch end, without in-sample validation.
 
-- `text_model/curriculum.py` - Dynamic curriculum scheduler implementation
-- `text_model/dataloader/streaming_dataset.py` - Structure-aware sampling
+### Reference Campaign and Verification
 
-### 5. False Negative Mitigation
+Train seeds 1–10 with the same settings on Lambda CUDA, then perform decision reads on the Mac.
+`tools sweep --runs '...{seed}' --seed ...` checks every seed before any export or decision read.
+It requires complete monitor epochs, consistent panel/run/seed/settings identities, an
+unambiguous earliest best checkpoint and exact saved best score. A selected epoch with a
+versioned sibling is refused. Each arm record carries all monitor reads and three panel reads
+per seed: outcome, regressor seen and regressor held-out at level 6.
 
-**Problem:** In contrastive learning, some "negative" samples may actually be semantically
-similar to the anchor (false negatives), harming training.
+Fix the reference margins with `tools margins --multiple 3` before candidate monitor or decision
+reads, then use `tools decide`. Use the cached arm backbone revision for comparison with the
+frozen text-only table; the comparator cannot supply the arm's revision.
 
-**Solutions:** The system provides **configurable false negative strategies**:
-
-1. **Eliminate:** Mask false negatives from contrastive denominator (set similarity to `-inf`)
-2. **Attract:** Apply auxiliary loss to attract false negatives to anchor
-3. **Hybrid:** Combine both strategies
-
-**Detection:** Curriculum-based clustering periodically clusters embeddings to identify false
-negatives sharing the same cluster as anchor.
-
-**Key Files:**
-
-- `text_model/false_negative_strategies.py` - Strategy configuration
-- `text_model/hyperbolic_clustering.py` - Clustering-based detection
-
-### 6. Decoupled Contrastive Learning (DCL)
-
-Standard InfoNCE loss can have gradient issues. DCL decouples positive and negative terms:
-
-```python
-L = (-pos_sim + logsumexp(neg_sims)).mean()
-```
-
-This provides better gradient flow and numerical stability.
-
-**Implementation:** `text_model/loss.py` - `HyperbolicInfoNCELoss`
-
-### 7. Advanced Graph Curriculum System
-
-The **HGCN refinement stage** uses a sophisticated **4-phase metric-driven curriculum**:
-
-**Architecture:** Event-driven with centralized controller
-
-**Phases:**
-
-1. **Anchoring** - Hub nodes, uniform sampling, high curvature
-2. **Expansion** - Tail nodes, adaptive margins (MACL)
-3. **Discrimination** - Hard negative mining
-4. **Stabilization** - Full graph, knowledge distillation
-
-**Key Components:**
-
-- **Controller** (`curriculum/controller.py`) - Phase transitions based on validation metrics
-- **Event Bus** (`curriculum/event_bus.py`) - Event-driven coordination
-- **Adaptive Loss** (`curriculum/adaptive_loss.py`) - MACL (Margin-Adaptive Curriculum Learning)
-  with confidence tracking
-- **Sampling** (`curriculum/sampling.py`) - Phase-specific samplers (Hub, Difficulty-Weighted,
-  Hard Negative, Blended)
-- **Monitoring** (`curriculum/monitoring.py`) - Progress analysis, HTML/Markdown reports,
-  visualizations
-- **Preprocessing** (`curriculum/preprocess_curriculum.py`) - Node scoring, difficulty thresholds,
-  relation cardinality
-
-### 8. Distributed Training (Multi-GPU)
-
-The codebase supports **global batch sampling** across multiple GPUs:
-
-- Uses `torch.distributed.all_gather` to collect embeddings from all ranks
-- Enables hard negative mining across the global batch
-- **Critical:** Gradients flow back through `all_gather` operation
-
-**Implementation:** `text_model/naics_model.py` - `gather_embeddings_global()`
-
-### 9. Validation and Configuration System
-
-**Validation System** (`utils/validation.py`):
-
-- Data path validation
-- Parquet schema validation (descriptions, distances, relations, triplets)
-- Training configuration validation
-- Tokenization cache validation
-- Returns `ValidationResult` with warnings and errors
-- `require_valid_config` - Raises on validation failure
-
-**Configuration System** (`utils/config.py`):
-
-- Pydantic-based configuration models with validation
-- Comprehensive config classes for all subsystems
-- `load_config` function with environment variable support
-- Hydra-style YAML configuration files
-
-### 10. Hardware Detection and Optimization
-
-**Training Utilities** (`utils/training.py`):
-
-- `detect_hardware` - Automatic GPU/CPU/MPS detection
-- `get_gpu_memory_info` - Memory statistics
-- `HardwareInfo` dataclass - Capability tracking
-- `CheckpointInfo` - Checkpoint metadata
-- `TrainingResult` - Training outcome tracking
-- `create_trainer` - PyTorch Lightning Trainer factory
-- `resolve_checkpoint` - Smart checkpoint path resolution
-
-**Backend** (`utils/backend.py`):
-
-- Device selection (CUDA, MPS, CPU)
-- GPU memory detection
-- Directory setup utilities
+`tools radius-report` reads the saved seed's first batch and exported table on the CPU without
+reading a panel. It verifies anchor-radius gradients, per-level SD > 1e-3, positive distinct
+sector radii, manifold error and chunked distance precision, plus gradients for the three terms
+and both scales. A failed criterion writes the report and exits 1.
 
 ## Development Setup
 
-### Initial Setup
-
 ```bash
-# Clone repository
 git clone https://github.com/lowmason/naics-embedder.git
 cd naics-embedder
-
-# Install uv (if not already installed)
-pip install uv
-
-# Install dependencies
 uv sync
+uv run naics-embedder --help
 ```
 
-`.python-version` pins uv to Python 3.12, one of CI's two test versions (3.10 and 3.12); uv
-downloads it if missing, and CI overrides it per matrix leg with `UV_PYTHON`. Without the pin,
-uv can pick Python 3.14, where the locked torch 2.9.x fails tests.
+Use `.python-version`'s Python 3.12 with the locked dependencies. CI also tests Python 3.10;
+use a separate environment to check that version rather than replacing `.venv`.
 
 ### Running Commands
 
-All commands use the `naics-embedder` CLI via `uv run`:
-
 ```bash
-# Show help
-uv run naics-embedder --help
-
-# Data preparation commands
-uv run naics-embedder data preprocess  # Download and preprocess NAICS data
-uv run naics-embedder data supervision # Build the immutable Stage-3 supervision bundle
-uv run naics-embedder data all         # Run all data preparation steps
-# (data relations / distances / triplets are deprecated and build nothing)
-# (data roles drew conf/data/index_roles.csv once; it is committed, and preprocess applies it)
-# (data regressor-groups drew conf/data/regressor_heldout_groups.csv once; it is committed)
-# (data summaries built conf/data/window_summaries.csv once; it is committed and pinned in code)
-
-# Training commands
-uv run naics-embedder train            # Train model
-uv run naics-embedder train --config conf/my_config.yaml  # Custom config
-
-# Tools commands
-uv run naics-embedder tools config     # Show current configuration
-uv run naics-embedder tools visualize  # Visualize training metrics
-uv run naics-embedder tools investigate  # Investigate hierarchy correlation
-uv run naics-embedder tools outcome-baseline  # Lexical stub on the outcome validation split
-uv run naics-embedder tools text-only-table  # Frozen-backbone text table for the regressor panel
-uv run naics-embedder tools regressor-panel  # Score an arm on the regressor panel
-uv run naics-embedder tools export-table  # Export a checkpoint's code table in Req 2's form
-uv run naics-embedder tools outcome-panel  # Score an arm on the outcome validation split
-uv run naics-embedder tools margins   # Fix each panel's margin from a reference arm (Req 5)
-uv run naics-embedder tools decide    # Decide among arms under Req 5's rule
-uv run naics-embedder tools diagnostics  # Req 6's structural diagnostics for a table
+uv run naics-embedder data all
+uv run naics-embedder train   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools config
+uv run naics-embedder tools visualize --summary checkpoints/reference/epoch_summary.jsonl
+uv run naics-embedder tools sweep --help
+uv run naics-embedder tools radius-report --help
+uv run naics-embedder tools diagnostics --help
 ```
+
+`data supervision` prints the exact manifest path. Retired relations/distances/triplets commands
+build nothing and exit 1. The manifest gate cannot be skipped. HGCN reads `conf/graph.yaml` and
+runs with `uv run python -m naics_embedder.graph_model.hgcn`; set its manifest separately.
 
 ### Running Tests
 
 ```bash
-# Run all tests
-uv run pytest
-
-# Run with coverage
+uv run pytest -n auto -q
+uv run pytest tests/unit/test_loss.py
 uv run pytest --cov=naics_embedder
-
-# Run specific test file
-uv run pytest tests/unit/test_encoder.py
-
-# Run with parallelization
-uv run pytest -n auto
-
-# Run on Python 3.10 (CI's other leg) in a separate env, so .venv stays on the 3.12 pin
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
+
+The current suite collects **2,315 tests**. Actual skip counts depend on local data and hardware
+capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
+coverage percentages. Do not read real sealed splits or run a real campaign to verify
+an ordinary code/doc change.
 
 ## Code Style and Conventions
 
@@ -624,544 +384,76 @@ def exp_map_zero(x_tan: torch.Tensor, c: float = 1.0) -> torch.Tensor:
 
 ## Common Development Tasks
 
-### 1. Adjusting Training Configuration
+### Change the Text Objective or Loader
+
+Edit `text_model/loss.py`, `naics_model.py`, `supervision/queries.py`, `code_targets.py`, or
+`text_model/dataloader/datamodule.py` as appropriate. Write a failing behavior test first. Check
+query candidate/target identities, unary masks, live-anchor replacement and radius/scale
+gradients, rather than merely mirroring the formula. Update the config contract deliberately;
+settings are compared on exact resume and campaign preflight.
+
+### Change Configuration
+
+Use Pydantic models in `utils/config.py` and keys that the current code reads. For a fresh run:
 
 ```bash
-# Edit the main configuration file
-# Adjust hyperparameters (learning_rate, max_epochs, batch_size, etc.)
-# in conf/config.yaml
-
-# Run training with modified config
-uv run naics-embedder train
-
-# Override specific parameters at runtime (Hydra-style)
-uv run naics-embedder train training.learning_rate=1e-4 data_loader.batch_size=16
+uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-**Note:** The project uses dynamic Structure-Aware Curriculum Learning. Training difficulty
-adapts automatically based on the NAICS hierarchical structure and training progress.
+Do not reintroduce removed objective/mining/curvature settings or bypass bundle validation.
+`tools config` validates the YAML over defaults and displays the run inputs and settings.
 
-### 2. Modifying Loss Functions
+### Debug Training or Add Metrics
 
-**Location:** `src/naics_embedder/text_model/loss.py`
+Reproduce a failure with a fixture first. Use the epoch summary for term means, scales and
+radius spread, and the radius report for live gradients and precision. MRR is the text control
+score. Keep structural diagnostics separate from selection; adding a statistic must not create
+a second checkpoint selector. HGCN metrics belong in its graph/metrics modules.
 
-**Key losses:**
+### Work on HGCN
 
-- `HyperbolicInfoNCELoss` - Decoupled contrastive loss in Lorentz space
-- `HierarchyPreservationLoss` - Encourages distance correlation with ground truth
-- `StructuralPreferenceLoss` - Pairwise structural ordering over selected candidates (replaces
-  LambdaRank; see `docs/text_training.md#stage-3-supervision-integrity`)
-
-**Steps:**
-
-1. Edit the loss class in `loss.py`
-2. Adjust loss weights in `conf/config.yaml` under `loss:` section
-3. Re-run training to test changes
-
-### 3. Adding New Evaluation Metrics
-
-**Location:** `src/naics_embedder/text_model/evaluation.py`
-
-**Existing metrics:**
-
-- `EmbeddingStatistics` - Radius, norm, diversity
-- `HierarchyMetrics` - Distance correlation, MAP, level consistency
-
-**Steps:**
-
-1. Add new metric computation in `evaluation.py`
-2. Update `EmbeddingEvaluator.evaluate()` to call new metric
-3. Modify `naics_model.py` validation step to log new metric
-4. Add corresponding test in `tests/unit/test_evaluation.py`
-
-### 4. Debugging Training Issues
-
-**Check hyperbolic validity:**
-
-```python
-from naics_embedder.utils.hyperbolic import validate_hyperbolic_embeddings
-
-# After computing embeddings
-is_valid = validate_hyperbolic_embeddings(embeddings_hyp, curvature=1.0, tolerance=1e-5)
-if not is_valid:
-    logger.warning('Embeddings not on Lorentz manifold!')
-```
-
-**Investigate low hierarchy correlation:**
-
-```bash
-uv run naics-embedder tools investigate
-```
-
-**Visualize training metrics:**
-
-```bash
-uv run naics-embedder tools visualize
-```
-
-**Check validation results:**
-
-```python
-from naics_embedder.utils.validation import validate_data_paths, validate_training_config
-
-# Validate data files
-result = validate_data_paths('data')
-if not result.is_valid:
-    print(result.errors)
-
-# Validate training config
-result = validate_training_config(config)
-if not result.is_valid:
-    print(result.errors)
-```
-
-### 5. Working with Configuration
-
-**Pydantic Configuration System:**
-
-The project uses Pydantic for type-safe configuration with automatic validation.
-
-**Load and validate config:**
-
-```python
-from naics_embedder.utils.config import load_config, Config
-
-config = load_config('conf/config.yaml')  # Automatically validated
-```
-
-**Override config at runtime:**
-
-```bash
-# Override single value
-uv run naics-embedder train training.learning_rate=2e-4
-
-# Override multiple values
-uv run naics-embedder train \
-  training.learning_rate=2e-4 \
-  data_loader.batch_size=16 \
-  loss.hierarchy_weight=0.5
-```
-
-**View effective config:**
-
-```bash
-uv run naics-embedder tools config
-```
-
-### 6. Working with Graph Curriculum System
-
-**Preprocess curriculum data:**
-
-```python
-from naics_embedder.graph_model.curriculum import preprocess_curriculum_data
-
-# Generate node scores and difficulty thresholds
-preprocess_curriculum_data(
-    distances_path='data/naics_distances.parquet',
-    relations_path='data/naics_relations.parquet',
-    output_dir='data'
-)
-```
-
-**Monitor curriculum training:**
-
-```python
-from naics_embedder.graph_model.curriculum import CurriculumAnalyzer
-
-analyzer = CurriculumAnalyzer()
-# .. during training ..
-report = analyzer.generate_report(output_path='reports/curriculum.md')
-```
-
-**Customize curriculum phases:**
-
-Edit phase configurations in `conf/config.yaml` under `graph_curriculum:` section or use the
-controller programmatically.
-
-## Important Implementation Details
-
-### 1. Gradient Checkpointing
-
-**Enabled by default** to save GPU memory:
-
-```python
-# In shared_encoder.py
-if use_gradient_checkpointing:
-    self.backbone.base_model.gradient_checkpointing_enable(
-        gradient_checkpointing_kwargs={'use_reentrant': False, 'context_fn': _replay_mps_rng}
-    )
-```
-
-**MPS:** `_replay_mps_rng` replays the MPS random state that torch skips, so dropout masks match.
-
-**Trade-off:** Reduces memory usage at the cost of ~20% slower training.
-
-### 2. Curvature Management
-
-**Two approaches:**
-
-1. **Configured curvature** (`text_model/hyperbolic.py`) - The curvature is used as given: it is
-   not learned and not clamped
-2. **Managed curvature** (`utils/hyperbolic.py`) - `CurvatureManager` with learnable or fixed
-   curvature; a learnable value is clamped to `[0.1, 10.0]` by default, which keeps it in a valid
-   range
-
-The text model uses the first. Its curvature defaults to 1.0 (`loss.curvature`) and is not learned,
-and export and reads take c = 1 only: `tools export-table` and `tools outcome-panel` refuse a
-checkpoint trained at any other curvature (spec R8).
-
-### 3. Mixed Precision Training
-
-**Enabled by default** via PyTorch Lightning:
-
-```yaml
-# In conf/config.yaml
-training:
-  trainer:
-    precision: "16-mixed"
-```
-
-**Benefits:** ~2x speedup and ~50% memory reduction on modern GPUs.
-
-### 3.5. torch.compile Optimization
-
-Core Lorentz operations use **PyTorch 2.0+ torch.compile** for kernel fusion:
-
-```python
-from naics_embedder.utils.compile import (
-    CompileConfig,
-    set_compile_config,
-    CompiledLorentzOps,
-    benchmark_compile_speedup,
-)
-
-# Configure compile behavior
-set_compile_config(CompileConfig(
-    enabled=True,               # Default: True if PyTorch 2.0+
-    mode='reduce-overhead',     # Best for repeated small ops
-    backend='inductor',         # Default, best performance
-    dynamic=True,               # Support varying batch sizes
-))
-
-# Use compiled operations
-ops = CompiledLorentzOps.get_instance()
-x_hyp = ops.exp_map_zero(tangent_vectors, c=1.0)
-
-# Benchmark speedup
-results = benchmark_compile_speedup(batch_size=256)
-print(f"Speedup: {results['exp_map']['speedup']:.2f}x")
-```
-
-**Disable via environment variable:**
-
-```bash
-NAICS_DISABLE_COMPILE=1 uv run naics-embedder train
-```
-
-**Compiled operations:**
-
-- `compiled_exp_map_zero`, `compiled_log_map_zero`
-- `compiled_lorentz_distance`, `compiled_minkowski_dot`
-- `compiled_project_to_hyperboloid`
-- MoE gating softmax operations
-- Hard negative mining margin computations
-
-### 4. Streaming Datasets
-
-Data is loaded via **streaming Polars datasets** to handle large-scale data efficiently:
-
-- **Implementation:** `text_model/dataloader/streaming_dataset.py`
-- **Benefits:** Low memory footprint, fast random access via PyArrow
-- **Format:** Parquet files with efficient columnar storage
-
-### 5. Tokenization Caching
-
-Tokenized inputs are **cached to disk** to avoid re-tokenization:
-
-- **Implementation:** `text_model/dataloader/tokenization_cache.py`
-- **Cache location:** `data/*.cache`
-- **Invalidation:** Automatic on tokenizer or data changes (hash-based)
-
-### 6. Checkpoint Management
-
-**Checkpoint structure:**
-
-```bash
-checkpoints/
-├── <experiment_name>/
-│   ├── last.ckpt                       # Last checkpoint (for resuming)
-│   ├── naics-epoch=X-val_loss=Y.ckpt  # Checkpoints by epoch/loss
-│   └── config.yaml                     # Config snapshot for this run
-```
-
-**Resume training:**
-
-```bash
-# Resume from last checkpoint
-uv run naics-embedder train --ckpt-path last
-
-# Resume from specific checkpoint
-uv run naics-embedder train --ckpt-path checkpoints/my_experiment/naics-epoch=5-val_loss=0.1234.ckpt
-```
-
-### 7. Warning Management
-
-The system uses **centralized warning suppression** (`utils/warnings.py`):
-
-- Suppresses known benign warnings from dependencies
-- Documents rationale for each suppressed warning
-- Applied globally by `cli/__init__.py` when the CLI package is imported
-
-```python
-from naics_embedder.utils.warnings import configure_warnings, list_suppressed_warnings
-
-configure_warnings()  # Apply all suppressions
-warnings_list = list_suppressed_warnings()  # Get list of suppressed warnings
-```
+Keep the graph curriculum and sampler changes in `graph_model/`; the text model has no phase
+curriculum. Validate graph bundle paths with `GraphConfig`. The graph stage retains triplet loss,
+per-level radial regularization, curvature utilities and structural statistics. Its full
+evaluation currently uses curvature 1; a non-unit-curvature correction is a separate concern.
 
 ## Testing and Validation
 
-### Test Suite
+There are 83 unit files and one integration file. Important current seams include:
 
-The project has a comprehensive test suite with **53 unit test files**:
+- `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
+  and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and
+  stable polar distance.
+- `test_datamodule.py`, `test_monitor.py`, `test_selection_log_guard.py`: two-stream epochs,
+  candidate cache, monitor reads and fail-closed selection-log guards.
+- `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`:
+  contracts, exact resume, stopped runs and settings guards.
+- `test_checkpoint_runner.py`, `test_radius_report.py`, `test_epoch_summary.py`,
+  `test_visualize_metrics.py`: campaign preflight, radius checks and durable health artifacts.
+- `integration/test_reference_training.py`: tiny-backbone Trainer runs, earliest-best selection,
+  schedule/early stopping, health records and exact resume.
+- Graph, panel, resampling and decision tests cover their separate interfaces.
 
-```bash
-# Run all tests
-uv run pytest
-
-# Run with coverage report
-uv run pytest --cov=naics_embedder --cov-report=html
-
-# Run specific test file
-uv run pytest tests/unit/test_encoder.py
-
-# Run tests in parallel
-uv run pytest -n auto
-
-# Run tests with verbose output
-uv run pytest -v
-```
-
-### Key Test Files
-
-- `test_config.py` - Configuration validation
-- `test_curriculum.py` - Text curriculum
-- `test_graph_curriculum.py` - Graph curriculum system (all components)
-- `test_datamodule.py` - Data loading
-- `test_encoder.py` - The shared encoder, on a tiny BERT
-- `test_fusion.py` - Fusion options and masking
-- `test_export.py` - The code-table export and the HGCN feeder
-- `test_arm_encoder.py` - The arm encoder and the outcome read
-- `test_evaluation.py` - Evaluation metrics
-- `test_hyperbolic.py` - Lorentz operations
-- `test_loss.py` - Loss functions
-- `test_moe.py` - Mixture-of-Experts
-- `test_naics_model.py` - Main model
-- `test_streaming_dataset.py` - Streaming datasets
-- `test_tokenization_cache.py` - Tokenization cache
-
-### Manual Testing
-
-```bash
-# Test data pipeline
-uv run naics-embedder data all
-
-# Test training (quick)
-uv run naics-embedder train training.trainer.max_epochs=2
-
-# Validate configuration
-uv run naics-embedder tools config
-```
-
-### Validation Metrics
-
-During training, the model computes validation metrics every epoch:
-
-- **Hyperbolic radius:** Mean radius of embeddings (should be stable)
-- **Hierarchy correlation:** Spearman correlation between learned and ground-truth distances
-- **Mean Average Precision (MAP):** Retrieval quality
-- **Diversity:** Average pairwise distance (should not collapse)
-
-Hierarchy correlation, MAP and the other structural statistics are logged for the record only
-(Req 6): no progress bar shows them, nothing selects on them, and they have no target values.
-Configurations are compared under Req 5 on the outcome and regressor panels (`tools margins`,
-`tools decide`), and Req 6's stratified diagnostics come from `tools diagnostics`.
-
-**Expected values (after convergence):**
-
-- Mean radius: 2.0-4.0 (depends on data and curvature)
+Keep generated fixture outputs under `tmp_path`. Use reference fixture bundles instead of real
+data. Run meaningful target tests and the full suite before claiming completion. Measure coverage
+with pytest-cov when needed; test counts alone do not establish it.
 
 ## CI/CD and Documentation
 
-### GitHub Actions
-
-**Workflows:**
-
-1. **Documentation** (`.github/workflows/docs.yml`)
-   - **Trigger:** Push to `main` or `master` branch, or a manual `workflow_dispatch` run
-   - **Action:** Build and deploy MkDocs documentation to GitHub Pages
-   - **Output:** <https://lowmason.github.io/naics-embedder/>
-
-2. **Tests** (`.github/workflows/tests.yml`)
-   - **Trigger:** Push to `main`/`master`, and pull requests targeting them
-   - **Action:** Two independent jobs, so lint and test failures show up as separate checks:
-     - `lint`: once, on Python 3.12. Runs `ruff check src/ tests/`, then
-       `./scripts/format_code.sh --check --all`, which fails on any file yapf would reformat.
-       That step reruns ruff, so it is skipped when ruff fails. Before pushing, run
-       `./scripts/format_code.sh --check --all` to reproduce both steps in one pass
-     - `test (3.10)`, `test (3.12)`: pytest with coverage, one check per Python version
-   - **Dependencies:** Installs from `uv.lock` (`uv sync --locked`), so CI tests the pinned
-     versions, not the newest releases that `pip install` resolves. Upgrade deliberately with
-     `uv lock --upgrade-package <name>`. The `lint` job syncs only the `dev` group
-     (`--only-group dev`), which has the locked ruff and yapf but not the project or its torch
-     wheels. Its yapf step sets `UV_NO_SYNC=1` because the script calls plain `uv run`, which
-     would otherwise install the whole project first.
-   - **Reports:** Coverage (`coverage.xml`) uploaded to Codecov
-
-### Documentation
-
-**Build locally:**
+`.github/workflows/tests.yml` runs Ruff and YAPF in a Python-3.12 lint job, plus pytest/coverage
+on Python 3.10 and 3.12 with locked dependencies. The docs workflow deploys on main/master;
+PR CI does not build documentation, so run strict MkDocs locally for rendered documentation.
 
 ```bash
-# Build docs
-uv run mkdocs build
-
-# Serve locally with live reload
-uv run mkdocs serve
+uv run ruff check src/ tests/
+./scripts/format_code.sh --check --all
+uv run mkdocs build --strict
 ```
 
-**View at:** <http://localhost:8000>
-
-**Update API docs:**
-
-API documentation is **auto-generated** from docstrings using `mkdocstrings`. The system has
-**32 API reference pages**.
-
-To add new module to docs:
-
-1. Add markdown file in `docs/api/`
-2. Include mkdocstrings directive:
-
-```markdown
-# Module Name
-
-::: naics_embedder.module_name
-```
-
-## Common Pitfalls and Solutions
-
-### 1. Embeddings Not on Lorentz Manifold
-
-**Symptom:** Warning during training: `"Embeddings not on Lorentz manifold"`
-
-**Causes:**
-
-- Numerical instability in exponential map
-- Gradient explosion
-- Learning rate too high
-- Curvature out of safe range
-
-**Solutions:**
-
-```bash
-# Reduce learning rate
-uv run naics-embedder train training.learning_rate=1e-5
-
-# Increase gradient clipping
-uv run naics-embedder train training.trainer.gradient_clip_val=0.5
-
-# Enable mixed precision (if not already)
-uv run naics-embedder train training.trainer.precision="16-mixed"
-```
-
-**Debug:**
-
-```python
-from naics_embedder.utils.hyperbolic import validate_hyperbolic_embeddings
-
-is_valid = validate_hyperbolic_embeddings(embeddings, curvature=1.0, tolerance=1e-5)
-```
-
-### 2. Low Hierarchy Correlation
-
-A low `hierarchy_corr` or cophenetic value is not a failure to tune away. Structural statistics
-are diagnostics (Req 6), and raising a loss weight or picking a checkpoint because one improves
-selects on the taxonomy, which Req 1 rules out. Compare configurations under Req 5
-(`tools margins`, `tools decide`), and report Req 6's diagnostics with `tools diagnostics`.
-
-### 3. OOM (Out of Memory) Errors
-
-**Solutions:**
-
-```bash
-# Reduce batch size
-uv run naics-embedder train data_loader.batch_size=8
-
-# Increase gradient accumulation
-uv run naics-embedder train training.trainer.accumulate_grad_batches=4
-
-# Use mixed precision (if not already)
-uv run naics-embedder train training.trainer.precision="16-mixed"
-```
-
-**Hardware detection:**
-
-```python
-from naics_embedder.utils.training import detect_hardware, get_gpu_memory_info
-
-hw_info = detect_hardware()
-gpu_info = get_gpu_memory_info()
-print(f'Available GPU memory: {gpu_info["available_gb"]:.2f} GB')
-```
-
-### 4. Checkpoint Not Found
-
-**Symptom:** `FileNotFoundError: checkpoint not found`
-
-**Solutions:**
-
-```bash
-# Check checkpoint directory exists
-ls checkpoints/<experiment_name>/
-
-# Use checkpoint resolution
-uv run naics-embedder train --ckpt-path last  # Auto-resolves to latest
-
-# Use absolute path
-uv run naics-embedder train --ckpt-path /absolute/path/to/checkpoint.ckpt
-```
-
-**Programmatic resolution:**
-
-```python
-from naics_embedder.utils.training import resolve_checkpoint
-
-ckpt_path = resolve_checkpoint('last', 'checkpoints/my_experiment')
-```
-
-### 5. Validation Errors
-
-**Symptom:** Errors during data loading or config parsing
-
-**Solutions:**
-
-```python
-from naics_embedder.utils.validation import (
-    validate_data_paths,
-    validate_training_config,
-    require_valid_config
-)
-
-# Check data files
-result = validate_data_paths('data')
-if not result.is_valid:
-    print('Errors:', result.errors)
-    print('Warnings:', result.warnings)
-
-# Validate config
-result = validate_training_config(config)
-require_valid_config(result)  # Raises if invalid
-```
+Format only touched Python files with `scripts/format_code.sh`; the full `--check --all` gate is
+read-only. Never use `ruff format`. New API pages use mkdocstrings and must appear in
+`docs/.nav.yml`. Re-point links when removing a heading, and check rendered anchors as well as
+the strict build. Public rendered docstrings must document their arguments accurately.
 
 ## Git Workflow
 
@@ -1205,132 +497,46 @@ git push -u origin claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U
 
 ## File Modification Guidelines
 
-### When to Edit vs. Create
+Prefer editing an existing module when it owns the behavior. Create a module for a distinct
+responsibility, with tests at its interface. Configuration belongs in `conf/config.yaml` and
+`utils/config.py`; panels use `conf/data/`, and HGCN uses `conf/graph.yaml`.
 
-**ALWAYS prefer editing** existing files over creating new ones:
+Keep model changes in the shared encoder/head/objective, epoch orchestration in `naics_model.py`,
+monitor/cache in `monitor.py`, and campaign preflight in `checkpoint_runner.py`. Health artifacts
+belong in `epoch_summary.py`; radius verification belongs in `radius_report.py`. CLI commands
+call those interfaces rather than duplicating their contracts.
 
-- Modifying loss functions → Edit `text_model/loss.py`
-- Adding CLI command → Edit `cli/commands/*.py`
-- Adjusting config → Edit `conf/config.yaml`
-- Adding utilities → Edit appropriate `utils/*.py`
+## Checklist for AI Assistants
 
-**ONLY create new files** when:
+- Explore requirements and constraints before nontrivial changes.
+- Follow the written plan in order and surface deviations.
+- Write failing behavior tests before library/pipeline changes; reproduce before debugging.
+- Use fixture bundles and `tmp_path`, with no real panel reads for code verification.
+- Follow Python single-quote, YAPF and semantic-divider conventions.
+- Run relevant tests, full suite, Ruff and the read-only full style gate.
+- Build rendered docs with strict MkDocs and verify changed links/anchors.
+- Report actual output and material limitations, not inferred success.
+- Update API pages and operator examples when interfaces change.
 
-- Adding entirely new module (e.g., new model architecture)
-- Adding new data preprocessing script
-- Creating new test file
-- Adding new documentation page
+## Architecture Decisions
 
-### Key Files to Edit
+Functional mixins keep loss balancing, logging and optimization distinct; epoch orchestration
+stays in the model. The shared backbone and projection make code fields and queries one space.
+The two-stream epoch covers every query and code once while a detached code cache bounds work.
+The monitor separates held-out task quality from training health and structural diagnostics.
+HGCN's graph curriculum remains separate from the text objective.
 
-**Configuration:**
-
-- `conf/config.yaml` - Base training configuration
-- `conf/data/*.yaml` - Data generation configs
-- `conf/data_loader/tokenization.yaml` - Tokenization config
-
-**Model Architecture:**
-
-- `text_model/shared_encoder.py` - The shared encoder
-- `text_model/fusion.py` - Fusion options
-- `text_model/moe.py` - Mixture-of-Experts (the `moe` fusion ablation)
-- `text_model/loss.py` - Loss functions
-- `graph_model/hgcn.py` - Hyperbolic GCN
-- `graph_model/curriculum/*.py` - Graph curriculum system
-
-**Training:**
-
-- `text_model/naics_model.py` - Main PyTorch Lightning module
-- `cli/commands/training.py` - Training CLI commands
-
-**Data:**
-
-- `data/*.py` - Data preprocessing scripts
-
-**Utils:**
-
-- `utils/config.py` - Configuration models
-- `utils/training.py` - Training utilities
-- `utils/validation.py` - Validation system
-- `utils/hyperbolic.py` - Hyperbolic manifold utilities
-
-## Summary Checklist for AI Assistants
-
-When working on this codebase:
-
-- [ ] Use `uv run` for all CLI commands
-- [ ] Follow single-quote Python style (`'` not `"`)
-- [ ] Keep lines ≤ 100 characters in Python and Markdown (ruff only errors above 105)
-- [ ] Use semantic section dividers in Python files
-- [ ] Add type hints to function signatures
-- [ ] Use `logging` instead of `print`
-- [ ] Write unit tests for new functionality in `tests/unit/`
-- [ ] Run tests before committing: `uv run pytest`
-- [ ] Format the files you touched: `./scripts/format_code.sh` (never `ruff format`; no `--all` in
-  feature PRs)
-- [ ] Test changes with a quick training run:
-  `uv run naics-embedder train training.trainer.max_epochs=2`
-- [ ] Check hyperbolic validity when modifying geometry code
-- [ ] Use validation utilities to check data and config
-- [ ] Update configuration files (not hardcoded values) for hyperparameters
-- [ ] Commit with descriptive messages (not "fix bug" or "yo brah!")
-- [ ] Push to the designated Claude branch with `-u origin <branch-name>`
-- [ ] Update documentation if adding new features or changing APIs
-
-## Architecture Decision Records
-
-### Why Mixin-Based Model Architecture?
-
-The `NAICSContrastiveModel` uses **functional mixins** rather than a monolithic class:
-
-- **Separation of concerns** - Each mixin handles one aspect (loss, logging, validation, etc.)
-- **Testability** - Individual mixins can be unit tested in isolation
-- **Maintainability** - Changes to logging don't risk breaking loss computation
-- **Readability** - Smaller, focused files instead of one 2000+ line file
-
-### Why Two Hyperbolic Implementations?
-
-- **`text_model/hyperbolic.py`** - Low-level operations used during text model training
-- **`utils/hyperbolic.py`** - High-level abstraction for general use, validation, curvature
-  management
-
-This separation allows the text model to use optimized operations while providing a clean
-interface for other components.
-
-### Why torch.compile?
-
-- **Kernel fusion** - Multiple element-wise ops fused into single GPU kernel
-- **Reduced memory bandwidth** - Fewer intermediate tensors
-- **Automatic optimization** - PyTorch's inductor backend handles low-level tuning
-- **Conditional** - Falls back gracefully on PyTorch <2.0 or when disabled
-
-### Why Pydantic + YAML (not pure Hydra)?
-
-- **Pydantic** provides strong type validation and IDE support
-- **YAML files** provide human-readable configuration
-- **Best of both worlds:** Type safety + flexibility
-
-### Why Two Curriculum Systems?
-
-- **Text Model (SADC):** Optimized for contrastive learning on text embeddings
-- **Graph Model (4-phase):** Optimized for graph convolutions with explicit phase transitions
-
-Different training dynamics require different curriculum strategies.
+The polar distance serves stable float32 text training, while Lorentz/manifold utilities serve
+export, panel reads and graph callers. Pydantic validates readable YAML configs and rejects
+retired settings. The checkpoint objective contract prevents old states from entering a new
+objective through accidental keyword or weights migration.
 
 ## Additional Resources
 
-- **README.md:** High-level architecture overview
-- **docs/quickstart.md:** Quick start guide
-- **docs/usage.md:** Complete CLI command reference
-- **docs/text_training.md:** Detailed text model training guide
-- **docs/hgcn_training.md:** HGCN refinement guide
-- **docs/benchmarks.md:** Performance benchmarks
-- **API Docs:** <https://lowmason.github.io/naics-embedder/> (32 auto-generated pages)
-- **Reports:** See `reports/` for generated analysis (SADC, HGCN curriculum, etc.)
-
-## Contact and Support
-
-- **Repository:** <https://github.com/lowmason/naics-embedder>
-- **Author:** Lowell Mason
-- **Issues:** Report bugs or request features via GitHub Issues
-- **Documentation:** <https://lowmason.github.io/naics-embedder/>
+- [README](README.md): system architecture and onboarding.
+- [Quickstart](docs/quickstart.md) and [CLI usage](docs/usage.md): operator commands.
+- [Text training](docs/text_training.md): objective, epoch, monitor and campaign.
+- [HGCN training](docs/hgcn_training.md): graph refinement.
+- [Test suite](tests/README.md): fixtures, coverage and test contracts.
+- [Documentation](https://lowmason.github.io/naics-embedder/): rendered guides and API references.
+- Repository and issues: <https://github.com/lowmason/naics-embedder>.

@@ -6,7 +6,8 @@ Three kinds, each one JSON file:
 - **Arm record.** One configuration's seed sweep: its spec, the text-only table it was paired
   with and that table's provenance (D9), the panels it read, and per seed the encoder checkpoint,
   the 2,125-code table, the stored scores and the selection-log records of the run's reads (the
-  log itself is gitignored and dies with its worktree or Lambda instance).
+  log itself is gitignored and dies with its worktree or Lambda instance). A trained seed also
+  carries the monitor reads that selected its checkpoint (spec 4.4).
 - **Margin record.** Each panel's δ, a stated multiple of a reference arm's across-seed standard
   deviation, fixed before any other arm's first read.
 - **Decision record.** Its arms and margins, every paired comparison with its 95 %
@@ -114,12 +115,22 @@ class SeedRun(_Record):
     '''
     One seed of an arm.
 
+    A trained seed names its training run and its checkpoint's epoch, and carries the monitor
+    reads that selected the checkpoint (spec 4.4). A seed from a runner that trains nothing has
+    none of the three.
+
     Attributes:
         scores: The seed's scores on all three panels (``decision.scores.SCORE_COLUMNS``).
         decoding: ``DecodingResult.per_query`` of the outcome read.
         predictions: Both regimes' level-6 validation predictions.
         statistics: Each panel's decision statistic on every unit.
         log_records: The selection-log records of this run's reads.
+        training_run: The id of the training run the checkpoint is from, which its checkpoints
+            save and its monitor reads name.
+        checkpoint_epoch: The checkpoint's epoch: the earliest with the highest monitor MRR.
+        monitor_records: The training run's ``monitor_reads.jsonl`` records, oldest first, each
+            ``{'mrr': …, 'read': …}``: an epoch's MRR, and its read as the selection log
+            appended it.
     '''
 
     seed: int
@@ -131,6 +142,10 @@ class SeedRun(_Record):
     predictions: ArtifactRef
     statistics: Dict[str, float]
     log_records: List[Dict[str, Any]]
+    # Each defaults, so a record written before runs carried their monitor reads still loads
+    training_run: Optional[str] = Field(default=None, min_length=1)
+    checkpoint_epoch: Optional[int] = Field(default=None, ge=0)
+    monitor_records: List[Dict[str, Any]] = Field(default_factory=list)
 
 class ArmRecord(_Record):
     '''One configuration's seed sweep (``decision.sweep.run_seed_sweep``).'''

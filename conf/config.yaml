@@ -1,50 +1,14 @@
-# Base training configuration for the NAICS SADC pipeline
+# Base training configuration for the NAICS text stage
 
 # Experiment identification
-experiment_name: sadc_default
+experiment_name: reference
 seed: 42
 
 # Stage-3 supervision: one immutable, validated bundle is the only authority for code identity,
 # structural facts, exclusions, and training pairs.
 supervision:
-  mode: repaired  # Options: repaired, legacy_containment (explicit, tagged, never exact-resumes)
   contract_version: stage3-supervision-v2
   manifest_path: null  # data supervision prints the exact immutable path to set before training
-
-# Curriculum scheduler configuration (Structure-Aware Dynamic Curriculum)
-curriculum:
-  phase1_end: 0.5  # Structural initialization cutoff (fraction of epochs)
-  phase2_end: 0.7  # Geometric refinement cutoff (fraction of epochs)
-  phase3_end: 1.0  # False negative mitigation cutoff (fraction of epochs)
-  tree_distance_alpha: 1.5  # Inverse-distance weighting exponent for negatives
-  sibling_distance_threshold: 2.0  # Distance threshold for sibling masking
-  fn_curriculum_start_epoch: 10  # Epoch to begin false-negative elimination
-  fn_cluster_every_n_epochs: 5  # How often to refresh clustering during Phase 3
-  fn_num_clusters: 500  # Number of clusters used for false-negative elimination
-  phase_mode: three_phase  # Options: three_phase, two_phase
-  anneal:
-    enabled: false
-    alpha_start: 1.5
-    alpha_end: 0.8
-    epochs: 50
-    metric_name: adaptive_margin_mean
-    metric_threshold: 0.35
-    metric_direction: below
-    router_mix_start: 0.3
-    router_mix_end: 0.5
-
-sampling:
-  strategy: sadc  # Options: sadc, sans_static
-  sans_static:
-    near_distance_threshold: 4.0
-    near_bucket_weight: 0.65
-    far_bucket_weight: 0.35
-    default_distance: 12.0
-
-false_negatives:
-  strategy: eliminate  # Options: eliminate, attract, hybrid
-  attraction_weight: 0.1
-  attraction_metric: cosine
 
 # Paths
 dirs:
@@ -77,10 +41,7 @@ data:
 
 # Data loading configuration
 data_loader:
-  batch_size: 16
-  num_workers: 4
-  val_split: 0.05
-  n_epochs: 100  # Pre-sampled epochs; one training epoch reads them all
+  queries_per_step: 128  # The most task queries a step reads: ceil(queries / 128) steps an epoch
 
   tokenization:
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
@@ -88,36 +49,15 @@ data_loader:
 
   streaming:
     descriptions_parquet: ./data/naics_descriptions.parquet
-    triplets_parquet: ./data/naics_training_pairs
-    distances_parquet: ./data/naics_distances.parquet
-    distance_matrix_parquet: ./data/naics_distance_matrix.parquet
-    relations_parquet: ./data/naics_relations.parquet
     tokenizer_name: sentence-transformers/all-MiniLM-L6-v2
     max_length: 128  # The backbone's trained window (utils/input_window.py)
-    seed: 42
-    # Negative sampling parameters
-    n_negatives: 24  # Maximum number of negatives per positive
-    # Phase 1 tree-distance based sampling
-    use_phase1_sampling: true  # Use inverse weighting and sibling masking
-    phase1_alpha: 1.5  # Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α
-    # An explicit exclusion is never a negative: pools and selection leave it out (Req 8(c))
-    # On-the-fly sampling with oversampling and difficulty curriculum
-    use_on_the_fly_sampling: false  # Use on-the-fly negative sampling instead of pre-computed cache
-    n_candidates: 48  # Total candidate negatives to sample (for Phase 2+ HNM pool)
-    n_negatives_phase1: 24  # Number of negatives used in Phase 1 loss (selected from candidates)
-    # Phase 1 difficulty curriculum (linear annealing from easy-heavy to hard-heavy)
-    # Buckets: Easy (d>=6), Semi-hard (d=4-5), Hard (d=3), Siblings (d=2) masked
-    # Hard ratio = 1 - easy - semi (derived to ensure sum = 1.0)
-    phase1_easy_start: 0.70  # Easy ratio at start of Phase 1
-    phase1_easy_end: 0.20  # Easy ratio at end of Phase 1
-    phase1_semi_start: 0.20  # Semi-hard ratio at start of Phase 1
-    phase1_semi_end: 0.40  # Semi-hard ratio at end of Phase 1
 
 # Model configuration
 model:
   base_model_name: sentence-transformers/all-MiniLM-L6-v2
   fusion: masked_mean  # masked_mean, attention, or moe (an ablation only)
   dimension: 16  # 8, 16 or 32: the one Linear(384 -> d) before the geometry head
+  radius_bound: 8.0  # R: the head gives a vector of norm v the radius R*tanh(v/R) (Req 13)
 
   lora:
     r: 8
@@ -130,38 +70,30 @@ model:
     hidden_dim: 768
     load_balancing_coef: 0.01
 
-  eval_sample_size: 300
-  eval_every_n_epochs: 1
-  parent_eval_top_k: 1
-  child_eval_top_k: 5
-
 # Loss configuration
 loss:
-  temperature: 0.07
-  curvature: 1.0
-  base_margin: 0.5
-  hierarchy_weight: 0.45  # Weight for hierarchy preservation loss (increased from 0.1)
-  structural_preference:  # Pairwise structural ordering over each positive + selected negatives
-    weight: 0.35
-    margin: 0.1
-    temperature: 1.0
-    tie_tolerance: 0.000001
-  radius_reg_weight: 0.10  # Weight for radius regularization to prevent instability
-  level_radius_weight: 0.15  # Weight for aligning hyperbolic radius with hierarchy depth
+  code_code_weight: 1  # w_c
+  radial_weight: 1  # w_r
+  target_temperature: 1  # τ_t, of the code-code target softmax(-D* / τ_t)
+  radial_step: 1  # ρ: level λ's target radius is ρ * (λ - 1)
+  logit_scale_init: 1  # Both learned logit scales start here
+  logit_scale_range: [0.01, 100]  # And are clamped to this range
 
 # Training configuration
 training:
-  learning_rate: 1e-4  # Reduced from 2e-4 to prevent radius instability
-  weight_decay: 0.01
-  warmup_steps: 500
-  use_warmup_cosine: false  # Set to true for large training jobs with many epochs
+  learning_rate: 1e-4
+  weight_decay: 0.01  # None on the logit scales
+  warmup_epochs: 1  # The linear warmup to the base rate
+  lr_plateau_factor: 0.5  # ReduceLROnPlateau on val/outcome_mrr
+  lr_plateau_patience: 2
+  early_stopping_patience: 5  # Epochs without a higher val/outcome_mrr
 
   trainer:
-    max_epochs: 10
+    max_epochs: 40
     accelerator: auto
     devices: 1
-    precision: "16-mixed"
+    precision: "bf16-mixed"  # On CUDA; elsewhere the trainer runs at 32-true
     gradient_clip_val: 1.0
-    accumulate_grad_batches: 2
+    accumulate_grad_batches: 1
     log_every_n_steps: 10
     val_check_interval: 1.0

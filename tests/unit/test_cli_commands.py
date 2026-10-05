@@ -5,6 +5,7 @@ import click
 import polars as pl
 import pytest
 import torch
+import typer
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
@@ -237,25 +238,23 @@ def test_tools_visualize_handles_exception(monkeypatch, runner):
 
     monkeypatch.setattr(tools_cli, 'visualize_metrics', boom)
 
-    result = runner.invoke(tools_cli.app, ['visualize'])
+    result = runner.invoke(tools_cli.app, ['visualize', '--summary', 'fixture-summary.jsonl'])
 
     assert result.exit_code == 1
     assert 'Error' in result.output
 
-def test_tools_investigate_success(monkeypatch, runner):
-    monkeypatch.setattr(
-        tools_cli,
-        'investigate_hierarchy',
-        lambda **_: {
-            'reason': 'ok',
-            'suggestion': 'none'
-        },
-    )
+def test_tools_investigate_is_gone(runner):
+    '''Spec 4.4: Req 6's statistics come only from tools diagnostics, so investigate is retired.'''
+
+    # Checked before invoking, so the command never runs while it still exists
+    assert 'investigate' not in typer.main.get_command(tools_cli.app).commands
+    assert not hasattr(tools_cli, 'investigate_hierarchy')
 
     result = runner.invoke(tools_cli.app, ['investigate'])
 
-    assert result.exit_code == 0
-    assert 'Investigation complete' in result.output
+    # Click's usage error: no such command
+    assert result.exit_code == 2
+    assert "No such command 'investigate'" in click.unstyle(result.output).replace('\n', '')
 
 # -------------------------------------------------------------------------------------------------
 # Decisions (Req 5) and diagnostics (Req 6)
@@ -760,10 +759,12 @@ def test_export_table_exports_under_the_configured_bundle_and_cache(
     assert 'arm_provenance.json' in result.output.replace('\n', '')
 
 @pytest.mark.unit
-def test_export_table_refuses_legacy_containment(monkeypatch, runner, tmp_path, default_config):
+def test_export_table_refuses_the_removed_supervision_mode(
+    monkeypatch, runner, tmp_path, default_config
+):
 
     def never(*_args, **_kwargs):
-        raise AssertionError('legacy containment reached the export')
+        raise AssertionError('a supervision mode reached the export')
 
     monkeypatch.setattr(tools_cli, 'export_code_table', never)
 
@@ -776,7 +777,9 @@ def test_export_table_refuses_legacy_containment(monkeypatch, runner, tmp_path, 
     )
 
     assert result.exit_code == 1
-    assert 'legacy containment has none' in ' '.join(result.output.split())
+    # D2: training is always repaired, so the config refuses the key as an extra input
+    message = ' '.join(click.unstyle(result.output).split())
+    assert 'supervision.mode Extra inputs are not permitted' in message
 
 @pytest.mark.unit
 def test_export_table_refuses_an_override_without_a_value(runner, tmp_path, default_config):

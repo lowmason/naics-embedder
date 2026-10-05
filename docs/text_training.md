@@ -1,659 +1,270 @@
-# Training Guide
+# Text Training Guide
 
-This guide explains how to train the NAICS Hyperbolic Embedding System with the dynamic Structure-Aware Dynamic Curriculum (SADC) scheduler. The current workflow uses a single configuration file (`conf/config.yaml`) to control model, data, trainer, and curriculum settings.
-
-Stage-3 training runs under the **repaired supervision contract** (`stage3-supervision-v2`): one
-immutable, validated supervision bundle is the only authority for code identity, structural facts,
-explicit exclusions, and training pairs. See
-[Stage-3 Supervision Integrity](#stage-3-supervision-integrity) before starting a run.
-
-## Table of Contents
-
-- [Training Guide](#training-guide)
-  - [Table of Contents](#table-of-contents)
-  - [Quick Start](#quick-start)
-  - [The Shared Encoder](#the-shared-encoder)
-  - [SADC Scheduler](#sadc-scheduler)
-  - [CLI Reference](#cli-reference)
-  - [Structural Spearman Validation](#structural-spearman-validation)
-  - [Resuming and Overrides](#resuming-and-overrides)
-  - [Stage-3 Supervision Integrity](#stage-3-supervision-integrity)
-    - [Operator Workflow](#operator-workflow)
-    - [The Supervision Bundle](#the-supervision-bundle)
-    - [Three Independent Axes](#three-independent-axes)
-    - [Candidate Identity](#candidate-identity)
-    - [Negative Selection](#negative-selection)
-    - [Structural Preference Loss](#structural-preference-loss)
-    - [Cache Regeneration](#cache-regeneration)
-    - [Exact Resume versus Weights-Only Migration](#exact-resume-versus-weights-only-migration)
-    - [Legacy Containment](#legacy-containment)
-    - [Rollout Gates](#rollout-gates)
-  - [Sampling Architecture: Data Layer vs Model Layer](#sampling-architecture-data-layer-vs-model-layer)
-    - [Data Layer (Streaming Dataset)](#data-layer-streaming-dataset)
-    - [Model Layer (NAICSContrastiveModel)](#model-layer-naicscontrastivemodel)
-    - [Interface Contract](#interface-contract)
-  - [Migration for Legacy Chains](#migration-for-legacy-chains)
-  - [Troubleshooting](#troubleshooting)
-
----
+The reference text model learns query retrieval, code geometry and live radii together. It uses
+one shared LoRA backbone, one fusion/projection path, two streams per epoch and the three terms
+of objective `req11-v1`. The outcome validation panel's MRR selects the earliest best checkpoint.
+Graph refinement is a separate stage; see [HGCN training](hgcn_training.md).
 
 ## Quick Start
 
-Preprocess data and build the supervision bundle (see `docs/usage.md`), then launch training with
-the manifest path that `data supervision` prints:
+Build the immutable bundle and pass the exact manifest path it prints:
 
 ```bash
 uv run naics-embedder data all
-uv run naics-embedder train --config conf/config.yaml \
-  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --config conf/config.yaml   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-Apply overrides inline—SADC will stay active and adapt phases automatically:
-
-```bash
-uv run naics-embedder train --config conf/config.yaml \
-  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json \
-  training.learning_rate=1e-4 training.trainer.max_epochs=20
-```
-
-To avoid repeating the override, set `supervision.manifest_path` in `conf/config.yaml`.
-
----
+The defaults are experiment `reference`, dimension 16, masked-mean fusion, radius bound 8,
+128 queries per step, one warmup epoch and a 40-epoch budget. CUDA uses `bf16-mixed` for the
+backbone only; fusion, projection, geometry and losses stay float32. CPU and MPS use `32-true`.
+The text Trainer uses one device and refuses `devices > 1`.
 
 ## The Shared Encoder
 
-One LoRA-adapted MiniLM backbone (revision 1110a243) reads every field
-(`text_model/shared_encoder.py`):
+One LoRA-adapted `sentence-transformers/all-MiniLM-L6-v2` reads every present text field,
+marked `title:`, `description:`, `examples:`, `excluded:` or `query:`. Blank and absent channels
+never enter the backbone. The model mean-pools each channel's tokens, fuses present channels,
+and applies exactly one `Linear(384, d)` for d in {8, 16, 32}.
 
-- **Field markers.** A present text is marked with its field: `'title: …'`, `'description: …'`,
-  `'excluded: …'`, `'examples: …'` or `'query: …'` (`text_model/fields.py`). An absent text
-  (null or blank) is the unmarked empty string with `present` False. The tokenization cache's
-  format `channels-v3` stores the marked texts. Its sidecar records the markers and a `summaries`
-  entry, the sha256 of the pinned window-fitting summaries (see "Input window" below). A cache
-  built under another format, other markers or other summaries is rebuilt, and a load that finds
-  a stale sidecar names each entry that differs.
-- **Present channels only.** Each field's present texts go through the backbone in calls of at most
-  256 texts (`MAX_TEXTS_PER_CALL`), each trimmed to its own longest text, and absent texts never
-  enter it. Each present text is mean-pooled over its tokens.
-- **Fusion** (`model.fusion`): `masked_mean` (default), `attention`, or `moe`, the ablation that
-  routes the masked mean through the experts of `model.moe`. Router-guided mining and the
-  load-balancing term run only under `moe` (spec R10, R11).
-- **Projection** (`model.dimension`): exactly one `Linear(384 → d)`, d in {8, 16, 32}, default
-  16.
-- **Head.** A parameter-free head caps the tangent's norm at 2 and maps it onto the hyperboloid
-  at c = 1. The model returns both the capped `tangent` (d) and the point `embedding` (d + 1).
+The default fusion is masked mean. Attention pooling is an option. MoE is an ablation: it sends
+the masked mean through top-2 experts, with a load-balancing term under `model.fusion=moe` only.
+It adds no mining, router-guided sampling or phase transitions.
 
-```bash
-# An ablation at dimension 8 under the MoE fusion
-uv run naics-embedder train supervision.manifest_path=/absolute/path/to/manifest.json \
-  model.fusion=moe model.dimension=8
+The parameter-free head splits projection v into radius and direction. With a = norm(v),
+`r = R * tanh(a / R)`, where `R = model.radius_bound`; the resulting Lorentz point is
+`(cosh(r), sinh(r) u)`. Zero v maps to the origin. Text curvature is fixed at 1, without a
+curvature setting. The radius remains live in every term; it is not normalized away or capped
+at a fixed norm of 2.
+
+## The Three Terms
+
+`NAICSContrastiveModel.compute_losses` returns `StepLosses`. Distances use the stable polar
+form in float32. The task and code-to-code logits have separate learned positive scales;
+they start at `loss.logit_scale_init` and are clamped to `loss.logit_scale_range` after each
+optimizer step, with no weight decay.
+
+### Task Query Cross-Entropy
+
+`task_loss` learns to decode an activity query to all its named codes. Training-role index
+entries contribute their text and code. Explicit redirection phrases contribute activity
+queries from the text before the redirection clause; a phrase
+that exactly or nearly matches an outcome validation/test query is withheld before training.
+Every remaining query is marked `query:` and read by the shared backbone.
+
+For a phrase query, T contains its named codes that are not lineal to the referencing code.
+N is the set of referencing codes, and C contains all codes at the query's level
+plus N. The loss is `-log(sum(softmax(logits)[T]))` over C. Every member of N remains a candidate,
+even when it is related to a target. Explicit exclusions are query facts, not sampled negative
+training pairs. The target and candidate identities come from `build_task_queries`.
+
+### Code-to-Code Cross-Entropy
+
+`code_code_loss` uses each live code anchor against all codebook codes. The anchor itself and
+its unary partner are removed. The remaining targets are the row-wise softmax of
+`-D* / loss.target_temperature`, where D* is the committed taxonomy tree metric. Independent
+scaled negative polar distances supply model logits. All target probability stays within the
+same keep mask; no negative miner or false-negative clustering participates.
+
+### Radial Error
+
+`radial_loss` is the mean squared error between the live anchor radii and
+`loss.radial_step * (level - 1)`. Default step 1 gives target radii 1, 2, 3, 4 and 5 at levels
+2 through 6. This is a soft target, not a fixed radius: each anchor's derivative through radius
+remains live, and codes at the same level can have different radii.
+
+### Total and Defaults
+
+```text
+loss = task_loss
+     + code_code_weight * code_code_loss
+     + radial_weight * radial_loss
+     + moe.load_balancing_coef * load_balancing_loss  (only under fusion=moe)
 ```
 
-A checkpoint records its encoder architecture (layout, fusion, dimension and backbone) in its
-contract. A checkpoint of another architecture cannot load, and nothing migrates it: four-copy
-checkpoints from before Stage 6 cannot load into the shared encoder (roadmap D2).
+The two term weights and target temperature default to 1. DCL, hierarchy-preservation loss,
+structural-preference loss, fixed-cap regularization, text curriculum, negative miners and
+false-negative mitigation are retired. Their configuration keys are rejected rather than
+reinterpreted as the new objective.
 
-After training, `tools export-table` writes the 2,125-code table, and `tools outcome-panel` reads
-the outcome panel's validation split (see `docs/usage.md`).
+## Two-Stream Epochs and the Code Cache
 
----
+An epoch visits every code anchor and every eligible query exactly once. Code and query
+permutations depend on seed and epoch. The number of steps is
+`ceil(n_queries / data_loader.queries_per_step)`; the reference's 11,039 queries at 128 give
+87 steps. The 2,125 code anchors are divided across these steps as evenly as possible.
+The loader has no text validation split or validation loader.
 
-## SADC Scheduler
+At fit start, and after each epoch, `refresh_code_cache` encodes all codebook code rows in eval
+mode with no gradients. The cache holds detached float32 directions and radii. At each step,
+current live code anchors replace their cached rows. The code-to-code and query terms thus use
+all candidates while gradients reach the live anchors and queries. Evaluation preserves the
+model's existing training flags and does not update dropout or adapters.
 
-The scheduler runs three phases within a single training invocation:
-
-1. **Structural Initialization (0–30%)**
-   - Flags: `use_tree_distance`, `mask_siblings`
-   - Effect: weights negatives by inverse tree distance and masks siblings.
-2. **Geometric Refinement (30–70%)**
-   - Flags: `enable_hard_negative_mining`, `enable_router_guided_sampling`
-   - Effect: activates Lorentzian hard-negative mining, and router-guided sampling under
-     `model.fusion: moe` only; under any other fusion the geometric miner fills every slot.
-3. **False Negative Mitigation (70–100%)**
-   - Flags: `enable_clustering`
-   - Effect: enables clustering-driven false-negative elimination.
-
-Phase boundaries are derived from the trainer's `max_epochs`. Flag transitions are logged to help
-verify when each mechanism is active.
-
-Two additional knobs were added for the experimentation tracks in [Issue #44](https://github.com/lowmason/naics-embedder/issues/44):
-
-- `curriculum.phase_mode=two_phase` merges Phase 3 behaviors into Phase 2 for a simpler two-stage schedule.
-- `curriculum.anneal.*` enables continuous schedules (e.g., annealing the tree-distance exponent or
-  router mix ratio over `epochs` or when a metric threshold is reached); the router mix ratio
-  applies under `model.fusion: moe` only (spec R10).
-
----
-
-## CLI Reference
-
-Use the `train` command for all new runs:
-
-```bash
-uv run naics-embedder train --config conf/config.yaml
-```
-
-Key options:
-
-- `--config PATH` — Base config file (default: `conf/config.yaml`).
-- `--ckpt-path PATH` — Use a checkpoint, or `last` to pick the most recent run artifact.
-- `--checkpoint-load-mode [exact|weights_only]` — How the checkpoint is used (default: `exact`).
-  See [Exact Resume versus Weights-Only Migration](#exact-resume-versus-weights-only-migration).
-- `--skip-validation` — Bypass the advisory pre-flight checks of data files and tokenization cache.
-  The supervision bundle gate is mandatory and always runs.
-- `OVERRIDES...` — Space-separated config overrides (e.g., `training.learning_rate=1e-4`).
-
----
-
-## Structural Spearman Validation
-
-Text validation reports `structural-spearman-v1` through versioned fields. Each mirrored distance
-pair is validated and averaged in CPU float64; only the strict upper triangle (`i < j`) is used,
-with the diagonal excluded. Canonical target distances are filtered at `min_distance=0.1`.
-SciPy assigns average ranks to exact ties. See the
-[complete input and undefined-result contract](overview.md#structural-spearman-v1).
-
-Lightning logs `val/structural_spearman_v1` only when defined and always logs
-`val/structural_spearman_v1_n_pairs` and `val/structural_spearman_v1_n_total`.
-Undefined results emit one warning with the exact reason and omit the numeric scalar.
-Malformed inputs raise `StructuralMetricInputError` and fail validation rather than being
-swallowed by the epoch-end evaluation handler.
-
-In distributed text training, structural Spearman and its counts describe **rank 0's sampled
-validation population**. All ranks validate their own matrices, but only rank 0 publishes these
-fields and undefined warnings and writes `evaluation_metrics.json`. The scalar and counts are
-not reduced across ranks: averaging local correlations is not a global Spearman coefficient, and
-undefined local populations must not select different collective operations. This rank-zero-only
-metric is for reporting, not a distributed early-stopping monitor.
-
-The existing `evaluation_metrics.json` history includes these fields. For example, a valid
-four-node evaluation with a constant target produces:
-
-```json
-{
-  "structural_spearman_v1": null,
-  "structural_spearman_v1_n_pairs": 6,
-  "structural_spearman_v1_n_total": 6,
-  "structural_spearman_v1_status": "undefined",
-  "structural_spearman_v1_reason": "constant_target",
-  "structural_spearman_v1_definition": "structural-spearman-v1"
-}
-```
-
-When defined, the value is numeric, status is `defined`, and reason is `null`. The other
-undefined reasons are `fewer_than_two_observations`, `constant_prediction_and_target`, and
-`constant_prediction`, in that precedence before `constant_target`.
-
-Unversioned historical `spearman`, `spearman_correlation`, `val/spearman_correlation`, and
-`val_spearman_correlation` fields are `legacy-ordinal-rank-v0`: defective, order-sensitive
-ordinal-rank results, not directly comparable with v1. Existing files are not rewritten, and
-new evaluations do not emit legacy aliases.
-
-For comparisons covered by this repair, retain `loss.curvature: 1.0`. After configuring the
-supervision manifest as described above, make the comparison setting explicit:
-
-```bash
-uv run naics-embedder train --config conf/config.yaml loss.curvature=1.0
-```
-
-The rank fix does not correct non-unit-curvature distances. HGCN full evaluation and Stage-4
-verification also remain fixed at `1.0`; Stage-4 reports structural Spearman without using it
-as an acceptance threshold.
-
----
-
-## Resuming and Overrides
-
-Resume the latest checkpoint produced under the current experiment name. Exact resume succeeds
-only when the checkpoint was trained under the same supervision contract as the configured bundle:
-
-```bash
-uv run naics-embedder train --ckpt-path last
-```
-
-Override trainer settings without editing YAML:
-
-```bash
-uv run naics-embedder train \
-  training.trainer.max_epochs=15 training.trainer.accumulate_grad_batches=4
-```
-
-`Config` and every section under it reject keys they do not define, so a misspelled key in
-`conf/config.yaml` or an override such as `training.learnig_rate=1e-4` raises a validation error
-and stops the run instead of silently training on the default value.
-
----
+The token cache is a separate preprocessing artifact. It records descriptions, tokenizer,
+window and summary identities. Long texts resolve through pinned window-fitting summaries;
+silent truncation is refused. The per-epoch embedding cache is rebuilt on resume and is not a
+checkpoint state that can become stale across processes.
 
 ## Stage-3 Supervision Integrity
 
-The repaired Stage-3 contract keeps every piece of supervision attached to the identity it
-describes. Structural facts are never mutated to encode exclusions, every candidate travels under
-one occurrence identity from pool construction through every loss, and training fails closed
-rather than continuing with partially aligned metadata.
+`data supervision` writes an immutable `stage3-supervision-v2` bundle: codebook, tree distances,
+unary pairs, redirections and training pairs, with one manifest and hashes. Loading validates
+members, schemas, identifiers and relationships together. A missing manifest or any mismatch
+refuses training before model or loader construction. `--skip-validation` only skips advisory
+checks and cannot bypass this gate.
 
-### Operator Workflow
+The bundle's training-pairs member stays present and validated. Text training never reads it;
+it derives task queries and dense code targets from the bundle's other facts. HGCN retains the
+training-pairs/sampling path for its separate graph objective.
+
+`CheckpointContract` records contract version, bundle id, codebook fingerprint, objective
+`req11-v1`, encoder architecture (layout, fusion, dimension and backbone name), and the
+window-summary hash. The radius bound is saved in model hyperparameters and `run_settings`;
+the resolved cached backbone revision is recorded in export provenance. Token caches separately
+pin descriptions, tokenizer and window identities. Pre-objective and four-copy checkpoints
+are refused before `load_from_checkpoint` in training, export, outcome reads and the HGCN feeder.
+No checkpoint migrates weights into this objective.
+
+## Outcome Validation Monitor
+
+After each epoch's cache refresh, `OutcomeMonitor` scores the outcome validation split through
+`OutcomePanel.score_logged`. Queries use the current shared model and codes use the refreshed cache.
+The test split stays sealed. The selection-log read carries training-run id, seed, epoch and
+matrix fingerprint; `monitor_reads.jsonl` beside the checkpoints preserves every read.
+
+The float64 MRR is logged as `val/outcome_mrr`. ModelCheckpoint keeps the earliest epoch with
+the highest value, plus `last.ckpt`. A tied later value cannot replace the earlier checkpoint.
+AdamW has one warmup epoch, followed by an MRR-driven plateau scheduler and early stopping.
+Structural statistics neither select a checkpoint nor control either scheduler.
+
+## Epoch Summary and Training Health
+
+`epoch_summary.jsonl` has one increasing, zero-based epoch row. It records MRR and finite health
+values: task/code-code/radial/total losses, both logit scales, and radius mean/SD at levels 2–6.
+MoE runs also record their load-balancing loss. Rows take `_log_health()`'s Python floats;
+Lightning's float32 callback metrics do not round the saved health values. MRR is `null` only
+for a run without a monitor.
 
 ```bash
-uv run naics-embedder data supervision
-uv run naics-embedder train \
-  --config conf/config.yaml \
+uv run naics-embedder tools visualize   --summary checkpoints/reference/epoch_summary.jsonl   --output-dir outputs/visualizations/reference
+```
+
+The tool writes one `epoch_metrics.png` figure with MRR, loss, scale and radius panels,
+including per-level SD bands. It accepts a
+summary path rather than a console-log stage. `read_epoch_summary` refuses malformed, nonfinite
+or unordered rows before plotting; the radius panel draws a band wherever both mean and SD
+are recorded.
+
+## Exact Resume
+
+Continue only the latest checkpoint of the same run:
+
+```bash
+uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+```
+
+The guards check the experiment directory, bundle, encoder, preprocessing, seed and all
+21 settings from `run_settings`. Those include effective accelerator/precision, query batch
+size, optimizer and stopping settings, epoch budget, clipping and accumulation. A fresh start
+refuses an already used checkpoint directory. A resume from another directory or with other
+settings exits 1 before model or data construction. A supplementary guard compares saved
+constructor hyperparameters with the current config: LoRA rank, alpha and dropout always, plus
+MoE expert count, top-k, hidden dimension and load-balancing coefficient under active MoE fusion.
+Missing required values are refused; inactive MoE settings are ignored. This preserves the
+21-key `run_settings` and `ArmSpec.settings` identity without rewriting checkpoints.
+`--checkpoint-load-mode` accepts only `exact`; there is no weights-only path.
+
+Resume restores the training-run id, optimizer, warmup/plateau and callback state, rebuilds the
+code cache, and retains both JSONL files through the resumed epoch before continuing. Kept lines
+preserve their bytes. Do not rewind with an older kept epoch checkpoint; use `last`.
+A run that early stopping ended exits 1 with `early stopping ended the run at epoch k`, since
+Lightning does not restore `trainer.should_stop`. A launcher must treat that message as a
+finished run, not retry it. A run whose epoch budget is spent is a harmless no-op. Extending the
+budget changes run settings and is refused on exact resume.
+
+`training.trainer.val_check_interval` is retained in the config model but unread by the text
+Trainer; there is no validation loader. Monitoring occurs once at each training epoch's end.
+
+## Export, Diagnostics and Radius Verification
+
+Use the earliest highest-MRR epoch from the monitor records. Export encodes every code through
+that checkpoint in eval mode and writes bounded tangent coordinates `e0` through `e{d-1}` plus
+checkpoint/table provenance. Panel reads reconstruct unit-curvature Lorentz points on the CPU
+in float64. A table exported from another checkpoint or preprocessing pin is refused.
+
+```bash
+uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+```
+
+`epoch=001.ckpt` is an example; substitute the selected filename. The radius report is a CPU
+read of the checkpoint, table and saved step-zero seed. It does not read an evaluation panel.
+It checks nonzero gradients through each anchor radius, per-level SD > 1e-3, positive distinct
+sector radii and their least gap, largest-radius manifold error, and float32/float64 distance
+agreement over all ordered pairs in row chunks. It also reports nonzero gradient norms of all
+three weighted terms and both scales. Failed criteria write the report and exit 1.
+
+The distance comparison requires relative error at most 1e-3 on noncoincident pairs. Exact
+coincident tangents must have zero float32 training distance; their float64 read residual is
+reported separately. A noncoincident pair whose read distance rounds to zero fails.
+Largest-radius manifold error must be at most `1e-9 * x0**2`.
+
+`tools diagnostics` separately reports Req 6's structural measures, with no thresholds and no
+checkpoint or arm selection. HGCN keeps its graph curriculum and structural logging; see
+[Structural Spearman v1](overview.md#structural-spearman-v1) for that metric's contract.
+
+## Reference Campaign
+
+Train reference seeds 1–10 on CUDA with `bf16-mixed`, then bring the complete run directories
+to the Mac for decision reads. Use a distinct directory per seed and keep the config identical
+apart from seed and experiment name. Preserve checkpoints, monitor records and epoch summaries.
+The frozen text-only comparator must use the same backbone revision and window summaries.
+
+Keep the decision store and records under `~/naics-artifacts`, outside every worktree:
+
+```bash
+mkdir -p ~/naics-artifacts/records/stage7
+uv run naics-embedder tools sweep --runs 'checkpoints/reference-seed-{seed}' \
+  --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --seed 6 --seed 7 --seed 8 --seed 9 --seed 10 \
+  --text-only data/reference/text_only.parquet --store ~/naics-artifacts \
+  --output ~/naics-artifacts/records/stage7/reference.json --purpose 'reference campaign validation' \
+  --name reference --accelerator cuda \
   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
-
-# Exact resume: every identifier must match.
-uv run naics-embedder train \
-  --ckpt-path checkpoints/run/last.ckpt \
-  --checkpoint-load-mode exact \
-  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
-
-# Explicit weights-only seeding from a shared-encoder checkpoint with the same encoder record
-# (layout, fusion, dimension, backbone); all training state resets. Four-copy (pre-Stage-6) and
-# contract-less checkpoints are refused (roadmap D2).
-uv run naics-embedder train \
-  --ckpt-path checkpoints/other_run/last.ckpt \
-  --checkpoint-load-mode weights_only \
-  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools margins \
+  --reference ~/naics-artifacts/records/stage7/reference.json --multiple 3 \
+  --name reference-margins --store ~/naics-artifacts \
+  --output ~/naics-artifacts/records/stage7/margins.json
 ```
 
-Each step is a gate:
-
-1. **Generate** — `data supervision` builds a complete bundle in a staging directory, validates
-   every artifact, writes the manifest last, and atomically publishes
-   `data/supervision/stage3-supervision-v2/<bundle-id>/`. It reads the descriptions, index roles
-   and redirection table that `data preprocess` writes, and the backbone's tokenizer from the
-   local Hugging Face cache. It prints `Supervision manifest: <path>`; nothing partial is ever
-   visible under that path. The legacy stage commands (`data relations`, `data distances`,
-   `data triplets`) print a migration notice and exit with status 1 without building anything.
-2. **Configure** — `supervision.manifest_path` names exactly one bundle. The shipped
-   `conf/config.yaml` leaves it `null`, which parses but cannot train: the mandatory gate stops
-   with `Repaired Stage-3 training requires supervision.manifest_path` and prints the command
-   above.
-3. **Validate** — before any DataModule, checkpoint, or model work, `train` re-validates the whole
-   bundle and checks that `data_loader.streaming.descriptions_parquet` is the file the bundle was
-   generated from. The bundle checks cover the contract version, member hashes and row counts,
-   Parquet contract metadata, and every required validation result. They also cover codebook
-   order and fingerprint, pair-fact coverage and orientation, D* and the unary-pair flags,
-   matrix reconciliation, training-pair joins, the index roles and the redirection table.
-   `--skip-validation` does not skip this gate.
-4. **Train or resume** — a fresh run, an exact resume (identical contract), or an explicit
-   weights-only migration. There is no automatic fallback to legacy files.
-
-### The Supervision Bundle
-
-A bundle is immutable and versioned. Its manifest records:
-
-- the contract and per-artifact schema versions, and the NAICS vintage;
-- the codebook order and fingerprint, the input fingerprints, the generator revision and the
-  generation parameters;
-- the structural relation-ID mapping;
-- every member's path, SHA-256, row count, and exclusion count;
-- every validation result the build ran;
-- the input window.
-
-Every Parquet member also carries the contract version, bundle ID, and schema version in its
-metadata, so artifacts from different bundles can never be mixed.
-
-| Artifact | Contents |
-|---|---|
-| `naics_codebook.parquet` | Canonical `code_id` ↔ `code` order |
-| `naics_pair_facts.parquet` | One row per unordered code pair: D* and the structural relation, both exclusion directions and their OR, and the unary-pair flag |
-| `naics_distances.parquet` / `naics_distance_matrix.parquet` | Legacy-compatible long-form and matrix views, reconciled against the pair facts |
-| `naics_relations.parquet` / `naics_relation_matrix.parquet` | Legacy-compatible relations with explicit exclusion columns (no exclusion relation) |
-| `naics_training_pairs/` | Training pairs with identities, semantic fields, exclusion provenance, and raw structure; no negative is an explicit exclusion and no positive is a unary pair |
-| `curriculum_difficulty_thresholds.json` | Curriculum thresholds derived from the same bundle |
-| `naics_index_roles.parquet` | Every Census index entry with its one role: examples-channel text, or a training, validation or test query |
-| `naics_redirections.parquet` | Every cross-reference and harvested "Excluded" paragraph once: its code and text, activity phrase, named codes, lineal codes and withheld flag |
-
-Validation failures name the artifact and bundle ID, for example
-`distance_matrix (<bundle-id>): matrix does not reconcile with the long-form pair facts`,
-`codebook hash mismatch at <path>: expected <sha>, found <sha>`,
-`expected supervision contract stage3-supervision-v2, found <version> in <path>`,
-`a direct positive is an explicit exclusion`, or
-`structural relation fields contain an exclusion sentinel`. Regenerate the bundle rather than
-editing members.
-
-**D\*.** The pair facts carry D*, the tree path length through a virtual root above the 20
-sectors (Req 7): `depth_i + depth_j - 2 * depth_LCA`. Sectors sit at depth 1, and the combined
-sectors 31-33, 44-45 and 48-49 count as one. There is no half-step and no cross-sector constant:
-across sectors D* is λ(i) + λ(j) − 2, where λ is the number of digits. The build checks every
-pair against `utils/naics_hierarchy.tree_distance_matrix`, the function Stage 4's diagnostics
-read, and checks the triangle inequality over all triples. Cross-sector pairs are found by their
-relation label (`cross_sector`, relation ID 99), never by a distance.
-
-**Redirections.** A cross-reference reroutes an activity; it does not assert that two codes are
-unrelated (Req 8). The redirection table holds every cross-reference row and every "Excluded"
-paragraph harvested from a description, once each. A code's exclusion channel is its rows' text,
-each row once, in table order. A held-out query that leaks into a row withholds it: the row
-stays in the table and its named codes stay exclusions, but its text leaves the channel and its
-activity phrase is dropped. The build's leakage check also reads the activity phrases, which
-Stage 7 trains on as queries. A lineal reference, a code naming its own ancestor or descendant,
-stays text only.
-
-**Unary pairs.** A five-digit code whose only child is its six-digit code forms a unary pair
-(Req 9). The pair facts flag the 522 unary pairs. They are never generated or sampled
-positives, and parent retrieval never scores them.
-
-**Input window.** The manifest's `input_window` records the backbone's trained window: 128 tokens
-for `sentence-transformers/all-MiniLM-L6-v2`, from its model card. Per text channel it records
-the present texts, the texts beyond the window and their share. A description, examples or
-excluded text whose marked form is over the window is read as its window-fitting summary (roadmap
-Stage 6b): whole sentences, clauses or examples entries of the text, chosen once by
-`naics-embedder data summaries` and committed as `conf/data/window_summaries.csv`.
-`WINDOW_SUMMARIES` (`panels/window_summaries.py`) pins the artifact by sha256, and the
-tokenization cache and the text-only comparator both read their texts through
-`resolve_channel_texts`, which checks the artifact on every call that finds an over-window text.
-No channel text is truncated; truncation stays a backstop for queries. Under MiniLM at 128
-tokens, 162 descriptions, 106 examples texts and 485 exclusion texts are summarized; the manifest
-counts unmarked text, so its counts are lower (153, 105 and 464). The checkpoint contract, the
-export and text-only provenances and the decision records carry the summaries' sha256. An absent
-channel is null in the descriptions, and the tokenization cache encodes it as the empty string,
-never as a placeholder.
-
-### Three Independent Axes
-
-Each (anchor, candidate) pair carries three independent kinds of supervision:
-
-- **Structure** — D* and the NAICS relation (`cross_sector`, relation ID 99, across sectors).
-  Exclusion processing never alters these values.
-- **Semantic target and source** — `RELATED` / `UNRELATED` / `UNKNOWN`, sourced from a
-  `TRAINING_POSITIVE`, an `EXPLICIT_EXCLUSION`, or `UNLABELED`. Model-derived pseudo-relatedness is
-  runtime metadata and is never persisted as ground truth.
-- **Exclusion provenance** — which code published the exclusion (`anchor_excludes_candidate`,
-  `candidate_excludes_anchor`) and their OR, `is_explicit_exclusion`.
-
-An explicitly excluded pair may be structurally close; the repaired losses read structure and
-exclusion separately instead of letting a sentinel distance stand in for both.
-
-### Candidate Identity
-
-A **code ID** says which NAICS code a candidate is; the same code may occur more than once in a
-pool. A **candidate UID** `[rank, batch_row, source_slot]` identifies one occurrence. Every
-training step encodes one canonical candidate pool, joins pair-dependent supervision (distance,
-relation, exclusions, margins) for each local anchor by code ID, and then performs a single checked
-gather: `NegativeCandidateBatch.select()` moves embeddings, code IDs, structure, exclusion flags,
-margins, router outputs, and validity together and rejects any selection whose UIDs do not match
-the pool. Miners only *propose* source indices; they never gather fields. Invalid padding rows keep
-source slot `-1`, are never selectable, and never contribute to a loss. In multi-GPU runs only
-intrinsic entity fields (UID, code ID, embedding, router output, validity) are gathered; supervision
-is recomputed for each local anchor.
-
-### Negative Selection
-
-An explicit exclusion is never a negative (Req 8(c)). The generator drops every candidate that is
-an explicit exclusion of its anchor, the canonical pool never admits one, and final selection
-refuses one. No slot is reserved for exclusions. The `K` slots come from strategy proposals, with
-duplicates removed by code (keeping the smallest UID), ties broken by code ID then UID, and a
-deterministic backfill. Proposals are consulted in order:
-
-1. **Phase 2+ miners.** With hard-negative mining on, the geometric miner proposes all `K` slots;
-   under `model.fusion: moe` with router-guided mining also on, it proposes
-   `K - int(K * router_mix_ratio)` and the router fills the rest. `router_mix_ratio` comes from
-   `curriculum.anneal` (default 0.5). Miners score one occurrence per code (the smallest candidate
-   UID, which the coordinator keeps) and never the anchor or positive code, so on multiple GPUs,
-   where a code repeats across rows and ranks of the global pool, the miners still fill their slots
-   with distinct codes.
-2. **The difficulty proposal** from the data layer, which is the only proposal in Phase 1 and the
-   fallback afterwards.
-3. **Deterministic backfill** from the remaining eligible codes.
-
-A candidate is **eligible** only if it is not an explicit exclusion of the anchor and is
-structurally farther from the anchor than the positive. That is the rule every generated
-training negative satisfies, including its cross-sector and equal-distance special cases.
-Candidates sourced at runtime, such as universe backfill and the multi-GPU global pool, therefore
-never repel a relative that the generated supervision would not treat as a negative. The
-repaired configuration rejects the legacy `phase1_exclusion_weight`. No exclusion is ever
-selected, so none reaches the contrastive denominator.
-
-### Structural Preference Loss
-
-`StructuralPreferenceLoss` replaces LambdaRank. For each anchor it compares every unordered pair of
-eligible candidates among the positive and the selected negatives whose structural distances
-differ by more than `tie_tolerance`. With `i` the structurally closer candidate and `j` the
-farther one, and `d` the learned Lorentz distance to the anchor:
-
-```text
-loss_ij = softplus((d_i - d_j + margin) / temperature)
-```
-
-The gradient is positive in `d_i` and negative in `d_j`, so every step pulls the structurally
-closer candidate in and pushes the farther one out; a correct ordering by at least `margin` costs
-little. Explicit exclusions, invalid padding, the anchor's own code, and repeated codes never
-participate. Optional pair weights are detached. Comparisons are averaged per anchor, then over
-anchors with at least one comparison; with none, the term is a finite differentiable zero. The
-term is logged as `train/structural_preference_loss` and configured under
-`loss.structural_preference` (`weight`, `margin`, `temperature > 0`, `tie_tolerance >= 0`).
-
-### Cache Regeneration
-
-- **Tokenization cache** — reused only when its JSON sidecar (`<cache>.meta.json`) records the
-  bundle's description and codebook fingerprints, tokenizer, max length, cache format, field
-  markers and window-fitting summaries; otherwise it is rebuilt.
-- **Streaming and multi-epoch caches** — stored in a versioned envelope keyed by contract, bundle
-  ID, codebook fingerprint, and source-artifact fingerprints; caches from other bundles or legacy
-  runs are rejected and regenerated.
-- **Pre-sampled epochs** — `data_loader.n_epochs` (default 100) is the number of sampling epochs
-  the datamodule pre-builds for the training and validation rows, and the caches key on it. One
-  training epoch reads all of them, so with the current bundle one Lightning epoch at the default
-  is about 19,883 steps at batch 16. The plan 8 Exit (roadmap Stage 6) ran `data_loader.n_epochs=1`:
-  one sampling of about 3,181 rows, or about 199 steps.
-- **Curriculum difficulty thresholds** — regenerated from the same bundle during bundle generation.
-- **Graph preprocessing** — `uv run python -m
-  naics_embedder.graph_model.curriculum.preprocess_curriculum --supervision-manifest <path>` and
-  `supervision_manifest_path` in `conf/graph.yaml` read relations, distances, the distance matrix,
-  training pairs, and (for HGCN) the curriculum difficulty thresholds from one bundle; HGCN
-  consumes only its legacy negative fields (`negative_idx`, `negative_code`, `relation_margin`,
-  `distance_margin`).
-
-### Exact Resume versus Weights-Only Migration
-
-Every new checkpoint records its supervision contract under `stage3_supervision`: supervision
-mode, contract version, bundle ID, codebook fingerprint, structural-preference-loss version,
-mining-contract version, the encoder architecture (layout, fusion, dimension and backbone), and
-the sha256 of the window-fitting summaries its token cache applied (`summaries`). A checkpoint
-trained before Stage 6b, on truncated text, records none and reads as null, so exact resume,
-export, reads and the HGCN feeder refuse it; weights-only migration does not compare it.
-Structural matrices are loaded from the validated bundle, not trusted from checkpoint state.
-
-- **`--checkpoint-load-mode exact`** (default) restores optimizer, scheduler, epoch, global step,
-  curriculum, and sampler state. It is allowed only when every contract field matches the runtime
-  bundle; otherwise training stops before model construction with
-  `exact resume contract mismatch (saved, runtime): {...}`. Checkpoints without a contract fail
-  with `legacy checkpoint has no Stage-3 contract and cannot exact resume`, followed by the D2
-  refusal. A checkpoint of another encoder architecture fails with that refusal too (roadmap D2).
-- **`--checkpoint-load-mode weights_only`** loads only allowlisted encoder parameters (`encoder.*`:
-  the shared backbone and its adapter, fusion, and the projection). It refuses a checkpoint of
-  another encoder architecture before reading any parameter (D2). Loss modules and data-derived
-  buffers
-  (`loss_fn.`, `hierarchy_loss_fn.`, `lambdarank_loss_fn.`, `structural_preference_loss_fn.`,
-  ground-truth distances, `norm_adaptive_margin.`) are skipped. Any other parameter group is fatal.
-  Optimizer, scheduler, epoch, global step, curriculum, sampler, and mining state are discarded, and
-  the run starts at epoch zero against the validated bundle. The log reports loaded, skipped, and
-  freshly initialized parameter groups. This initializes from old weights; it does not undo what an
-  old objective learned.
-
-Embedding generation from a checkpoint applies the contract check in two forms. Export and reads
-(`tools export-table`, `tools outcome-panel`) compare the supervision fields with the configured
-bundle only, and the encoder record they use is the checkpoint's own: a d = 8 checkpoint exports
-under a d = 16 config, and a four-copy checkpoint is refused (roadmap D2). Only the embedding
-generation that feeds HGCN training compares the checkpoint's encoder record with the config's, as
-exact resume does.
-
-### Legacy Containment
-
-`supervision.mode: legacy_containment` is an explicit, non-default mode for old configurations. It
-is not contract-compliant Stage-3 training:
-
-- LambdaRank, the structural preference loss, and the hierarchy loss are disabled, even when old
-  weights are set (`loss.rank_order_weight` and `data_loader.streaming.phase1_exclusion_weight`
-  are accepted only in this mode);
-- hard-negative and router-based reordering and pseudo-related elimination or attraction are
-  disabled; training uses local, unmined negatives in collated order, with the legacy
-  repeat-last padding of shorter negative lists;
-- radius regularizers still run, as do MoE routing and load balancing under `model.fusion: moe`;
-- runs log `LEGACY CONTAINMENT` at startup and `train/integrity/legacy_containment = 1` each epoch;
-- checkpoints are tagged with bundle ID `legacy-containment` and codebook fingerprint
-  `unversioned`, so they can never exact-resume into repaired training; they can seed a repaired
-  run through `weights_only` only when their encoder record matches the run's. Containment
-  checkpoints saved before Stage 6 carry the four-copy layout and are refused (roadmap D2).
-
-### Rollout Gates
-
-Four gates must pass before normal repaired Stage-3 training:
-
-```bash
-uv run pytest tests/unit/test_candidate_contract.py -q
-uv run pytest tests/unit/test_loss.py::test_structural_preference_gradient_corrects_an_inversion -q
-uv run pytest tests/unit/test_supervision_artifacts.py -q
-uv run pytest tests/integration/test_stage3_training_step.py -q
-```
-
-They prove, in order, that a forced reorder keeps every candidate field on one identity, that the
-structural preference gradient corrects an inverted pair, that bundle validation fails closed, and
-that a full training step feeds every loss the same selected candidates.
-
-During training, epoch-summed integrity counters report selection health:
-`train/integrity/anchors_with_exclusions`, the per-reason selections (`geometric_selections`,
-`router_selections`, `difficulty_selections`, `deterministic_backfills`, and `quota_selections`,
-which stays at zero because no slot is reserved), `invalid_candidates_ignored` (padding),
-`structurally_ineligible_candidates`, and `duplicate_candidates_removed`.
-
-Validation scores every eligible candidate of each validation pool, never an explicit exclusion,
-with no mining or pseudo-labels, so `val/contrastive_loss` depends only on the model and the
-epoch-independent validation pools. Its values are not comparable with legacy runs, whose
-validation contrasted a fixed negative list.
-
----
-
-## Sampling Architecture: Data Layer vs Model Layer
-
-This page clarifies the split between the streaming data pipeline and the model during curriculum-driven training.
-
-### Data Layer (Streaming Dataset)
-
-- Build one canonical candidate pool per (anchor, positive) from the bundle's training pairs:
-  unique codes structurally farther from the anchor than the positive, never an explicit
-  exclusion of the anchor, the anchor or the positive.
-- Phase 1 sampling:
-  - Inverse tree-distance weighting over D* (`P(n) ∝ 1 / d_tree(a, n)^α`).
-  - Sibling masking (`d_tree == 2` set to zero, which under D* also masks a grandparent or
-    grandchild).
-  - Difficulty proposals over the pool.
-- Static baseline (SANS):
-  - Set `sampling.strategy=sans_static` to replace the dynamic weighting with fixed near/far buckets.
-  - Configure bucket ratios under `sampling.sans_static` (e.g., `near_bucket_weight`, `near_distance_threshold`).
-  - The dataloader emits `sampling_metadata` so the model can log near/far percentages per batch, making it easier to benchmark against Issue [#43](https://github.com/lowmason/naics-embedder/issues/43).
-- Outputs:
-  - Tokenized anchors/positives.
-  - One candidate pool per item: code IDs, sampling role/provenance, validity, source slots, and
-    difficulty proposals. Pair-dependent supervision is joined later in the model.
-
-### Model Layer (NAICSContrastiveModel)
-
-The model is decomposed into functional **mixins** for maintainability:
-
-| Mixin | Responsibility |
-|-------|----------------|
-| `DistributedMixin` | Global candidate-pool gathering for multi-GPU training |
-| `LossMixin` | Contrastive, hierarchy, structural preference, and radius losses |
-| `CurriculumMixin` | Canonical pools, checked negative selection, pseudo-related candidates |
-| `LoggingMixin` | Training, selection-health, and validation metric logging |
-| `ValidationMixin` | Validation step and evaluation metrics |
-| `OptimizerMixin` | Optimizer and scheduler configuration |
-
-**Curriculum-driven behavior:**
-
-- Reads curriculum flags from `CurriculumScheduler`.
-- Phase 2+ proposals (source indices into the canonical pool), consulted before the difficulty
-  proposal:
-  - Embedding-based hard negative proposals (Lorentzian distance), for a `1 - router_mix_ratio`
-    share of the slots when router mining is also on.
-  - Router-guided proposals (gate confusion) fill the remaining slots, under `model.fusion: moe`
-    only.
-  - Norm-adaptive margins via `NormAdaptiveMargin` (sech-based decay) are logged for annealing.
-- Phase 3:
-  - Pseudo-related candidates from clustering, derived only after selection and never including
-    an explicit exclusion.
-- False-negative strategy (`false_negatives.strategy`):
-  - `eliminate` removes effective false negatives from the contrastive denominator (default).
-  - `attract` keeps them and applies an auxiliary attraction loss scaled by `attraction_weight`.
-  - `hybrid` combines both behaviors for higher precision at the cost of extra compute.
-- Logging:
-  - Negative relationship distribution and tree-distance bins over the selected negatives.
-  - Selection health counters, hard-negative distances, and adaptive margins.
-
-### Interface Contract
-
-- **Inputs expected from data layer:** one candidate pool per item with code IDs, validity, and
-  source slots; no pair-dependent supervision is trusted from the batch.
-- **Curriculum flags influence:**
-  - Phase 1 flags (`use_tree_distance`, `mask_siblings`) act in the data layer.
-  - Phase 2/3 flags (`enable_hard_negative_mining`, `enable_router_guided_sampling`,
-    `enable_clustering`) act in the model layer; the router flag acts only under `moe`.
-- **Selection:** every strategy proposes source indices; the selection coordinator performs the
-  only gather, so all losses see the same selected candidates.
-
-## Migration for Legacy Chains
-
-The legacy stage-by-stage curriculum files and chain configs are retired. To reproduce an old
-multi-stage job, acknowledge the deprecated workflow explicitly:
-
-```bash
-uv run naics-embedder train-seq --legacy --num-stages 3 --config conf/config.yaml
-```
-
-New work should rely on `train` plus overrides—the dynamic SADC scheduler replaces manual chains and
-static curriculum files.
-
----
-
-## Performance Optimization
-
-### torch.compile Support
-
-Core Lorentz operations are optimized using PyTorch 2.0+ `torch.compile` for improved throughput:
-
-- **Exponential/Logarithmic maps** — Fused element-wise operations
-- **Distance computations** — Compiled Lorentzian distance
-- **MoE gating** — Compiled softmax operations
-- **Hard negative mining** — Compiled norm and margin computations
-
-Compilation is **enabled by default** when PyTorch 2.0+ is available. Configure via:
-
-```python
-from naics_embedder.utils.compile import CompileConfig, set_compile_config
-
-set_compile_config(CompileConfig(
-    enabled=True,
-    mode='reduce-overhead',  # Best for small tensors / repeated calls
-    dynamic=True,            # Support varying batch sizes
-))
-```
-
-**Disable compilation** via environment variable:
-
-```bash
-NAICS_DISABLE_COMPILE=1 uv run naics-embedder train
-```
-
-**Benchmark compiled vs eager operations:**
-
-```python
-from naics_embedder.utils.compile import benchmark_compile_speedup
-
-results = benchmark_compile_speedup(batch_size=256, embedding_dim=768)
-print(f"exp_map speedup: {results['exp_map']['speedup']:.2f}x")
-print(f"distance speedup: {results['lorentz_distance']['speedup']:.2f}x")
-```
-
----
+`--accelerator cuda` names the training settings, even when the read runs on the Mac.
+`tools sweep` independently resolves the arm's cached backbone revision; a comparator cannot
+supply that revision. Before any export or decision read, its combined preflight checks every
+seed's complete epochs through `last.ckpt`, earliest best epoch, selected checkpoint, seed,
+training-run id and 21 settings. It applies the supplementary constructor-hyperparameter check
+to both `last.ckpt` and the selected checkpoint against the arm config before any seed export
+or decision read. It also verifies that monitor records identify validation reads
+from the correct panel, with valid fingerprints and the correct seed, rather than test reads or
+opening events. A selected epoch with a versioned sibling or a saved best score that differs
+from the monitor is refused.
+
+Each seed then exports the selected table beside the checkpoint and reads three validation
+panels: outcome, regressor seen, and regressor held-out at level 6. The arm record carries all
+monitor reads, checkpoint epoch and training-run id as well as decision reads. A decision arm
+requires at least five complete seeds; this reference campaign uses ten.
+
+Fix margins before any candidate arm's monitor or decision read. Candidate arm records and
+reference records are compared by `tools decide` under Req 5's paired two-stage bootstrap and
+tie order. The test splits stay sealed. Radius verification and structural diagnostics describe
+the trained model; the three panels decide whether an arm is adopted.
 
 ## Troubleshooting
 
-- **Dataset checks** — Use `uv run naics-embedder tools config` to confirm paths before training.
-- **Supervision gate failures** — The message names the artifact and bundle ID; regenerate the
-  bundle with `uv run naics-embedder data supervision` and point `supervision.manifest_path` at the
-  printed manifest.
-- **Flag visibility** — Curriculum phase transitions and flag values are emitted in training logs.
-- **Memory pressure** — Lower `data_loader.batch_size` or increase `accumulate_grad_batches` via
-  overrides. Each step encodes the full candidate pool (up to `n_candidates` rows per anchor with
-  on-the-fly sampling).
-- **Compile issues** — If torch.compile causes problems, disable with `NAICS_DISABLE_COMPILE=1`.
+- A missing or inconsistent bundle: regenerate it with `data supervision` and use its printed
+  manifest path; do not patch members or weaken hashes.
+- A contract or settings refusal: inspect the configured run identity. An old objective or a
+  changed seed, budget, radius bound or precision requires a fresh run directory.
+- A stopped run: keep its selected checkpoint and monitor evidence; do not relaunch it.
+- A nonfinite loss or inert radius term: inspect the epoch summary and `tools radius-report`;
+  structural correlation is not the training control score.
+- Memory pressure: reduce `data_loader.queries_per_step` for a fresh run, or choose a smaller
+  dimension. Changing settings during exact resume is refused.

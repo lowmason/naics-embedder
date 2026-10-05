@@ -154,6 +154,44 @@ def anchors_df(descriptions_parquet):
     '''Build anchors from test descriptions.'''
     return build_anchor_list(descriptions_parquet)
 
+@pytest.fixture
+def mock_codes_parquet(tmp_path):
+    '''Create minimal 6-level NAICS codes for testing.'''
+    data = {
+        'code': [
+            '31',
+            '311',
+            '3111',
+            '31111',
+            '311111',
+            '311112',
+            '32',
+            '321',
+            '3211',
+            '32111',
+            '321111',
+        ],
+        'level': [2, 3, 4, 5, 6, 6, 2, 3, 4, 5, 6],
+        'index': list(range(11)),
+    }
+    df = pl.DataFrame(data)
+    path = tmp_path / 'codes.parquet'
+    df.write_parquet(path)
+    return str(path)
+
+@pytest.fixture
+def mock_relations_parquet(tmp_path):
+    '''Create minimal relations data for sibling sampling.'''
+    data = {
+        'code_i': ['311111', '311112'],
+        'code_j': ['311112', '311111'],
+        'relation_id': [2, 2],  # siblings
+    }
+    df = pl.DataFrame(data)
+    path = tmp_path / 'relations.parquet'
+    df.write_parquet(path)
+    return str(path)
+
 # -------------------------------------------------------------------------------------------------
 # Tests for build_taxonomy()
 # -------------------------------------------------------------------------------------------------
@@ -667,6 +705,99 @@ class TestPositiveSampler:
             assert 'positive_level' in s
             assert 'stratum_id' in s
             assert 'stratum_wgt' in s
+
+# -------------------------------------------------------------------------------------------------
+# Tests for create_positive_sampler() in HGCN's call shape: no codebook
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestCreatePositiveSampler:
+    '''Tests for PositiveSampler class.'''
+
+    def test_sampler_initialization(self, mock_codes_parquet, mock_relations_parquet, monkeypatch):
+        '''PositiveSampler should initialize with anchor list.'''
+        # Mock get_indices_codes
+        code_to_idx = {
+            '31': 0,
+            '311': 1,
+            '3111': 2,
+            '31111': 3,
+            '311111': 4,
+            '311112': 5,
+            '32': 6,
+            '321': 7,
+            '3211': 8,
+            '32111': 9,
+            '321111': 10,
+        }
+        idx_to_code = {v: k for k, v in code_to_idx.items()}
+
+        def mock_get_indices_codes(key):
+            if key == 'code_to_idx':
+                return code_to_idx
+            elif key == 'idx_to_code':
+                return idx_to_code
+            return None
+
+        monkeypatch.setattr(
+            'naics_embedder.data.positive_sampling.get_indices_codes', mock_get_indices_codes
+        )
+
+        sampler = create_positive_sampler(
+            descriptions_parquet=mock_codes_parquet,
+            relations_parquet=mock_relations_parquet,
+            max_per_stratum=4,
+            seed=42,
+        )
+
+        assert len(sampler.anchors) > 0
+
+    def test_sample_positives_returns_list(
+        self, mock_codes_parquet, mock_relations_parquet, monkeypatch
+    ):
+        '''sample_positives should return list of positive dicts.'''
+        code_to_idx = {
+            '31': 0,
+            '311': 1,
+            '3111': 2,
+            '31111': 3,
+            '311111': 4,
+            '311112': 5,
+            '32': 6,
+            '321': 7,
+            '3211': 8,
+            '32111': 9,
+            '321111': 10,
+        }
+        idx_to_code = {v: k for k, v in code_to_idx.items()}
+
+        def mock_get_indices_codes(key):
+            if key == 'code_to_idx':
+                return code_to_idx
+            elif key == 'idx_to_code':
+                return idx_to_code
+            return None
+
+        monkeypatch.setattr(
+            'naics_embedder.data.positive_sampling.get_indices_codes', mock_get_indices_codes
+        )
+
+        sampler = create_positive_sampler(
+            descriptions_parquet=mock_codes_parquet,
+            relations_parquet=mock_relations_parquet,
+            max_per_stratum=4,
+            seed=42,
+        )
+
+        # Sample positives for first anchor
+        if sampler.anchors:
+            positives = sampler.sample_positives(sampler.anchors[0])
+            assert isinstance(positives, list)
+            for p in positives:
+                assert 'positive_idx' in p
+                assert 'positive_code' in p
+                assert 'stratum_id' in p
+                assert 'stratum_wgt' in p
 
 # -------------------------------------------------------------------------------------------------
 # Tests for stratified sampling distribution

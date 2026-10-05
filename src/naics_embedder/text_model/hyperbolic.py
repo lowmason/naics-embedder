@@ -4,29 +4,11 @@
 # With optional torch.compile support for fused operations
 # -------------------------------------------------------------------------------------------------
 
-import logging
-from typing import Dict, Optional, Tuple
+import math
+from typing import NamedTuple, Tuple
 
 import torch
 import torch.nn as nn
-
-logger = logging.getLogger(__name__)
-
-# Torch 2.1+ exposes cudagraph helpers under torch.compiler; use best-effort import.
-try:
-    from torch.compiler import cudagraph_mark_step_begin as _cudagraph_mark_step_begin
-except Exception:  # pragma: no cover - torch version specific
-    _cudagraph_mark_step_begin = None
-
-def _mark_cudagraph_step() -> None:
-    '''
-    Notify Torch compile that a new CUDA graph step begins.
-
-    Prevents "tensor output ... overwritten by a subsequent run" when compiled
-    kernels are invoked from Lightning sanity checks or validation loops.
-    '''
-    if _cudagraph_mark_step_begin is not None:
-        _cudagraph_mark_step_begin()
 
 # Import compile utilities
 try:
@@ -45,165 +27,139 @@ except ImportError:
         return decorator
 
 # -------------------------------------------------------------------------------------------------
-# Compiled core operations for hyperbolic geometry
+# The geometry head and the polar distance (spec 4.2)
 # -------------------------------------------------------------------------------------------------
 
-@maybe_compile(mode='reduce-overhead')
-def _exp_map_zero_compiled(v_spatial: torch.Tensor, sqrt_c: torch.Tensor) -> torch.Tensor:
-    '''Core exponential map computation - highly fusible element-wise ops.'''
-    norm_v = torch.norm(v_spatial, p=2, dim=1, keepdim=True)
-    norm_v = torch.clamp(norm_v, min=1e-8)
-    theta = torch.clamp(sqrt_c * norm_v, max=40.0)
-    x0 = torch.cosh(theta) / sqrt_c
-    sinh_term = torch.sinh(theta) / sqrt_c
-    x_spatial = (sinh_term / norm_v) * v_spatial
-    # Clone to prevent CUDAGraphs from reusing the output buffer across steps when
-    # this compiled kernel is captured; otherwise subsequent runs can overwrite it.
-    return torch.cat([x0, x_spatial], dim=1).clone()
+class HeadPoints(NamedTuple):
+    '''
+    The head's points for a batch of B vectors in dimension d.
 
-@maybe_compile(mode='reduce-overhead')
-def _lorentz_dot_compiled(uv: torch.Tensor) -> torch.Tensor:
-    '''Core Lorentz inner product - element-wise ops.'''
-    return torch.sum(uv[:, 1:], dim=1) - uv[:, 0]
+    Attributes:
+        tangent: The bounded tangent vector at the origin, r · û (B, d), which the export writes.
+        embedding: The Lorentz point exp_o(r · û) = (cosh r, sinh r · û) at c = 1 (B, d + 1).
+        radius: r, the point's geodesic distance from the origin (B,).
+        direction: û, the unit direction of the head's input (B, d); zero where the input is zero.
+    '''
 
-@maybe_compile(mode='reduce-overhead')
-def _lorentz_distance_compiled(dot_product: torch.Tensor, sqrt_c: torch.Tensor) -> torch.Tensor:
-    '''Core Lorentz distance computation.'''
-    arccosh_arg = torch.clamp(-dot_product, min=1.0)
-    return sqrt_c * torch.acosh(arccosh_arg)
+    tangent: torch.Tensor
+    embedding: torch.Tensor
+    radius: torch.Tensor
+    direction: torch.Tensor
 
-@maybe_compile(mode='reduce-overhead')
-def _batched_lorentz_dot_compiled(uv: torch.Tensor) -> torch.Tensor:
-    '''Core batched Lorentz inner product.'''
-    return torch.sum(uv[:, :, 1:], dim=2) - uv[:, :, 0]
+def _where_positive(values: torch.Tensor, positive: torch.Tensor) -> torch.Tensor:
+    '''``values`` where ``positive`` holds, else 1: a safe divisor or root whose gradient is 0.'''
 
-# -------------------------------------------------------------------------------------------------
-# Interim geometry head
-# -------------------------------------------------------------------------------------------------
+    return torch.where(positive, values, torch.ones_like(values))
 
 class HyperbolicHead(nn.Module):
     '''
-    The interim hyperbolic head (spec 4.1). It has no parameters.
+    The hyperbolic head (spec 4.2): a gradient-passing bound on the radius, then the exp map at the
+    origin of the c = 1 hyperboloid. It has no parameters and no curvature.
 
-    It rescales each tangent vector to norm at most ``max_norm``, the interim harness's cap
-    (Stage 7 removes it, Req 13), then maps it to the Lorentz hyperboloid by the exp map at the
-    origin. ``distance`` names the decoding distance for its points.
+    From the projection's output v, with ν = ‖v‖ and the bound R, the radius is r = R · tanh(ν / R)
+    and the direction is û = v / ν, so r ≤ R for every v. The radius takes gradient at any length
+    (Req 13): dr/dν = sech²(ν / R) is positive, about 0.61 at a six-digit code's target r = 5 under
+    R = 8. The interim cap at norm 2 passed about 1e-7 at its saturated points. In float32 the
+    derivative rounds to 0 only from ν ≈ 8.7R, where tanh rounds to 1. At v = 0 the direction and
+    the radius are 0, so the point is the origin, and every gradient there is finite. ``distance``
+    names the decoding distance for its points.
 
     Args:
-        curvature: The hyperboloid's curvature c.
-        max_norm: The cap on a tangent vector's norm.
+        radius_bound: R, the bound on every radius (``model.radius_bound``).
+
+    Raises:
+        ValueError: If ``radius_bound`` is not a positive finite number.
     '''
 
     distance = 'lorentz'
 
-    def __init__(self, curvature: float = 1.0, max_norm: float = 2.0):
+    def __init__(self, radius_bound: float = 8.0):
         super().__init__()
-        self.curvature = curvature
-        self.max_norm = max_norm
+        if not (math.isfinite(radius_bound) and radius_bound > 0):
+            raise ValueError(f'radius_bound must be a positive finite number, not {radius_bound!r}')
+        self.radius_bound = float(radius_bound)
 
-    def forward(self, tangent: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, vectors: torch.Tensor) -> HeadPoints:
         '''
-        Cap the tangent vectors, then map them to the hyperboloid.
+        Bound each vector's radius and map it to the hyperboloid, in the vectors' dtype.
 
         Args:
-            tangent: Tangent vectors at the origin, (B, d), without a time coordinate.
+            vectors: The projection's outputs, (B, d).
 
         Returns:
-            ``(tangent, embedding)``: the capped tangent (B, d), which the export writes, and the
-            Lorentz point (B, d + 1), which the interim loss reads.
+            The bounded tangent, the Lorentz point, the radius and the direction.
         '''
 
-        norm = torch.norm(tangent, p=2, dim=1, keepdim=True)
-        scale = torch.where(
-            norm > self.max_norm, self.max_norm / (norm + 1e-8), torch.ones_like(norm)
+        norm = torch.linalg.vector_norm(vectors, dim=1, keepdim=True)
+        radius = self.radius_bound * torch.tanh(norm / self.radius_bound)
+        # Guarded by where, not a clamp: at ν = 0 the direction and its gradient are 0, not 1/ε
+        moving = norm > 0
+        direction = torch.where(
+            moving, vectors / _where_positive(norm, moving), torch.zeros_like(vectors)
         )
-        tangent = tangent * scale
-        curvature = torch.tensor(self.curvature, device=tangent.device, dtype=tangent.dtype)
-        _mark_cudagraph_step()
-        return tangent, _exp_map_zero_compiled(tangent, torch.sqrt(curvature))
+        # The tangent is computed once, here, so the export and every reader see the same r · û
+        tangent = radius * direction
+        embedding = torch.cat([torch.cosh(radius), torch.sinh(radius) * direction], dim=1)
+        return HeadPoints(tangent, embedding, radius.squeeze(1), direction)
 
-# -------------------------------------------------------------------------------------------------
-# Lorentz Distance Computation
-# -------------------------------------------------------------------------------------------------
+def _refuse_unpaired_shapes(*tensors: torch.Tensor) -> None:
+    '''Refuse anything but radii (A,) and (B,) with directions (A, d) and (B, d).'''
 
-class LorentzDistance(nn.Module):
+    shapes = [tuple(tensor.shape) for tensor in tensors]
+    paired = [len(shape) for shape in shapes] == [1, 2, 1, 2]
+    if paired:
+        (count_a, ), (rows_a, width_a), (count_b, ), (rows_b, width_b) = shapes
+        paired = (rows_a, rows_b, width_a) == (count_a, count_b, width_b)
+    if not paired:
+        raise ValueError(
+            'polar_distance takes radii (A,) and (B,) with directions (A, d) and (B, d); got '
+            + ', '.join(str(shape) for shape in shapes)
+        )
+
+def polar_distance(
+    radius_a: torch.Tensor,
+    direction_a: torch.Tensor,
+    radius_b: torch.Tensor,
+    direction_b: torch.Tensor,
+) -> torch.Tensor:
     '''
-    Computes distances in the Lorentz model of hyperbolic space.
+    The geodesic distance at c = 1 between every point of one set and every point of another,
+    from each point's radius r and direction û (spec 4.2).
 
-    Distance between two points u, v on the hyperboloid:
-    d(u, v) = √c * arccosh(-⟨u, v⟩_L)
+    The distance is the hyperbolic law of cosines in half-angle form, so it equals
+    arcosh(−⟨x, y⟩_L) exactly:
 
-    where ⟨u, v⟩_L = u₁v₁ + ... + uₙvₙ - u₀v₀ (Lorentz inner product)
+        d(x, y) = 2 · asinh(√(sinh²((r_x − r_y) / 2) + sinh r_x · sinh r_y · ‖û_x − û_y‖² / 4))
+
+    Every term is non-negative, so nothing cancels, and float32 resolves it at every radius the
+    head's bound allows. ‖û_x − û_y‖² comes from explicit differences, not from 2 − 2 û_x · û_y,
+    which cancels at small angles. The ops are elementwise, so under autocast float32 inputs give
+    float32 distances. The square root is guarded at zero: a zero separation has distance 0, and
+    the value and its gradient stay finite.
+
+    Args:
+        radius_a: The first set's radii, (A,).
+        direction_a: Its directions, (A, d): unit vectors, or 0 at the origin.
+        radius_b: The second set's radii, (B,).
+        direction_b: Its directions, (B, d).
+
+    Returns:
+        The distances, (A, B), in the inputs' dtype.
+
+    Raises:
+        ValueError: If the shapes are not (A,), (A, d), (B,) and (B, d).
     '''
 
-    def __init__(self, curvature: float = 1.0):
-        super().__init__()
-        self.c = curvature
-
-    def lorentz_dot(self, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        '''
-        Compute Lorentz inner product: ⟨u, v⟩_L = Σᵢ uᵢvᵢ - u₀v₀
-
-        Uses compiled operations when torch.compile is enabled.
-
-        Args:
-            u: First point on hyperboloid, shape (batch_size, embedding_dim+1)
-            v: Second point on hyperboloid, shape (batch_size, embedding_dim+1)
-
-        Returns:
-            Lorentz inner products, shape (batch_size,)
-        '''
-        uv = u * v
-        return _lorentz_dot_compiled(uv)
-
-    def forward(self, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        '''
-        Compute Lorentzian distance between two points.
-
-        Uses compiled operations when torch.compile is enabled.
-
-        Args:
-            u: First point on hyperboloid, shape (batch_size, embedding_dim+1)
-            v: Second point on hyperboloid, shape (batch_size, embedding_dim+1)
-
-        Returns:
-            Distances, shape (batch_size,)
-        '''
-        _mark_cudagraph_step()
-        uv = u * v
-        dot_product = _lorentz_dot_compiled(uv)
-        sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device, dtype=u.dtype))
-        return _lorentz_distance_compiled(dot_product, sqrt_c)
-
-    def batched_forward(self, u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        '''
-        Batched Lorentz distance computation with broadcasting support.
-
-        Uses compiled operations when torch.compile is enabled.
-
-        Args:
-            u: Tensor of shape (batch_size, 1, embedding_dim+1) or (batch_size, embedding_dim+1)
-            v: Tensor of shape (batch_size, k, embedding_dim+1)
-
-        Returns:
-            Tensor of shape (batch_size, k) with distances
-        '''
-        _mark_cudagraph_step()
-        # Ensure u has the right shape for broadcasting
-        if u.dim() == 2:
-            u = u.unsqueeze(1)  # (batch_size, 1, embedding_dim+1)
-
-        # Compute batched Lorentz dot product (compiled)
-        uv = u * v  # (batch_size, k, embedding_dim+1)
-        dot_product = _batched_lorentz_dot_compiled(uv)  # (batch_size, k)
-
-        # Clamp to ensure valid arccosh argument (arccosh requires arg >= 1)
-        arccosh_arg = torch.clamp(-dot_product, min=1.0)
-
-        sqrt_c = torch.sqrt(torch.tensor(self.c, device=u.device, dtype=u.dtype))
-        dist = sqrt_c * torch.acosh(arccosh_arg)
-
-        return dist
+    _refuse_unpaired_shapes(radius_a, direction_a, radius_b, direction_b)
+    half_gap = torch.sinh((radius_a.unsqueeze(1) - radius_b.unsqueeze(0)) / 2)
+    chord = (direction_a.unsqueeze(1) - direction_b.unsqueeze(0)).square().sum(dim=2)
+    sinh_product = torch.sinh(radius_a).unsqueeze(1) * torch.sinh(radius_b).unsqueeze(0)
+    squared = half_gap.square() + sinh_product * chord / 4
+    separated = squared > 0
+    root = torch.where(
+        separated, torch.sqrt(_where_positive(squared, separated)), torch.zeros_like(squared)
+    )
+    return 2 * torch.asinh(root)
 
 # -------------------------------------------------------------------------------------------------
 # Hyperbolic Manifold Validation and Diagnostics
@@ -257,79 +213,6 @@ def compute_hyperbolic_radii(embeddings: torch.Tensor) -> torch.Tensor:
         Hyperbolic radii of shape (batch_size,)
     '''
     return embeddings[:, 0]
-
-def log_hyperbolic_diagnostics(
-    embeddings: torch.Tensor,
-    curvature: float = 1.0,
-    level_labels: Optional[torch.Tensor] = None,
-    logger_instance: Optional[logging.Logger] = None,
-) -> Dict[str, float]:
-    '''
-    Log comprehensive diagnostics for hyperbolic embeddings.
-
-    Args:
-        embeddings: Hyperbolic embeddings of shape (batch_size, embedding_dim+1)
-        curvature: Curvature parameter c
-        level_labels: Optional NAICS hierarchy level labels for grouped statistics
-        logger_instance: Optional logger instance (uses module logger if None)
-
-    Returns:
-        Dictionary of diagnostic metrics
-    '''
-    if logger_instance is None:
-        logger_instance = logger
-
-    # Check manifold validity
-    is_valid, lorentz_norms, violations = check_lorentz_manifold_validity(embeddings, curvature)
-
-    # Compute hyperbolic radii
-    radii = compute_hyperbolic_radii(embeddings)
-
-    diagnostics = {
-        'manifold_valid': is_valid,
-        'lorentz_norm_mean': lorentz_norms.mean().item(),
-        'lorentz_norm_std': lorentz_norms.std().item(),
-        'lorentz_norm_min': lorentz_norms.min().item(),
-        'lorentz_norm_max': lorentz_norms.max().item(),
-        'violation_mean': violations.mean().item(),
-        'violation_max': violations.max().item(),
-        'radius_mean': radii.mean().item(),
-        'radius_std': radii.std().item(),
-        'radius_min': radii.min().item(),
-        'radius_max': radii.max().item(),
-    }
-
-    # Log basic diagnostics
-    norm_mean = diagnostics['lorentz_norm_mean']
-    norm_std = diagnostics['lorentz_norm_std']
-    logger_instance.info(
-        f'Hyperbolic Embedding Diagnostics:\n'
-        f'  • Manifold valid: {is_valid}\n'
-        f'  • Lorentz norm: {norm_mean:.6f} ± {norm_std:.6f} '
-        f'(target: {-1.0 / curvature:.6f})\n'
-        f'  • Max violation: {diagnostics["violation_max"]:.6e}\n'
-        f'  • Hyperbolic radius: {diagnostics["radius_mean"]:.4f} ± {diagnostics["radius_std"]:.4f}'
-    )
-
-    # Log per-level statistics if provided
-    if level_labels is not None:
-        unique_levels = torch.unique(level_labels)
-        logger_instance.info('  • Radius by hierarchy level:')
-        for level in unique_levels:
-            level_mask = level_labels == level
-            level_radii = radii[level_mask]
-            mean_val = level_radii.mean().item()
-            std_val = level_radii.std().item()
-            logger_instance.info(f'    Level {level.item()}: {mean_val:.4f} ± {std_val:.4f}')
-
-    # Warn if manifold constraint is violated
-    if not is_valid:
-        logger_instance.warning(
-            f'⚠️  Hyperbolic embeddings violate manifold constraint! '
-            f'Max violation: {diagnostics["violation_max"]:.6e}'
-        )
-
-    return diagnostics
 
 # -------------------------------------------------------------------------------------------------
 # Compiled Lorentz Operations Core Functions

@@ -16,22 +16,26 @@ nav:
               - Relationship Measures: api/compute_relations.md
               - Graph Distance Measures: api/compute_distances.md
           - Create Contrastive Training Triplets: api/create_triplets.md
+          - Activity Phrases: api/activity.md
+          - Task Queries: api/queries.md
+          - Code Targets: api/code_targets.md
           - Redirection Table: api/redirections.md
           - Window-Fitting Summaries: api/window_summaries.md
       - Training:
           - Text Training:
               - Data Loading:
                   - Tokenization: api/tokenization_cache.md
-                  - Streaming DataSet: api/streaming_dataset.md
                   - DataLoader: api/datamodule.md
               - Shared Encoder: api/encoder.md
+              - Text Model: api/naics_model.md
+              - Text Objective: api/loss.md
+              - Code Cache and Outcome Monitor: api/monitor.md
+              - Checkpoint Runner: api/checkpoint_runner.md
+              - Radius Verification: api/radius_report.md
+              - Epoch Summary: api/epoch_summary.md
               - Export and Arm Encoder: api/export.md
               - Mixture of Experts: api/moe.md
               - Hyperbolic Operations: api/hyperbolic.md
-              - Loss Functions:
-                  - Contrastive: api/contrastive_loss.md
-                  - Hierarchy Preservation: api/hierarchy_preservation_loss.md
-                  - Structural Preference: api/structural_preference_loss.md
           - HGCN Training:
               - Data Loading:
                   - Streaming DataSet: api/hgcn_streaming_dataset.md
