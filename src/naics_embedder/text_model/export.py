@@ -162,24 +162,6 @@ def encode_query_texts(
 # Loading an arm
 # -------------------------------------------------------------------------------------------------
 
-def require_unit_curvature(hyper_parameters: Mapping[str, Any]) -> None:
-    '''
-    Refuse a checkpoint trained at a curvature other than 1 (spec R8).
-
-    The table's tangent coordinates and the scorer's ``lorentz`` distance both assume c = 1. An
-    absent curvature is the model's default, 1.
-
-    Raises:
-        ValueError: If the saved curvature is not 1.
-    '''
-
-    curvature = float(hyper_parameters.get('curvature', 1.0))
-    if curvature != 1.0:
-        raise ValueError(
-            f'the checkpoint was trained at curvature {curvature:g}; export and reads take c = 1 '
-            'only (spec R8)'
-        )
-
 def load_arm_model(
     checkpoint_path: Union[str, Path],
     bundle: ValidatedSupervisionBundle,
@@ -191,8 +173,9 @@ def load_arm_model(
     Load an arm's checkpoint for export or a read, refusing it before any weight loads.
 
     The checkpoint's own hyperparameters rebuild its fusion and dimension, so its encoder record
-    is never compared with a config (spec 4.4). Its supervision fields must match ``bundle``, and
-    its summaries ``summaries``.
+    is never compared with a config (spec 4.4). It must have been trained under Req 11's
+    objective, its supervision fields must match ``bundle``, and its summaries ``summaries``.
+    Curvature is fixed at 1 with no parameter (spec 4.2), so there is none to check.
 
     Args:
         checkpoint_path: The arm's Lightning checkpoint.
@@ -205,15 +188,15 @@ def load_arm_model(
         The model, in eval mode on ``device``, and the checkpoint's saved contract.
 
     Raises:
-        ValueError: If the curvature is not 1 (R8), the supervision contract is not the bundle's,
-            the checkpoint was trained under other summaries, or it is of another encoder
-            architecture (D2).
+        ValueError: If the checkpoint was trained under another objective, such as every one
+            saved before Stage 7 (spec 4.5; checked first), its supervision contract is not the
+            bundle's, it was trained under other summaries, or it is of another encoder
+            architecture. Nothing migrates such a checkpoint (D2).
     '''
 
     # Lightning checkpoints carry pickled hyperparameters; they are trusted artifacts of this
     # project's own training runs
     raw = torch.load(Path(checkpoint_path), map_location='cpu', weights_only=False)
-    require_unit_curvature(raw.get('hyper_parameters', {}))
     contract = validate_supervision_contract(
         raw.get(CHECKPOINT_KEY), bundle.manifest, summaries=summaries
     )

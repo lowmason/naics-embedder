@@ -29,8 +29,10 @@ from naics_embedder.text_model.hyperbolic import HyperbolicHead
 from tests.fixtures.shared_encoder import (
     ARM_DIMENSION,
     FIVE_CODES,
+    PRE_STAGE_7_REFUSAL,
     TOKEN_WINDOW,
     five_code_token_rows,
+    forbid_model_loads,
     lightning_checkpoint,
 )
 
@@ -187,23 +189,23 @@ def test_an_edited_table_is_refused(
             shared_checkpoint, exported_table, validated_bundle, five_code_token_config
         )
 
-def test_a_checkpoint_at_another_curvature_is_refused(
-    tmp_path, shared_model, exported_table, validated_bundle, five_code_token_config
+def test_a_pre_stage_7_checkpoint_is_refused_on_read_before_its_model_loads(
+    monkeypatch, pre_stage7_checkpoint, exported_table, validated_bundle, five_code_token_config
 ):
-    '''Spec §6: curvature other than 1 is refused (R8).'''
+    '''Spec 4.5: the outcome read refuses it on its objective, and nothing migrates it (D2).'''
 
-    checkpoint = lightning_checkpoint(shared_model)
-    checkpoint['hyper_parameters']['curvature'] = 2.0
-    curved = tmp_path / 'curved.ckpt'
-    torch.save(checkpoint, curved)
-    # The provenance names the curved checkpoint, so its checks pass and R8's guard is what fires
+    # The provenance names the pre-Stage-7 checkpoint, so its checks pass and only the
+    # checkpoint's contract can refuse it
     path = provenance_path(exported_table)
     provenance = json.loads(path.read_text())
-    provenance['checkpoint']['sha256'] = sha256_file(curved)
+    provenance['checkpoint']['sha256'] = sha256_file(pre_stage7_checkpoint)
     path.write_text(json.dumps(provenance))
+    forbid_model_loads(monkeypatch)
 
-    with pytest.raises(ValueError, match='curvature 2'):
-        ArmEncoder.from_files(curved, exported_table, validated_bundle, five_code_token_config)
+    with pytest.raises(ValueError, match=PRE_STAGE_7_REFUSAL):
+        ArmEncoder.from_files(
+            pre_stage7_checkpoint, exported_table, validated_bundle, five_code_token_config
+        )
 
 def test_a_text_only_table_is_refused_before_any_model_loads(
     no_model_load, shared_checkpoint, text_only_comparator_table, validated_bundle,

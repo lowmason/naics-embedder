@@ -522,8 +522,8 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         '''
-        Record the supervision contract and encoder architecture this checkpoint belongs to, and
-        the training run's id.
+        Record the supervision contract this checkpoint belongs to, Req 11's objective and the
+        encoder architecture included (spec 4.5), and the training run's id.
         '''
 
         checkpoint[CHECKPOINT_KEY] = self.checkpoint_contract.model_dump()
@@ -531,11 +531,12 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         '''
-        Refuse a checkpoint of any other supervision contract or encoder architecture; then stash
-        its training run and epoch for ``on_train_start``.
+        Refuse a checkpoint of any other objective, supervision contract or encoder architecture;
+        then stash its training run and epoch for ``on_train_start``.
 
         Runs for Lightning exact resume and ``load_from_checkpoint`` before the state dict loads,
-        so a four-copy checkpoint meets the D2 refusal, never a key mismatch. It reads and writes
+        so a checkpoint of another objective, such as every one saved before Stage 7, or of the
+        four-copy encoder meets a refusal that cites D2, never a key mismatch. It reads and writes
         no file, since ``load_from_checkpoint`` runs it too.
         '''
 

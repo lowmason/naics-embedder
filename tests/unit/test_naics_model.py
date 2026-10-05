@@ -46,9 +46,11 @@ from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.text_model.shared_encoder import SharedEncoder
 from tests.fixtures.shared_encoder import (
     MINILM,
+    PRE_STAGE_7_REFUSAL,
     REFERENCE_WINDOW,
     build_reference_model,
     lightning_checkpoint,
+    pre_stage_7_contract,
 )
 
 logger = logging.getLogger(__name__)
@@ -1527,7 +1529,7 @@ class TestCheckpointContract:
     def test_model_contract_matches_its_bundle(self, naics_model, validated_bundle):
         contract = naics_model.checkpoint_contract
 
-        assert contract.supervision_mode == 'repaired'
+        assert contract.objective == 'req11-v1'
         assert contract.bundle_id == validated_bundle.manifest.bundle_id
         assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
         assert contract.encoder == shared_encoder_architecture(
@@ -1559,6 +1561,21 @@ class TestCheckpointContract:
 
         assert checkpoint['stage3_supervision'] == naics_model.checkpoint_contract.model_dump()
 
+    def test_a_saved_checkpoint_records_the_req11_objective(self, shared_model):
+        '''Spec 4.5: a new checkpoint names its objective, and no field of the old one's.'''
+
+        saved = lightning_checkpoint(shared_model)['stage3_supervision']
+
+        assert saved['objective'] == 'req11-v1'
+        assert set(saved) == {
+            'contract_version',
+            'bundle_id',
+            'codebook_fingerprint',
+            'objective',
+            'encoder',
+            'summaries',
+        }
+
     def test_on_load_checkpoint_rejects_legacy_and_mismatched_contracts(self, naics_model):
         contract = naics_model.checkpoint_contract.model_dump()
 
@@ -1576,7 +1593,7 @@ class TestCheckpointContract:
         from naics_embedder.supervision.checkpoints import CheckpointContract
 
         other = CheckpointContract(
-            supervision_mode='repaired',
+            objective='req11-v1',
             bundle_id='other-bundle',
             codebook_fingerprint='f' * 64,
         )
@@ -1653,19 +1670,31 @@ class TestCheckpointContract:
         with pytest.raises(ValueError, match='D2'):
             NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu', dimension=8)
 
+    def test_load_from_checkpoint_refuses_a_pre_stage_7_checkpoint(self, pre_stage7_checkpoint):
+        '''
+        Spec 4.5: the model's own hook refuses it on its objective before its state dict loads,
+        for any caller of ``load_from_checkpoint``, and nothing migrates it (D2).
+        '''
+
+        with pytest.raises(ValueError, match=PRE_STAGE_7_REFUSAL):
+            NAICSContrastiveModel.load_from_checkpoint(pre_stage7_checkpoint, map_location='cpu')
+
 # -------------------------------------------------------------------------------------------------
 # Test: Legacy containment is deleted (roadmap D2)
 # -------------------------------------------------------------------------------------------------
 
 def test_a_saved_containment_checkpoint_never_restores(naics_model):
-    '''A checkpoint saved under legacy containment, before D2 deleted it, is refused.'''
+    '''
+    A checkpoint saved under legacy containment, before D2 deleted it, is refused: like every
+    checkpoint saved before Stage 7, on its objective (spec 4.5).
+    '''
 
     containment = {
-        **naics_model.checkpoint_contract.model_dump(),
+        **pre_stage_7_contract(naics_model.checkpoint_contract.model_dump()),
         'supervision_mode': 'legacy_containment',
         'bundle_id': 'legacy-containment',
         'codebook_fingerprint': 'unversioned',
     }
 
-    with pytest.raises(ValueError, match='exact resume'):
+    with pytest.raises(ValueError, match=PRE_STAGE_7_REFUSAL):
         naics_model.on_load_checkpoint({'stage3_supervision': containment})

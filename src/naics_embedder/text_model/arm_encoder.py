@@ -163,9 +163,9 @@ class ArmEncoder:
                 checkpoint, table hash or window), predates Stage 6b (it records no summaries or
                 tokenizer), names another checkpoint, or the table file is not the one it names;
                 if the table was exported at another window, with another tokenizer or under
-                other summaries than ``token_config``'s; or as ``load_arm_model``: a curvature
-                other than 1 (R8), another supervision contract or summaries, or another encoder
-                architecture (D2).
+                other summaries than ``token_config``'s; or as ``load_arm_model``: another
+                objective, as every checkpoint saved before Stage 7 has (spec 4.5), another
+                supervision contract or summaries, or another encoder architecture (D2).
             FileNotFoundError: If the checkpoint, the table or its provenance is missing.
         '''
 

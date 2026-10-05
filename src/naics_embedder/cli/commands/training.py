@@ -221,7 +221,9 @@ def generate_embeddings_from_checkpoint(
     Loads a trained model checkpoint, runs inference on all NAICS codes, and
     writes the resulting embeddings to a parquet file compatible with HGCN
     training. The checkpoint must carry the supervision contract of the configured run, the
-    contract of its validated bundle; a checkpoint without one, or with another, is refused.
+    contract of its validated bundle; a checkpoint without one, or with another, is refused
+    before its model loads. One trained under another objective, as every checkpoint saved
+    before Stage 7 was, is refused first, and nothing migrates it (spec 4.5, D2).
 
     Args:
         checkpoint_path: Filesystem path to the PyTorch Lightning checkpoint

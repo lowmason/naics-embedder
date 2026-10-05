@@ -8,8 +8,10 @@ MiniLM.
 
 The arm fixtures train nothing. ``shared_model`` is a d = 16 model of the five-code supervision
 bundle (``tests/fixtures/supervision.py``) on the tiny backbone, and ``shared_checkpoint`` saves it
-as Lightning would. ``text_only_comparator_table`` is a table a read can be pointed at by mistake:
-the text-only comparator's, written by its own builder.
+as Lightning would. ``truncated_checkpoint`` and ``pre_stage7_checkpoint`` save it as checkpoints
+trained before Stage 6b and before Stage 7, which every load refuses. ``text_only_comparator_table``
+is a table a read can be pointed at by mistake: the text-only comparator's, written by its own
+builder.
 
 ``reference_arm_model`` is a d = 16 model of the reference bundle, whose 17 codes span levels 2-6
 and whose 11 task queries train Req 11's three terms. ``reference_arm_steps`` holds one epoch of
@@ -17,7 +19,7 @@ its two-stream steps, in the layout ``StepDataset`` hands the training step.
 '''
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
 import polars as pl
 import pytest
@@ -149,6 +151,58 @@ def truncated_checkpoint(tmp_path, shared_model) -> Path:
     path = tmp_path / 'truncated.ckpt'
     torch.save(checkpoint, path)
     return path
+
+# The fields every contract saved before Stage 7 carried, at their last values, which the contract
+# no longer has (spec 4.5): legacy containment's supervision mode, and the six-term objective's
+# loss and mining versions. None of those contracts names an objective
+PRE_STAGE_7_FIELDS = {
+    'supervision_mode': 'repaired',
+    'structural_preference_loss_version': 'structural-preference-v1',
+    'mining_contract_version': 'negative-selection-v2',
+}
+# P23's refusal of a checkpoint trained before Stage 7, as every load raises it
+PRE_STAGE_7_REFUSAL = r'objective pre-req11, not req11-v1 .*nothing migrates \(D2\)'
+
+def pre_stage_7_contract(contract: Mapping[str, Any]) -> Dict[str, Any]:
+    '''
+    ``contract`` as a model saved it before Stage 7: its supervision identity, encoder record and
+    summaries, with the three fields Stage 7 dropped, and no objective.
+    '''
+
+    kept = ('contract_version', 'bundle_id', 'codebook_fingerprint', 'encoder', 'summaries')
+    return {**{name: contract[name] for name in kept}, **PRE_STAGE_7_FIELDS}
+
+@pytest.fixture
+def pre_stage7_checkpoint(tmp_path, shared_model) -> Path:
+    '''
+    ``shared_model`` saved as a checkpoint trained before Stage 7 (spec 4.5): its contract carries
+    the three fields Stage 7 dropped and names no objective.
+
+    Its hyperparameters hold the old head's curvature, which no model takes now, and no radius
+    bound, so a load that let it through would rebuild the head at the default R (spec 4.2).
+    '''
+
+    checkpoint = lightning_checkpoint(shared_model)
+    checkpoint['stage3_supervision'] = pre_stage_7_contract(checkpoint['stage3_supervision'])
+    checkpoint['hyper_parameters']['curvature'] = 1.0
+    del checkpoint['hyper_parameters']['radius_bound']
+    path = tmp_path / 'pre_stage7.ckpt'
+    torch.save(checkpoint, path)
+    return path
+
+def forbid_model_loads(monkeypatch) -> None:
+    '''
+    From here on, fail the test if a checkpoint's model loads (``load_from_checkpoint``): a refusal
+    of its contract must come first.
+
+    Call it in the test's body, after its fixtures: some of them export a table, which loads one.
+    '''
+
+    def never(*_args, **_kwargs):
+        # AssertionError, so a test's pytest.raises(ValueError) cannot swallow an unwanted load
+        raise AssertionError('the model loaded before its contract was refused')
+
+    monkeypatch.setattr(NAICSContrastiveModel, 'load_from_checkpoint', never)
 
 @pytest.fixture
 def exported_table(tmp_path, shared_checkpoint, validated_bundle, five_code_token_config) -> Path:

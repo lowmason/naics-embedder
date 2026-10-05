@@ -23,9 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # -------------------------------------------------------------------------------------------------
 
 CONTRACT_VERSION = 'stage3-supervision-v2'
-STRUCTURAL_PREFERENCE_LOSS_VERSION = 'structural-preference-v1'
-# v2: no slot is reserved for an explicit exclusion, which is never a negative (Req 8)
-MINING_CONTRACT_VERSION = 'negative-selection-v2'
+# The objective a checkpoint was trained under, which its contract records (spec 4.5): Req 11's
+# three terms, the radial form and the bound. Every contract saved before Stage 7 names none, and
+# reads as the legacy marker; nothing loads such a checkpoint, and nothing migrates it (D2)
+OBJECTIVE = 'req11-v1'
+LEGACY_OBJECTIVE = 'pre-req11'
 
 # -------------------------------------------------------------------------------------------------
 # Structural margin contract

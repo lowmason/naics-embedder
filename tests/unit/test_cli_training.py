@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from naics_embedder.cli import app as cli_app
 from naics_embedder.cli.commands import training
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.window_summaries import summaries_identity
+from naics_embedder.supervision import checkpoints
 from naics_embedder.supervision.checkpoints import (
     CheckpointContract,
     shared_encoder_architecture,
@@ -29,6 +31,7 @@ from naics_embedder.utils import training as utils_training
 from naics_embedder.utils.config import Config, OutcomePanelConfig
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
+from tests.fixtures.shared_encoder import PRE_STAGE_7_REFUSAL
 
 MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
 OUTCOME_MRR = 'val/outcome_mrr'
@@ -315,7 +318,7 @@ def test_training_checkpoint_resume_passes_ckpt(training_env):
     [(path, runtime)] = training_env.exact_resume_calls
     assert path == 'foo.ckpt'
     assert runtime == CheckpointContract(
-        supervision_mode='repaired',
+        objective='req11-v1',
         bundle_id='bundle-a',
         codebook_fingerprint='a' * 64,
         encoder=CONFIGURED_ENCODER,
@@ -376,6 +379,38 @@ def test_exact_resume_contract_mismatch_fails_before_training(training_env, monk
 
     assert excinfo.value.exit_code == 1
     assert training_env.trainer is None
+
+@pytest.mark.unit
+def test_train_refuses_an_exact_resume_of_a_pre_stage_7_checkpoint(
+    training_env, monkeypatch, tmp_path, validated_bundle, pre_stage7_checkpoint
+):
+    '''
+    Spec 4.5: exact resume refuses a checkpoint trained before Stage 7 on its objective, and nothing
+    migrates it (D2). The contract check refuses it before the other resume guards read the
+    checkpoint, and before anything is built.
+    '''
+
+    # The real contract check, against the checkpoint's own bundle, so that only the objective
+    # tells the two contracts apart
+    monkeypatch.setattr(training, 'validate_exact_resume', checkpoints.validate_exact_resume)
+    training_env.bundle = validated_bundle
+    training_env.checkpoint_info = CheckpointInfo(
+        path=str(pre_stage7_checkpoint), is_same_stage=True, exists=True
+    )
+    # train opens its log under the working directory
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        training.train(ckpt_path='last', skip_validation=True)
+
+    assert excinfo.value.exit_code == 1
+    refusal = excinfo.value.__context__
+    assert isinstance(refusal, ValueError)
+    assert re.search(PRE_STAGE_7_REFUSAL, str(refusal))
+    assert training_env.read_checkpoint_calls == []
+    assert training_env.trainer is None
+    assert 'datamodule' not in training_env.events
+    assert 'monitor' not in training_env.events and 'model' not in training_env.events
 
 @pytest.mark.unit
 def test_weights_only_is_no_longer_a_checkpoint_load_mode(cli_runner, training_env):

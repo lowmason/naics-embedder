@@ -32,8 +32,10 @@ from tests.fixtures.shared_encoder import (
     ARM_DIMENSION,
     FIVE_CODES,
     MINILM,
+    PRE_STAGE_7_REFUSAL,
     TOKEN_WINDOW,
     five_code_token_rows,
+    forbid_model_loads,
     lightning_checkpoint,
 )
 
@@ -181,6 +183,29 @@ def test_the_hgcn_feeder_refuses_a_checkpoint_trained_on_truncated_text(
         )
     assert not output.exists()
 
+def test_the_hgcn_feeder_refuses_a_pre_stage_7_checkpoint_before_its_model_loads(
+    monkeypatch, tmp_path, pre_stage7_checkpoint, validated_bundle, five_code_descriptions_parquet
+):
+    '''Spec 4.5: on its objective, as exact resume refuses it, and nothing migrates it (D2).'''
+
+    monkeypatch.setattr(
+        training_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle
+    )
+    # The refusal comes first. A regression past it would pick a device and build the default
+    # ./data/token_cache: keep that on the CPU and under tmp_path
+    monkeypatch.setattr(training_cli, 'pick_device', lambda *_args: torch.device('cpu'))
+    monkeypatch.chdir(tmp_path)
+    cfg = Config()
+    cfg.data_loader.streaming.descriptions_parquet = str(five_code_descriptions_parquet)
+    output = tmp_path / 'encodings.parquet'
+    forbid_model_loads(monkeypatch)
+
+    with pytest.raises(ValueError, match=PRE_STAGE_7_REFUSAL):
+        training_cli.generate_embeddings_from_checkpoint(
+            str(pre_stage7_checkpoint), cfg, str(output)
+        )
+    assert not output.exists()
+
 # -------------------------------------------------------------------------------------------------
 # The code-table export
 # -------------------------------------------------------------------------------------------------
@@ -276,18 +301,34 @@ def test_the_provenance_names_the_table_and_the_checkpoint(
     assert provenance['matrix_fingerprint'] == table_fingerprint(pl.read_parquet(exported_table))
     assert set(provenance['library_versions']) == {'peft', 'polars', 'torch', 'transformers'}
 
-def test_a_checkpoint_at_another_curvature_is_refused(
-    tmp_path, shared_model, validated_bundle, five_code_token_config
+def test_a_load_refuses_a_pre_stage_7_checkpoint_before_its_model_loads(
+    monkeypatch, pre_stage7_checkpoint, validated_bundle
 ):
-    checkpoint = lightning_checkpoint(shared_model)
-    checkpoint['hyper_parameters']['curvature'] = 2.0
-    path = tmp_path / 'curved.ckpt'
-    torch.save(checkpoint, path)
-    output = tmp_path / 'table.parquet'
+    '''
+    Spec 4.5: its hyperparameters name no radius bound, so a load would rebuild the head at the
+    default R and read the old objective's weights as this one's. Its contract's objective refuses
+    it first, and nothing migrates it (D2).
+    '''
 
-    with pytest.raises(ValueError, match='curvature 2'):
-        export_code_table(path, validated_bundle, five_code_token_config, output)
+    forbid_model_loads(monkeypatch)
+
+    with pytest.raises(ValueError, match=PRE_STAGE_7_REFUSAL):
+        load_arm_model(
+            pre_stage7_checkpoint, validated_bundle, summaries=summaries_identity(MINILM)
+        )
+
+def test_the_export_refuses_a_pre_stage_7_checkpoint(
+    monkeypatch, tmp_path, pre_stage7_checkpoint, validated_bundle, five_code_token_config
+):
+    '''Spec 4.5: on its objective, before its model loads, so no table or provenance is written.'''
+
+    output = tmp_path / 'table.parquet'
+    forbid_model_loads(monkeypatch)
+
+    with pytest.raises(ValueError, match=PRE_STAGE_7_REFUSAL):
+        export_code_table(pre_stage7_checkpoint, validated_bundle, five_code_token_config, output)
     assert not output.exists()
+    assert not provenance_path(output).exists()
 
 def test_a_checkpoint_of_another_bundle_is_refused(
     tmp_path, shared_model, validated_bundle, five_code_token_config

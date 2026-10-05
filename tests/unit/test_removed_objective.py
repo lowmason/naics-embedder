@@ -41,6 +41,9 @@ DELETIONS = [
     'naics_embedder.supervision.schema:SelectionReason',
     'naics_embedder.supervision.schema:SamplingProvenance',
     'naics_embedder.supervision.schema:SAMPLING_ROLE_TO_ID',
+    # The checkpoint contract's versions of the old terms and mining; it names the objective now
+    'naics_embedder.supervision.schema:STRUCTURAL_PREFERENCE_LOSS_VERSION',
+    'naics_embedder.supervision.schema:MINING_CONTRACT_VERSION',
     # Data
     'naics_embedder.text_model.dataloader.streaming_dataset',
     'naics_embedder.text_model.dataloader.difficulty_sampler',
@@ -58,6 +61,9 @@ DELETIONS = [
     'naics_embedder.text_model.hyperbolic:_lorentz_distance_compiled',
     'naics_embedder.text_model.hyperbolic:_batched_lorentz_dot_compiled',
     'naics_embedder.text_model.hyperbolic:_mark_cudagraph_step',
+    # The curvature guard: no model takes a curvature, and the contract's objective refuses every
+    # older checkpoint instead (spec 4.2)
+    'naics_embedder.text_model.export:require_unit_curvature',
     # The config models and checks of the removed keys (P22)
     'naics_embedder.utils.config:CurriculumConfig',
     'naics_embedder.utils.config:AnnealConfig',
