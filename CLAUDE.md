@@ -240,8 +240,8 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects 2,285 tests: **2283 passed, 2 skipped** on a host with MPS;
-**2276 passed, 9 skipped** without MPS. Tests use fixture data and tiny models. These counts
+The current suite collects 2,287 tests: **2285 passed, 2 skipped** on a host with MPS;
+**2277 passed, 10 skipped** without MPS. Tests use fixture data and tiny models. These counts
 are not coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
 

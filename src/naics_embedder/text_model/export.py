@@ -200,10 +200,11 @@ def load_arm_model(
     contract = validate_supervision_contract(
         raw.get(CHECKPOINT_KEY), bundle.manifest, summaries=summaries
     )
+    # Callback scores can be float64, which MPS cannot deserialize; move only the model below.
     # on_load_checkpoint refuses another encoder architecture before the state dict loads (D2)
     model = NAICSContrastiveModel.load_from_checkpoint(
         checkpoint_path,
-        map_location=device,
+        map_location='cpu',
         supervision_manifest_path=str(bundle.manifest_path),
         supervision_bundle=bundle,
     )

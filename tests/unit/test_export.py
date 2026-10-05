@@ -267,6 +267,44 @@ def test_a_read_rebuilds_the_head_at_the_checkpoints_radius_bound(
 
     assert model.encoder.head.radius_bound == 5.0
 
+@pytest.mark.parametrize(
+    'device',
+    [
+        'cpu',
+        pytest.param(
+            'mps',
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason='MPS is unavailable'
+            )
+        ),
+    ],
+)
+def test_a_load_keeps_float64_callback_scores_off_the_model_device(
+    tmp_path, shared_model, validated_bundle, device
+):
+    checkpoint = lightning_checkpoint(shared_model)
+    checkpoint['callbacks'] = {
+        'ModelCheckpoint': {
+            'best_model_score': torch.tensor(0.25, dtype=torch.float64)
+        },
+    }
+    path = tmp_path / 'callback-score.ckpt'
+    torch.save(checkpoint, path)
+
+    model, contract = load_arm_model(
+        path, validated_bundle, summaries=summaries_identity(MINILM), device=device
+    )
+
+    assert next(model.parameters()).device.type == device
+    assert not model.training
+    assert contract.objective == 'req11-v1'
+    for name, tensor in shared_model.state_dict().items():
+        assert torch.equal(model.state_dict()[name].cpu(), tensor.cpu())
+    saved = torch.load(path, map_location='cpu', weights_only=False)
+    score = saved['callbacks']['ModelCheckpoint']['best_model_score']
+    assert score.dtype == torch.float64
+    assert score.item() == 0.25
+
 def test_the_provenance_names_the_table_and_the_checkpoint(
     exported_table, shared_checkpoint, validated_bundle, five_code_descriptions_parquet
 ):
