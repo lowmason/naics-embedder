@@ -94,3 +94,24 @@ def remote_repo(tmp_path: Path) -> RemoteRepo:
         check=True
     )
     return RemoteRepo(root, cfg, manifest)
+
+@dataclass(frozen=True)
+class RunnerCall:
+    args: list[str]
+    kwargs: dict[str, object]
+
+@dataclass
+class RecordedTransportRunner:
+    calls: list[RunnerCall] = field(default_factory=list)
+    replies: list[subprocess.CompletedProcess] = field(default_factory=list)
+
+    def __call__(self, args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        self.calls.append(RunnerCall(args, kwargs))
+        if self.replies:
+            return self.replies.pop(0)
+        stdout = b'rsync  version 3.5.1  protocol version 32\n' if '--version' in args else b'{}'
+        return subprocess.CompletedProcess(args, 0, stdout, b'')
+
+@pytest.fixture
+def recorded_transport_runner() -> RecordedTransportRunner:
+    return RecordedTransportRunner()
