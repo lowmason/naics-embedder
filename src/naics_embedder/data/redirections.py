@@ -11,7 +11,9 @@ from a description, in code order. Its columns:
 - ``source``: ``cross_reference`` or ``description``.
 - ``code`` and ``text``: the referencing code and the row's text.
 - ``activity``: the text before ``--`` or before " are/is classified" (or "included"), on a
-  cross-reference row that names a code. Stage 7 trains on these phrases as queries.
+  cross-reference row that names a code (``supervision.activity.activity_phrase``, which this
+  module re-exports). Stage 7 trains on these phrases as queries, and the bundle loader
+  recomputes each one.
 - ``named_codes``: the codebook codes the text names other than its own code, in order of first
   appearance. On a cross-reference row these are its destinations.
 - ``lineal_codes``: the named codes that are the row's code's ancestors or descendants. Lineal
@@ -41,6 +43,7 @@ from naics_embedder.panels.leakage import (
     normalize_text,
     text_segments,
 )
+from naics_embedder.supervision.activity import activity_phrase
 from naics_embedder.supervision.artifacts import (
     CROSS_REFERENCE_SOURCE,
     DESCRIPTION_SOURCE,
@@ -50,22 +53,11 @@ from naics_embedder.utils.naics_hierarchy import code_lineage
 
 logger = logging.getLogger(__name__)
 
-# "Growing soybeans--are classified in ...", "Establishments ... are classified in ...", and the
-# source's one misspelling, "are lclassified"
-_REDIRECTION = re.compile(r'(?:--|\s+)(?=(?:are|is)\s+l?(?:classified|included)\b)')
 _CODE_REFERENCE = re.compile(r' (\d{2,6})')
 
 # -------------------------------------------------------------------------------------------------
 # One row's parts
 # -------------------------------------------------------------------------------------------------
-
-def activity_phrase(text: str) -> Optional[str]:
-    '''The activity a cross-reference redirects: its text before the redirection, or None.'''
-
-    match = _REDIRECTION.search(text)
-    if match is None:
-        return None
-    return text[:match.start()].strip() or None
 
 def named_codes(code: str, text: str, codes: Set[str]) -> List[str]:
     '''The codebook codes ``text`` names other than ``code``, in order of first appearance.'''
