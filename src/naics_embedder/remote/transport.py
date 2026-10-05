@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from naics_embedder.remote.session import GpuEvidence, PullMapping
+from naics_embedder.remote.worker import _credential_name
 
 # -------------------------------------------------------------------------------------------------
 # Tool and path boundaries
@@ -32,7 +33,10 @@ IDENTITY_CODE = """import json,sys; from pathlib import Path
 p=json.load(sys.stdin); r=Path(p['repo']).expanduser().resolve()
 b=Path(p.get('checkpoint_base',str(r/'checkpoints'))).expanduser()
 if not b.is_absolute(): b=r/b
-print(json.dumps({'repo':str(r),'checkpoint_base':str(b.resolve())}))"""
+m=r/'.remote/pushes/session.json'
+if m.is_symlink() or not m.resolve().is_relative_to(r): raise ValueError('unsafe session marker')
+s=json.loads(m.read_text()) if m.exists() else {}
+print(json.dumps({'repo':str(r),'checkpoint_base':str(b.resolve()),'session_id':s.get('session_id'),'push_id':s.get('push_id')}))"""
 PREREQUISITE_CODE = """import json,re,shutil,subprocess,sys
 json.load(sys.stdin)
 def qualified():
@@ -66,6 +70,8 @@ def safe_files(files: tuple[str, ...], code: bool = False) -> bytes:
             raise ValueError(f'unsafe relative path: {name!r}')
         if any(part in {'.ssh', '.aws', '.git'} for part in path.parts):
             raise ValueError(f'credential or git path refused: {name}')
+        if code and _credential_name(name):
+            raise ValueError(f'credential code deletion refused: {name}')
         if code and path.parts[0] in {'data', 'checkpoints', 'logs', 'outputs', '.remote', '.venv'}:
             raise ValueError(f'protected code deletion: {name}')
     return b''.join(name.encode() + b'\0' for name in files)
@@ -78,26 +84,42 @@ def _contained_files(root: Path, files: tuple[str, ...]) -> None:
 def _system_probe_code(operation: str) -> str:
     from naics_embedder.remote.worker import (
         TMUX_SESSION,
+        _code_item,
+        _code_name,
+        _controlled_inventory,
+        _credential_name,
+        _generated_name,
         _inside,
         _inventory,
+        _owned_remove,
+        _pending_link,
         _remove_code,
         _training_status,
     )
-    preamble = 'import hashlib,json,os,subprocess,sys\nfrom pathlib import Path, PurePosixPath\n'
+    preamble = (
+        'import fnmatch,hashlib,json,os,posixpath,stat,subprocess,sys\n'
+        'from pathlib import Path, PurePosixPath\n'
+    )
     preamble += f'TMUX_SESSION = {TMUX_SESSION!r}\n'
     functions = {
         'inventory': [_inside, _inventory],
         'training': [_training_status],
-        'edits': [safe_files, _inside, _remove_code, _inventory]
+        'edits': [
+            safe_files, _inside, _remove_code, _inventory, _code_name, _credential_name,
+            _generated_name, _code_item, _pending_link, _controlled_inventory, _owned_remove
+        ]
     }[operation]
     code = preamble + '\n'.join(inspect.getsource(function) for function in functions)
     code += '\np=json.load(sys.stdin)\n'
     if operation == 'inventory':
         code += "print(json.dumps(_inventory(Path(p['repo']),p.get('path','.'))))"
     elif operation == 'edits':
-        code += "safe_files(tuple(p.get('remove',())),code=True)\n"
         code += "r=Path(p['repo'])\n"
-        code += "result=_remove_code(r,tuple(p['remove'])) if 'remove' in p else _inventory(r,'.')\n"
+        code += "if 'remove' in p:\n"
+        code += " if 'authorized' in p: result=_owned_remove(r,p)\n"
+        code += " else:\n  safe_files(tuple(p['remove']),code=True)\n"
+        code += "  result=_remove_code(r,tuple(p['remove']))\n"
+        code += "else: result=_controlled_inventory(r,p) if p.get('controlled') else _inventory(r,'.')\n"
         code += 'print(json.dumps(result))'
     else:
         code += 'print(json.dumps(_training_status(p)))'

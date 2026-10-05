@@ -413,3 +413,227 @@ def test_launch_and_interrupt_use_one_exact_tmux_target(tmp_path, monkeypatch):
     ]
     assert calls[0][1]['stdin'] == subprocess.DEVNULL
     assert calls[1][0] == ['tmux', 'send-keys', '-t', 'naics-train', 'C-c']
+
+@pytest.mark.parametrize('rendered', [False, True])
+def test_controlled_scan_prunes_contents_and_reports_prior_replacements(
+    tmp_path, rendered, monkeypatch
+):
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from naics_embedder.remote.transport import _system_probe_code
+    from naics_embedder.remote.worker import run_probe
+    root = tmp_path / 'instance'
+    root.mkdir()
+    for name in ['outputs/generated', '.aws/credentials', '.env', '__pycache__/new.pyc']:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.mkfifo(path)
+    (root / 'outputs/previous.py').mkdir()
+    os.mkfifo(root / 'special.py')
+    (root / 'source.py').write_text('source')
+    (root / 'outside.py').symlink_to(tmp_path / 'outside')
+    if not rendered:
+        original_open = Path.open
+
+        def refuse_fifo(path, *args, **kwargs):
+            if path.name in {'generated', 'credentials', '.env', 'new.pyc', 'special.py'}:
+                raise AssertionError('probe opened pruned/special content')
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, 'open', refuse_fifo)
+    payload = dict(
+        repo=str(root),
+        controlled=True,
+        expected=['outputs/previous.py'],
+        ignore=['__pycache__/', '*.pyc']
+    )
+    if rendered:
+        result = subprocess.run(
+            ['python3', '-c', _system_probe_code('edits')],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True
+        )
+        result = json.loads(result.stdout)
+    else:
+        result = run_probe('edits', payload, root)
+    files = {item['path']: item for item in result['files']}
+    assert set(files) == {'outputs/previous.py', 'special.py', 'source.py', 'outside.py'}
+    assert files['outputs/previous.py']['kind'] == 'directory'
+    assert files['special.py']['kind'] == 'special'
+    assert files['outside.py']['kind'] == 'unsafe_symlink'
+
+@pytest.mark.parametrize('rendered', [False, True])
+def test_owned_runtime_deletion_preserves_siblings(tmp_path, rendered):
+    import json
+    import subprocess
+    from dataclasses import asdict
+
+    from naics_embedder.remote.code_manifest import file_entry
+    from naics_embedder.remote.transport import _system_probe_code
+    from naics_embedder.remote.worker import run_probe
+    root = tmp_path / 'instance'
+    (root / 'outputs').mkdir(parents=True)
+    (root / 'outputs/tracked').write_text('owned')
+    (root / 'outputs/runtime').write_text('runtime')
+    item = asdict(file_entry(root.resolve(), 'outputs/tracked'))
+    payload = dict(
+        repo=str(root),
+        remove=['outputs/tracked'],
+        authorized=[item],
+        classification='previous',
+        previous=[item],
+        current_paths=[]
+    )
+    if rendered:
+        result = subprocess.run(
+            ['python3', '-c', _system_probe_code('edits')],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True
+        )
+        assert json.loads(result.stdout)['removed'] == ['outputs/tracked']
+    else:
+        run_probe('edits', payload, root)
+    assert not (root / 'outputs/tracked').exists()
+    assert (root / 'outputs/runtime').read_text() == 'runtime'
+
+def test_runtime_delete_requires_previous_manifest_membership(tmp_path):
+    from dataclasses import asdict
+
+    from naics_embedder.remote.code_manifest import file_entry
+    from naics_embedder.remote.worker import run_probe
+    (tmp_path / 'outputs').mkdir()
+    path = tmp_path / 'outputs/generated'
+    path.write_text('generated')
+    item = asdict(file_entry(tmp_path.resolve(), 'outputs/generated'))
+    with pytest.raises(ValueError, match='previous manifest'):
+        run_probe(
+            'edits',
+            dict(
+                remove=['outputs/generated'],
+                authorized=[item],
+                classification='previous',
+                previous=[],
+                current_paths=[]
+            ), tmp_path
+        )
+    assert path.read_text() == 'generated'
+
+@pytest.mark.parametrize('name', ['with spaces.py', 'line\nbreak.py', 'back\\slash.py'])
+@pytest.mark.parametrize('rendered', [False, True])
+def test_controlled_scan_preserves_literal_posix_filenames(tmp_path, name, rendered):
+    import json
+    import subprocess
+
+    from naics_embedder.remote.transport import _system_probe_code
+    from naics_embedder.remote.worker import run_probe
+    (tmp_path / name).write_text('code')
+    payload = dict(repo=str(tmp_path), controlled=True, expected=[name], ignore=[])
+    if rendered:
+        result = subprocess.run(
+            ['python3', '-c', _system_probe_code('edits')],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10
+        )
+        response = json.loads(result.stdout)
+    else:
+        response = run_probe('edits', payload, tmp_path)
+    assert [item['path'] for item in response['files']] == [name]
+
+def test_controlled_hash_ignores_access_time_update(tmp_path):
+    import os
+
+    from naics_embedder.remote.worker import run_probe
+    path = tmp_path / 'code.py'
+    path.write_text('constant bytes')
+    before = path.stat()
+    os.utime(path, ns=(0, before.st_mtime_ns))
+    before = path.stat()
+    response = run_probe('edits', dict(controlled=True, expected=['code.py'], ignore=[]), tmp_path)
+    after = path.stat()
+    assert response['files'][0]['size'] == len('constant bytes')
+    assert after.st_atime_ns > before.st_atime_ns
+    assert (after.st_mtime_ns, after.st_ctime_ns) == (before.st_mtime_ns, before.st_ctime_ns)
+
+def test_controlled_hash_refuses_content_mutation(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from naics_embedder.remote.worker import run_probe
+    path = tmp_path / 'code.py'
+    path.write_text('constant bytes')
+    original = Path.open
+
+    def mutate(candidate, *args, **kwargs):
+        if candidate == path and args and args[0] == 'rb':
+            with original(path, 'a') as stream:
+                stream.write(' changed')
+        return original(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', mutate)
+    with pytest.raises(ValueError, match='changed during inventory'):
+        run_probe('edits', dict(controlled=True, expected=['code.py'], ignore=[]), tmp_path)
+
+@pytest.mark.parametrize('rendered', [False, True])
+def test_exact_pending_link_allowed_only_in_pretransfer_scan(tmp_path, rendered):
+    import hashlib
+    import json
+    import subprocess
+
+    from naics_embedder.remote.transport import _system_probe_code
+    from naics_embedder.remote.worker import run_probe
+    (tmp_path / 'AGENTS.md').symlink_to('CLAUDE.md')
+    pending = [
+        dict(
+            path='AGENTS.md',
+            sha256=hashlib.sha256(b'CLAUDE.md').hexdigest(),
+            size=9,
+            mode=(tmp_path / 'AGENTS.md').lstat().st_mode & 0o777,
+            kind='symlink',
+            target='CLAUDE.md'
+        ),
+        dict(path='CLAUDE.md', sha256='expected', size=1, mode=0o644, kind='file', target=None)
+    ]
+
+    def probe(entries):
+        payload = dict(
+            repo=str(tmp_path),
+            controlled=True,
+            expected=['AGENTS.md', 'CLAUDE.md'],
+            ignore=[],
+            pending_entries=entries
+        )
+        if rendered:
+            result = subprocess.run(
+                ['python3', '-c', _system_probe_code('edits')],
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10
+            )
+            return json.loads(result.stdout)
+        return run_probe('edits', payload, tmp_path)
+
+    assert probe(pending)['files'][0]['kind'] == 'symlink'
+    assert probe([])['files'][0]['kind'] == 'unsafe_symlink'
+    pending[0]['target'] = 'other.md'
+    assert probe(pending)['files'][0]['kind'] == 'unsafe_symlink'
+
+@pytest.mark.parametrize(
+    'name', ['.env', '.env.production', 'private.pem', 'nested/id_ed25519', 'nested/private.pfx']
+)
+def test_generic_code_delete_refuses_credential_filenames(name):
+    from naics_embedder.remote.transport import safe_files
+    with pytest.raises(ValueError, match='credential'):
+        safe_files((name, ), code=True)

@@ -155,3 +155,84 @@ def remote_resume_fixture(remote_repo, trained_seeds):
         root, cfg, canonical_inputs(root, cfg), directory, str(original.resolve()),
         RecordedTransport()
     )
+
+@dataclass
+class WorkflowTransport(RecordedTransport):
+    root: Path = field(default_factory=Path)
+    running: bool = False
+    bootstrap_error: bool = False
+    canonical_error: bool = False
+    push_error: bool = False
+    fail_after: str | None = None
+
+    def probe(self, operation, payload):
+        from naics_embedder.remote.worker import run_probe
+        self.calls.append(('probe', operation, payload))
+        if operation == 'training':
+            return {'running': self.running}
+        if operation == 'transport_prerequisites':
+            return {'qualified': True}
+        if operation == 'bootstrap':
+            if self.bootstrap_error:
+                raise RuntimeError('bootstrap failed')
+            return dict(
+                repo=str(self.root),
+                checkpoint_base=str(self.root / 'checkpoints'),
+                uv='/usr/bin/uv',
+                python='/usr/bin/python',
+                ntp=True,
+                accelerator='cpu',
+                gpu='fixture'
+            )
+        result = run_probe(operation, payload, self.root)
+        if operation == 'canonical' and self.canonical_error:
+            result['hashes'] = {}
+        return result
+
+    def push(self, source, destination, files):
+        self.calls.append(('push', source, destination, files))
+        target = Path(destination)
+        for name in files:
+            path = target / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            original = source / name
+            if path.is_symlink():
+                path.unlink()
+            if original.is_symlink():
+                path.symlink_to(original.readlink())
+            else:
+                shutil.copy2(original, path)
+            if self.push_error and (self.fail_after is None or self.fail_after == name):
+                raise RuntimeError('interrupted transfer')
+
+@pytest.fixture
+def remote_workflow_fixture(remote_repo, tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from naics_embedder.remote.workflow import RemoteWorkflow
+    from naics_embedder.utils.config import RemoteConfig
+
+    instance = tmp_path / 'instance'
+    instance.mkdir()
+    transport = WorkflowTransport(root=instance)
+    now = [datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)]
+    import naics_embedder.remote.push as push_module
+
+    class FixtureDateTime(datetime):
+
+        @classmethod
+        def now(cls, tz=None):
+            return now[0]
+
+    monkeypatch.setattr(push_module, 'datetime', FixtureDateTime)
+    cfg = RemoteConfig(repo_dir=str(instance))
+    workflow = RemoteWorkflow(remote_repo.root, cfg, lambda host, cfg: transport, lambda: now[0])
+    return SimpleNamespace(
+        root=remote_repo.root,
+        repo=remote_repo,
+        instance=instance,
+        transport=transport,
+        workflow=workflow,
+        now=now
+    )
