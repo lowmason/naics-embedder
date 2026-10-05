@@ -1451,3 +1451,33 @@ def parse_override_value(value: str) -> Any:
 
     except (ValueError, SyntaxError):
         return value
+
+# -------------------------------------------------------------------------------------------------
+# Remote transport configuration (separate from training settings)
+# -------------------------------------------------------------------------------------------------
+
+class RemoteConfig(BaseModel):
+    '''Strict settings for code transport and session-specific result pulls.'''
+
+    model_config = ConfigDict(extra='forbid')
+
+    repo_dir: str = '~/naics-embedder'
+    sync_interval_seconds: int = Field(default=600, gt=0)
+    in_flight_seconds: int = Field(default=120, ge=0)
+    untracked_cap_bytes: int = Field(default=10000000, ge=0)
+    pulled_directories: List[str] = Field(
+        default_factory=lambda: ['checkpoints', 'outputs', 'logs', '.remote/segments']
+    )
+    instance_scan_ignore: List[str] = Field(
+        default_factory=lambda: ['__pycache__/', '*.pyc', '.pytest_cache/', '.ipynb_checkpoints/']
+    )
+    rsync_path: Optional[str] = None
+
+    @field_validator('pulled_directories')
+    @classmethod
+    def fixed_pull_roots(cls, value: List[str]) -> List[str]:
+        '''Permit exactly the four contractual result roots, in any order.'''
+        roots = {'checkpoints', 'outputs', 'logs', '.remote/segments'}
+        if len(value) != len(roots) or set(value) != roots:
+            raise ValueError('pulled_directories must contain the four contractual roots')
+        return value

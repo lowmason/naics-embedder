@@ -1,0 +1,7 @@
+repo_dir: ~/naics-embedder
+sync_interval_seconds: 600
+in_flight_seconds: 120
+untracked_cap_bytes: 10000000
+pulled_directories: [checkpoints, outputs, logs, .remote/segments]
+instance_scan_ignore: [__pycache__/, '*.pyc', .pytest_cache/, .ipynb_checkpoints/]
+rsync_path: null
