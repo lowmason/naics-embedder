@@ -4,35 +4,24 @@
 '''
 Mixins module for the NAICSContrastiveModel.
 
-This module provides functional mixins that decompose the model into smaller,
-maintainable components:
+The model's three mixins:
 
-- DistributedMixin: Global batch sampling utilities for multi-GPU training
-- LossMixin: Loss computation methods (hierarchy, structural preference, radius regularization)
-- CurriculumMixin: Curriculum learning logic (checked negative selection, pseudo-related candidates)
-- LoggingMixin: Logging utilities for training and validation metrics
-- ValidationMixin: Validation step and evaluation logic
-- OptimizerMixin: Optimizer and scheduler configuration
+- LossMixin: the experts' load-balancing term, under ``moe`` only (R11)
+- LoggingMixin: the epoch's health logs (P20)
+- OptimizerMixin: AdamW, the warmup, the plateau on the monitor's MRR and the logit scales' clamp
+  (P16)
+
+``curriculum.py``, ``distributed.py`` and ``validation.py`` hold the old objective's mixins, which
+the model no longer has; they go with the rest of its machinery (spec 4.5).
 '''
 
-from naics_embedder.text_model.mixins.curriculum import CurriculumMixin
-from naics_embedder.text_model.mixins.distributed import (
-    DistributedMixin,
-    gather_candidate_entities,
-    gather_embeddings_global,
-)
 from naics_embedder.text_model.mixins.logging import LoggingMixin
 from naics_embedder.text_model.mixins.loss import LossMixin
-from naics_embedder.text_model.mixins.optimizer import OptimizerMixin
-from naics_embedder.text_model.mixins.validation import ValidationMixin
+from naics_embedder.text_model.mixins.optimizer import OUTCOME_MRR, OptimizerMixin
 
 __all__ = [
-    'DistributedMixin',
-    'gather_candidate_entities',
-    'gather_embeddings_global',
+    'OUTCOME_MRR',
     'LossMixin',
-    'CurriculumMixin',
     'LoggingMixin',
-    'ValidationMixin',
     'OptimizerMixin',
 ]

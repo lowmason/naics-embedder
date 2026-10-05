@@ -58,7 +58,7 @@ ENCODE_BATCH_SIZE = 32
 
 def code_token_config(cfg: Config) -> TokenizationConfig:
     '''
-    The tokenization cache training reads, as ``NAICSDataModule`` builds it.
+    The tokenization cache training reads: ``train`` hands it to ``NAICSDataModule``.
 
     The descriptions and the window are the streaming ones, the tokenizer is the tokenization
     one, and the path is the default. Export and reads therefore load the cache file that

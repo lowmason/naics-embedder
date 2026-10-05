@@ -2,33 +2,35 @@
 # NAICS Contrastive Learning Model
 # -------------------------------------------------------------------------------------------------
 '''
-Main NAICS Contrastive Learning Model combining:
-- SharedEncoder: one LoRA-tuned backbone, masked fusion and one affine map to dimension d
-- Hyperbolic embeddings using the Lorentz model
-- Curriculum learning with structure-aware negative sampling
-- Multi-level supervision and false negative detection
+The text stage's Lightning module: the shared encoder, trained on Req 11's three terms over a
+live code cache and selected on the outcome panel's validation MRR (spec 4.1-4.4; D6).
 
-The model is decomposed into functional mixins for maintainability:
-- DistributedMixin: Global batch sampling utilities
-- LossMixin: Loss computation methods
-- CurriculumMixin: Curriculum learning logic
-- LoggingMixin: Logging utilities
-- ValidationMixin: Validation step and evaluation
-- OptimizerMixin: Optimizer configuration
+- SharedEncoder: one LoRA-tuned backbone over field-marked channels, masked fusion, one affine map
+  to dimension d and the bounded head, which gives each text its radius r and direction û.
+- A step reads two streams (spec 4.3): a chunk of the codes, as anchors, and a chunk of the task
+  queries. Every candidate comes from the code cache, each code's (r, û) at its last refresh, with
+  the step's anchors replaced by their live points.
+- Req 11's terms (spec 4.1): the task term over each query's candidates, the code-code listwise
+  term over each anchor's J_a, and the radial term; under ``moe`` only, the experts' load
+  balancing.
+- The cache is refreshed at fit start and at each epoch's end. The end-of-epoch refresh feeds the
+  outcome monitor's read, whose MRR is logged as ``val/outcome_mrr`` and steps the plateau.
+
+The model is decomposed into functional mixins:
+- LossMixin: the experts' load-balancing term (``moe`` only)
+- LoggingMixin: the epoch's health logs (P20)
+- OptimizerMixin: AdamW, the warmup, the plateau and the logit scales' clamp (P16)
 '''
 
 import logging
+import math
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 import pytorch_lightning as pyl
 import torch
 
-from naics_embedder.metrics import (
-    EmbeddingEvaluator,
-    EmbeddingStatistics,
-    HierarchyMetrics,
-)
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, load_validated_bundle
 from naics_embedder.supervision.checkpoints import (
     CHECKPOINT_KEY,
@@ -37,134 +39,150 @@ from naics_embedder.supervision.checkpoints import (
     shared_encoder_architecture,
     validate_checkpoint_contract,
 )
-from naics_embedder.supervision.index import SupervisionIndex
+from naics_embedder.supervision.code_targets import NO_PARTNER, CodeTargets
 from naics_embedder.supervision.schema import CONTRACT_VERSION
-from naics_embedder.supervision.selection import NegativeSelectionCoordinator
-from naics_embedder.text_model.curriculum import CurriculumScheduler
 from naics_embedder.text_model.fusion import FUSIONS
-from naics_embedder.text_model.hard_negative_mining import (
-    LorentzianHardNegativeMiner,
-    NormAdaptiveMargin,
-    RouterGuidedNegativeMiner,
-)
-from naics_embedder.text_model.loss import (
-    HierarchyPreservationLoss,
-    HyperbolicInfoNCELoss,
-    StructuralPreferenceLoss,
-)
-from naics_embedder.text_model.mixins import (
-    CurriculumMixin,
-    DistributedMixin,
-    LoggingMixin,
-    LossMixin,
-    OptimizerMixin,
-    ValidationMixin,
-    gather_embeddings_global,
-)
+from naics_embedder.text_model.hyperbolic import polar_distance
+from naics_embedder.text_model.loss import LogitScale, code_code_loss, radial_loss, task_loss
+from naics_embedder.text_model.mixins import OUTCOME_MRR, LoggingMixin, LossMixin, OptimizerMixin
 from naics_embedder.text_model.shared_encoder import DIMENSIONS, SharedEncoder
 
-# Re-export distributed utilities for backward compatibility
-__all__ = [
-    'NAICSContrastiveModel',
-    'gather_embeddings_global',
-]
-from naics_embedder.utils.config import FalseNegativeConfig
-from naics_embedder.utils.naics_hierarchy import NaicsHierarchy, load_naics_hierarchy
+if TYPE_CHECKING:
+    # The monitor imports the export, which imports this module, so the methods that use the
+    # monitor import it when they run
+    from naics_embedder.text_model.monitor import CodeCache, OutcomeMonitor
+
+__all__ = ['NAICSContrastiveModel', 'StepLosses', 'TRAINING_RUN_KEY']
 
 logger = logging.getLogger(__name__)
+
+# The checkpoint key of the training run's id, which every monitor read names (spec 4.4)
+TRAINING_RUN_KEY = 'training_run'
+
+# -------------------------------------------------------------------------------------------------
+# A step's losses
+# -------------------------------------------------------------------------------------------------
+
+class StepLosses(NamedTuple):
+    '''
+    One step's losses (spec 4.1).
+
+    Attributes:
+        total: What the step optimizes: L = L_task + w_c · L_cc + w_r · L_rad, plus the
+            load-balancing term times its coefficient under ``moe``.
+        task: L_task, the task term.
+        code_code: L_cc, the code-code listwise term.
+        radial: L_rad, the radial term.
+        load_balancing: The experts' load-balancing term, before its coefficient; None unless the
+            fusion is ``moe``.
+        anchor_radius: The anchors' live radii r_a, (A,): every term's gradient reaches the radius
+            through them (Verification "Radius").
+    '''
+
+    total: torch.Tensor
+    task: torch.Tensor
+    code_code: torch.Tensor
+    radial: torch.Tensor
+    load_balancing: Optional[torch.Tensor]
+    anchor_radius: torch.Tensor
+
+def _refuse_settings(
+    *,
+    code_code_weight: float,
+    radial_weight: float,
+    target_temperature: float,
+    radial_step: float,
+    warmup_epochs: int,
+    lr_plateau_factor: float,
+    lr_plateau_patience: int,
+) -> None:
+    '''
+    Refuse a setting the config's validators refuse (spec 5, P22), before anything loads.
+
+    The logit scales refuse their own range and start (``LogitScale``).
+
+    Raises:
+        ValueError: If a weight is below 0, the target temperature or radial step is not
+            positive, a value is not finite, an epoch count is not an integer at or above 0, or
+            the plateau's factor is not in (0, 1).
+    '''
+
+    for name, value in (('code_code_weight', code_code_weight), ('radial_weight', radial_weight)):
+        if not (math.isfinite(value) and value >= 0):
+            raise ValueError(f'{name} must be a finite number at or above 0, not {value!r}')
+    for name, value in (('target_temperature', target_temperature), ('radial_step', radial_step)):
+        if not (math.isfinite(value) and value > 0):
+            raise ValueError(f'{name} must be a positive finite number, not {value!r}')
+    for name, count in (
+        ('warmup_epochs', warmup_epochs), ('lr_plateau_patience', lr_plateau_patience)
+    ):
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f'{name} must be an integer at or above 0, not {count!r}')
+    if not 0 < lr_plateau_factor < 1:
+        raise ValueError(f'lr_plateau_factor must lie in (0, 1), not {lr_plateau_factor!r}')
 
 # -------------------------------------------------------------------------------------------------
 # Main NAICS Contrastive Learning Model
 # -------------------------------------------------------------------------------------------------
 
-class NAICSContrastiveModel(
-    DistributedMixin,
-    LossMixin,
-    CurriculumMixin,
-    LoggingMixin,
-    ValidationMixin,
-    OptimizerMixin,
-    pyl.LightningModule,
-):
+class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.LightningModule):
     '''
-    NAICS Contrastive Learning Model for learning hierarchical NAICS code embeddings.
+    The text stage's model: the shared encoder, trained on Req 11's three terms over a live code
+    cache and selected on the outcome panel's validation MRR (spec 4.1-4.4; D6).
 
-    This model combines:
-    - SharedEncoder: one LoRA-tuned backbone over field-marked channels, masked fusion, and one
-      affine map to the embedding dimension
-    - Hyperbolic embeddings: Lorentz model for hierarchical representation
-    - Curriculum learning: Structure-aware dynamic curriculum (SADC)
-    - Multiple loss functions: Contrastive, hierarchy preservation, structural preference
-
-    Repaired Stage-3 supervision comes only from one validated supervision bundle: every training
-    step encodes one canonical candidate pool, joins pair-dependent supervision by code identity,
-    and gathers every loss field through one checked negative selection.
-
-    The implementation is decomposed into functional mixins:
-    - DistributedMixin: Multi-GPU global batch sampling
-    - LossMixin: Loss computation (hierarchy, structural preference, regularization)
-    - CurriculumMixin: Checked negative selection and pseudo-related candidates
-    - LoggingMixin: Training and validation metric logging
-    - ValidationMixin: Validation step and evaluation metrics
-    - OptimizerMixin: Optimizer and scheduler configuration
+    Supervision comes only from one validated supervision bundle: its codebook, its tree metric D*
+    and its unary pairs (``CodeTargets``), held as buffers in codebook order and never saved.
 
     Args:
-        base_model_name: HuggingFace model name for the base encoder
+        base_model_name: HuggingFace model name for the backbone
         lora_r: LoRA rank
         lora_alpha: LoRA alpha scaling factor
         lora_dropout: LoRA dropout rate
-        fusion: Channel fusion: ``masked_mean`` (default), ``attention`` or ``moe``. Router
-            mining and the load-balancing term run only under ``moe`` (R10, R11)
+        fusion: Channel fusion: ``masked_mean`` (default), ``attention`` or ``moe``. The
+            load-balancing term exists only under ``moe`` (R11)
         dimension: Embedding dimension, one of 8, 16 or 32: the width of the one
             ``Linear(hidden → d)`` before the geometry head
         num_experts: Number of MoE experts (``moe`` only)
-        top_k: Number of experts to select per code (``moe`` only)
-        moe_hidden_dim: Hidden dimension of MoE layers (``moe`` only)
+        top_k: Number of experts each row is routed to (``moe`` only)
+        moe_hidden_dim: Hidden dimension of the experts (``moe`` only)
         radius_bound: R, the head's bound on every radius: r = R · tanh(‖v‖ / R) (spec 4.2)
-        temperature: Temperature for InfoNCE loss
-        curvature: The curvature of the interim losses and miners; the encoder and its head take
-            none (spec 4.2)
-        hierarchy_weight: Weight for hierarchy preservation loss
-        radius_reg_weight: Weight for radius regularization
-        level_radius_weight: Weight for level-aware radius prior
-        learning_rate: Base learning rate
-        weight_decay: AdamW weight decay
-        warmup_steps: Number of warmup steps
-        use_warmup_cosine: Use warmup + cosine decay scheduler
-        load_balancing_coef: MoE load balancing coefficient (the term exists only under ``moe``)
-        fn_curriculum_start_epoch: Epoch to start false negative curriculum
-        fn_cluster_every_n_epochs: Clustering frequency for pseudo-labels
-        fn_num_clusters: Number of clusters for pseudo-labeling
-        eval_every_n_epochs: Evaluation frequency
-        eval_sample_size: Number of samples for evaluation
-        tree_distance_alpha: Tree distance scaling factor
-        base_margin: Base margin for adaptive margin
-        curriculum_phase1_end: End of curriculum phase 1 (fraction)
-        curriculum_phase2_end: End of curriculum phase 2 (fraction)
-        curriculum_phase3_end: End of curriculum phase 3 (fraction)
-        sibling_distance_threshold: Threshold for sibling relationships
-        curriculum_phase_mode: Curriculum phase mode
-        curriculum_anneal: Annealing configuration for curriculum
-        false_negative_config: Configuration for false negative handling
-        parent_eval_top_k: Top-k for parent retrieval evaluation
-        child_eval_top_k: Top-k for child retrieval evaluation
-        supervision_manifest_path: Manifest of the validated supervision bundle (required: it
-            is the one authority for structural distances and the hierarchy)
+        code_code_weight: w_c, the code-code term's weight in the total (spec 4.1)
+        radial_weight: w_r, the radial term's weight in the total
+        target_temperature: τ_t, the temperature of the code-code target softmax(−D* / τ_t)
+        radial_step: ρ, the radius from one level to the next: the radial target is ρ · (λ − 1)
+        logit_scale_init: Where both logit scales s = exp(θ) start
+        logit_scale_range: (low, high), the range both logit scales are clamped to
+        learning_rate: AdamW's base learning rate
+        weight_decay: AdamW's weight decay, on every parameter but the logit scales
+        warmup_epochs: W, the epochs of the linear warmup; 0 for none
+        lr_plateau_factor: The factor the plateau cuts the learning rate by
+        lr_plateau_patience: The epochs without a better ``val/outcome_mrr`` before a cut
+        load_balancing_coef: The load-balancing term's coefficient (``moe`` only)
+        seed: The run's seed, which every monitor read names
+        run_settings: The run's free settings (``utils/training.run_settings``), saved so an
+            exact resume under other settings can be refused; None outside ``train``
+        supervision_manifest_path: Manifest of the validated supervision bundle (required: it is
+            the one authority for the codes, D* and the unary pairs)
         supervision_contract_version: Expected supervision contract version
-        structural_preference_weight: Weight for the structural preference loss
-        structural_preference_margin: Ordering margin for structural preference
-        structural_preference_temperature: Softplus temperature for structural preference
-        structural_preference_tie_tolerance: Structural distance tie tolerance
         summaries: The sha256 of the window-fitting summaries the token cache applied, or None
             for a backbone with no pin; recorded in the checkpoint contract
         checkpoint_contract: Optional runtime contract; must match the loaded bundle
         supervision_bundle: Optional already-validated bundle for ``supervision_manifest_path``
-            (not saved in hyperparameters)
+        monitor: The run's ``OutcomeMonitor``, which reads the validation split at each epoch's
+            end; with None, no epoch reads it, logs ``val/outcome_mrr`` or steps the plateau
+
+    ``checkpoint_contract``, ``supervision_bundle`` and ``monitor`` are not saved in the
+    hyperparameters.
+
+    Raises:
+        ValueError: If the fusion or dimension is unknown, a setting is out of its range, the
+            manifest is missing, a pre-validated bundle is not the configured one, or the runtime
+            contract is not the bundle's.
     '''
 
     def __init__(
         self,
-        base_model_name: str = 'sentence-transformers/all-mpnet-base-v2',
+        base_model_name: str = 'sentence-transformers/all-MiniLM-L6-v2',
         lora_r: int = 8,
         lora_alpha: int = 16,
         lora_dropout: float = 0.1,
@@ -174,41 +192,26 @@ class NAICSContrastiveModel(
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
         radius_bound: float = 8.0,
-        temperature: float = 0.07,
-        curvature: float = 1.0,
-        hierarchy_weight: float = 0.1,
-        radius_reg_weight: float = 0.01,
-        level_radius_weight: float = 0.05,
-        learning_rate: float = 2e-4,
+        code_code_weight: float = 1.0,
+        radial_weight: float = 1.0,
+        target_temperature: float = 1.0,
+        radial_step: float = 1.0,
+        logit_scale_init: float = 1.0,
+        logit_scale_range: Tuple[float, float] = (0.01, 100.0),
+        learning_rate: float = 1e-4,
         weight_decay: float = 0.01,
-        warmup_steps: int = 500,
-        use_warmup_cosine: bool = False,
+        warmup_epochs: int = 1,
+        lr_plateau_factor: float = 0.5,
+        lr_plateau_patience: int = 2,
         load_balancing_coef: float = 0.01,
-        fn_curriculum_start_epoch: int = 10,
-        fn_cluster_every_n_epochs: int = 5,
-        fn_num_clusters: int = 500,
-        eval_every_n_epochs: int = 1,
-        eval_sample_size: int = 500,
-        tree_distance_alpha: float = 1.5,
-        base_margin: float = 0.5,
-        curriculum_phase1_end: float = 0.3,
-        curriculum_phase2_end: float = 0.7,
-        curriculum_phase3_end: float = 1.0,
-        sibling_distance_threshold: float = 2.0,
-        curriculum_phase_mode: str = 'three_phase',
-        curriculum_anneal: Optional[Dict[str, float]] = None,
-        false_negative_config: Optional[Union[FalseNegativeConfig, Dict[str, Any]]] = None,
-        parent_eval_top_k: int = 1,
-        child_eval_top_k: int = 5,
+        seed: int = 0,
+        run_settings: Optional[Dict[str, Any]] = None,
         supervision_manifest_path: Optional[str] = None,
         supervision_contract_version: str = CONTRACT_VERSION,
-        structural_preference_weight: float = 0.35,
-        structural_preference_margin: float = 0.1,
-        structural_preference_temperature: float = 1.0,
-        structural_preference_tie_tolerance: float = 1e-6,
         summaries: Optional[str] = None,
         checkpoint_contract: Optional[CheckpointContract] = None,
         supervision_bundle: Optional[ValidatedSupervisionBundle] = None,
+        monitor: Optional['OutcomeMonitor'] = None,
     ):
         super().__init__()
 
@@ -216,7 +219,16 @@ class NAICSContrastiveModel(
             raise ValueError(f'unknown fusion {fusion!r}; expected one of {list(FUSIONS)}')
         if dimension not in DIMENSIONS:
             raise ValueError(f'unknown dimension {dimension!r}; expected one of {list(DIMENSIONS)}')
-        # The one switch for the MoE-only machinery: router mining and load balancing (R10, R11)
+        _refuse_settings(
+            code_code_weight=code_code_weight,
+            radial_weight=radial_weight,
+            target_temperature=target_temperature,
+            radial_step=radial_step,
+            warmup_epochs=warmup_epochs,
+            lr_plateau_factor=lr_plateau_factor,
+            lr_plateau_patience=lr_plateau_patience,
+        )
+        # The one switch for the MoE-only load-balancing term (R11)
         self.fusion = fusion
 
         # Training is always repaired: legacy containment is deleted (roadmap D2)
@@ -226,9 +238,10 @@ class NAICSContrastiveModel(
                 'with `naics-embedder data supervision` and set the printed manifest path'
             )
 
-        # Bundle and contract objects stay out of hyperparameters: checkpoints record paths and
-        # identifiers, and a restored model re-validates its bundle from the manifest path.
-        self.save_hyperparameters(ignore=['checkpoint_contract', 'supervision_bundle'])
+        # Bundle, contract and monitor objects stay out of hyperparameters: checkpoints record
+        # paths and identifiers, and a restored model re-validates its bundle from the manifest
+        # path.
+        self.save_hyperparameters(ignore=['checkpoint_contract', 'supervision_bundle', 'monitor'])
         # The architecture this model's weights belong to; a checkpoint of any other is refused
         # (spec 4.4, roadmap D2)
         encoder_record = shared_encoder_architecture(
@@ -236,8 +249,8 @@ class NAICSContrastiveModel(
         )
 
         # Load the validated supervision bundle before any model construction: the single
-        # authority for code identity, structural facts, exclusions, the evaluation hierarchy,
-        # and ground-truth distances. A caller that already validated it may pass it in.
+        # authority for code identity and the structural facts. A caller that already validated
+        # it may pass it in.
         if supervision_bundle is None:
             bundle = load_validated_bundle(
                 supervision_manifest_path,
@@ -260,15 +273,6 @@ class NAICSContrastiveModel(
         runtime_contract = contract_for_bundle(
             bundle.manifest, encoder=encoder_record, summaries=summaries
         )
-        self.relation_id_to_name: Dict[int, str] = {
-            relation_id: name
-            for name, relation_id in bundle.manifest.structural_relation_ids.items()
-        }
-        self.supervision_index = SupervisionIndex.from_bundle(bundle)
-        self.selection_coordinator = NegativeSelectionCoordinator()
-        self.naics_hierarchy: Optional[NaicsHierarchy] = load_naics_hierarchy(
-            str(bundle.artifact_path('relations'))
-        )
         if checkpoint_contract is not None and checkpoint_contract != runtime_contract:
             raise ValueError(
                 f'runtime checkpoint contract {checkpoint_contract.model_dump()} does not match '
@@ -277,7 +281,26 @@ class NAICSContrastiveModel(
         self.checkpoint_contract = runtime_contract
         self.supervision_bundle_id = runtime_contract.bundle_id
 
-        # Initialize the shared encoder: one backbone, fusion, one affine map, the head
+        # Each code's level, D* to every code and unary partner, in codebook order (P15). Buffers,
+        # so they move with the model; not persistent, since the bundle holds them, not the
+        # checkpoint
+        targets = CodeTargets.from_bundle(bundle)
+        self.codes: Tuple[str, ...] = targets.codes
+        self.register_buffer(
+            'structural_distance', torch.from_numpy(targets.structural_distance), persistent=False
+        )
+        self.register_buffer(
+            'unary_partner', torch.from_numpy(targets.unary_partner), persistent=False
+        )
+        self.register_buffer('code_levels', torch.from_numpy(targets.levels), persistent=False)
+
+        # The task term's and the code-code term's learned logit scales (spec 4.1). Each refuses
+        # a range that is not 0 < low < high and a start outside it
+        low, high = logit_scale_range
+        self.logit_scale_task = LogitScale(logit_scale_init, low, high)
+        self.logit_scale_code = LogitScale(logit_scale_init, low, high)
+
+        # The shared encoder: one backbone, fusion, one affine map, the head
         self.encoder = SharedEncoder(
             base_model_name=base_model_name,
             lora_r=lora_r,
@@ -291,79 +314,15 @@ class NAICSContrastiveModel(
             radius_bound=radius_bound,
         )
 
-        # Initialize loss function
-        self.loss_fn = HyperbolicInfoNCELoss(
-            embedding_dim=self.encoder.dimension,
-            temperature=temperature,
-            curvature=curvature,
-        )
-
-        # Initialize hard negative mining
-        self.hard_negative_miner = LorentzianHardNegativeMiner(curvature=curvature)
-        self.norm_adaptive_margin = NormAdaptiveMargin(base_margin=base_margin, curvature=curvature)
-        self.router_guided_miner = RouterGuidedNegativeMiner(
-            metric='kl_divergence',
-            temperature=1.0,
-        )
-
-        # Store configuration
-        self.load_balancing_coef = load_balancing_coef
-        self.parent_eval_top_k = parent_eval_top_k
-        self.child_eval_top_k = child_eval_top_k
-
-        # Initialize evaluation components
-        self.embedding_eval = EmbeddingEvaluator()
-        self.embedding_stats = EmbeddingStatistics()
-        self.hierarchy_metrics = HierarchyMetrics()
-
-        # Ground truth distances: the validated structural matrix in codebook order
-        self.ground_truth_distances: Optional[torch.Tensor] = (
-            self.supervision_index.structural_distance
-        )
-        self.code_to_idx: Optional[Dict[str, int]] = dict(self.supervision_index.code_to_id)
-
-        # Structural losses
-        self.hierarchy_loss_fn = None
-        if hierarchy_weight > 0:
-            self.hierarchy_loss_fn = HierarchyPreservationLoss(
-                tree_distances=self.supervision_index.structural_distance,
-                code_to_idx=self.code_to_idx,
-                weight=hierarchy_weight,
-            )
-        # Structural preference over each anchor's positive plus selected negatives
-        self.structural_preference_loss_fn = StructuralPreferenceLoss(
-            curvature=curvature,
-            margin=structural_preference_margin,
-            temperature=structural_preference_temperature,
-            tie_tolerance=structural_preference_tie_tolerance,
-            weight=structural_preference_weight,
-        )
-
-        # Initialize validation state
-        self.validation_embeddings: Dict[str, torch.Tensor] = {}
-        self.validation_codes: List[str] = []
-
-        # Initialize pseudo-label state
-        self.code_to_pseudo_label: Dict[str, int] = {}
-
-        # Initialize evaluation metrics history
-        self.evaluation_metrics_history: List[Dict] = []
-
-        # Initialize curriculum state
-        self.curriculum_scheduler: Optional[CurriculumScheduler] = None
-        self.current_curriculum_flags: Dict[str, bool] = {}
-        self.current_schedule_scalars: Dict[str, float] = {}
-        self.previous_phase: Optional[int] = None
-        self.curriculum_anneal = curriculum_anneal
-        self.curriculum_phase_mode = curriculum_phase_mode
-
-        # Initialize false negative configuration
-        if false_negative_config is None:
-            self.false_negative_config = FalseNegativeConfig()
-        elif isinstance(false_negative_config, FalseNegativeConfig):
-            self.false_negative_config = false_negative_config
-        else:
-            self.false_negative_config = FalseNegativeConfig(**false_negative_config)
+        self.monitor = monitor
+        # Every code's (r, û) at the last refresh: plain state, never saved, so an exact resume
+        # rebuilds it from the restored weights (spec 4.3)
+        self.code_cache: Optional['CodeCache'] = None
+        # The run's id: minted at a fresh fit's start, kept from the checkpoint on exact resume
+        self.training_run: Optional[str] = None
+        self._resumed_run: Optional[str] = None
+        self._resumed_epoch: Optional[int] = None
+        self._reset_health()
 
     def forward(self, channel_inputs: Dict[str, Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         '''
@@ -382,181 +341,204 @@ class NAICSContrastiveModel(
         '''
         return self.encoder(channel_inputs)
 
+    # ---------------------------------------------------------------------------------------------
+    # The code cache and a step's losses
+    # ---------------------------------------------------------------------------------------------
+
+    def refresh_code_cache(self, code_rows: Sequence[Mapping[str, Any]]) -> 'CodeCache':
+        '''
+        Re-encode every code into ``code_cache`` (spec 4.3, P14): in eval mode, without gradient,
+        in float32 with autocast off, in codebook order. The training flags are put back.
+
+        Args:
+            code_rows: Every code's cached token rows, in codebook order.
+
+        Returns:
+            The new cache.
+        '''
+
+        from naics_embedder.text_model.monitor import refresh_code_cache
+
+        self.code_cache = refresh_code_cache(self, code_rows, self.codes)
+        return self.code_cache
+
+    def compute_losses(self, batch: Dict[str, Dict[str, Any]]) -> StepLosses:
+        '''
+        One step's losses over its two streams (spec 4.1, 4.3).
+
+        The step's anchors and queries go through the encoder, and nothing else does. Every
+        candidate is the code cache's point, with the anchors' rows replaced by their live points,
+        so gradient reaches the codes through the anchors alone, as anchors and as candidates.
+        The distances and the terms run in float32 with autocast off: only the backbone runs in
+        reduced precision (spec 4.2).
+
+        Args:
+            batch: One step, as ``StepDataset`` builds it: ``codes`` (``inputs``, ``ids`` and
+                ``levels``) and ``queries`` (``inputs``, ``levels``, ``targets`` and
+                ``negatives``).
+
+        Returns:
+            The step's losses.
+
+        Raises:
+            RuntimeError: If no refresh has built the code cache.
+        '''
+
+        cache = self.code_cache
+        if cache is None:
+            raise RuntimeError(
+                'compute_losses reads the code cache, but none was built: refresh_code_cache '
+                'builds it, as on_train_start does'
+            )
+        codes, queries = batch['codes'], batch['queries']
+        code_output = self(codes['inputs'])
+        query_output = self(queries['inputs'])
+        ids = codes['ids']
+        settings = self.hparams
+        with torch.autocast(device_type=ids.device.type, enabled=False):
+            anchor_radius = code_output['radius'].float()
+            anchor_direction = code_output['direction'].float()
+            radius, direction = cache.with_live(ids, anchor_radius, anchor_direction)
+            # The task term: each query against the codes at its level and its forced negatives,
+            # over all N codes (spec 4.1(i))
+            query_distances = polar_distance(
+                query_output['radius'].float(),
+                query_output['direction'].float(),
+                radius,
+                direction,
+            )
+            at_level = self.code_levels[None, :] == queries['levels'][:, None]
+            task = task_loss(
+                query_distances,
+                self.logit_scale_task(),
+                at_level | queries['negatives'],
+                queries['targets'],
+            )
+            # The code-code term: each anchor against J_a (spec 4.1(ii))
+            code_code = code_code_loss(
+                polar_distance(anchor_radius, anchor_direction, radius, direction),
+                self.logit_scale_code(),
+                self.structural_distance[ids],
+                self._keep(ids),
+                settings.target_temperature,
+            )
+            # The radial term (spec 4.1(iii))
+            radial = radial_loss(anchor_radius, codes['levels'], settings.radial_step)
+            total = task + settings.code_code_weight * code_code + settings.radial_weight * radial
+            load_balancing = None
+            if self.fusion == 'moe':
+                # Over both streams' gates (R11)
+                gate_probs, top_k_indices = self._collect_gate_outputs([code_output, query_output])
+                load_balancing = self._compute_load_balancing_loss(
+                    gate_probs, top_k_indices, sum(len(rows) for rows in gate_probs)
+                )
+                total = total + settings.load_balancing_coef * load_balancing
+        return StepLosses(total, task, code_code, radial, load_balancing, anchor_radius)
+
+    def _keep(self, ids: torch.Tensor) -> torch.Tensor:
+        '''
+        J_a for each anchor, as ``CodeTargets.keep`` gives it: every code but the anchor and, for
+        a unary pair, its partner (spec 4.1(ii)). Built from the buffers, on the anchors' device.
+        '''
+
+        rows = torch.arange(len(ids), device=ids.device)
+        keep = torch.ones((len(ids), len(self.codes)), dtype=torch.bool, device=ids.device)
+        keep[rows, ids] = False
+        partners = self.unary_partner[ids]
+        paired = partners != NO_PARTNER
+        keep[rows[paired], partners[paired]] = False
+        return keep
+
+    def training_step(self, batch: Dict[str, Dict[str, Any]], batch_idx: int) -> torch.Tensor:
+        '''
+        One step over the two streams: its losses, kept for the epoch's health logs.
+
+        Args:
+            batch: One step, as ``StepDataset`` builds it
+            batch_idx: The step's index in the epoch
+
+        Returns:
+            The step's total loss.
+        '''
+
+        losses = self.compute_losses(batch)
+        self._record_health(losses)
+        # The progress bar's value; the epoch means are the health logs (P20)
+        self.log(
+            'loss/step',
+            losses.total.detach(),
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+            batch_size=1,
+        )
+        return losses.total
+
+    # ---------------------------------------------------------------------------------------------
+    # The training run: its start, each epoch's end and its checkpoints
+    # ---------------------------------------------------------------------------------------------
+
+    def on_train_start(self) -> None:
+        '''
+        Start the training run: keep the restored run's id or mint one, ready the monitor's
+        records, and build the code cache (spec 4.3, 4.4).
+
+        On exact resume, ``on_load_checkpoint`` has stashed the checkpoint's training run and
+        epoch: the run keeps its id, and the monitor keeps its records through that epoch. The
+        cache is never saved, so a resume rebuilds it from the restored weights.
+        '''
+
+        self.training_run = self._resumed_run or uuid.uuid4().hex
+        if self.monitor is not None:
+            self.monitor.start(resumed_epoch=self._resumed_epoch)
+        self._reset_health()
+        self.refresh_code_cache(self.trainer.datamodule.code_rows)
+
+    def on_train_epoch_end(self) -> None:
+        '''
+        End the epoch (P15, P18): refresh the cache; then, with a monitor, read the validation
+        split on it, log the MRR as ``val/outcome_mrr``, step the plateau on it and append the
+        read to the run's records; then the health logs (P20).
+
+        The MRR is one float64 value: the one logged, the one the plateau steps on and the one the
+        record holds. This hook runs before ModelCheckpoint's, so the epoch's checkpoint holds
+        the stepped plateau, and the run's records hold the epoch's read.
+        '''
+
+        self.refresh_code_cache(self.trainer.datamodule.code_rows)
+        if self.monitor is not None:
+            read = self.monitor.read(
+                self,
+                self.code_cache,
+                training_run=self.training_run,
+                seed=self.hparams.seed,
+                epoch=self.current_epoch,
+            )
+            mrr = torch.tensor(read.mrr, dtype=torch.float64)
+            self.log(OUTCOME_MRR, mrr, on_step=False, on_epoch=True, prog_bar=True, batch_size=1)
+            self._step_plateau(mrr)
+            self.monitor.append(read)
+        self._log_health()
+
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-        '''Record the supervision contract and encoder architecture this checkpoint belongs to.'''
+        '''
+        Record the supervision contract and encoder architecture this checkpoint belongs to, and
+        the training run's id.
+        '''
+
         checkpoint[CHECKPOINT_KEY] = self.checkpoint_contract.model_dump()
+        checkpoint[TRAINING_RUN_KEY] = self.training_run
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         '''
-        Refuse to restore a checkpoint of any other supervision contract or encoder architecture.
+        Refuse a checkpoint of any other supervision contract or encoder architecture; then stash
+        its training run and epoch for ``on_train_start``.
 
         Runs for Lightning exact resume and ``load_from_checkpoint`` before the state dict loads,
-        so a four-copy checkpoint meets the D2 refusal, never a key mismatch.
+        so a four-copy checkpoint meets the D2 refusal, never a key mismatch. It reads and writes
+        no file, since ``load_from_checkpoint`` runs it too.
         '''
+
         validate_checkpoint_contract(checkpoint.get(CHECKPOINT_KEY), self.checkpoint_contract)
-
-    def _forward_candidate_pool(self, batch: Dict[str, Any]
-                                ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
-        '''
-        Encode the collated candidate pool once and build occurrence UIDs.
-
-        Only valid candidate rows are encoded; invalid padding rows receive zero outputs (the same
-        convention as distributed padding) and are never selectable. UIDs are
-        ``[rank, batch_row, source_slot]``, so invalid rows keep source slot ``-1``.
-
-        Args:
-            batch: Repaired collated batch
-
-        Returns:
-            Tuple of (flat candidate encoder output, ``[batch, candidate, 3]`` UIDs)
-        '''
-        valid = batch['candidate_valid_mask'].reshape(-1)
-        valid_inputs = {
-            channel: {
-                name: value[valid]
-                for name, value in inputs.items()
-            }
-            for channel, inputs in batch['candidate_inputs'].items()
-        }
-        valid_output = self(valid_inputs)
-        candidate_output: Dict[str, torch.Tensor] = {}
-        for name, value in valid_output.items():
-            full = value.new_zeros((valid.shape[0], *value.shape[1:]))
-            full[valid] = value
-            candidate_output[name] = full
-
-        source_slot = batch['candidate_source_slot']
-        rank = (
-            torch.distributed.get_rank()
-            if torch.distributed.is_available() and torch.distributed.is_initialized() else 0
-        )
-        rank_component = torch.full_like(source_slot, rank)
-        batch_component = torch.arange(int(batch['batch_size']), device=source_slot.device
-                                       ).unsqueeze(1).expand_as(source_slot)
-        candidate_uid = torch.stack([rank_component, batch_component, source_slot], dim=-1)
-        return candidate_output, candidate_uid
-
-    def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
-        '''
-        Perform a single repaired training step over one checked negative selection.
-
-        Order: encode anchors, positives, and the candidate pool once; select negatives by
-        candidate identity; derive pseudo-related candidates from the selection only; then every
-        loss consumes the same selected batch.
-
-        Args:
-            batch: Repaired collated batch (see ``collate_fn``)
-            batch_idx: Batch index
-
-        Returns:
-            Total loss for optimization
-        '''
-        batch_size = int(batch['batch_size'])
-
-        # Update curriculum state
-        self._update_curriculum_state(batch_idx, batch_size)
-
-        # Forward pass: anchors, positives, and the canonical candidate pool
-        anchor_output = self(batch['anchor'])
-        positive_output = self(batch['positive'])
-        candidate_output, candidate_uid = self._forward_candidate_pool(batch)
-        anchor_emb = anchor_output['embedding']
-        positive_emb = positive_output['embedding']
-
-        # Log training statistics
-        self._log_multilevel_supervision_stats(batch, batch_idx, batch_size)
-        self._log_sampling_metadata(batch, batch_size)
-
-        # One checked selection; every negative field below is gathered by the same UIDs
-        selected = self._select_negative_batch(
-            batch=batch,
-            anchor_output=anchor_output,
-            candidate_output=candidate_output,
-            candidate_uid=candidate_uid,
-            batch_idx=batch_idx,
-        )
-        self._log_selected_negative_stats(anchor_emb, selected, batch_idx, batch_size)
-
-        # Pseudo-related candidates exist only after selection; exclusions are never eligible
-        pseudo_related = self._build_selected_pseudo_related_mask(batch['anchor_code_id'], selected)
-        effective_mask, auxiliary_fn_loss = self._apply_false_negative_strategy_wrapper(
-            anchor_emb,
-            selected,
-            pseudo_related,
-        )
-        contrastive_loss = self._compute_contrastive_loss(
-            anchor_emb,
-            positive_emb,
-            selected,
-            effective_mask,
-        )
-        if auxiliary_fn_loss is not None:
-            contrastive_loss = contrastive_loss + auxiliary_fn_loss
-        structural_preference_loss = self._compute_structural_preference_loss(
-            anchor_emb,
-            positive_emb,
-            batch,
-            selected,
-        )
-
-        # Adaptive margin diagnostics (feed metric-triggered curriculum annealing)
-        adaptive_margins = self.norm_adaptive_margin(anchor_emb)
-        self._log_adaptive_margin_stats(adaptive_margins, batch_idx, batch_size)
-
-        # Auxiliary losses; selected-candidate regularizers see only valid selections
-        hierarchy_loss = self._compute_hierarchy_loss(anchor_emb, positive_emb, batch, batch_size)
-        radius_reg_loss = self._compute_radius_regularization(
-            anchor_emb,
-            positive_emb,
-            selected.embedding[selected.valid_mask],
-            batch_size,
-        )
-        level_radius_loss = self._compute_level_radius_alignment_loss(
-            anchor_emb,
-            positive_emb,
-            batch,
-            batch_size,
-        )
-
-        # MoE load balancing over anchors, positives, and valid candidate rows only. Only the MoE
-        # fusion has experts, so only it computes, adds and logs the term (R11).
-        raw_load_balancing_loss = None
-        if self.fusion == 'moe':
-            valid_candidates = batch['candidate_valid_mask'].reshape(-1)
-            valid_candidate_output = {
-                name: candidate_output[name][valid_candidates]
-                for name in ('gate_probs', 'top_k_indices') if name in candidate_output
-            }
-            gate_probs_list, topk_indices_list = self._collect_gate_outputs(
-                [anchor_output, positive_output, valid_candidate_output]
-            )
-            self._log_router_diversity(gate_probs_list, batch_size)
-            raw_load_balancing_loss = self._compute_load_balancing_loss(
-                gate_probs_list,
-                topk_indices_list,
-                batch_size,
-            )
-
-        # Combine losses
-        total_loss, scaled_load_balancing_loss = self._combine_loss_terms(
-            contrastive_loss,
-            raw_load_balancing_loss,
-            hierarchy_loss,
-            structural_preference_loss,
-            radius_reg_loss,
-            level_radius_loss,
-        )
-
-        # Log loss breakdown
-        self._log_loss_breakdown(
-            contrastive_loss,
-            scaled_load_balancing_loss,
-            hierarchy_loss,
-            structural_preference_loss,
-            radius_reg_loss,
-            level_radius_loss,
-            total_loss,
-            batch_size,
-        )
-
-        return total_loss
+        self._resumed_run = checkpoint.get(TRAINING_RUN_KEY)
+        self._resumed_epoch = checkpoint.get('epoch')

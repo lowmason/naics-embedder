@@ -2,7 +2,11 @@
 # Validation Mixin
 # -------------------------------------------------------------------------------------------------
 '''
-Validation mixin for NAICSContrastiveModel.
+The old objective's validation mixin, which the text model no longer has.
+
+The text stage's validation is the outcome monitor, and it computes no structural statistic
+(spec 4.4, Req 6). This module stays only until the old objective's machinery is deleted (spec
+4.5); it holds its own logging helpers, which the model's logging mixin no longer has.
 
 Provides methods for:
 - Validation step
@@ -13,7 +17,7 @@ Provides methods for:
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import torch
 
@@ -553,3 +557,68 @@ class ValidationMixin:
                 logger.debug(f'Saved evaluation metrics to {metrics_file}')
             except Exception as e:
                 logger.warning(f'Failed to save evaluation metrics to JSON: {e}')
+
+    def _to_python_scalar(self, value: Any) -> Any:
+        '''Convert any numeric value to a Python scalar for logging.'''
+        if isinstance(value, torch.Tensor):
+            return value.item()
+        elif isinstance(value, (bool, int)):
+            return int(value)
+        else:
+            return float(value)
+
+    def _log_radius_structure_metrics(
+        self,
+        embeddings: torch.Tensor,
+        codes: Sequence[str],
+        batch_size: int,
+    ) -> Dict[str, float]:
+        '''Log radius structure metrics for hyperbolic embeddings.'''
+        if self.naics_hierarchy is None or not codes:
+            return {}
+
+        from naics_embedder.metrics.hierarchy_structure import compute_radius_structure_metrics
+
+        metrics = compute_radius_structure_metrics(embeddings, codes, self.naics_hierarchy)
+        for name, value in metrics.items():
+            scalar_value = self._to_python_scalar(value)
+            self.log(
+                f'val/{name}',
+                scalar_value,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+            )
+        return metrics
+
+    def _log_hierarchy_retrieval_metrics(
+        self,
+        distance_matrix: torch.Tensor,
+        codes: Sequence[str],
+        batch_size: int,
+    ) -> Dict[str, float]:
+        '''Log hierarchy retrieval metrics (parent/child recall).'''
+        if self.naics_hierarchy is None or distance_matrix.numel() == 0:
+            return {}
+
+        from naics_embedder.metrics.hierarchy_structure import compute_hierarchy_retrieval_metrics
+
+        metrics = compute_hierarchy_retrieval_metrics(
+            distance_matrix,
+            codes,
+            self.naics_hierarchy,
+            parent_top_k=self.parent_eval_top_k,
+            child_top_k=self.child_eval_top_k,
+        )
+        for name, value in metrics.items():
+            scalar_value = self._to_python_scalar(value)
+            self.log(
+                f'val/{name}',
+                scalar_value,
+                batch_size=batch_size,
+                on_step=False,
+                on_epoch=True,
+                sync_dist=True,
+            )
+        return metrics

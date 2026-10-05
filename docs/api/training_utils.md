@@ -55,8 +55,16 @@ Structured result from a completed training run.
         - detect_hardware
         - get_gpu_memory_info
         - parse_config_overrides
+        - effective_precision
+        - run_settings
         - resolve_checkpoint
+        - read_checkpoint
+        - refuse_a_fresh_start_into_a_used_directory
+        - refuse_a_resume_from_another_directory
+        - refuse_a_resume_under_other_settings
+        - refuse_a_resume_of_a_stopped_run
+        - outcome_checkpoint
+        - outcome_early_stopping
         - create_trainer
-        - collect_training_result
         - save_training_summary
 

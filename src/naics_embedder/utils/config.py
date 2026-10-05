@@ -2,7 +2,9 @@
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import ast
 import logging
+import math
 from enum import Enum
 from fractions import Fraction
 from pathlib import Path
@@ -853,6 +855,14 @@ class DataLoaderConfig(BaseModel):
     streaming: StreamingConfig = Field(
         default_factory=StreamingConfig, description='Streaming configuration'
     )
+    queries_per_step: int = Field(
+        default=128,
+        ge=1,
+        description=(
+            'The most task queries one step reads: an epoch has ceil(queries / queries_per_step) '
+            'steps, and the codes are cut into as many near-equal chunks (spec 4.3)'
+        ),
+    )
     batch_size: int = Field(default=32, gt=0, le=512, description='Training batch size')
     num_workers: int = Field(default=4, ge=0, le=32, description='Number of data loading workers')
     val_split: float = Field(default=0.05, gt=0, lt=1, description='Validation split fraction')
@@ -970,10 +980,54 @@ class StructuralPreferenceConfig(BaseModel):
     )
 
 class LossConfig(BaseModel):
-    '''Loss function configuration.'''
+    '''
+    Loss function configuration: Req 11's three terms and their two learned logit scales (spec
+    4.1).
+
+    The logit-scale keys refuse exactly what ``LogitScale`` refuses (P22), so a configuration that
+    validates never fails when the model builds its scales.
+    '''
 
     model_config = ConfigDict(extra='forbid')
 
+    code_code_weight: float = Field(
+        default=1.0,
+        ge=0,
+        allow_inf_nan=False,
+        description="w_c, the code-code listwise term's weight in the total",
+    )
+    radial_weight: float = Field(
+        default=1.0,
+        ge=0,
+        allow_inf_nan=False,
+        description="w_r, the radial term's weight in the total",
+    )
+    target_temperature: float = Field(
+        default=1.0,
+        gt=0,
+        allow_inf_nan=False,
+        description='τ_t, the temperature of the code-code target softmax(-D* / τ_t)',
+    )
+    radial_step: float = Field(
+        default=1.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="ρ, the radius from one level to the next: level λ's target is ρ · (λ - 1)",
+    )
+    logit_scale_init: float = Field(
+        default=1.0,
+        allow_inf_nan=False,
+        description=('Where both learned logit scales s = exp(θ) start, inside logit_scale_range'),
+    )
+    logit_scale_range: List[float] = Field(
+        default_factory=lambda: [0.01, 100.0],
+        min_length=2,
+        max_length=2,
+        description=(
+            '[low, high], the range both logit scales are clamped to, with 0 < low < high; the '
+            'scales take no weight decay'
+        ),
+    )
     temperature: float = Field(
         default=0.07, gt=0, le=1, description='Temperature for contrastive loss'
     )
@@ -1018,6 +1072,33 @@ class LossConfig(BaseModel):
         description='Weight for hierarchy-level-aware radius prior (0.0 to disable)',
     )
 
+    @field_validator('logit_scale_range')
+    @classmethod
+    def range_is_positive_and_not_empty(cls, value: List[float]) -> List[float]:
+        '''Spec section 5: refuse a range that is empty or not positive, or has an end that is not
+        finite, as ``LogitScale`` does.'''
+
+        low, high = value
+        if not (math.isfinite(low) and math.isfinite(high)):
+            raise ValueError(f'logit_scale_range takes finite ends, not [{low!r}, {high!r}]')
+        if not 0 < low < high:
+            raise ValueError(
+                f'logit_scale_range must satisfy 0 < low < high, not [{low!r}, {high!r}]'
+            )
+        return value
+
+    @model_validator(mode='after')
+    def init_lies_in_the_range(self) -> 'LossConfig':
+        '''Both scales start at logit_scale_init, which must lie inside logit_scale_range.'''
+
+        low, high = self.logit_scale_range
+        if not low <= self.logit_scale_init <= high:
+            raise ValueError(
+                f'logit_scale_init must lie inside logit_scale_range [{low!r}, {high!r}], not '
+                f'{self.logit_scale_init!r}'
+            )
+        return self
+
 # -------------------------------------------------------------------------------------------------
 # Training Configuration
 # -------------------------------------------------------------------------------------------------
@@ -1028,7 +1109,10 @@ class TrainerConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     max_epochs: int = Field(
-        default=10, gt=0, le=1000, description='Maximum number of training epochs'
+        default=40,
+        gt=0,
+        le=1000,
+        description='The epoch budget: each epoch reads every code and every task query once',
     )
     accelerator: str = Field(
         default='auto', description='Training accelerator (auto, gpu, cpu, mps)'
@@ -1044,11 +1128,21 @@ class TrainerConfig(BaseModel):
     )
     gradient_clip_val: float = Field(default=1.0, gt=0, description='Gradient clipping value')
     accumulate_grad_batches: int = Field(
-        default=1, gt=0, description='Number of batches for gradient accumulation'
+        default=1,
+        gt=0,
+        description=(
+            'Steps per optimizer step; 1 (spec 4.3). The warmup counts optimizer steps, so a '
+            'value k lengthens it to k times warmup_epochs'
+        ),
     )
     log_every_n_steps: int = Field(default=10, gt=0, description='Log metrics every N steps')
     val_check_interval: float = Field(
-        default=1.0, gt=0, description='Run validation every N epochs (or fraction)'
+        default=1.0,
+        gt=0,
+        description=(
+            'Unread: the text stage runs no validation loop, and the outcome monitor reads the '
+            "validation split at each epoch's end (spec 4.4)"
+        ),
     )
 
     @field_validator('accelerator')
@@ -1201,11 +1295,37 @@ class TrainingConfig(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
-    learning_rate: float = Field(
-        default=2e-4, gt=0, lt=1, description='Learning rate for optimizer'
-    )
+    learning_rate: float = Field(default=1e-4, gt=0, lt=1, description="AdamW's base learning rate")
     weight_decay: float = Field(
-        default=0.01, ge=0, lt=1, description='Weight decay (L2 regularization)'
+        default=0.01,
+        ge=0,
+        lt=1,
+        description="AdamW's weight decay, on every parameter but the logit scales",
+    )
+    warmup_epochs: int = Field(
+        default=1,
+        ge=0,
+        description=(
+            'W, the epochs of the linear warmup to the base rate; 0 for none. A plateau cut can '
+            'come at the end of epoch lr_plateau_patience + 1 (from 0), and a cut inside the '
+            'warmup is overwritten by it, so keep W at most lr_plateau_patience + 2'
+        ),
+    )
+    lr_plateau_factor: float = Field(
+        default=0.5,
+        gt=0,
+        lt=1,
+        description='The factor ReduceLROnPlateau cuts the learning rate by, in (0, 1)',
+    )
+    lr_plateau_patience: int = Field(
+        default=2,
+        ge=0,
+        description='The epochs without a higher val/outcome_mrr the plateau waits before a cut',
+    )
+    early_stopping_patience: int = Field(
+        default=5,
+        ge=1,
+        description='The epochs without a higher val/outcome_mrr before training stops',
     )
     warmup_steps: int = Field(default=500, ge=0, description='Number of warmup steps')
     use_warmup_cosine: bool = Field(
@@ -1456,7 +1576,8 @@ class Config(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     experiment_name: str = Field(
-        default='default', description='Experiment name for logging and checkpoints'
+        default='reference',
+        description='Experiment name: the run checkpoints into <checkpoint_dir>/<experiment_name>',
     )
     seed: int = Field(default=42, ge=0, description='Random seed for reproducibility')
     curriculum: CurriculumConfig = Field(
@@ -1570,11 +1691,20 @@ class Config(BaseModel):
 # -------------------------------------------------------------------------------------------------
 
 def parse_override_value(value: str) -> Any:
-    '''Parse override value from string to appropriate type.'''
+    '''
+    Parse override value from string to appropriate type.
+
+    A bracketed list is read as a Python literal before anything else, so a list with a decimal
+    point (``loss.logit_scale_range=[0.01, 100]``) is a list, not the string it would otherwise
+    be; a bracketed value that is not a literal stays a string.
+    '''
 
     try:
         if value.lower() in ('true', 'false'):
             return value.lower() == 'true'
+
+        if value.strip().startswith('['):
+            return ast.literal_eval(value)
 
         if '.' in value or 'e' in value.lower():
             return float(value)
@@ -1583,8 +1713,6 @@ def parse_override_value(value: str) -> Any:
             return int(value)
         except ValueError:
             pass
-
-        import ast
 
         return ast.literal_eval(value)
 

@@ -11,6 +11,8 @@ import pytest
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from naics_embedder.text_model.dataloader.datamodule import DEFAULT_QUERIES_PER_STEP
+from naics_embedder.text_model.loss import LogitScale
 from naics_embedder.utils.config import (
     CheckpointLoadMode,
     Config,
@@ -33,7 +35,9 @@ from naics_embedder.utils.config import (
     TokenizationConfig,
     TrainerConfig,
     load_config,
+    parse_override_value,
 )
+from naics_embedder.utils.training import parse_config_overrides
 from tests.fixtures.regressor_panel import BRANCH_RECORD
 
 # -------------------------------------------------------------------------------------------------
@@ -839,6 +843,202 @@ def test_more_than_one_device_is_refused(devices):
         Config().override({'training.trainer.devices': devices})
 
     assert _error_locs_and_types(excinfo) == [(('training', 'trainer', 'devices'), 'value_error')]
+
+# -------------------------------------------------------------------------------------------------
+# The objective's added and changed keys (spec 4.5 and section 5; P5, P22)
+# -------------------------------------------------------------------------------------------------
+
+INF = float('inf')
+NAN = float('nan')
+
+# Spec 4.5's added keys and the keys it changes, at the defaults the spec states (R7, 4.1-4.5)
+SPEC_DEFAULTS = {
+    'experiment_name': 'reference',
+    'data_loader.queries_per_step': 128,
+    'loss.code_code_weight': 1.0,
+    'loss.radial_weight': 1.0,
+    'loss.target_temperature': 1.0,
+    'loss.radial_step': 1.0,
+    'loss.logit_scale_init': 1.0,
+    'loss.logit_scale_range': [0.01, 100.0],
+    'training.learning_rate': 1e-4,
+    'training.weight_decay': 0.01,
+    'training.warmup_epochs': 1,
+    'training.lr_plateau_factor': 0.5,
+    'training.lr_plateau_patience': 2,
+    'training.early_stopping_patience': 5,
+    'training.trainer.max_epochs': 40,
+    'training.trainer.accumulate_grad_batches': 1,
+    'training.trainer.precision': 'bf16-mixed',
+}
+
+def _dotted(source: Any, key: str) -> Any:
+    '''The value at a dotted key, in a Config or in the YAML's dict.'''
+
+    for part in key.split('.'):
+        source = source[part] if isinstance(source, dict) else getattr(source, part)
+    return source
+
+@pytest.mark.parametrize(('key', 'value'), list(SPEC_DEFAULTS.items()), ids=list(SPEC_DEFAULTS))
+def test_an_added_or_changed_key_has_the_specs_default_in_the_model_and_the_yaml(
+    valid_config_dict, key, value
+):
+    '''P5: the Pydantic default is the spec's, and the shipped YAML states the same value.'''
+
+    assert _dotted(Config(), key) == value
+    # The YAML sets the key itself: a missing key would validate to the default
+    _dotted(valid_config_dict, key)
+    assert _dotted(Config.model_validate(valid_config_dict), key) == value
+
+def test_the_configured_queries_per_step_default_is_the_datamodules():
+    assert DataLoaderConfig().queries_per_step == DEFAULT_QUERIES_PER_STEP
+
+@pytest.mark.parametrize(
+    ('key', 'value', 'error'),
+    [
+        ('data_loader.queries_per_step', 0, 'greater_than_equal'),
+        ('data_loader.queries_per_step', -1, 'greater_than_equal'),
+        ('data_loader.queries_per_step', 1.5, 'int_from_float'),
+        ('loss.code_code_weight', -0.1, 'greater_than_equal'),
+        ('loss.code_code_weight', INF, 'finite_number'),
+        ('loss.radial_weight', -1.0, 'greater_than_equal'),
+        ('loss.radial_weight', NAN, 'finite_number'),
+        ('loss.target_temperature', 0.0, 'greater_than'),
+        ('loss.target_temperature', -1.0, 'greater_than'),
+        ('loss.target_temperature', INF, 'finite_number'),
+        ('loss.radial_step', 0.0, 'greater_than'),
+        ('loss.radial_step', -0.5, 'greater_than'),
+        ('loss.radial_step', INF, 'finite_number'),
+        ('loss.logit_scale_init', INF, 'finite_number'),
+        ('loss.logit_scale_init', NAN, 'finite_number'),
+        ('loss.logit_scale_range', [0.01], 'too_short'),
+        ('loss.logit_scale_range', [0.01, 1.0, 100.0], 'too_long'),
+        ('training.warmup_epochs', -1, 'greater_than_equal'),
+        ('training.warmup_epochs', 0.5, 'int_from_float'),
+        ('training.lr_plateau_factor', 0.0, 'greater_than'),
+        ('training.lr_plateau_factor', -0.5, 'greater_than'),
+        ('training.lr_plateau_factor', 1.0, 'less_than'),
+        ('training.lr_plateau_factor', 1.5, 'less_than'),
+        ('training.lr_plateau_patience', -1, 'greater_than_equal'),
+        ('training.early_stopping_patience', 0, 'greater_than_equal'),
+        ('training.early_stopping_patience', -1, 'greater_than_equal'),
+    ],
+)
+def test_an_added_key_outside_its_range_is_refused(key, value, error):
+    '''Spec section 5 and P22: queries_per_step below 1, a weight below 0, a temperature or step at
+    or below 0, a non-finite value, an epoch count below 0, a plateau factor outside (0, 1), an
+    early-stopping patience below 1.'''
+
+    with pytest.raises(ValidationError) as excinfo:
+        Config().override({key: value})
+
+    # Pinned on the type: before the key is declared, the same override fails as extra_forbidden
+    assert _error_locs_and_types(excinfo) == [(tuple(key.split('.')), error)]
+
+@pytest.mark.parametrize(
+    'bounds',
+    [[1.0, 1.0], [100.0, 0.01], [0.0, 100.0], [-1.0, 100.0], [0.01, INF], [NAN, 100.0]],
+    ids=['one-point', 'reversed', 'zero', 'negative', 'infinite', 'nan'],
+)
+def test_a_logit_scale_range_that_is_empty_or_not_positive_is_refused(bounds):
+    '''Spec section 5: the range must satisfy 0 < low < high, with finite ends.'''
+
+    with pytest.raises(ValidationError, match='logit_scale_range') as excinfo:
+        Config().override({'loss.logit_scale_range': bounds})
+
+    assert _error_locs_and_types(excinfo) == [(('loss', 'logit_scale_range'), 'value_error')]
+
+@pytest.mark.parametrize('init', [0.001, 1000.0], ids=['below', 'above'])
+def test_a_logit_scale_init_outside_its_range_is_refused(init):
+    '''P22: both scales start at logit_scale_init, which must lie inside logit_scale_range.'''
+
+    with pytest.raises(ValidationError, match='logit_scale_init') as excinfo:
+        Config().override({'loss.logit_scale_init': init})
+
+    assert _error_locs_and_types(excinfo) == [(('loss', ), 'value_error')]
+
+@pytest.mark.parametrize(
+    ('key', 'value'),
+    [
+        ('data_loader.queries_per_step', 1),
+        ('loss.code_code_weight', 0.0),
+        ('loss.radial_weight', 0.0),
+        ('loss.logit_scale_init', 0.01),
+        ('loss.logit_scale_init', 100.0),
+        ('training.warmup_epochs', 0),
+        ('training.lr_plateau_patience', 0),
+        ('training.early_stopping_patience', 1),
+    ],
+)
+def test_an_added_key_at_the_edge_of_its_range_is_accepted(key, value):
+    assert _dotted(Config().override({key: value}), key) == value
+
+@pytest.mark.parametrize(
+    ('init', 'low', 'high'),
+    [
+        (1.0, 0.01, 100.0),
+        (0.01, 0.01, 100.0),
+        (100.0, 0.01, 100.0),
+        (0.5, 0.25, 2.0),
+        (1.0, 1.0, 1.0),
+        (1.0, 2.0, 0.5),
+        (1.0, 0.0, 100.0),
+        (1.0, -1.0, 100.0),
+        (0.001, 0.01, 100.0),
+        (1000.0, 0.01, 100.0),
+        (INF, 0.01, 100.0),
+        (1.0, 0.01, INF),
+        (NAN, 0.01, 100.0),
+        (1.0, NAN, 100.0),
+    ],
+)
+def test_the_logit_scale_keys_refuse_exactly_what_the_logit_scale_refuses(init, low, high):
+    '''P22: a config that validates never fails when the model builds its logit scales, and the
+    config refuses nothing they accept.'''
+
+    try:
+        LogitScale(init, low, high)
+    except ValueError:
+        builds = False
+    else:
+        builds = True
+    try:
+        Config().override({'loss.logit_scale_init': init, 'loss.logit_scale_range': [low, high]})
+    except ValidationError:
+        validates = False
+    else:
+        validates = True
+
+    assert validates is builds
+
+@pytest.mark.parametrize(
+    ('text', 'value'),
+    [
+        ('[0.05, 50]', [0.05, 50]),
+        ('[0.01, 100.0]', [0.01, 100.0]),
+        ('[1, 100]', [1, 100]),
+        ('1e-4', 1e-4),
+        ('0.5', 0.5),
+        ('128', 128),
+        ('true', True),
+        ('bf16-mixed', 'bf16-mixed'),
+        ('reference', 'reference'),
+        ('[not, a, list', '[not, a, list'),
+    ],
+)
+def test_an_override_parses_a_list_with_decimals_and_every_other_value_as_before(text, value):
+    '''A list with a decimal point was a string, which the logit-scale range refused.'''
+
+    parsed = parse_override_value(text)
+
+    assert parsed == value
+    assert type(parsed) is type(value)
+
+def test_the_logit_scale_range_can_be_overridden_on_the_command_line():
+    overrides, invalid = parse_config_overrides(['loss.logit_scale_range=[0.05, 50]'])
+
+    assert invalid == []
+    assert Config().override(overrides).loss.logit_scale_range == [0.05, 50.0]
 
 # -------------------------------------------------------------------------------------------------
 # GraphConfig Tests

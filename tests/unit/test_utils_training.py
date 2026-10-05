@@ -1,16 +1,18 @@
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
+from naics_embedder.utils import training as utils_training
 from naics_embedder.utils.config import Config
 from naics_embedder.utils.training import (
     HardwareInfo,
     TrainingResult,
-    collect_training_result,
     create_trainer,
     detect_hardware,
     get_gpu_memory_info,
@@ -18,6 +20,8 @@ from naics_embedder.utils.training import (
     resolve_checkpoint,
     save_training_summary,
 )
+
+OUTCOME_MRR = 'val/outcome_mrr'
 
 def _build_config(tmp_path: Path) -> Config:
     cfg = Config()
@@ -137,16 +141,84 @@ def test_resolve_checkpoint_missing_path(tmp_path):
 @pytest.mark.unit
 def test_create_trainer_uses_cpu_defaults(tmp_path):
     cfg = _build_config(tmp_path)
+    # Nothing reads it: there is no validation loop
+    cfg.training.trainer.val_check_interval = 0.25
     hardware = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
     checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     trainer, ckpt_cb, es_cb = create_trainer(cfg, hardware, checkpoint_dir)
 
-    assert ckpt_cb.monitor == 'val/contrastive_loss'
-    assert es_cb.patience == 3
     assert trainer.max_epochs == cfg.training.trainer.max_epochs
+    assert (trainer.precision, trainer.num_devices) == ('32-true', 1)
+    assert trainer.accumulate_grad_batches == cfg.training.trainer.accumulate_grad_batches
+    assert trainer.gradient_clip_val == cfg.training.trainer.gradient_clip_val
+    assert trainer.log_every_n_steps == cfg.training.trainer.log_every_n_steps
+    # No validation loop: validation is the outcome monitor (spec 4.4)
+    assert (trainer.limit_val_batches, trainer.num_sanity_val_steps) == (0, 0)
+    assert trainer.val_check_interval == 1.0
     assert trainer.logger is not None
+    assert ckpt_cb in trainer.callbacks and es_cb in trainer.callbacks
+
+@pytest.mark.unit
+def test_create_trainer_keeps_the_earliest_best_epoch_and_the_last_on_the_outcome_mrr(tmp_path):
+    '''P17: one kept epoch, the first with the highest val/outcome_mrr (a later epoch replaces it
+    only by beating it), saved at each training epoch's end as epoch=<NNN>.ckpt, plus last.ckpt.'''
+
+    cfg = _build_config(tmp_path)
+    hardware = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
+    checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
+
+    _, ckpt_cb, _ = create_trainer(cfg, hardware, checkpoint_dir)
+
+    assert isinstance(ckpt_cb, ModelCheckpoint)
+    assert ckpt_cb.dirpath == os.path.realpath(checkpoint_dir)
+    assert (ckpt_cb.monitor, ckpt_cb.mode, ckpt_cb.save_top_k) == (OUTCOME_MRR, 'max', 1)
+    assert ckpt_cb.save_last is True
+    # Saved at the training epoch's end, whatever the trainer's validation settings
+    assert ckpt_cb._save_on_train_epoch_end is True
+    assert ckpt_cb.format_checkpoint_name({'epoch': torch.tensor(7)}
+                                          ) == os.path.join(ckpt_cb.dirpath, 'epoch=007.ckpt')
+    # The same callback the exact-resume guard reads the saved state of
+    assert ckpt_cb.state_key == utils_training.outcome_checkpoint(checkpoint_dir).state_key
+
+@pytest.mark.unit
+def test_create_trainer_stops_early_on_the_outcome_mrr_at_the_configured_patience(tmp_path):
+    cfg = _build_config(tmp_path)
+    cfg.training.early_stopping_patience = 7
+    hardware = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
+    checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
+
+    trainer, _, es_cb = create_trainer(cfg, hardware, checkpoint_dir)
+
+    assert isinstance(es_cb, EarlyStopping)
+    assert (es_cb.monitor, es_cb.mode, es_cb.patience) == (OUTCOME_MRR, 'max', 7)
+    # A tie is no improvement: an equal MRR counts against the patience
+    assert es_cb.min_delta == 0.0
+    assert es_cb._check_on_train_epoch_end is True
+    early_stoppers = [cb for cb in trainer.callbacks if isinstance(cb, EarlyStopping)]
+    checkpointers = [cb for cb in trainer.callbacks if isinstance(cb, ModelCheckpoint)]
+    assert (len(early_stoppers), len(checkpointers)) == (1, 1)
+
+@pytest.mark.unit
+def test_create_trainer_stops_early_with_the_callback_the_stopped_run_guard_reads(tmp_path):
+    '''P19: the stopped-run guard reads the state of outcome_early_stopping's callback, so
+    create_trainer's EarlyStopping is that callback: the same class, state key and settings.'''
+
+    cfg = _build_config(tmp_path)
+    cfg.training.early_stopping_patience = 7
+    hardware = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
+    checkpoint_dir = Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name
+
+    _, _, es_cb = create_trainer(cfg, hardware, checkpoint_dir)
+
+    helper = utils_training.outcome_early_stopping(7)
+    # A subclass would save its state under another key: the key names the class
+    assert type(es_cb) is type(helper) is EarlyStopping
+    assert es_cb.state_key == helper.state_key
+    settings, helper_settings = dict(vars(es_cb)), dict(vars(helper))
+    assert torch.equal(settings.pop('best_score'), helper_settings.pop('best_score'))
+    assert settings == helper_settings
 
 @pytest.mark.unit
 def test_create_trainer_propagates_train_epoch_to_datamodule(tmp_path):
@@ -188,32 +260,15 @@ def test_create_trainer_runs_on_one_device_at_the_detected_precision(monkeypatch
     assert captured['precision'] == '32'
 
 @pytest.mark.unit
-def test_collect_training_result(tmp_path):
-    from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-
-    ckpt_cb = ModelCheckpoint(dirpath=str(tmp_path), filename='model-{epoch:02d}')
-    ckpt_cb.best_model_path = str(tmp_path / 'best.ckpt')
-    early_stopping = EarlyStopping(monitor='val/contrastive_loss')
-    early_stopping.stopped_epoch = 4
-    early_stopping.best_score = torch.tensor(0.123)
-
-    result = collect_training_result(ckpt_cb, early_stopping, config_path='conf.yaml')
-
-    assert result.best_checkpoint_path == str(tmp_path / 'best.ckpt')
-    assert result.last_checkpoint_path == str(tmp_path / 'last.ckpt')
-    assert result.config_path == 'conf.yaml'
-    assert result.early_stopped
-
-@pytest.mark.unit
 def test_save_training_summary_writes_files(tmp_path):
     result = TrainingResult(
-        best_checkpoint_path='best.ckpt',
+        best_checkpoint_path='epoch=003.ckpt',
         last_checkpoint_path='last.ckpt',
         config_path='config.yaml',
-        best_loss=0.42,
+        best_score=0.42,
         stopped_epoch=5,
         early_stopped=True,
-        metrics={'best_val_loss': 0.42},
+        metrics={'best_val_outcome_mrr': 0.42},
     )
     cfg = Config()
     hw = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
@@ -222,5 +277,390 @@ def test_save_training_summary_writes_files(tmp_path):
 
     assert 'yaml' in paths and Path(paths['yaml']).exists()
     assert 'json' in paths and Path(paths['json']).exists()
-    snapshot = json.loads(Path(paths['json']).read_text())['config_snapshot']['model']
+    summary = json.loads(Path(paths['json']).read_text())
+    snapshot = summary['config_snapshot']['model']
     assert (snapshot['fusion'], snapshot['dimension']) == ('masked_mean', 16)
+    # The best score is the kept epoch's validation MRR, not a loss
+    assert summary['results']['best_score'] == 0.42
+    assert 'best_loss' not in summary['results']
+    assert summary['metrics'] == {'best_val_outcome_mrr': 0.42}
+
+# -------------------------------------------------------------------------------------------------
+# One accelerator and precision rule, and the run's settings (P21, P31)
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('accelerator', 'expected'), [('cuda', '16-mixed'), ('mps', '32-true'), ('cpu', '32-true')]
+)
+def test_effective_precision_is_the_configured_precision_on_cuda_only(accelerator, expected):
+    cfg = Config().override({'training.trainer.precision': '16-mixed'})
+
+    assert utils_training.effective_precision(cfg, accelerator) == expected
+
+@pytest.mark.unit
+@pytest.mark.parametrize('host', ['cuda', 'mps', 'cpu'])
+def test_effective_precision_is_the_precision_the_hardware_check_resolves(monkeypatch, host):
+    '''P31: the precision a run records is the one detect_hardware hands its trainer.'''
+
+    monkeypatch.setattr(torch.cuda, 'is_available', lambda: host == 'cuda', raising=False)
+    monkeypatch.setattr(torch.cuda, 'device_count', lambda: 1, raising=False)
+    monkeypatch.setattr(torch.backends, 'mps', SimpleNamespace(is_available=lambda: host == 'mps'))
+    monkeypatch.setattr(utils_training, 'get_gpu_memory_info', lambda: None)
+    cfg = Config()
+
+    hardware = detect_hardware(cuda_precision=cfg.training.trainer.precision)
+
+    assert hardware.accelerator == host
+    assert utils_training.effective_precision(cfg, hardware.accelerator) == hardware.precision
+
+# Every run setting at a value other than its default, so each one is seen to be read
+RUN_OVERRIDES = {
+    'model.fusion': 'attention',
+    'model.dimension': 8,
+    'model.radius_bound': 5.0,
+    'loss.code_code_weight': 0.25,
+    'loss.radial_weight': 2.0,
+    'loss.target_temperature': 0.5,
+    'loss.radial_step': 0.75,
+    'loss.logit_scale_init': 2.0,
+    'loss.logit_scale_range': [0.05, 50.0],
+    'training.learning_rate': 3e-4,
+    'training.weight_decay': 0.02,
+    'training.warmup_epochs': 2,
+    'training.lr_plateau_factor': 0.25,
+    'training.lr_plateau_patience': 3,
+    'training.early_stopping_patience': 6,
+    'training.trainer.max_epochs': 12,
+    'data_loader.queries_per_step': 64,
+    'training.trainer.accumulate_grad_batches': 2,
+    'training.trainer.gradient_clip_val': 0.5,
+}
+
+@pytest.mark.unit
+def test_run_settings_are_the_free_settings_the_epoch_budget_and_the_fusion():
+    '''P21: R7's free settings, the epoch budget, the fusion, the accumulation and the clipping,
+    the accelerator and the precision, in that order, the logit-scale range a list.'''
+
+    cfg = Config().override(RUN_OVERRIDES)
+
+    settings = utils_training.run_settings(cfg, accelerator='cuda', precision='bf16-mixed')
+
+    assert list(settings.items()) == [
+        ('fusion', 'attention'),
+        ('dimension', 8),
+        ('radius_bound', 5.0),
+        ('code_code_weight', 0.25),
+        ('radial_weight', 2.0),
+        ('target_temperature', 0.5),
+        ('radial_step', 0.75),
+        ('logit_scale_init', 2.0),
+        ('logit_scale_range', [0.05, 50.0]),
+        ('learning_rate', 3e-4),
+        ('weight_decay', 0.02),
+        ('warmup_epochs', 2),
+        ('lr_plateau_factor', 0.25),
+        ('lr_plateau_patience', 3),
+        ('early_stopping_patience', 6),
+        ('max_epochs', 12),
+        ('queries_per_step', 64),
+        ('accumulate_grad_batches', 2),
+        ('gradient_clip_val', 0.5),
+        ('accelerator', 'cuda'),
+        ('precision', 'bf16-mixed'),
+    ]
+    assert type(settings['logit_scale_range']) is list
+
+@pytest.mark.unit
+def test_run_settings_survive_a_records_json_unchanged():
+    '''An arm record holds the settings as JSON, so the record's equal the run's.'''
+
+    settings = utils_training.run_settings(Config(), accelerator='cuda', precision='bf16-mixed')
+
+    assert json.loads(json.dumps(settings)) == settings
+
+# -------------------------------------------------------------------------------------------------
+# The guards on a run's checkpoint directory (P19)
+# -------------------------------------------------------------------------------------------------
+
+# The shipped training.early_stopping_patience (spec 4.4)
+PATIENCE = 5
+
+def _saved_state(
+    checkpoint_dir: Path,
+    settings,
+    *,
+    seed: int = 42,
+    dirpath=None,
+    wait_count: int = 0,
+    stopped_epoch: int = 0,
+) -> dict:
+    '''
+    What a checkpoint saved in ``checkpoint_dir`` holds of what the guards read: the states of the
+    run's ModelCheckpoint and EarlyStopping, under the keys the trainer restores them by, and the
+    hyperparameters.
+    '''
+
+    callback = utils_training.outcome_checkpoint(checkpoint_dir)
+    stopper = utils_training.outcome_early_stopping(PATIENCE)
+    return {
+        'callbacks': {
+            callback.state_key: {
+                'dirpath': callback.dirpath if dirpath is None else dirpath,
+                'best_model_score': torch.tensor(0.5),
+            },
+            stopper.state_key: {
+                'wait_count': wait_count,
+                'stopped_epoch': stopped_epoch,
+                'best_score': torch.tensor(0.5, dtype=torch.float64),
+                'patience': PATIENCE,
+            },
+        },
+        'hyper_parameters': {
+            'seed': seed,
+            'run_settings': settings
+        },
+    }
+
+@pytest.fixture
+def current_settings():
+    return utils_training.run_settings(Config(), accelerator='cpu', precision='32-true')
+
+@pytest.mark.unit
+@pytest.mark.parametrize('state', ['missing', 'empty'])
+def test_a_fresh_start_into_a_missing_or_empty_checkpoint_directory_is_allowed(tmp_path, state):
+    checkpoint_dir = tmp_path / 'checkpoints' / 'reference'
+    if state == 'empty':
+        checkpoint_dir.mkdir(parents=True)
+
+    utils_training.refuse_a_fresh_start_into_a_used_directory(checkpoint_dir)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('entry', ['last.ckpt', 'monitor_reads.jsonl', 'a-subdirectory'])
+def test_a_fresh_start_into_a_used_checkpoint_directory_is_refused(tmp_path, entry):
+    '''A fresh run would leave its checkpoints as -v1 siblings of the other run's, and resolve
+    --ckpt-path last to the other run's last.ckpt.'''
+
+    checkpoint_dir = tmp_path / 'reference'
+    checkpoint_dir.mkdir()
+    if entry == 'a-subdirectory':
+        (checkpoint_dir / entry).mkdir()
+    else:
+        (checkpoint_dir / entry).write_text('')
+
+    with pytest.raises(ValueError, match='exists and is not empty') as excinfo:
+        utils_training.refuse_a_fresh_start_into_a_used_directory(checkpoint_dir)
+
+    assert str(checkpoint_dir) in str(excinfo.value)
+    assert '--ckpt-path last' in str(excinfo.value)
+
+@pytest.mark.unit
+def test_a_fresh_start_into_a_file_in_place_of_the_checkpoint_directory_is_refused(tmp_path):
+    checkpoint_dir = tmp_path / 'reference'
+    checkpoint_dir.write_text('')
+
+    with pytest.raises(ValueError, match='is not a directory'):
+        utils_training.refuse_a_fresh_start_into_a_used_directory(checkpoint_dir)
+
+@pytest.mark.unit
+def test_a_resume_from_the_runs_own_checkpoint_directory_is_allowed(tmp_path, current_settings):
+    '''The saved directory is compared as ModelCheckpoint stores it, its real path: a symlinked
+    path to the same directory resumes.'''
+
+    checkpoint_dir = tmp_path / 'checkpoints' / 'reference'
+    checkpoint_dir.mkdir(parents=True)
+    linked = tmp_path / 'linked'
+    linked.symlink_to(tmp_path / 'checkpoints')
+    saved = _saved_state(checkpoint_dir, current_settings)
+
+    utils_training.refuse_a_resume_from_another_directory(saved, linked / 'reference')
+
+@pytest.mark.unit
+def test_a_resume_from_another_checkpoint_directory_is_refused(tmp_path, current_settings):
+    '''Lightning 2.5.5 restores ModelCheckpoint's best-k state only from its own directory, so
+    such a resume would lose the kept epoch.'''
+
+    elsewhere = tmp_path / 'elsewhere' / 'reference'
+    checkpoint_dir = tmp_path / 'checkpoints' / 'reference'
+    saved = _saved_state(elsewhere, current_settings)
+
+    with pytest.raises(ValueError, match='another checkpoint directory') as excinfo:
+        utils_training.refuse_a_resume_from_another_directory(saved, checkpoint_dir)
+
+    message = str(excinfo.value)
+    assert os.path.realpath(elsewhere) in message
+    assert os.path.realpath(checkpoint_dir) in message
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'corruption',
+    ['no-callbacks', 'another-monitor', 'no-dirpath'],
+)
+def test_a_resume_whose_checkpoint_holds_no_checkpoint_state_of_this_run_is_refused(
+    tmp_path, current_settings, corruption
+):
+    '''Without the state, Lightning would restore no best-k state and keep no earlier epoch.'''
+
+    checkpoint_dir = tmp_path / 'reference'
+    saved = _saved_state(checkpoint_dir, current_settings)
+    state_key = utils_training.outcome_checkpoint(checkpoint_dir).state_key
+    if corruption == 'no-callbacks':
+        del saved['callbacks']
+    elif corruption == 'another-monitor':
+        other = ModelCheckpoint(dirpath=checkpoint_dir, monitor='val/contrastive_loss')
+        saved['callbacks'] = {other.state_key: saved['callbacks'][state_key]}
+    else:
+        del saved['callbacks'][state_key]['dirpath']
+
+    with pytest.raises(ValueError, match='no ModelCheckpoint state'):
+        utils_training.refuse_a_resume_from_another_directory(saved, checkpoint_dir)
+
+@pytest.mark.unit
+def test_a_resume_under_the_runs_own_settings_is_allowed(tmp_path, current_settings):
+    saved = _saved_state(tmp_path, dict(current_settings))
+
+    utils_training.refuse_a_resume_under_other_settings(saved, current_settings, seed=42)
+
+@pytest.mark.unit
+def test_a_resume_under_other_run_settings_is_refused_naming_each_difference(
+    tmp_path, current_settings
+):
+    '''P19: train builds the model from the config, so a changed setting would change the run
+    mid-way, with nothing in the checkpoint contract to catch it.'''
+
+    saved_settings = {**current_settings, 'learning_rate': 2e-4, 'max_epochs': 10}
+    saved_settings['logit_scale_range'] = [0.05, 50.0]
+    saved = _saved_state(tmp_path, saved_settings)
+
+    with pytest.raises(ValueError, match='other run settings') as excinfo:
+        utils_training.refuse_a_resume_under_other_settings(saved, current_settings, seed=42)
+
+    message = str(excinfo.value)
+    assert 'learning_rate: saved 0.0002, now 0.0001' in message
+    assert 'max_epochs: saved 10, now 40' in message
+    assert 'logit_scale_range: saved [0.05, 50.0], now [0.01, 100.0]' in message
+    assert 'radius_bound' not in message
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('key', 'value', 'named'),
+    [
+        ('training.trainer.accumulate_grad_batches', 2, 'accumulate_grad_batches: saved 2, now 1'),
+        ('training.trainer.gradient_clip_val', 0.5, 'gradient_clip_val: saved 0.5, now 1.0'),
+    ],
+    ids=['accumulate_grad_batches', 'gradient_clip_val'],
+)
+def test_a_resume_under_another_accumulation_or_clipping_is_refused(
+    tmp_path, current_settings, key, value, named
+):
+    '''P21: the warmup counts optimizer steps, so another accumulation would stretch it mid-run,
+    and another clipping would change every later step. Both are run settings, refused as any.'''
+
+    saved_settings = utils_training.run_settings(
+        Config().override({key: value}), accelerator='cpu', precision='32-true'
+    )
+    saved = _saved_state(tmp_path, saved_settings)
+
+    with pytest.raises(ValueError, match='other run settings') as excinfo:
+        utils_training.refuse_a_resume_under_other_settings(saved, current_settings, seed=42)
+
+    assert named in str(excinfo.value)
+
+@pytest.mark.unit
+def test_a_resume_under_a_setting_one_side_lacks_is_refused(tmp_path, current_settings):
+    saved_settings = {key: value for key, value in current_settings.items() if key != 'fusion'}
+    saved_settings['curriculum_phase1_end'] = 0.5
+    saved = _saved_state(tmp_path, saved_settings)
+
+    with pytest.raises(ValueError, match='other run settings') as excinfo:
+        utils_training.refuse_a_resume_under_other_settings(saved, current_settings, seed=42)
+
+    message = str(excinfo.value)
+    assert "fusion: saved absent, now 'masked_mean'" in message
+    assert 'curriculum_phase1_end: saved 0.5, now absent' in message
+
+@pytest.mark.unit
+def test_a_resume_under_another_seed_is_refused(tmp_path, current_settings):
+    '''The seed draws every epoch's permutations and names every monitor read.'''
+
+    saved = _saved_state(tmp_path, current_settings, seed=7)
+
+    with pytest.raises(ValueError, match='seed: saved 7, now 42'):
+        utils_training.refuse_a_resume_under_other_settings(saved, current_settings, seed=42)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('hparams', ['no-run-settings', 'no-hyperparameters'])
+def test_a_resume_from_a_checkpoint_that_records_no_run_settings_is_refused(
+    tmp_path, current_settings, hparams
+):
+    saved = _saved_state(tmp_path, None)
+    if hparams == 'no-hyperparameters':
+        del saved['hyper_parameters']
+
+    with pytest.raises(ValueError, match='records no run settings'):
+        utils_training.refuse_a_resume_under_other_settings(saved, current_settings, seed=42)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('wait_count', [0, PATIENCE - 1], ids=['improving', 'waiting'])
+def test_a_resume_of_a_run_early_stopping_has_not_ended_is_allowed(
+    tmp_path, current_settings, wait_count
+):
+    '''A stopped_epoch of 0 is a run early stopping has not ended, however long it has waited.'''
+
+    saved = _saved_state(tmp_path, current_settings, wait_count=wait_count)
+
+    utils_training.refuse_a_resume_of_a_stopped_run(saved, PATIENCE)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('stopped_epoch', [1, 3])
+def test_a_resume_of_a_run_early_stopping_ended_is_refused_naming_its_epoch(
+    tmp_path, current_settings, stopped_epoch
+):
+    '''P19: Lightning 2.5.5 restores early stopping's state but not the trainer's stop, so a
+    resumed run would train past its stop and change its kept checkpoint and records. Epoch 1 is
+    the earliest stop there can be, at a patience of 1.'''
+
+    saved = _saved_state(
+        tmp_path, current_settings, wait_count=PATIENCE, stopped_epoch=stopped_epoch
+    )
+
+    with pytest.raises(
+        ValueError, match=f'early stopping ended the run at epoch {stopped_epoch}'
+    ) as excinfo:
+        utils_training.refuse_a_resume_of_a_stopped_run(saved, PATIENCE)
+
+    assert 'another experiment_name' in str(excinfo.value)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('corruption', ['no-callbacks', 'another-monitor', 'no-stopped-epoch'])
+def test_a_resume_whose_checkpoint_records_no_early_stopping_state_of_this_run_is_refused(
+    tmp_path, current_settings, corruption
+):
+    '''Without the state, the guard could not tell a run early stopping ended from one it has
+    not.'''
+
+    saved = _saved_state(tmp_path, current_settings)
+    state_key = utils_training.outcome_early_stopping(PATIENCE).state_key
+    if corruption == 'no-callbacks':
+        del saved['callbacks']
+    elif corruption == 'another-monitor':
+        # The early stopping of the runs before Req 11's objective
+        other = EarlyStopping(monitor='val/contrastive_loss', mode='min')
+        saved['callbacks'][other.state_key] = saved['callbacks'].pop(state_key)
+    else:
+        del saved['callbacks'][state_key]['stopped_epoch']
+
+    with pytest.raises(ValueError, match='records no EarlyStopping state'):
+        utils_training.refuse_a_resume_of_a_stopped_run(saved, PATIENCE)
+
+@pytest.mark.unit
+def test_read_checkpoint_loads_a_saved_checkpoint_on_the_cpu(tmp_path, current_settings):
+    path = tmp_path / 'last.ckpt'
+    saved = {**_saved_state(tmp_path, current_settings), 'state_dict': {'w': torch.ones(2)}}
+    torch.save(saved, path)
+
+    loaded = utils_training.read_checkpoint(path)
+
+    assert loaded['hyper_parameters'] == saved['hyper_parameters']
+    assert loaded['state_dict']['w'].device.type == 'cpu'
+    assert torch.equal(loaded['state_dict']['w'], torch.ones(2))

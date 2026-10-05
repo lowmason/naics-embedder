@@ -2,261 +2,29 @@
 # Loss Computation Mixin
 # -------------------------------------------------------------------------------------------------
 '''
-Loss computation mixin for NAICSContrastiveModel.
+Loss mixin for NAICSContrastiveModel: the experts' load-balancing term, under ``moe`` only.
 
-Provides methods for computing various loss components:
-- Contrastive loss
-- Hierarchy preservation loss
-- Structural preference loss over selected candidates
-- Radius regularization loss
-- Load balancing loss for MoE
+Req 11's three terms live in ``text_model/loss.py`` and ``compute_losses`` combines them. The one
+extra term is the experts' load balancing, which only the MoE fusion has (spec 4.1, R11).
 '''
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import torch
-
-from naics_embedder.losses.level_radius import level_radius_loss
-from naics_embedder.supervision.candidates import SelectedNegativeBatch
-from naics_embedder.text_model.false_negative_strategies import apply_false_negative_strategy
-from naics_embedder.text_model.loss import effective_false_negative_mask
 
 logger = logging.getLogger(__name__)
 
 class LossMixin:
     '''
-    Mixin providing loss computation methods for the NAICS model.
+    Mixin providing the MoE load-balancing term and its utilization logs.
 
     This mixin expects the following attributes on the class:
     - device: torch.device
-    - hparams: hyperparameters with weight configurations
-    - hierarchy_loss_fn: Optional hierarchy preservation loss function
-    - structural_preference_loss_fn: Structural preference loss over selected candidates
-    - false_negative_config: Optional false-negative strategy configuration
-    - load_balancing_coef: float coefficient for load balancing loss
     - trainer: PyTorch Lightning trainer (for distributed logging)
     - logger: PyTorch Lightning logger (for histograms)
     - global_step: int training step counter
     '''
-
-    def _compute_hierarchy_loss(
-        self,
-        anchor_emb: torch.Tensor,
-        positive_emb: torch.Tensor,
-        batch: Dict[str, Any],
-        batch_size: int,
-    ) -> torch.Tensor:
-        '''
-        Compute hierarchy preservation loss based on tree distances.
-
-        Args:
-            anchor_emb: Anchor embeddings
-            positive_emb: Positive embeddings
-            batch: Training batch with anchor_code and optional positive_code
-            batch_size: Batch size for logging
-
-        Returns:
-            Hierarchy loss tensor (scalar)
-        '''
-        if self.hierarchy_loss_fn is None or 'anchor_code' not in batch:
-            return torch.tensor(0.0, device=self.device)
-
-        all_codes = list(batch['anchor_code'])
-        if 'positive_code' in batch:
-            all_codes.extend(batch['positive_code'])
-        else:
-            all_codes.extend(batch['anchor_code'])
-
-        all_embeddings = torch.cat([anchor_emb, positive_emb])
-        from naics_embedder.text_model.hyperbolic import LorentzDistance
-
-        curvature = getattr(self.hparams, 'curvature', 1.0)
-        lorentz_dist = LorentzDistance(curvature=curvature)
-
-        hierarchy_loss = self.hierarchy_loss_fn(
-            all_embeddings, all_codes, lambda x, y: lorentz_dist(x, y)
-        )
-
-        self.log('train/hierarchy_loss', hierarchy_loss, batch_size=batch_size)
-        return hierarchy_loss
-
-    def _apply_false_negative_strategy_wrapper(
-        self,
-        anchor_emb: torch.Tensor,
-        selected: SelectedNegativeBatch,
-        pseudo_related: Optional[torch.Tensor],
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        '''
-        Resolve post-selection pseudo-related candidates into the effective false-negative mask.
-
-        Explicit exclusions and invalid padding are never effective false negatives, with or
-        without a configured strategy.
-
-        Args:
-            anchor_emb: Anchor embeddings (batch_size, embed_dim)
-            selected: The checked selected-negative batch
-            pseudo_related: Optional pseudo-related mask aligned with ``selected``
-
-        Returns:
-            Tuple of (effective_mask, auxiliary_loss)
-        '''
-        if self.false_negative_config is None:
-            return (
-                effective_false_negative_mask(
-                    pseudo_related,
-                    selected.is_explicit_exclusion,
-                    selected.valid_mask,
-                ),
-                None,
-            )
-        return apply_false_negative_strategy(
-            self.false_negative_config,
-            anchor_emb,
-            selected.embedding,
-            pseudo_related,
-            explicit_exclusion_mask=selected.is_explicit_exclusion,
-            valid_mask=selected.valid_mask,
-        )
-
-    def _compute_contrastive_loss(
-        self,
-        anchor_emb: torch.Tensor,
-        positive_emb: torch.Tensor,
-        selected: SelectedNegativeBatch,
-        effective_mask: Optional[torch.Tensor],
-    ) -> torch.Tensor:
-        '''
-        Hyperbolic InfoNCE over the checked selected negatives.
-
-        Args:
-            anchor_emb: Anchor embeddings
-            positive_emb: Positive embeddings
-            selected: The checked selected-negative batch
-            effective_mask: Optional effective false-negative mask aligned with ``selected``
-
-        Returns:
-            Contrastive loss (scalar)
-        '''
-        return self.loss_fn(
-            anchor_emb,
-            positive_emb,
-            selected.embedding,
-            valid_mask=selected.valid_mask,
-            is_explicit_exclusion=selected.is_explicit_exclusion,
-            pseudo_related_mask=effective_mask,
-        )
-
-    def _compute_structural_preference_loss(
-        self,
-        anchor_emb: torch.Tensor,
-        positive_emb: torch.Tensor,
-        batch: Dict[str, Any],
-        selected: SelectedNegativeBatch,
-    ) -> torch.Tensor:
-        '''
-        Structural preference over each anchor's positive plus its selected negatives.
-
-        Args:
-            anchor_emb: Anchor embeddings
-            positive_emb: Positive embeddings
-            batch: Collated batch with anchor/positive code IDs and positive structural distance
-            selected: The checked selected-negative batch
-
-        Returns:
-            Weighted structural preference loss (scalar)
-        '''
-        return self.structural_preference_loss_fn(
-            anchor_emb=anchor_emb,
-            positive_emb=positive_emb,
-            anchor_code_id=batch['anchor_code_id'],
-            positive_code_id=batch['positive_code_id'],
-            positive_structural_distance=batch['positive_structural_distance'],
-            selected=selected,
-        )
-
-    def _compute_radius_regularization(
-        self,
-        anchor_emb: torch.Tensor,
-        positive_emb: torch.Tensor,
-        negative_emb: torch.Tensor,
-        batch_size: int,
-    ) -> torch.Tensor:
-        '''
-        Compute radius regularization loss to prevent embedding explosion.
-
-        Args:
-            anchor_emb: Anchor embeddings
-            positive_emb: Positive embeddings
-            negative_emb: Negative embeddings
-            batch_size: Batch size for logging
-
-        Returns:
-            Radius regularization loss tensor (scalar)
-        '''
-        radius_reg_weight = getattr(self.hparams, 'radius_reg_weight', 0.0)
-        if radius_reg_weight <= 0:
-            return torch.tensor(0.0, device=self.device)
-
-        all_embeddings = torch.cat([anchor_emb, positive_emb, negative_emb])
-        x0 = all_embeddings[:, 0]
-        curvature = getattr(self.hparams, 'curvature', 1.0)
-        radius_squared = torch.clamp(x0**2 - 1.0 / curvature, min=0.0)
-        radius = torch.sqrt(radius_squared + 1e-8)
-
-        radius_threshold = 10.0
-        excess_radius = torch.clamp(radius - radius_threshold, min=0.0)
-        radius_reg_loss = radius_reg_weight * torch.mean(excess_radius**2)
-
-        self.log('train/radius_reg_loss', radius_reg_loss, batch_size=batch_size)
-        self.log('train/mean_radius', radius.mean(), batch_size=batch_size)
-        self.log('train/max_radius', radius.max(), batch_size=batch_size)
-        return radius_reg_loss
-
-    def _compute_level_radius_alignment_loss(
-        self,
-        anchor_emb: torch.Tensor,
-        positive_emb: torch.Tensor,
-        batch: Dict[str, Any],
-        batch_size: int,
-    ) -> torch.Tensor:
-        '''
-        Encourage monotonically increasing hyperbolic radii across hierarchy levels.
-        '''
-        weight = getattr(self.hparams, 'level_radius_weight', 0.0)
-        if weight <= 0:
-            return torch.tensor(0.0, device=self.device)
-
-        anchor_codes = batch.get('anchor_code', [])
-        positive_codes = batch.get('positive_code', [])
-        if not anchor_codes and not positive_codes:
-            return torch.tensor(0.0, device=self.device)
-
-        device = anchor_emb.device
-
-        def _code_lengths(codes: List[str]) -> torch.Tensor:
-            lengths = [len(code or '') for code in codes]
-            return torch.tensor(lengths, dtype=torch.float32, device=device)
-
-        anchor_levels = _code_lengths(anchor_codes)
-        positive_levels_raw = batch.get('positive_levels')
-        if positive_levels_raw:
-            positive_levels = torch.tensor(positive_levels_raw, dtype=torch.float32, device=device)
-        else:
-            positive_levels = _code_lengths(positive_codes)
-
-        embeddings = torch.cat([anchor_emb, positive_emb], dim=0)
-        levels = torch.cat([anchor_levels, positive_levels], dim=0)
-        if embeddings.shape[0] != levels.shape[0]:
-            logger.warning(
-                'Mismatch between embeddings and level annotations; skipping radius loss.'
-            )
-            return torch.tensor(0.0, device=self.device)
-
-        curvature = getattr(self.hparams, 'curvature', 1.0)
-        base_loss = level_radius_loss(embeddings, levels, curvature=curvature)
-        scaled_loss = base_loss * weight
-        return scaled_loss
 
     def _compute_load_balancing_loss(
         self,
@@ -457,41 +225,6 @@ class LossMixin:
             on_epoch=True,
             prog_bar=True,
         )
-
-    def _combine_loss_terms(
-        self,
-        contrastive_loss: torch.Tensor,
-        load_balancing_loss: Optional[torch.Tensor],
-        hierarchy_loss: torch.Tensor,
-        structural_preference_loss: torch.Tensor,
-        radius_reg_loss: torch.Tensor,
-        level_radius_loss_value: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        '''
-        Combine individual loss components into the final optimization target.
-
-        Args:
-            contrastive_loss: Main contrastive loss
-            load_balancing_loss: MoE load balancing loss, or None outside the MoE fusion (R11)
-            hierarchy_loss: Hierarchy preservation loss
-            structural_preference_loss: Structural preference loss over selected candidates
-            radius_reg_loss: Radius regularization loss
-            level_radius_loss_value: Level-aware radius alignment loss
-
-        Returns:
-            Tuple containing the total loss and the scaled load balancing term (None when there
-            is no term).
-        '''
-        scaled_load_balancing_loss = None
-        total_loss = contrastive_loss
-        if load_balancing_loss is not None:
-            scaled_load_balancing_loss = self.load_balancing_coef * load_balancing_loss
-            total_loss = total_loss + scaled_load_balancing_loss
-        total_loss = (
-            total_loss + hierarchy_loss + structural_preference_loss + radius_reg_loss
-            + level_radius_loss_value
-        )
-        return total_loss, scaled_load_balancing_loss
 
     def _collect_gate_outputs(self, outputs: List[Dict[str, torch.Tensor]]
                               ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:

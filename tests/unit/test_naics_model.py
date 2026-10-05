@@ -1,40 +1,68 @@
 '''
-Unit tests for NAICSContrastiveModel (PyTorch Lightning module).
+Unit tests for NAICSContrastiveModel, the text stage's Lightning module (spec 4.1-4.4, section 6).
 
-Tests cover:
-- Model initialization and configuration (repaired supervision bundle)
-- Forward pass through encoder
-- Repaired training step over one checked selection
-- Validation step and embedding storage
-- Optimizer and scheduler configuration
-- Curriculum integration
-- Post-selection false negative masking
-- Selection health counters
-- Distributed training utilities
-- Checkpoint loading
+The five-code arm on MiniLM carries the construction, forward, checkpoint and contract tests. The
+training step runs on the reference arm (``tests/fixtures/shared_encoder.py``): a d = 16 model of
+the reference bundle on the tiny backbone, whose 17 codes span levels 2-6 and whose 11 task
+queries fill an epoch of three two-stream steps. Its tests cover Req 11's three terms on a live
+code cache (No inert terms, Coverage, Precision, Cache), the optimizer and its schedule (P16), the
+training hooks (P15, P18) and the health logs (P20).
 
-Distributed candidate gathering is covered by the Gloo tests in
-``tests/integration/test_distributed_supervision.py``.
+The Trainer is a stand-in (``_attach_stub_trainer``) and the monitor a scripted one, which writes
+nothing, so no test here reads a split or touches a selection log outside ``tmp_path`` (P28).
 '''
 
+import inspect
 import logging
-from unittest.mock import Mock, patch
+import math
+import re
+import statistics
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Optional, Sequence
+from unittest.mock import Mock
 
 import pytest
 import pytorch_lightning as pyl
 import torch
+from pytorch_lightning.utilities.model_helpers import is_overridden
 from transformers import PreTrainedModel
 
+from naics_embedder.panels.outcome import OutcomePanel
+from naics_embedder.panels.text_only import matrix_fingerprint
 from naics_embedder.supervision.checkpoints import contract_for_bundle, shared_encoder_architecture
-from naics_embedder.text_model.dataloader.datamodule import collate_fn
-from naics_embedder.text_model.naics_model import (
-    NAICSContrastiveModel,
-    gather_embeddings_global,
+from naics_embedder.supervision.code_targets import CodeTargets
+from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.text_model import naics_model as model_module
+from naics_embedder.text_model.export import encode_token_rows
+from naics_embedder.text_model.fields import CHANNELS, QUERY
+from naics_embedder.text_model.loss import LogitScale
+from naics_embedder.text_model.monitor import (
+    MONITOR_RECORDS,
+    MonitorRead,
+    OutcomeMonitor,
+    read_monitor_records,
 )
+from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.text_model.shared_encoder import SharedEncoder
-from tests.fixtures.shared_encoder import lightning_checkpoint
+from tests.fixtures.shared_encoder import (
+    MINILM,
+    REFERENCE_WINDOW,
+    build_reference_model,
+    lightning_checkpoint,
+)
 
 logger = logging.getLogger(__name__)
+
+# The key the monitor's MRR is logged, stepped and checkpointed under (P17, P18)
+OUTCOME_MRR = 'val/outcome_mrr'
+# The reference bundle's four unary pairs, both ways (tests/fixtures/supervision.py)
+REFERENCE_PARTNERS = {
+    '31111': '311111',
+    '31121': '311211',
+    '32111': '321111',
+    '44111': '441111',
+}
+REFERENCE_PARTNERS.update({child: parent for parent, child in list(REFERENCE_PARTNERS.items())})
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -45,27 +73,16 @@ def model_config(generated_bundle):
     '''Minimal model configuration for fast testing, backed by the five-code bundle fixture.'''
 
     return {
-        'base_model_name': 'sentence-transformers/all-MiniLM-L6-v2',
+        'base_model_name': MINILM,
         'lora_r': 4,
         'lora_alpha': 8,
         'lora_dropout': 0.1,
         'num_experts': 4,
         'top_k': 2,
         'moe_hidden_dim': 512,
-        'temperature': 0.07,
-        'curvature': 1.0,
-        'hierarchy_weight': 0.0,  # Disabled for basic tests
-        'radius_reg_weight': 0.01,
         'learning_rate': 2e-4,
         'weight_decay': 0.01,
-        'warmup_steps': 100,
-        'use_warmup_cosine': False,
         'load_balancing_coef': 0.01,
-        'fn_curriculum_start_epoch': 5,
-        'fn_cluster_every_n_epochs': 3,
-        'fn_num_clusters': 50,
-        'eval_every_n_epochs': 1,
-        'eval_sample_size': 100,
         'supervision_manifest_path': str(generated_bundle),
     }
 
@@ -79,11 +96,10 @@ def naics_model(model_config, test_device):
     return model
 
 @pytest.fixture
-def sample_training_batch(test_device, batch_size=4, k_negatives=8):
-    '''Create sample training batch with anchor, positive, and negative samples.'''
+def sample_training_batch(test_device, batch_size=4):
+    '''A batch of four codes' channel inputs, for the forward pass.'''
 
     seq_length = 32
-    channels = ['title', 'description', 'excluded', 'examples']
 
     def create_channel_inputs(batch_size):
         return {
@@ -92,85 +108,147 @@ def sample_training_batch(test_device, batch_size=4, k_negatives=8):
                 'attention_mask': torch.ones(batch_size, seq_length, device=test_device),
                 'present': torch.ones(batch_size, dtype=torch.bool, device=test_device),
             }
-            for channel in channels
+            for channel in CHANNELS
         }
 
-    batch = {
-        'anchor': create_channel_inputs(batch_size),
-        'positive': create_channel_inputs(batch_size),
-        'negatives': create_channel_inputs(batch_size * k_negatives),
-        'batch_size': batch_size,
-        'k_negatives': k_negatives,
-        'anchor_code': [f'{i:02d}111' for i in range(batch_size)],
-        'positive_code': [f'{i:02d}1111' for i in range(batch_size)],
-        'negative_codes': [[f'{j:02d}999' for j in range(k_negatives)] for _ in range(batch_size)],
-        'positive_levels': [len(f'{i:02d}1111') for i in range(batch_size)],
-    }
-
-    return batch
-
-# Five-code bundle fixture (tests/fixtures/supervision.py): code ID -> code. Anchor '111111' (0)
-# explicitly excludes '111113' (2); '222222' (3) excludes '111112' (1).
-BUNDLE_CODES = ('111111', '111112', '111113', '222222', '333333')
-CHANNELS = ('title', 'description', 'excluded', 'examples')
-
-def _tokens(code_id: int, seq_length: int = 32) -> dict:
-    '''Deterministic per-code token inputs, so repeated codes encode identically.'''
-
-    generator = torch.Generator().manual_seed(1000 + code_id)
-    return {
-        channel: {
-            'input_ids': torch.randint(0, 1000, (seq_length, ), generator=generator),
-            'attention_mask': torch.ones(seq_length, dtype=torch.long),
-            'present': True,
-        }
-        for channel in CHANNELS
-    }
-
-def _repaired_item(
-    anchor_id: int,
-    positive_id: int,
-    positive_distance: float,
-    positive_relation_id: int,
-    pool: list,
-    selection_k: int = 2,
-) -> dict:
-    return {
-        'anchor_code_id': anchor_id,
-        'anchor_code': BUNDLE_CODES[anchor_id],
-        'anchor_embedding': _tokens(anchor_id),
-        'positive_code_id': positive_id,
-        'positive_code': BUNDLE_CODES[positive_id],
-        'positive_embedding': _tokens(positive_id),
-        'positive_structural_distance': positive_distance,
-        'positive_structural_relation_id': positive_relation_id,
-        'candidate_pool': [
-            {
-                'negative_code_id': code_id,
-                'negative_code': BUNDLE_CODES[code_id],
-                'negative_embedding': _tokens(code_id),
-                'sampling_role_id': 2,
-                'sampling_provenance_id': 2,
-            } for code_id in pool
-        ],
-        'difficulty_proposal_indices': list(range(len(pool))),
-        'selection_k': selection_k,
-    }
+    return {'anchor': create_channel_inputs(batch_size), 'batch_size': batch_size}
 
 @pytest.fixture
-def repaired_training_batch():
+def reference_model(tiny_backbone, reference_manifest, reference_bundle) -> Callable[..., Any]:
+    '''Build a model of the reference bundle on the tiny backbone, with constructor overrides.'''
+
+    def build(**overrides: Any) -> NAICSContrastiveModel:
+        return build_reference_model(reference_manifest, reference_bundle, **overrides)
+
+    return build
+
+@pytest.fixture
+def epoch_steps(reference_arm_steps) -> List[Dict[str, Any]]:
+    '''The three steps of the reference bundle's epoch 0.'''
+
+    return [reference_arm_steps[step] for step in range(len(reference_arm_steps))]
+
+@pytest.fixture
+def code_targets(reference_bundle) -> CodeTargets:
+    return CodeTargets.from_bundle(reference_bundle)
+
+# -------------------------------------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------------------------------------
+
+class ScriptedMonitor:
     '''
-    Two repaired rows with uneven pools: row 0 (anchor 0) holds its exclusion (2), which no path
-    selects, and one padding row; row 1 (anchor 2) repeats code 4 and has no exclusion in its
-    pool. Each row selects two negatives.
+    A stand-in for ``OutcomeMonitor``: it records each call in ``events`` and returns scripted
+    MRRs. It reads no split and writes nothing, so no selection log is touched (P28).
     '''
 
-    return collate_fn(
-        [
-            _repaired_item(0, 1, 0.5, 1, [2, 3, 4]),
-            _repaired_item(2, 0, 2.0, 2, [1, 3, 4, 4]),
-        ],
+    def __init__(self, mrrs: Sequence[float] = (0.5, ), events: Optional[List[Any]] = None):
+        self.mrrs = list(mrrs)
+        self.events: List[Any] = [] if events is None else events
+        self.reads: List[Dict[str, Any]] = []
+
+    def start(self, *, resumed_epoch: Optional[int]) -> None:
+        self.events.append(('start', resumed_epoch))
+
+    def read(self, model, cache, *, training_run: str, seed: int, epoch: int) -> MonitorRead:
+        self.reads.append(
+            {
+                'model': model,
+                'cache': cache,
+                'training_run': training_run,
+                'seed': seed,
+                'epoch': epoch
+            }
+        )
+        self.events.append(('read', epoch))
+        mrr = self.mrrs[len(self.reads) - 1]
+        return MonitorRead(epoch=epoch, mrr=mrr, record={'epoch': epoch})
+
+    def append(self, read: MonitorRead) -> None:
+        self.events.append(('append', read.epoch))
+
+def _attach_stub_trainer(
+    model: NAICSContrastiveModel,
+    code_rows: Sequence[Dict[str, Any]],
+    *,
+    epoch: int = 0,
+    global_step: int = 0,
+    num_training_batches: int = 3,
+) -> SimpleNamespace:
+    '''
+    Attach a stand-in for the Trainer: what the hooks and ``optimizer_step`` read of it.
+
+    The optimizer and plateau come from ``configure_optimizers``, as Lightning's would. A real
+    ``self.log`` writes into a Trainer's results, so it becomes a Mock. Returns the trainer, the
+    optimizer, the plateau and the log.
+    '''
+
+    config = model.configure_optimizers()
+    plateau = config['lr_scheduler']['scheduler']
+    trainer = SimpleNamespace(
+        datamodule=SimpleNamespace(code_rows=code_rows),
+        current_epoch=epoch,
+        global_step=global_step,
+        num_training_batches=num_training_batches,
+        lr_scheduler_configs=[SimpleNamespace(scheduler=plateau)],
+        logger=None,
     )
+    model.trainer = trainer
+    model.log = Mock()
+    return SimpleNamespace(
+        trainer=trainer, optimizer=config['optimizer'], plateau=plateau, log=model.log
+    )
+
+def _logged(log: Mock) -> Dict[str, Any]:
+    '''Each key the mocked ``self.log`` received, with its last call.'''
+
+    return {call.args[0]: call for call in log.call_args_list}
+
+def _first_rows(batch: Dict[str, Any], anchors: int = 1, queries: int = 1) -> Dict[str, Any]:
+    '''A step cut down to its first anchors and queries, in the same layout.'''
+
+    def cut(inputs: Dict[str, Dict[str, torch.Tensor]], rows: int):
+        return {
+            field: {
+                name: value[:rows]
+                for name, value in tensors.items()
+            }
+            for field, tensors in inputs.items()
+        }
+
+    codes, step_queries = batch['codes'], batch['queries']
+    return {
+        'codes': {
+            'inputs': cut(codes['inputs'], anchors),
+            'ids': codes['ids'][:anchors],
+            'levels': codes['levels'][:anchors],
+        },
+        'queries': {
+            'inputs': cut(step_queries['inputs'], queries),
+            'levels': step_queries['levels'][:queries],
+            'targets': step_queries['targets'][:queries],
+            'negatives': step_queries['negatives'][:queries],
+        },
+    }
+
+def _scale_closure(model: NAICSContrastiveModel, optimizer, loss: Callable[[], torch.Tensor]):
+    '''A closure as Lightning's runs one: zero the gradients, then the loss and its backward.'''
+
+    def closure() -> torch.Tensor:
+        optimizer.zero_grad()
+        value = loss()
+        value.backward()
+        return value
+
+    return closure
+
+def _float32(value: float) -> float:
+    '''``value`` as a float32 parameter stores it.'''
+
+    return torch.tensor(value, dtype=torch.float32).item()
+
+def _flags(model: torch.nn.Module) -> Dict[str, bool]:
+    return {name: module.training for name, module in model.named_modules()}
 
 # -------------------------------------------------------------------------------------------------
 # Test: Initialization
@@ -180,23 +258,128 @@ def repaired_training_batch():
 class TestModelInitialization:
     '''Test NAICSContrastiveModel initialization and configuration.'''
 
-    def test_model_creation(self, naics_model, model_config):
-        '''Test that model is created successfully with all components.'''
+    def test_the_constructor_takes_exactly_its_arguments_with_their_defaults(self):
+        '''P15: Req 11's settings, the schedule's and the run's, in this order.'''
+
+        expected = [
+            ('base_model_name', MINILM),
+            ('lora_r', 8),
+            ('lora_alpha', 16),
+            ('lora_dropout', 0.1),
+            ('fusion', 'masked_mean'),
+            ('dimension', 16),
+            ('num_experts', 4),
+            ('top_k', 2),
+            ('moe_hidden_dim', 1024),
+            ('radius_bound', 8.0),
+            ('code_code_weight', 1.0),
+            ('radial_weight', 1.0),
+            ('target_temperature', 1.0),
+            ('radial_step', 1.0),
+            ('logit_scale_init', 1.0),
+            ('logit_scale_range', (0.01, 100.0)),
+            ('learning_rate', 1e-4),
+            ('weight_decay', 0.01),
+            ('warmup_epochs', 1),
+            ('lr_plateau_factor', 0.5),
+            ('lr_plateau_patience', 2),
+            ('load_balancing_coef', 0.01),
+            ('seed', 0),
+            ('run_settings', None),
+            ('supervision_manifest_path', None),
+            ('supervision_contract_version', CONTRACT_VERSION),
+            ('summaries', None),
+            ('checkpoint_contract', None),
+            ('supervision_bundle', None),
+            ('monitor', None),
+        ]
+
+        parameters = inspect.signature(NAICSContrastiveModel.__init__).parameters
+        assert [
+            (name, parameter.default) for name, parameter in parameters.items() if name != 'self'
+        ] == expected
+
+    def test_model_creation(self, naics_model):
+        '''The encoder and two logit scales; none of the old objective's machinery (Req 10, 11).'''
 
         assert isinstance(naics_model, pyl.LightningModule)
-        assert hasattr(naics_model, 'encoder')
-        assert hasattr(naics_model, 'loss_fn')
-        assert hasattr(naics_model, 'hard_negative_miner')
-        assert hasattr(naics_model, 'embedding_eval')
+        assert isinstance(naics_model.encoder, SharedEncoder)
+        assert isinstance(naics_model.logit_scale_task, LogitScale)
+        assert isinstance(naics_model.logit_scale_code, LogitScale)
+        assert naics_model.code_cache is None
+        for name in (
+            'loss_fn',
+            'hard_negative_miner',
+            'router_guided_miner',
+            'norm_adaptive_margin',
+            'hierarchy_loss_fn',
+            'structural_preference_loss_fn',
+            'supervision_index',
+            'selection_coordinator',
+            'embedding_eval',
+            'embedding_stats',
+            'hierarchy_metrics',
+            'naics_hierarchy',
+        ):
+            assert not hasattr(naics_model, name), name
+
+    def test_the_text_stage_has_no_validation_loop_and_none_of_the_old_mixins(
+        self, reference_arm_model
+    ):
+        '''The monitor is the validation (spec 4.3, 4.4); no structural statistic is computed.'''
+
+        model = reference_arm_model
+        assert not is_overridden('validation_step', model)
+        assert not is_overridden('on_validation_epoch_end', model)
+        bases = {base.__name__ for base in type(model).__mro__}
+        assert bases.isdisjoint({'ValidationMixin', 'CurriculumMixin', 'DistributedMixin'})
+        assert {'LossMixin', 'LoggingMixin', 'OptimizerMixin'} <= bases
 
     def test_hyperparameters_saved(self, naics_model, model_config):
-        '''Test that hyperparameters are saved correctly.'''
+        '''The settings are saved with their defaults; the old objective's are gone.'''
 
-        # PyTorch Lightning saves hparams
-        assert hasattr(naics_model, 'hparams')
-        assert naics_model.hparams['learning_rate'] == model_config['learning_rate']
-        assert naics_model.hparams['temperature'] == model_config['temperature']
-        assert naics_model.hparams['curvature'] == model_config['curvature']
+        hparams = naics_model.hparams
+        assert hparams['learning_rate'] == model_config['learning_rate']
+        assert hparams['weight_decay'] == model_config['weight_decay']
+        assert {
+            name: hparams[name]
+            for name in (
+                'code_code_weight',
+                'radial_weight',
+                'target_temperature',
+                'radial_step',
+                'logit_scale_init',
+                'logit_scale_range',
+                'warmup_epochs',
+                'lr_plateau_factor',
+                'lr_plateau_patience',
+                'seed',
+            )
+        } == {
+            'code_code_weight': 1.0,
+            'radial_weight': 1.0,
+            'target_temperature': 1.0,
+            'radial_step': 1.0,
+            'logit_scale_init': 1.0,
+            'logit_scale_range': (0.01, 100.0),
+            'warmup_epochs': 1,
+            'lr_plateau_factor': 0.5,
+            'lr_plateau_patience': 2,
+            'seed': 0,
+        }
+        for name in ('temperature', 'curvature', 'hierarchy_weight', 'warmup_steps'):
+            assert name not in hparams, name
+
+    def test_the_seed_and_run_settings_are_saved_but_the_monitor_is_not(self, reference_model):
+        monitor = ScriptedMonitor()
+        settings = {'fusion': 'masked_mean', 'max_epochs': 40}
+        model = reference_model(seed=7, run_settings=settings, monitor=monitor)
+
+        assert model.monitor is monitor
+        assert model.hparams['seed'] == 7
+        assert model.hparams['run_settings'] == settings
+        for name in ('monitor', 'supervision_bundle', 'checkpoint_contract'):
+            assert name not in model.hparams, name
 
     def test_encoder_configuration(self, naics_model, model_config):
         '''One MiniLM backbone, masked-mean fusion and one Linear(384 -> 16) to the head.'''
@@ -220,57 +403,65 @@ class TestModelInitialization:
         with pytest.raises(ValueError, match='unknown dimension'):
             NAICSContrastiveModel(**model_config, dimension=12)
 
-    def test_loss_function_configuration(self, naics_model, model_config):
-        '''Test that loss function is configured correctly.'''
+    def test_the_code_targets_are_buffers_that_checkpoints_leave_out(
+        self, reference_arm_model, code_targets
+    ):
+        '''P15: D*, the unary partners and the levels, in codebook order, never saved.'''
 
-        loss_fn = naics_model.loss_fn
-        assert loss_fn.temperature == model_config['temperature']
-        assert loss_fn.curvature == model_config['curvature']
+        model = reference_arm_model
+        assert model.codes == code_targets.codes
+        expected = {
+            'structural_distance': torch.from_numpy(code_targets.structural_distance),
+            'unary_partner': torch.from_numpy(code_targets.unary_partner),
+            'code_levels': torch.from_numpy(code_targets.levels),
+        }
+        buffers = dict(model.named_buffers())
+        state = model.state_dict()
+        for name, value in expected.items():
+            assert buffers[name] is getattr(model, name)
+            assert buffers[name].dtype == value.dtype
+            assert torch.equal(buffers[name], value), name
+            assert name not in state, name
 
-    def test_hard_negative_miner_configuration(self, naics_model, model_config):
-        '''Test that hard negative miner is configured correctly.'''
+    def test_the_two_logit_scales_start_at_their_init_inside_their_range(self, reference_model):
+        model = reference_model(logit_scale_init=2.0, logit_scale_range=(0.5, 10.0))
 
-        miner = naics_model.hard_negative_miner
-        assert miner.curvature == model_config['curvature']
+        for scale in (model.logit_scale_task, model.logit_scale_code):
+            assert (scale.low, scale.high) == (0.5, 10.0)
+            assert scale().item() == pytest.approx(2.0)
+        assert model.logit_scale_task is not model.logit_scale_code
+        assert model.logit_scale_task.log_scale is not model.logit_scale_code.log_scale
 
-    def test_ground_truth_distances_come_from_bundle(self, naics_model):
-        '''Evaluation ground truth is the validated structural matrix in codebook order.'''
+    @pytest.mark.parametrize(
+        ('setting', 'value', 'message'),
+        [
+            ('code_code_weight', -0.5, 'code_code_weight'),
+            ('radial_weight', -1.0, 'radial_weight'),
+            ('target_temperature', 0.0, 'target_temperature'),
+            ('radial_step', 0.0, 'radial_step'),
+            ('logit_scale_range', (1.0, 1.0), 'logit-scale range'),
+            ('logit_scale_init', 200.0, 'inside its range'),
+            ('warmup_epochs', -1, 'warmup_epochs'),
+            ('lr_plateau_factor', 1.0, 'lr_plateau_factor'),
+            ('lr_plateau_patience', -1, 'lr_plateau_patience'),
+        ],
+        ids=[
+            'code_code_weight',
+            'radial_weight',
+            'target_temperature',
+            'radial_step',
+            'logit_scale_range',
+            'logit_scale_init',
+            'warmup_epochs',
+            'lr_plateau_factor',
+            'lr_plateau_patience',
+        ],
+    )
+    def test_a_setting_outside_its_range_is_refused(self, reference_model, setting, value, message):
+        '''The refusals the config's validators mirror (spec 5, P22), before any step runs.'''
 
-        index = naics_model.supervision_index
-        assert naics_model.code_to_idx == index.code_to_id
-        assert torch.equal(naics_model.ground_truth_distances, index.structural_distance)
-        assert naics_model.ground_truth_distances[0, 2] == 2.0
-        assert naics_model.hierarchy_loss_fn is None  # Weight is 0 in config
-
-    def test_hierarchy_loss_with_weight(self, model_config, test_device):
-        '''Hierarchy loss uses the bundle structural matrix when its weight is positive.'''
-
-        model_config['hierarchy_weight'] = 0.1
-        model = NAICSContrastiveModel(**model_config).to(test_device)
-
-        assert model.hierarchy_loss_fn is not None
-        assert torch.equal(
-            model.hierarchy_loss_fn.tree_distances.cpu(),
-            model.supervision_index.structural_distance,
-        )
-
-    def test_structural_preference_loss_configuration(self, model_config, test_device):
-        '''Structural preference replaces LambdaRank and carries its configured weight.'''
-
-        model_config['structural_preference_weight'] = 0.2
-        model_config['structural_preference_margin'] = 0.3
-        model = NAICSContrastiveModel(**model_config).to(test_device)
-
-        loss_fn = model.structural_preference_loss_fn
-        assert loss_fn.weight == 0.2
-        assert loss_fn.margin == 0.3
-        assert not hasattr(model, 'lambdarank_loss_fn')
-
-    def test_evaluation_hierarchy_comes_from_bundle(self, naics_model):
-        '''The evaluation hierarchy reads the bundle relations artifact (child ID 1).'''
-
-        assert naics_model.naics_hierarchy is not None
-        assert naics_model.naics_hierarchy.get_parent('111112') == '111111'
+        with pytest.raises(ValueError, match=message):
+            reference_model(**{setting: value})
 
     def test_repaired_mode_requires_manifest(self, model_config):
         '''Repaired training fails closed without a supervision manifest.'''
@@ -342,48 +533,365 @@ class TestForwardPass:
         assert output['direction'].shape == (batch_size, 16)
 
 # -------------------------------------------------------------------------------------------------
+# Test: The step's losses (Req 11 on the live cache)
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestComputeLosses:
+    '''``compute_losses``: Req 11's three terms on a step of two streams and the code cache.'''
+
+    def test_a_step_before_any_refresh_is_refused(self, reference_arm_model, epoch_steps):
+        '''The candidates come from the cache, so a step needs one (on_train_start builds it).'''
+
+        with pytest.raises(RuntimeError, match='cache'):
+            reference_arm_model.compute_losses(epoch_steps[0])
+
+    def test_every_term_and_both_scales_get_gradient(
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps
+    ):
+        '''Spec 6, No inert terms; and dL/dr_a is nonzero for every anchor (Verification
+        "Radius").'''
+
+        model = reference_arm_model
+        model.refresh_code_cache(reference_arm_code_rows)
+
+        losses = model.compute_losses(epoch_steps[0])
+
+        assert isinstance(losses, model_module.StepLosses)
+        assert losses.load_balancing is None
+        weight = model.encoder.projection.weight
+        for name in ('task', 'code_code', 'radial'):
+            (gradient, ) = torch.autograd.grad(getattr(losses, name), weight, retain_graph=True)
+            assert gradient.abs().sum() > 0, name
+        task_scale = model.logit_scale_task.log_scale
+        code_scale = model.logit_scale_code.log_scale
+        # Each term has its own scale, and reads only that one
+        gradients = {
+            (term, scale_name): torch.autograd.grad(
+                getattr(losses, term), scale, retain_graph=True, allow_unused=True
+            )[0]
+            for term in ('task', 'code_code')
+            for scale_name, scale in (('task', task_scale), ('code', code_scale))
+        }
+        for pair in (('task', 'task'), ('code_code', 'code')):
+            assert gradients[pair] is not None and gradients[pair].item() != 0, pair
+        assert gradients['task', 'code'] is None
+        assert gradients['code_code', 'task'] is None
+        (radius_gradient, ) = torch.autograd.grad(losses.total, losses.anchor_radius)
+        assert losses.anchor_radius.shape == epoch_steps[0]['codes']['ids'].shape
+        assert (radius_gradient != 0).all()
+
+    def test_the_total_weights_the_terms_and_the_settings_reach_them(
+        self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch
+    ):
+        '''L = L_task + w_c L_cc + w_r L_rad (spec 4.1), with tau_t and rho as configured.'''
+
+        model = reference_model(
+            code_code_weight=0.25, radial_weight=2.0, target_temperature=0.5, radial_step=0.75
+        )
+        model.refresh_code_cache(reference_arm_code_rows)
+        settings = {}
+        code_code, radial = model_module.code_code_loss, model_module.radial_loss
+
+        def code_code_spy(distances, scale, structural, keep, target_temperature):
+            settings['target_temperature'] = target_temperature
+            return code_code(distances, scale, structural, keep, target_temperature)
+
+        def radial_spy(radius, levels, radial_step):
+            settings['radial_step'] = radial_step
+            return radial(radius, levels, radial_step)
+
+        monkeypatch.setattr(model_module, 'code_code_loss', code_code_spy)
+        monkeypatch.setattr(model_module, 'radial_loss', radial_spy)
+
+        losses = model.compute_losses(epoch_steps[0])
+
+        assert settings == {'target_temperature': 0.5, 'radial_step': 0.75}
+        expected = losses.task + 0.25 * losses.code_code + 2.0 * losses.radial
+        torch.testing.assert_close(losses.total, expected, rtol=1e-6, atol=0.0)
+
+    def test_load_balancing_reads_both_streams_gets_gradient_and_enters_the_total_under_moe(
+        self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch
+    ):
+        '''Spec 6, No inert terms under moe; the term is added with its coefficient (spec 4.1).'''
+
+        model = reference_model(fusion='moe', moe_hidden_dim=16, load_balancing_coef=0.25)
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
+        rows = []
+        balance = model._compute_load_balancing_loss
+
+        def spy(gate_probs_list, topk_indices_list, batch_size):
+            rows.append(sum(len(gate_probs) for gate_probs in gate_probs_list))
+            return balance(gate_probs_list, topk_indices_list, batch_size)
+
+        monkeypatch.setattr(model, '_compute_load_balancing_loss', spy)
+        step = epoch_steps[0]
+
+        losses = model.compute_losses(step)
+
+        assert rows == [len(step['codes']['ids']) + len(step['queries']['levels'])]
+        gate = model.encoder.fusion.moe.gate.weight
+        (gradient, ) = torch.autograd.grad(losses.load_balancing, gate, retain_graph=True)
+        assert gradient.abs().sum() > 0
+        # The terms' weights are 1, and the coefficient 0.25
+        expected = losses.task + losses.code_code + losses.radial + 0.25 * losses.load_balancing
+        torch.testing.assert_close(losses.total, expected, rtol=1e-6, atol=0.0)
+
+    def test_every_step_scores_each_anchor_against_every_code_but_itself_and_its_partner(
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps, code_targets, monkeypatch
+    ):
+        '''Spec 6, Coverage: J_a over all N codes, and each code an anchor once over the epoch.'''
+
+        model = reference_arm_model
+        model.refresh_code_cache(reference_arm_code_rows)
+        calls = []
+        code_code = model_module.code_code_loss
+
+        def spy(distances, scale, structural, keep, target_temperature):
+            calls.append((tuple(distances.shape), structural.detach().clone(), keep.clone()))
+            return code_code(distances, scale, structural, keep, target_temperature)
+
+        monkeypatch.setattr(model_module, 'code_code_loss', spy)
+
+        for step in epoch_steps:
+            model.compute_losses(step)
+
+        codes = code_targets.codes
+        anchors = []
+        assert len(calls) == len(epoch_steps)
+        for step, (shape, structural, keep) in zip(epoch_steps, calls):
+            ids = step['codes']['ids'].tolist()
+            assert shape == (len(ids), len(codes))
+            for row, code_id in enumerate(ids):
+                code = codes[code_id]
+                masked = {codes[other] for other in range(len(codes)) if not keep[row, other]}
+                partner = {REFERENCE_PARTNERS[code]} if code in REFERENCE_PARTNERS else set()
+                assert masked == {code} | partner, code
+                assert torch.equal(
+                    structural[row], torch.from_numpy(code_targets.structural_distance[code_id])
+                )
+                anchors.append(code)
+        assert sorted(anchors) == sorted(codes)
+
+    def test_the_task_candidates_are_the_levels_codes_and_the_forced_negatives(
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps, code_targets, monkeypatch
+    ):
+        '''Spec 4.1(i): C = the codes at the query's level, plus N, over all codes (Req 8(b)).'''
+
+        model = reference_arm_model
+        model.refresh_code_cache(reference_arm_code_rows)
+        calls = []
+        task = model_module.task_loss
+
+        def spy(distances, scale, candidates, targets):
+            calls.append((tuple(distances.shape), candidates.clone(), targets.clone()))
+            return task(distances, scale, candidates, targets)
+
+        monkeypatch.setattr(model_module, 'task_loss', spy)
+
+        for step in epoch_steps:
+            model.compute_losses(step)
+
+        codes = code_targets.codes
+
+        def named(mask: torch.Tensor) -> frozenset:
+            return frozenset(codes[index] for index in mask.nonzero().flatten().tolist())
+
+        by_query = {}
+        for step, (shape, candidates, targets) in zip(epoch_steps, calls):
+            levels = step['queries']['levels'].tolist()
+            assert shape == (len(levels), len(codes))
+            assert torch.equal(targets, step['queries']['targets'])
+            for row, level in enumerate(levels):
+                by_query[level, named(targets[row])] = named(candidates[row])
+        assert sum(len(step['queries']['levels']) for step in epoch_steps) == 11
+        # 'Retailing new cars' (level 2): both sectors, and its referencing code
+        assert by_query[2, frozenset({'44'})] == {'31', '44', '311211'}
+        # 'Dealing in new cars' (level 5): the five-digit codes, and its referencing code
+        assert by_query[5, frozenset({'44111'})] == {'31111', '31121', '32111', '44111', '311111'}
+
+    @pytest.mark.parametrize('fusion', ['masked_mean', 'moe'])
+    def test_the_distances_and_terms_run_in_float32_with_autocast_off(
+        self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch, fusion
+    ):
+        '''Spec 6, Precision: under CPU bf16 autocast, every distance and term is float32.'''
+
+        model = reference_model(fusion=fusion, moe_hidden_dim=16)
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
+        seen = []
+
+        def floating(values: Sequence[Any]) -> List[torch.Tensor]:
+            found = []
+            for value in values:
+                if isinstance(value, (list, tuple)):
+                    found.extend(floating(value))
+                elif isinstance(value, torch.Tensor) and value.is_floating_point():
+                    found.append(value)
+            return found
+
+        def spy(name: str, function: Callable[..., torch.Tensor]):
+
+            def wrapped(*args, **kwargs):
+                result = function(*args, **kwargs)
+                dtypes = {tensor.dtype for tensor in floating([*args, *kwargs.values()])}
+                seen.append((name, torch.is_autocast_enabled('cpu'), dtypes, result.dtype))
+                return result
+
+            return wrapped
+
+        for name in ('polar_distance', 'task_loss', 'code_code_loss', 'radial_loss'):
+            monkeypatch.setattr(model_module, name, spy(name, getattr(model_module, name)))
+        if fusion == 'moe':
+            monkeypatch.setattr(
+                model,
+                '_compute_load_balancing_loss',
+                spy('load_balancing', model._compute_load_balancing_loss),
+            )
+
+        with torch.autocast('cpu', dtype=torch.bfloat16):
+            losses = model.compute_losses(epoch_steps[0])
+
+        names = [entry[0] for entry in seen]
+        expected = [
+            'polar_distance', 'polar_distance', 'task_loss', 'code_code_loss', 'radial_loss'
+        ]
+        if fusion == 'moe':
+            expected.append('load_balancing')
+        assert sorted(names) == sorted(expected)
+        for name, autocast, inputs, output in seen:
+            assert not autocast, name
+            assert inputs == {torch.float32}, name
+            assert output == torch.float32, name
+        for name in ('total', 'task', 'code_code', 'radial', 'anchor_radius'):
+            assert getattr(losses, name).dtype == torch.float32, name
+
+    def test_the_candidates_are_the_cache_with_the_anchors_live(
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps, monkeypatch
+    ):
+        '''Spec 4.3, Cache: every other row is a constant of the last refresh, and only the
+        anchors' rows carry gradient. The step encodes its anchors and queries only.'''
+
+        model = reference_arm_model
+        cache = model.refresh_code_cache(reference_arm_code_rows)
+        # Dropout off, so the anchors' live points can be recomputed exactly
+        model.eval()
+        # Move the weights after the refresh: the cache is now stale
+        generator = torch.Generator().manual_seed(5)
+        with torch.no_grad():
+            weight = model.encoder.projection.weight
+            weight.add_(0.5 * torch.randn(weight.shape, generator=generator))
+        step = epoch_steps[0]
+        ids = step['codes']['ids']
+        others = torch.tensor([code_id not in set(ids.tolist()) for code_id in range(17)])
+        encoded = []
+        forward = model.encoder.forward
+
+        def forward_spy(inputs):
+            fields = tuple(sorted(inputs))
+            encoded.append((fields, len(inputs[fields[0]]['input_ids'])))
+            return forward(inputs)
+
+        monkeypatch.setattr(model.encoder, 'forward', forward_spy)
+        candidates = []
+        distance = model_module.polar_distance
+
+        def distance_spy(radius_a, direction_a, radius_b, direction_b):
+            candidates.append((radius_b, direction_b))
+            return distance(radius_a, direction_a, radius_b, direction_b)
+
+        monkeypatch.setattr(model_module, 'polar_distance', distance_spy)
+
+        model.compute_losses(step)
+
+        queries = len(step['queries']['levels'])
+        assert sorted(encoded) == sorted(
+            [(tuple(sorted(CHANNELS)), len(ids)), ((QUERY, ), queries)]
+        )
+        with torch.no_grad():
+            live = forward(step['codes']['inputs'])
+            fresh = encode_token_rows(model, reference_arm_code_rows)
+        # The weights moved, so the cache is stale at the anchors' rows and at every other row
+        assert not torch.allclose(live['radius'], cache.radius[ids])
+        assert not torch.allclose(fresh['radius'][others].float(), cache.radius[others])
+        assert len(candidates) == 2
+        projection = model.encoder.projection.weight
+        for radius, direction in candidates:
+            assert torch.equal(radius[others], cache.radius[others])
+            assert torch.equal(direction[others], cache.direction[others])
+            assert torch.equal(radius[ids].detach(), live['radius'])
+            assert torch.equal(direction[ids].detach(), live['direction'])
+            (anchor_gradient,
+             ) = torch.autograd.grad(radius[ids].sum(), projection, retain_graph=True)
+            (other_gradient,
+             ) = torch.autograd.grad(radius[others].sum(), projection, retain_graph=True)
+            assert anchor_gradient.abs().sum() > 0
+            assert other_gradient.abs().sum() == 0
+        assert not cache.radius.requires_grad
+
+# -------------------------------------------------------------------------------------------------
 # Test: Training Step
 # -------------------------------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestTrainingStep:
-    '''Test the repaired training step.'''
+    '''The training step: ``compute_losses`` on one step of the two streams.'''
 
-    def test_training_step_basic(self, naics_model, repaired_training_batch):
-        '''Test basic training step runs without errors.'''
+    def test_training_step_basic(
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps, monkeypatch
+    ):
+        '''It returns the total ``compute_losses`` computed, and logs it for the progress bar.'''
 
-        naics_model.train()
-        loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
+        model = reference_arm_model
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
+        computed = []
+        compute = model.compute_losses
 
-        assert isinstance(loss, torch.Tensor)
-        assert loss.ndim == 0  # Scalar loss
+        def spy(batch):
+            computed.append(compute(batch))
+            return computed[-1]
+
+        monkeypatch.setattr(model, 'compute_losses', spy)
+
+        loss = model.training_step(epoch_steps[0], batch_idx=0)
+
+        assert loss is computed[0].total
+        assert loss.ndim == 0
         assert loss.item() > 0
-        assert not torch.isnan(loss)
-        assert not torch.isinf(loss)
+        assert torch.isfinite(loss)
+        call = _logged(model.log)['loss/step']
+        assert call.args[1].item() == loss.item()
+        assert call.kwargs['batch_size'] == 1
+        assert (call.kwargs['on_step'], call.kwargs['on_epoch']) == (True, False)
+        assert call.kwargs['prog_bar'] is True
 
-    def test_training_step_gradient_flow(self, naics_model, repaired_training_batch):
-        '''Uneven pools train with finite gradients; padding rows never reach the encoder.'''
+    def test_training_step_gradient_flow(
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps
+    ):
+        model = reference_arm_model
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
 
-        naics_model.train()
-        loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
-        loss.backward()
+        model.training_step(epoch_steps[1], batch_idx=1).backward()
 
-        grads = [p.grad for p in naics_model.parameters() if p.requires_grad]
+        grads = [p.grad for p in model.parameters() if p.requires_grad]
         assert any(grad is not None for grad in grads)
         assert all(grad is None or torch.isfinite(grad).all() for grad in grads)
 
     def test_a_step_at_dimension_16_trains_the_adapter_and_the_projection(
-        self, naics_model, repaired_training_batch, monkeypatch
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps
     ):
         '''Spec §6: the step reaches LoRA and the projection, and logs no load-balancing term.'''
 
-        log = Mock()
-        monkeypatch.setattr(naics_model, 'log', log)
-        naics_model.train()
+        model = reference_arm_model
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
 
-        naics_model.training_step(repaired_training_batch, batch_idx=0).backward()
+        model.training_step(epoch_steps[0], batch_idx=0).backward()
 
-        encoder = naics_model.encoder
+        encoder = model.encoder
         assert encoder.dimension == 16
         assert encoder.projection.weight.grad.abs().sum() > 0
         # PEFT starts lora_B at zero, so lora_A's first gradient is exactly zero (P9); the
@@ -396,281 +904,158 @@ class TestTrainingStep:
         assert adapters
         for name, parameter in adapters.items():
             assert parameter.grad is not None and parameter.grad.abs().sum() > 0, name
-        keys = {call.args[0] for call in log.call_args_list}
-        assert 'train/load_balancing_loss' not in keys
+        keys = set(_logged(model.log))
+        assert 'loss/load_balancing' not in keys
         assert not any(key.startswith('train/moe/') for key in keys)
-
-    def test_forward_candidate_pool_encodes_only_valid_rows(
-        self, naics_model, repaired_training_batch
-    ):
-        '''Padding rows get zero outputs and source slot -1; valid UIDs are (rank, row, slot).'''
-
-        encoded_rows = []
-        original_forward = naics_model.encoder.forward
-
-        def spy_forward(channel_inputs):
-            encoded_rows.append(channel_inputs['title']['input_ids'].shape[0])
-            return original_forward(channel_inputs)
-
-        naics_model.encoder.forward = spy_forward
-        with torch.no_grad():
-            output, uid = naics_model._forward_candidate_pool(repaired_training_batch)
-
-        assert encoded_rows == [7]  # 3 + 4 valid rows of the 2 x 4 pool
-        assert torch.count_nonzero(output['embedding'][3]) == 0
-        assert uid[0, 3].tolist() == [0, 0, -1]
-        assert uid[1].tolist() == [[0, 1, 0], [0, 1, 1], [0, 1, 2], [0, 1, 3]]
-
-    def test_training_step_with_curriculum(self, naics_model, repaired_training_batch):
-        '''Test training step with curriculum scheduler.'''
-
-        from naics_embedder.text_model.curriculum import CurriculumScheduler
-
-        # Initialize curriculum scheduler
-        naics_model.curriculum_scheduler = CurriculumScheduler(
-            max_epochs=15, phase1_end=0.33, phase2_end=0.67, phase3_end=1.0
-        )
-
-        naics_model.train()
-        loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
-
-        assert isinstance(loss, torch.Tensor)
-        assert not torch.isnan(loss)
-
-    def test_training_step_false_negative_masking(
-        self, naics_model, repaired_training_batch, monkeypatch
-    ):
-        '''Pseudo-related masking happens after selection, on the selected negatives only.'''
-
-        naics_model.current_curriculum_flags = {'enable_clustering': True}
-        monkeypatch.setattr(naics_model, '_update_curriculum_state', lambda *_args: None)
-        # '111111' shares a cluster with its exclusion '111113' and with '222222'
-        naics_model.code_to_pseudo_label = {'111111': 1, '111113': 1, '222222': 1}
-
-        captured = {}
-        original = naics_model._compute_contrastive_loss
-
-        def spy(anchor_emb, positive_emb, selected, effective_mask):
-            captured['codes'] = selected.code_id[0].tolist()
-            captured['mask'] = effective_mask[0].tolist()
-            return original(anchor_emb, positive_emb, selected, effective_mask)
-
-        monkeypatch.setattr(naics_model, '_compute_contrastive_loss', spy)
-        naics_model.train()
-        loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
-
-        flags = dict(zip(captured['codes'], captured['mask']))
-        assert flags == {3: True, 4: False}
-        assert not torch.isnan(loss)
-
-    def test_selection_health_counters_are_epoch_sums(
-        self, naics_model, repaired_training_batch, monkeypatch
-    ):
-        '''Integrity counters are logged per batch as epoch sums without identities.'''
-
-        log = Mock()
-        monkeypatch.setattr(naics_model, 'log', log)
-        naics_model.train()
-        naics_model.training_step(repaired_training_batch, batch_idx=1)
-
-        counters = {
-            call.args[0]: call.args[1].item()
-            for call in log.call_args_list if call.args[0].startswith('train/integrity/')
-        }
-        # Mining is off, so the difficulty proposal fills every slot, two per row. Row 0's
-        # exclusion sits in its pool but takes no slot, and the structural counter leaves it out.
-        assert counters == {
-            'train/integrity/anchors_with_exclusions': 1.0,
-            'train/integrity/quota_selections': 0.0,
-            'train/integrity/geometric_selections': 0.0,
-            'train/integrity/router_selections': 0.0,
-            'train/integrity/difficulty_selections': 4.0,
-            'train/integrity/deterministic_backfills': 0.0,
-            'train/integrity/invalid_candidates_ignored': 1.0,
-            'train/integrity/structurally_ineligible_candidates': 0.0,
-            'train/integrity/duplicate_candidates_removed': 1.0,
-        }
-        for call in log.call_args_list:
-            if call.args[0].startswith('train/integrity/'):
-                assert call.kwargs['reduce_fx'] == 'sum'
-                assert call.kwargs['on_epoch'] is True
-                assert call.kwargs['on_step'] is False
-
-    def test_training_step_logs_structural_preference(
-        self, naics_model, repaired_training_batch, monkeypatch
-    ):
-        '''The structural preference term is logged under its own key; LambdaRank is gone.'''
-
-        log = Mock()
-        monkeypatch.setattr(naics_model, 'log', log)
-        naics_model.train()
-        naics_model.training_step(repaired_training_batch, batch_idx=1)
-
-        keys = {call.args[0] for call in log.call_args_list}
-        assert 'train/structural_preference_loss' in keys
-        assert not any('lambdarank' in key for key in keys)
 
     @pytest.mark.parametrize(('fusion', 'logged'), [('masked_mean', False), ('moe', True)])
     def test_load_balancing_is_computed_and_logged_only_under_moe(
-        self, model_config, repaired_training_batch, monkeypatch, fusion, logged
+        self, reference_model, reference_arm_code_rows, epoch_steps, fusion, logged
     ):
         '''R11: only the MoE fusion has experts, so only it has a load-balancing term.'''
 
-        model = NAICSContrastiveModel(**model_config, fusion=fusion)
-        log = Mock()
-        monkeypatch.setattr(model, 'log', log)
-        model.train()
+        model = reference_model(fusion=fusion, moe_hidden_dim=16)
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
 
-        loss = model.training_step(repaired_training_batch, batch_idx=0)
+        losses = model.compute_losses(epoch_steps[0])
 
-        keys = {call.args[0] for call in log.call_args_list}
-        assert ('train/load_balancing_loss' in keys) is logged
+        keys = set(_logged(model.log))
+        assert (losses.load_balancing is not None) is logged
         assert any(key.startswith('train/moe/') for key in keys) is logged
-        assert torch.isfinite(loss)
-
-    def test_combine_loss_terms_scales_load_balancing(self, naics_model):
-        '''Ensure load balancing term is scaled before contributing to total loss.'''
-
-        naics_model.load_balancing_coef = 0.25
-
-        contrastive_loss = torch.tensor(1.0)
-        load_balancing_loss = torch.tensor(2.0)
-        hierarchy_loss = torch.tensor(0.3)
-        structural_preference_loss = torch.tensor(0.2)
-        radius_reg_loss = torch.tensor(0.1)
-        level_radius_loss = torch.tensor(0.05)
-
-        total_loss, scaled_load_balancing = naics_model._combine_loss_terms(
-            contrastive_loss,
-            load_balancing_loss,
-            hierarchy_loss,
-            structural_preference_loss,
-            radius_reg_loss,
-            level_radius_loss,
-        )
-
-        expected_scaled = load_balancing_loss * naics_model.load_balancing_coef
-        expected_total = (
-            contrastive_loss + expected_scaled + hierarchy_loss + structural_preference_loss
-            + radius_reg_loss + level_radius_loss
-        )
-
-        assert torch.isclose(scaled_load_balancing, expected_scaled)
-        assert torch.isclose(total_loss, expected_total)
-
-    def test_combine_loss_terms_without_a_load_balancing_term(self, naics_model):
-        '''Outside the MoE fusion there is no term to scale or add (R11).'''
-
-        total_loss, scaled_load_balancing = naics_model._combine_loss_terms(
-            torch.tensor(1.0),
-            None,
-            torch.tensor(0.3),
-            torch.tensor(0.2),
-            torch.tensor(0.1),
-            torch.tensor(0.05),
-        )
-
-        assert scaled_load_balancing is None
-        assert torch.isclose(total_loss, torch.tensor(1.65))
+        assert torch.isfinite(losses.total)
 
 # -------------------------------------------------------------------------------------------------
-# Test: Validation Step
+# Test: Numerical Stability
 # -------------------------------------------------------------------------------------------------
 
 @pytest.mark.unit
-class TestValidationStep:
-    '''Test validation step functionality.'''
+class TestNumericalStability:
+    '''Finite losses and gradients, the logit scales at either end of their range included.'''
 
-    def test_validation_step_basic(self, naics_model, repaired_training_batch):
-        '''Test basic validation step runs without errors.'''
+    def test_no_nan_in_training(self, reference_arm_model, reference_arm_code_rows, epoch_steps):
+        model = reference_arm_model
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
 
-        naics_model.eval()
-        with torch.no_grad():
-            loss = naics_model.validation_step(repaired_training_batch, batch_idx=0)
+        loss = model.training_step(epoch_steps[2], batch_idx=2)
+        loss.backward()
 
-        assert isinstance(loss, torch.Tensor)
-        assert loss.ndim == 0
-        assert loss.item() > 0
-        assert not torch.isnan(loss)
+        assert torch.isfinite(loss)
+        for name, param in model.named_parameters():
+            if param.requires_grad and param.grad is not None:
+                assert torch.isfinite(param.grad).all(), f'non-finite gradient in {name}'
 
-    def test_validation_step_uses_no_selection(
-        self, naics_model, repaired_training_batch, monkeypatch
+    @pytest.mark.parametrize('init', [0.01, 100.0])
+    def test_a_step_at_either_end_of_the_logit_scale_range_is_finite(
+        self, reference_model, reference_arm_code_rows, epoch_steps, init
     ):
-        '''Validation scores the whole valid pool; mining and selection never run.'''
+        model = reference_model(logit_scale_init=init)
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
 
-        monkeypatch.setattr(
-            naics_model.selection_coordinator,
-            'select',
-            Mock(side_effect=AssertionError('selection during validation')),
-        )
-        naics_model.current_curriculum_flags = {
-            'enable_hard_negative_mining': True,
-            'enable_router_guided_sampling': True,
-            'enable_clustering': True,
-        }
-        naics_model.eval()
-        with torch.no_grad():
-            loss = naics_model.validation_step(repaired_training_batch, batch_idx=0)
+        loss = model.training_step(epoch_steps[0], batch_idx=0)
+        loss.backward()
+
+        assert torch.isfinite(loss)
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                assert torch.isfinite(param.grad).all(), name
+
+# -------------------------------------------------------------------------------------------------
+# Test: Edge Cases
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestEdgeCases:
+    '''Test edge cases.'''
+
+    def test_batch_size_one(self, reference_arm_model, reference_arm_code_rows, epoch_steps):
+        '''One anchor and one query make a step.'''
+
+        model = reference_arm_model
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
+
+        loss = model.training_step(_first_rows(epoch_steps[0]), batch_idx=0)
 
         assert torch.isfinite(loss)
 
-    def test_validation_step_never_scores_an_exclusion(
-        self, naics_model, repaired_training_batch, monkeypatch
+# -------------------------------------------------------------------------------------------------
+# Test: The code cache
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestCodeCache:
+    '''The model's cache of every code's (r, û) (spec 4.3, P14).'''
+
+    def test_a_refresh_encodes_every_code_in_eval_mode_without_gradient(
+        self, reference_arm_model, reference_arm_code_rows, code_targets, monkeypatch
     ):
-        '''Validation applies training's eligibility, so an exclusion in the pool is not scored.'''
+        '''Spec 6, Cache: in eval mode, without gradient, in codebook order; the training flags,
+        mixed ones included, come back.'''
 
-        captured = {}
-        forward = naics_model.loss_fn.forward
+        model = reference_arm_model
+        model.train()
+        model.encoder.projection.eval()
+        flags = _flags(model)
+        seen = []
+        forward = model.encoder.forward
 
-        def spy(*args, **kwargs):
-            captured['valid_mask'] = kwargs['valid_mask'].tolist()
-            return forward(*args, **kwargs)
+        def spy(inputs):
+            seen.append(
+                (torch.is_grad_enabled(), any(module.training for module in model.modules()))
+            )
+            return forward(inputs)
 
-        monkeypatch.setattr(naics_model.loss_fn, 'forward', spy)
-        naics_model.eval()
-        with torch.no_grad():
-            naics_model.validation_step(repaired_training_batch, batch_idx=0)
+        monkeypatch.setattr(model.encoder, 'forward', spy)
 
-        # Row 0's pool is [2, 3, 4] plus padding, and code 2 is anchor 0's exclusion
-        assert captured['valid_mask'] == [[False, True, True, False], [True, True, True, True]]
+        cache = model.refresh_code_cache(reference_arm_code_rows)
 
-    def test_validation_step_embedding_storage(self, naics_model, repaired_training_batch):
-        '''Test that validation step stores embeddings.'''
+        assert seen and set(seen) == {(False, False)}
+        assert _flags(model) == flags
+        assert model.code_cache is cache
+        assert cache.codes == code_targets.codes
+        assert cache.radius.shape == (17, ) and cache.direction.shape == (17, 16)
+        assert cache.radius.dtype == cache.direction.dtype == torch.float32
+        assert not cache.radius.requires_grad and not cache.direction.requires_grad
+        expected = encode_token_rows(model, reference_arm_code_rows)
+        assert torch.equal(cache.radius, expected['radius'].float())
+        assert torch.equal(cache.tangent, expected['tangent'])
 
-        naics_model.eval()
-        naics_model.validation_embeddings = {}
-        naics_model.validation_codes = []
+    def test_a_restored_model_refreshes_to_the_same_cache(
+        self,
+        tmp_path,
+        reference_model,
+        reference_bundle,
+        reference_arm_code_rows,
+        epoch_steps,
+    ):
+        '''Spec 6, Cache: the cache is never saved, and the restored weights rebuild it.'''
 
-        with torch.no_grad():
-            naics_model.validation_step(repaired_training_batch, batch_idx=0)
+        model = reference_model()
+        model.log = Mock()
+        model.refresh_code_cache(reference_arm_code_rows)
+        before = model.code_cache.radius.clone()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.5)
+        model.training_step(epoch_steps[0], batch_idx=0).backward()
+        optimizer.step()
+        model.refresh_code_cache(reference_arm_code_rows)
+        assert not torch.equal(model.code_cache.radius, before)
+        path = tmp_path / 'arm.ckpt'
+        torch.save(lightning_checkpoint(model), path)
 
-        # Check that embeddings were stored
-        assert len(naics_model.validation_embeddings) > 0
-        assert len(naics_model.validation_codes) > 0
+        restored = NAICSContrastiveModel.load_from_checkpoint(
+            path,
+            map_location='cpu',
+            supervision_manifest_path=str(reference_bundle.manifest_path),
+            supervision_bundle=reference_bundle,
+        )
+        assert restored.code_cache is None
+        restored.refresh_code_cache(reference_arm_code_rows)
 
-        # Check that embeddings match codes
-        for code in naics_model.validation_codes:
-            assert code in naics_model.validation_embeddings
-            embedding = naics_model.validation_embeddings[code]
-            assert embedding.shape[0] == naics_model.encoder.dimension + 1  # Lorentz
-
-    def test_validation_step_no_duplicate_codes(self, naics_model, repaired_training_batch):
-        '''Test that validation step doesn\'t store duplicate codes.'''
-
-        naics_model.eval()
-        naics_model.validation_embeddings = {}
-        naics_model.validation_codes = []
-
-        # Run validation step twice with same batch
-        with torch.no_grad():
-            naics_model.validation_step(repaired_training_batch, batch_idx=0)
-            initial_count = len(naics_model.validation_codes)
-
-            naics_model.validation_step(repaired_training_batch, batch_idx=1)
-            final_count = len(naics_model.validation_codes)
-
-        # Should not add duplicates
-        assert final_count == initial_count
+        for name in ('radius', 'direction', 'tangent'):
+            assert torch.equal(getattr(restored.code_cache, name), getattr(model.code_cache, name))
 
 # -------------------------------------------------------------------------------------------------
 # Test: Optimizer Configuration
@@ -678,184 +1063,420 @@ class TestValidationStep:
 
 @pytest.mark.unit
 class TestOptimizerConfiguration:
-    '''Test optimizer and scheduler configuration.'''
+    '''The optimizer, the warmup, the plateau and the logit-scale clamp (P16, P30).'''
 
-    def test_configure_optimizers_basic(self, naics_model):
-        '''Test basic optimizer configuration.'''
+    def test_configure_optimizers_basic(self, reference_arm_model):
+        config = reference_arm_model.configure_optimizers()
 
-        optimizer_config = naics_model.configure_optimizers()
+        assert set(config) == {'optimizer', 'lr_scheduler'}
 
-        # Should return optimizer
-        assert 'optimizer' in optimizer_config or isinstance(
-            optimizer_config, torch.optim.Optimizer
-        )
+    def test_adamw_optimizer(self, reference_arm_model):
+        '''Two groups: the logit scales take no weight decay (spec 4.4).'''
 
-    def test_adamw_optimizer(self, naics_model, model_config):
-        '''Test that AdamW optimizer is configured correctly.'''
-
-        optimizer_config = naics_model.configure_optimizers()
-
-        # Extract optimizer
-        if isinstance(optimizer_config, dict):
-            optimizer = optimizer_config['optimizer']
-        else:
-            optimizer = optimizer_config
+        model = reference_arm_model
+        optimizer = model.configure_optimizers()['optimizer']
 
         assert isinstance(optimizer, torch.optim.AdamW)
+        first, second = optimizer.param_groups
+        scales = [model.logit_scale_task.log_scale, model.logit_scale_code.log_scale]
+        trainable = [
+            parameter for parameter in model.parameters()
+            if parameter.requires_grad and all(parameter is not scale for scale in scales)
+        ]
+        assert [id(parameter) for parameter in second['params']] == [id(scale) for scale in scales]
+        assert [id(parameter) for parameter in first['params']] == [id(p) for p in trainable]
+        assert (first['weight_decay'], second['weight_decay']) == (0.01, 0.0)
+        assert first['lr'] == second['lr'] == model.hparams['learning_rate'] == 1e-4
 
-        # Check learning rate
-        assert optimizer.param_groups[0]['lr'] == model_config['learning_rate']
+    def test_the_plateau_is_registered_non_strict_on_the_outcome_mrr(self, reference_model):
+        '''P16, P30: mode max on the monitor's MRR, so Lightning checkpoints its state.'''
 
-        # Check weight decay
-        assert optimizer.param_groups[0]['weight_decay'] == model_config['weight_decay']
+        model = reference_model(lr_plateau_factor=0.25, lr_plateau_patience=3)
+        config = model.configure_optimizers()
 
-    def test_warmup_cosine_scheduler(self, model_config, test_device):
-        '''Test warmup + cosine scheduler configuration.'''
+        scheduler = dict(config['lr_scheduler'])
+        plateau = scheduler.pop('scheduler')
+        assert isinstance(plateau, torch.optim.lr_scheduler.ReduceLROnPlateau)
+        assert plateau.optimizer is config['optimizer']
+        assert (plateau.mode, plateau.factor, plateau.patience) == ('max', 0.25, 3)
+        assert plateau.threshold == 0.0
+        assert scheduler == {'monitor': OUTCOME_MRR, 'interval': 'epoch', 'strict': False}
 
-        model_config['use_warmup_cosine'] = True
-        model_config['warmup_steps'] = 100
+    def test_lightning_never_steps_the_plateau(self, reference_arm_model):
+        '''P16: on_train_epoch_end steps it by hand, before ModelCheckpoint saves.'''
 
-        model = NAICSContrastiveModel(**model_config).to(test_device)
-        optimizer_config = model.configure_optimizers()
+        model = reference_arm_model
+        plateau = model.configure_optimizers()['lr_scheduler']['scheduler']
+        before = plateau.state_dict()
 
-        # Should return dict with optimizer and lr_scheduler
-        assert isinstance(optimizer_config, dict)
-        assert 'optimizer' in optimizer_config
-        assert 'lr_scheduler' in optimizer_config
+        model.lr_scheduler_step(plateau, torch.tensor(0.5, dtype=torch.float64))
 
-        # Check scheduler configuration
-        lr_scheduler_config = optimizer_config['lr_scheduler']
-        assert 'scheduler' in lr_scheduler_config
-        assert 'interval' in lr_scheduler_config
+        assert plateau.state_dict() == before
 
-# -------------------------------------------------------------------------------------------------
-# Test: Distributed Utilities
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestDistributedUtilities:
-    '''Test distributed training utility functions.'''
-
-    def test_gather_embeddings_single_gpu(self, test_device):
-        '''Test gather_embeddings_global with single GPU (no-op).'''
-
-        embeddings = torch.randn(16, 385, device=test_device)
-
-        # Without distributed environment, should return input unchanged
-        with patch('torch.distributed.is_initialized', return_value=False):
-            gathered = gather_embeddings_global(embeddings)
-
-            assert gathered is embeddings
-            torch.testing.assert_close(gathered, embeddings)
-
-    def test_gather_embeddings_world_size_one(self, test_device):
-        '''Test gather_embeddings_global with world_size=1.'''
-
-        embeddings = torch.randn(16, 385, device=test_device)
-
-        with (
-            patch('torch.distributed.is_initialized', return_value=True),
-            patch('torch.distributed.get_world_size', return_value=1),
-        ):
-            gathered = gather_embeddings_global(embeddings)
-
-            assert gathered is embeddings
-
-    @patch('torch.distributed.all_gather')
-    def test_gather_embeddings_multi_gpu(self, mock_all_gather, test_device):
-        '''Test gather_embeddings_global with multiple GPUs (mocked).'''
-
-        local_embeddings = torch.randn(8, 385, device=test_device)
-        world_size = 4
-
-        # Mock all_gather to simulate gathering from multiple GPUs
-        def mock_gather_fn(gathered_list, tensor):
-            # Simulate gathering: each rank contributes the same tensor
-            for i in range(len(gathered_list)):
-                gathered_list[i] = tensor.clone()
-
-        mock_all_gather.side_effect = mock_gather_fn
-
-        with (
-            patch('torch.distributed.is_initialized', return_value=True),
-            patch('torch.distributed.get_world_size', return_value=world_size),
-        ):
-            gathered = gather_embeddings_global(local_embeddings)
-
-            # Should concatenate world_size copies of local embeddings
-            assert gathered.shape[0] == local_embeddings.shape[0] * world_size
-            assert gathered.shape[1] == local_embeddings.shape[1]
-
-# -------------------------------------------------------------------------------------------------
-# Test: Curriculum Integration
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestCurriculumIntegration:
-    '''Test curriculum scheduler integration.'''
-
-    def test_curriculum_flags_update(self, naics_model, repaired_training_batch):
-        '''Test that curriculum flags are updated during training.'''
-
-        from naics_embedder.text_model.curriculum import CurriculumScheduler
-
-        naics_model.curriculum_scheduler = CurriculumScheduler(
-            max_epochs=15, phase1_end=0.33, phase2_end=0.67, phase3_end=1.0
-        )
-
-        # Set epoch to phase 2
-        naics_model.trainer = Mock()
-        naics_model.trainer.current_epoch = 7
-
-        naics_model.train()
-        naics_model.training_step(repaired_training_batch, batch_idx=0)
-
-        # Check that curriculum flags were updated
-        assert len(naics_model.current_curriculum_flags) > 0
-
-    def test_curriculum_phase_transition(self, naics_model, repaired_training_batch):
-        '''Test curriculum phase transition logging.'''
-
-        from naics_embedder.text_model.curriculum import CurriculumScheduler
-
-        naics_model.curriculum_scheduler = CurriculumScheduler(
-            max_epochs=15, phase1_end=0.33, phase2_end=0.67, phase3_end=1.0
-        )
-
-        # Transition from phase 1 to phase 2
-        naics_model.trainer = Mock()
-        naics_model.trainer.current_epoch = 5
-        naics_model.previous_phase = 1
-
-        naics_model.train()
-        naics_model.training_step(repaired_training_batch, batch_idx=0)
-
-        # Previous phase should be updated
-        current_phase = naics_model.curriculum_scheduler.get_phase(naics_model.current_epoch)
-        assert naics_model.previous_phase == current_phase
-
-    def test_phase_two_selection_under_masked_mean_fills_no_router_slot(
-        self, naics_model, repaired_training_batch, monkeypatch
+    def test_the_warmup_ramps_the_rate_then_leaves_it_to_the_plateau(
+        self, reference_model, reference_arm_code_rows
     ):
-        '''Spec §6: a phase-2 step under the default fusion neither raises nor routes (R10).'''
+        '''P16: lr = base (t + 1) / (W S) for the first W epochs of S steps, then untouched.'''
 
-        log = Mock()
-        monkeypatch.setattr(naics_model, 'log', log)
-        monkeypatch.setattr(naics_model, '_update_curriculum_state', lambda *_args: None)
-        naics_model.current_curriculum_flags = {
-            'enable_hard_negative_mining': True,
-            'enable_router_guided_sampling': True,
+        base = 1e-3
+        model = reference_model(learning_rate=base, warmup_epochs=2)
+        stub = _attach_stub_trainer(model, reference_arm_code_rows, num_training_batches=3)
+        optimizer = stub.optimizer
+        closure = _scale_closure(model, optimizer, lambda: model.logit_scale_task().square())
+        rates = []
+        for step in range(8):
+            stub.trainer.global_step = step
+            model.optimizer_step(step // 3, step % 3, optimizer, closure)
+            rates.append([group['lr'] for group in optimizer.param_groups])
+
+        expected = [base * (step + 1) / 6 for step in range(6)] + [base, base]
+        assert rates == [[pytest.approx(rate, rel=1e-12)] * 2 for rate in expected]
+        # The plateau halves the rate after three epochs without a better MRR (patience 2)
+        for mrr in (0.5, 0.4, 0.4, 0.4):
+            stub.plateau.step(mrr)
+        halved = pytest.approx([base / 2] * 2, rel=1e-12)
+        assert [group['lr'] for group in optimizer.param_groups] == halved
+        stub.trainer.global_step = 8
+        model.optimizer_step(2, 2, optimizer, closure)
+        assert [group['lr'] for group in optimizer.param_groups] == halved
+
+    def test_no_warmup_at_zero_warmup_epochs(self, reference_model, reference_arm_code_rows):
+        model = reference_model(learning_rate=1e-3, warmup_epochs=0)
+        stub = _attach_stub_trainer(model, reference_arm_code_rows)
+        closure = _scale_closure(model, stub.optimizer, lambda: model.logit_scale_task().square())
+
+        model.optimizer_step(0, 0, stub.optimizer, closure)
+
+        assert [group['lr'] for group in stub.optimizer.param_groups] == [1e-3, 1e-3]
+
+    def test_a_scale_carried_past_its_bound_returns_to_it_and_can_come_back(
+        self, reference_model, reference_arm_code_rows
+    ):
+        '''P16: the forward clamp passes no gradient beyond the range, so the step's in-place
+        clamp brings theta back to the bound, where the gradient reaches it again.'''
+
+        model = reference_model(learning_rate=0.01, warmup_epochs=0)
+        stub = _attach_stub_trainer(model, reference_arm_code_rows)
+        task, code = model.logit_scale_task, model.logit_scale_code
+        high, low = math.log(task.high), math.log(code.low)
+        with torch.no_grad():
+            task.log_scale.fill_(high + 1.0)
+            code.log_scale.fill_(low - 1.0)
+        held = _scale_closure(model, stub.optimizer, lambda: task() + code())
+
+        model.optimizer_step(0, 0, stub.optimizer, held)
+
+        assert task.log_scale.grad == 0 and code.log_scale.grad == 0
+        assert task.log_scale.item() == _float32(high)
+        assert code.log_scale.item() == _float32(low)
+        # At the bound the clamp passes gradient again, so a step can move theta back inside
+        inward = _scale_closure(model, stub.optimizer, lambda: task() - code())
+        stub.trainer.global_step = 1
+        model.optimizer_step(0, 1, stub.optimizer, inward)
+        assert task.log_scale.item() < _float32(high)
+        assert code.log_scale.item() > _float32(low)
+
+    def test_a_step_that_carries_a_scale_out_of_its_range_ends_on_the_bound(
+        self, reference_model, reference_arm_code_rows
+    ):
+        model = reference_model(learning_rate=1.0, warmup_epochs=0)
+        stub = _attach_stub_trainer(model, reference_arm_code_rows)
+        task = model.logit_scale_task
+        high = math.log(task.high)
+        with torch.no_grad():
+            task.log_scale.fill_(high - 0.1)
+        outward = _scale_closure(model, stub.optimizer, lambda: -task())
+
+        model.optimizer_step(0, 0, stub.optimizer, outward)
+
+        assert task.log_scale.item() == _float32(high)
+
+# -------------------------------------------------------------------------------------------------
+# Test: The training hooks (P15, P18)
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestTrainingHooks:
+    '''The training run, the monitor's reads, the plateau and the checkpoint hooks.'''
+
+    def test_on_save_checkpoint_writes_the_contract_and_the_training_run(self, reference_arm_model):
+        model = reference_arm_model
+        model.training_run = 'run-a'
+        checkpoint = {}
+
+        model.on_save_checkpoint(checkpoint)
+
+        assert checkpoint == {
+            'stage3_supervision': model.checkpoint_contract.model_dump(),
+            'training_run': 'run-a',
         }
-        naics_model.train()
 
-        naics_model.training_step(repaired_training_batch, batch_idx=1)
+    def test_a_fresh_fit_mints_a_training_run_starts_the_monitor_and_refreshes(
+        self, reference_model, reference_arm_code_rows, code_targets
+    ):
+        monitor = ScriptedMonitor()
+        model = reference_model(monitor=monitor)
+        _attach_stub_trainer(model, reference_arm_code_rows)
 
-        counters = {
-            call.args[0]: call.args[1].item()
-            for call in log.call_args_list if call.args[0].startswith('train/integrity/')
+        model.on_train_start()
+
+        assert re.fullmatch('[0-9a-f]{32}', model.training_run)
+        assert monitor.events == [('start', None)]
+        assert model.code_cache is not None and model.code_cache.codes == code_targets.codes
+
+    def test_a_resumed_fit_keeps_its_training_run_and_resumes_the_monitor(
+        self, reference_model, reference_arm_code_rows
+    ):
+        '''on_load_checkpoint only stashes (it also runs under load_from_checkpoint); the fit
+        start resumes the monitor from the restored epoch.'''
+
+        monitor = ScriptedMonitor()
+        model = reference_model(monitor=monitor)
+        contract = model.checkpoint_contract.model_dump()
+
+        model.on_load_checkpoint(
+            {
+                'stage3_supervision': contract,
+                'training_run': 'run-a',
+                'epoch': 3
+            }
+        )
+
+        assert monitor.events == []
+        assert model.code_cache is None
+        _attach_stub_trainer(model, reference_arm_code_rows, epoch=4)
+        model.on_train_start()
+        assert model.training_run == 'run-a'
+        assert monitor.events == [('start', 3)]
+        assert model.code_cache is not None
+
+    def test_a_refused_contract_stashes_nothing(self, reference_model, reference_arm_code_rows):
+        monitor = ScriptedMonitor()
+        model = reference_model(monitor=monitor)
+        other = {**model.checkpoint_contract.model_dump(), 'bundle_id': 'other-bundle'}
+
+        with pytest.raises(ValueError, match='exact resume'):
+            model.on_load_checkpoint(
+                {
+                    'stage3_supervision': other,
+                    'training_run': 'run-b',
+                    'epoch': 5
+                }
+            )
+
+        _attach_stub_trainer(model, reference_arm_code_rows)
+        model.on_train_start()
+        assert model.training_run != 'run-b'
+        assert monitor.events == [('start', None)]
+
+    def test_the_epoch_end_refreshes_reads_logs_steps_appends_then_logs_health(
+        self, reference_model, reference_arm_code_rows, monkeypatch
+    ):
+        '''P15, P18: one float64 MRR goes to the log and the plateau, before the record is
+        appended; the module's hook runs before ModelCheckpoint's, so the epoch's checkpoint
+        sees both.'''
+
+        events: List[Any] = []
+        monitor = ScriptedMonitor([0.25], events)
+        model = reference_model(monitor=monitor, seed=11)
+        stub = _attach_stub_trainer(model, reference_arm_code_rows, epoch=2)
+        model.on_train_start()
+        first_cache = model.code_cache
+        events.clear()
+        refresh = model.refresh_code_cache
+
+        def refresh_spy(code_rows):
+            events.append('refresh')
+            return refresh(code_rows)
+
+        monkeypatch.setattr(model, 'refresh_code_cache', refresh_spy)
+        stub.log.side_effect = lambda name, *args, **kwargs: events.append(('log', name))
+        plateau_metrics = []
+        step = stub.plateau.step
+
+        def plateau_spy(metrics):
+            events.append('plateau')
+            plateau_metrics.append(metrics)
+            return step(metrics)
+
+        stub.plateau.step = plateau_spy
+
+        model.on_train_epoch_end()
+
+        assert events[:5] == [
+            'refresh',
+            ('read', 2),
+            ('log', OUTCOME_MRR),
+            'plateau',
+            ('append', 2),
+        ]
+        health = events[5:]
+        assert health and all(event[0] == 'log' and event[1] != OUTCOME_MRR for event in health)
+        (read, ) = monitor.reads
+        assert read['cache'] is model.code_cache and read['cache'] is not first_cache
+        assert read['model'] is model
+        assert (read['training_run'], read['seed'], read['epoch']) == (model.training_run, 11, 2)
+        call = _logged(stub.log)[OUTCOME_MRR]
+        mrr = call.args[1]
+        assert plateau_metrics == [mrr] and plateau_metrics[0] is mrr
+        assert mrr.dtype == torch.float64 and mrr.device.type == 'cpu' and mrr.item() == 0.25
+        assert call.kwargs['batch_size'] == 1
+        assert stub.plateau.best == 0.25
+
+    def test_without_a_monitor_the_epoch_end_refreshes_and_logs_health_only(
+        self, reference_arm_model, reference_arm_code_rows
+    ):
+        model = reference_arm_model
+        stub = _attach_stub_trainer(model, reference_arm_code_rows)
+        model.on_train_start()
+        first_cache = model.code_cache
+        plateau = stub.plateau.state_dict()
+
+        model.on_train_epoch_end()
+
+        assert model.code_cache is not first_cache
+        assert OUTCOME_MRR not in _logged(stub.log)
+        assert _logged(stub.log)
+        assert stub.plateau.state_dict() == plateau
+
+    def test_an_epoch_end_with_the_outcome_monitor_logs_steps_and_records_one_mrr(
+        self, tmp_path, reference_model, reference_bundle, reference_arm_code_rows, minilm_tokenizer
+    ):
+        '''P18 end to end on the real monitor: the MRR logged, the plateau's and the record's are
+        one value. The selection log is under tmp_path (P28).'''
+
+        panel = OutcomePanel.from_bundle(
+            reference_bundle, tmp_path / 'logs' / 'selection_log.jsonl'
+        )
+        records = tmp_path / 'checkpoints' / MONITOR_RECORDS
+        monitor = OutcomeMonitor(
+            panel, minilm_tokenizer, REFERENCE_WINDOW, records, 'model hook unit test'
+        )
+        model = reference_model(monitor=monitor, seed=3)
+        stub = _attach_stub_trainer(model, reference_arm_code_rows)
+        plateau_metrics = []
+        step = stub.plateau.step
+        stub.plateau.step = lambda metrics: (plateau_metrics.append(metrics), step(metrics))[1]
+        model.on_train_start()
+
+        model.on_train_epoch_end()
+
+        (record, ) = read_monitor_records(records)
+        mrr = _logged(stub.log)[OUTCOME_MRR].args[1]
+        assert plateau_metrics[0] is mrr
+        assert mrr.dtype == torch.float64 and mrr.item() == record['mrr']
+        detail = record['read']['detail']
+        cache = model.code_cache
+        assert {
+            name: detail[name]
+            for name in ('training_run', 'seed', 'epoch', 'table')
+        } == {
+            'training_run': model.training_run,
+            'seed': 3,
+            'epoch': 0,
+            'table': matrix_fingerprint(cache.codes, cache.tangent.numpy()),
         }
-        assert counters['train/integrity/router_selections'] == 0.0
-        assert counters['train/integrity/geometric_selections'] > 0.0
+
+# -------------------------------------------------------------------------------------------------
+# Test: The health logs (P20)
+# -------------------------------------------------------------------------------------------------
+
+def _run_epoch(model: NAICSContrastiveModel, steps: Sequence[Dict[str, Any]], monkeypatch) -> List:
+    '''Run ``steps`` through ``training_step``, returning each step's ``StepLosses``.'''
+
+    computed = []
+    compute = model.compute_losses
+
+    def spy(batch):
+        computed.append(compute(batch))
+        return computed[-1]
+
+    monkeypatch.setattr(model, 'compute_losses', spy)
+    for index, step in enumerate(steps):
+        model.training_step(step, batch_idx=index)
+    monkeypatch.setattr(model, 'compute_losses', compute)
+    return computed
+
+@pytest.mark.unit
+class TestHealthLogs:
+    '''Each epoch logs its terms' means, the two scales and r per level; nothing selects on them.'''
+
+    def test_the_health_logs_are_epoch_means_the_scales_and_the_radii_per_level(
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps, code_targets, monkeypatch
+    ):
+        model = reference_arm_model
+        stub = _attach_stub_trainer(model, reference_arm_code_rows)
+        model.on_train_start()
+        computed = _run_epoch(model, epoch_steps, monkeypatch)
+        stub.log.reset_mock()
+
+        model.on_train_epoch_end()
+
+        logged = _logged(stub.log)
+        levels = range(2, 7)
+        assert set(logged) == {
+            'loss/task',
+            'loss/code_code',
+            'loss/radial',
+            'loss/total',
+            'logit_scale/task',
+            'logit_scale/code_code',
+            *(
+                f'radius/{statistic}/level_{level}' for statistic in ('mean', 'sd')
+                for level in levels
+            ),
+        }
+        for call in logged.values():
+            assert call.kwargs['batch_size'] == 1
+            assert (call.kwargs['on_step'], call.kwargs['on_epoch']) == (False, True)
+        # Each term's epoch mean is the plain mean over the steps, whatever their sizes
+        for name in ('task', 'code_code', 'radial', 'total'):
+            mean = statistics.fmean(getattr(losses, name).item() for losses in computed)
+            assert logged[f'loss/{name}'].args[1] == pytest.approx(mean, rel=1e-12), name
+        assert logged['logit_scale/task'].args[1] == pytest.approx(model.logit_scale_task().item())
+        assert logged['logit_scale/code_code'].args[1] == pytest.approx(
+            model.logit_scale_code().item()
+        )
+        radius = model.code_cache.radius.to(torch.float64)
+        code_levels = torch.from_numpy(code_targets.levels)
+        for level in levels:
+            at_level = radius[code_levels == level]
+            mean = logged[f'radius/mean/level_{level}'].args[1]
+            sd = logged[f'radius/sd/level_{level}'].args[1]
+            assert mean == pytest.approx(at_level.mean().item(), rel=1e-12)
+            assert sd == pytest.approx(at_level.std(correction=0).item(), rel=1e-9, abs=1e-15)
+
+    def test_a_new_epoch_starts_new_means(
+        self, reference_arm_model, reference_arm_code_rows, epoch_steps, monkeypatch
+    ):
+        model = reference_arm_model
+        stub = _attach_stub_trainer(model, reference_arm_code_rows)
+        model.on_train_start()
+        _run_epoch(model, epoch_steps, monkeypatch)
+        model.on_train_epoch_end()
+        stub.log.reset_mock()
+
+        (losses, ) = _run_epoch(model, epoch_steps[:1], monkeypatch)
+        model.on_train_epoch_end()
+
+        logged = _logged(stub.log)
+        assert logged['loss/task'].args[1] == pytest.approx(losses.task.item(), rel=1e-12)
+        assert logged['loss/total'].args[1] == pytest.approx(losses.total.item(), rel=1e-12)
+
+    def test_moe_adds_the_load_balancing_mean(
+        self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch
+    ):
+        model = reference_model(fusion='moe', moe_hidden_dim=16)
+        stub = _attach_stub_trainer(model, reference_arm_code_rows)
+        model.on_train_start()
+        computed = _run_epoch(model, epoch_steps[:2], monkeypatch)
+        stub.log.reset_mock()
+
+        model.on_train_epoch_end()
+
+        mean = statistics.fmean(losses.load_balancing.item() for losses in computed)
+        logged = _logged(stub.log)
+        assert logged['loss/load_balancing'].args[1] == pytest.approx(mean, rel=1e-12)
 
 # -------------------------------------------------------------------------------------------------
 # Test: Checkpoint Loading
@@ -884,15 +1505,16 @@ class TestCheckpointLoading:
             assert name1 == name2
             torch.testing.assert_close(param1, param2)
 
-    def test_hparams_save_load(self, naics_model):
-        '''Test that hyperparameters are saved correctly.'''
+    def test_hparams_save_load(self, naics_model, tmp_path):
+        '''A checkpoint's hyperparameters rebuild the same settings.'''
 
-        hparams = naics_model.hparams
+        path = tmp_path / 'arm.ckpt'
+        torch.save(lightning_checkpoint(naics_model), path)
 
-        # Hyperparameters should be accessible
-        assert 'learning_rate' in hparams
-        assert 'curvature' in hparams
-        assert 'temperature' in hparams
+        restored = NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu')
+
+        assert dict(restored.hparams) == dict(naics_model.hparams)
+        assert restored.hparams['logit_scale_range'] == (0.01, 100.0)
 
 # -------------------------------------------------------------------------------------------------
 # Test: Supervision checkpoint contract
@@ -964,8 +1586,6 @@ class TestCheckpointContract:
     def test_prevalidated_bundle_is_reused_and_kept_out_of_hparams(
         self, model_config, validated_bundle, monkeypatch
     ):
-        import naics_embedder.text_model.naics_model as model_module
-
         monkeypatch.setattr(
             model_module,
             'load_validated_bundle',
@@ -1049,112 +1669,3 @@ def test_a_saved_containment_checkpoint_never_restores(naics_model):
 
     with pytest.raises(ValueError, match='exact resume'):
         naics_model.on_load_checkpoint({'stage3_supervision': containment})
-
-# -------------------------------------------------------------------------------------------------
-# Test: Numerical Stability
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestNumericalStability:
-    '''Test model numerical stability.'''
-
-    def test_no_nan_in_training(self, naics_model, repaired_training_batch):
-        '''Test that training produces no NaN values.'''
-
-        naics_model.train()
-        loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
-
-        assert not torch.isnan(loss)
-
-        # Check gradients
-        loss.backward()
-        for name, param in naics_model.named_parameters():
-            if param.requires_grad and param.grad is not None:
-                assert not torch.isnan(param.grad).any(), f'NaN gradient in {name}'
-
-    def test_no_inf_in_training(self, naics_model, repaired_training_batch):
-        '''Test that training produces no Inf values.'''
-
-        naics_model.train()
-        loss = naics_model.training_step(repaired_training_batch, batch_idx=0)
-
-        assert not torch.isinf(loss)
-
-    def test_extreme_temperature(self, model_config, repaired_training_batch, test_device):
-        '''Test model with extreme temperature values.'''
-
-        for temperature in [0.01, 1.0]:
-            model_config['temperature'] = temperature
-            model = NAICSContrastiveModel(**model_config).to(test_device)
-
-            model.train()
-            loss = model.training_step(repaired_training_batch, batch_idx=0)
-
-            assert not torch.isnan(loss)
-            assert not torch.isinf(loss)
-
-# -------------------------------------------------------------------------------------------------
-# Test: Logging and Metrics
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestLoggingAndMetrics:
-    '''Test logging and metric tracking.'''
-
-    def test_to_python_scalar(self, naics_model):
-        '''Test _to_python_scalar conversion utility.'''
-
-        # Test tensor conversion
-        tensor_val = torch.tensor(3.14)
-        assert isinstance(naics_model._to_python_scalar(tensor_val), float)
-
-        # Test bool conversion
-        bool_val = True
-        assert isinstance(naics_model._to_python_scalar(bool_val), int)
-
-        # Test float conversion
-        float_val = 2.718
-        assert isinstance(naics_model._to_python_scalar(float_val), float)
-
-    def test_metrics_file_path(self, naics_model, tmp_path):
-        '''Test metrics file path generation.'''
-
-        # Mock logger with log_dir
-        mock_logger = Mock()
-        mock_logger.log_dir = str(tmp_path / 'logs')
-
-        naics_model.trainer = Mock()
-        naics_model.trainer.logger = mock_logger
-
-        metrics_path = naics_model._get_metrics_file_path()
-
-        assert metrics_path is not None
-        assert 'evaluation_metrics.json' in str(metrics_path)
-
-# -------------------------------------------------------------------------------------------------
-# Test: Edge Cases
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestEdgeCases:
-    '''Test edge cases and error handling.'''
-
-    def test_batch_size_one(self, naics_model):
-        '''Test model handles batch size of 1.'''
-
-        batch = collate_fn([_repaired_item(0, 1, 0.5, 1, [2, 3, 4])])
-
-        naics_model.train()
-        loss = naics_model.training_step(batch, batch_idx=0)
-
-        assert not torch.isnan(loss)
-        assert not torch.isinf(loss)
-
-    def test_selection_capacity_failure_is_fatal(self, naics_model):
-        '''An anchor without K selectable codes aborts the step; its exclusion adds no capacity.'''
-
-        batch = collate_fn([_repaired_item(0, 1, 0.5, 1, [2, 3, 4], selection_k=3)])
-
-        naics_model.train()
-        with pytest.raises(ValueError, match='anchor code ID 0'):
-            naics_model.training_step(batch, batch_idx=0)

@@ -9,7 +9,7 @@ performance benchmarking.
 
 ### Current Status
 
-**Test files:** 53 unit, 2 integration
+**Test files:** 53 unit, 3 integration
 
 - ✅ **Well Tested**: Text model pipeline (encoding, MoE, loss, hyperbolic ops, evaluation)
 - ✅ **Tested since this file was written**: Data processing, graph model (HGCN), clustering,
@@ -54,13 +54,13 @@ tests/
 │   ├── test_hard_negative_mining.py  # Hard negative mining ✅
 │   ├── test_false_negative_strategy.py  # False negative mitigation ✅
 │   ├── test_tokenization_cache.py  # Tokenization caching ✅
-│   ├── test_datamodule.py    # Data module and collation ✅
+│   ├── test_datamodule.py    # Two-stream steps and the data module ✅
 │   ├── test_streaming_dataset.py  # Streaming dataset utilities ✅
 │   ├── test_streaming_sampling.py  # Sampling strategies ✅
 │   ├── test_data_distances.py  # Distance computation ✅
 │   ├── test_config.py        # Configuration management ✅
 │   └── ...
-├── integration/              # Integration tests (2 files)
+├── integration/              # Integration tests (3 files)
 ├── fixtures/                 # Test data and fixtures
 └── conftest.py              # Shared pytest fixtures
 
@@ -172,10 +172,10 @@ The following modules have comprehensive test coverage:
     - get_tokens utility function
 
 2. **text_model/dataloader/datamodule.py** ✅ - `test_datamodule.py`
-    - collate_fn batching logic
-    - Positive level extraction
-    - NAICSMapDataset indexing and __getitem__
-    - DataLoader shuffle configuration
+    - stack_text_inputs batching
+    - Two-stream epochs: steps, permutations, even chunks and tokenized task queries
+    - NAICSDataModule: the two streams from the bundle and the code rows in codebook order
+    - The one train loader, no validation loader, and the epoch set at each epoch start
 
 3. **text_model/dataloader/streaming_dataset.py** ✅ - `test_streaming_dataset.py`
     - Taxonomy utilities
@@ -211,7 +211,7 @@ has tests:
 | CLI commands | `cli/commands/data.py`, `cli/commands/tools.py`, `cli/commands/training.py` | `test_cli_commands.py` (data, tools), `test_cli_training.py` (training) |
 | Backend and console utilities | `utils/backend.py`, `utils/utilities.py`, `utils/warnings.py`, `utils/console.py` | `test_utils_backend.py`, `test_utils_utilities.py`, `test_warnings.py`, `test_utils_console.py` |
 | Tools and visualization | `tools/config_tools.py`, `tools/metrics_tools.py`, `tools/_visualize_metrics.py`, `tools/_investigate_hierarchy.py` | `test_config_tools.py`, `test_metrics_tools_api.py`, `test_visualize_metrics.py`, `test_investigate_hierarchy_tool.py` |
-| Integration | Cross-component | `integration/test_stage3_training_step.py` (one training step), `integration/test_distributed_supervision.py` (distributed selection) |
+| Integration | Cross-component | `integration/test_stage3_training_step.py` (the checked negative selection, until the old objective's machinery goes), `integration/test_distributed_supervision.py` (distributed selection), `integration/test_reference_training.py` (training the reference bundle through `create_trainer`) |
 
 Module paths are relative to `src/naics_embedder/`. The per-module test skeletons that used to
 follow here were removed, since the test files are the reference now. The original analysis and
@@ -219,9 +219,11 @@ skeletons are in `b1ee4df`.
 
 ### Open Gaps
 
-- **Training loops.** No test runs an optimization loop on the text model or HGCN. Tests call
-  `training_step` or `backward()` directly, and the `Trainer.fit` runs in `test_datamodule.py`
-  drive a stub module to test epoch handling.
+- **Training loops.** `integration/test_reference_training.py` runs the text model's training
+  loop through `create_trainer`, on the reference fixture bundle and the tiny backbone: the
+  monitor's reads and records, the kept epoch, early stopping, the warmup and plateau, the
+  health logs and exact resume. HGCN has no such test: `test_hgcn_metrics.py` fits it one batch
+  an epoch, to test the epoch its metrics are recorded under.
 - **Whole-system run.** No test runs data generation → text training → HGCN → evaluation end to
   end. Tests described as full-pipeline or end-to-end cover sub-pipelines: graph preprocessing,
   positive sampling, and distributed selection.
@@ -301,7 +303,8 @@ uv run pytest tests/ --cov=src/naics_embedder.graph_model.hgcn --cov-report=term
 
 #### Phase 3: Integration & Completeness (Weeks 5-6)
 
-- [ ] Add integration tests for training loops
+- [ ] Add integration tests for training loops (the text model's is
+  `integration/test_reference_training.py`; HGCN's remains)
 - [ ] Add end-to-end pipeline tests
 - [x] Add CLI command tests
 - [ ] Target: Achieve >70% overall coverage
@@ -676,7 +679,7 @@ uv run pytest tests/ --benchmark-only
 | Category | Status |
 |----------|--------|
 | **Total Source Modules** | 67 (excluding `__init__.py`) |
-| **Total Test Files** | 53 unit, 2 integration |
+| **Total Test Files** | 53 unit, 3 integration |
 | **Target Coverage** | >70% |
 
 ### Critical Missing Tests

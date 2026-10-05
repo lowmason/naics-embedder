@@ -1,7 +1,7 @@
-# Base training configuration for the NAICS SADC pipeline
+# Base training configuration for the NAICS text stage
 
 # Experiment identification
-experiment_name: sadc_default
+experiment_name: reference
 seed: 42
 
 # Stage-3 supervision: one immutable, validated bundle is the only authority for code identity,
@@ -76,6 +76,7 @@ data:
 
 # Data loading configuration
 data_loader:
+  queries_per_step: 128  # The most task queries a step reads: ceil(queries / 128) steps an epoch
   batch_size: 16
   num_workers: 4
   val_split: 0.05
@@ -137,6 +138,12 @@ model:
 
 # Loss configuration
 loss:
+  code_code_weight: 1  # w_c
+  radial_weight: 1  # w_r
+  target_temperature: 1  # τ_t, of the code-code target softmax(-D* / τ_t)
+  radial_step: 1  # ρ: level λ's target radius is ρ * (λ - 1)
+  logit_scale_init: 1  # Both learned logit scales start here
+  logit_scale_range: [0.01, 100]  # And are clamped to this range
   temperature: 0.07
   curvature: 1.0
   base_margin: 0.5
@@ -151,17 +158,21 @@ loss:
 
 # Training configuration
 training:
-  learning_rate: 1e-4  # Reduced from 2e-4 to prevent radius instability
-  weight_decay: 0.01
+  learning_rate: 1e-4
+  weight_decay: 0.01  # None on the logit scales
+  warmup_epochs: 1  # The linear warmup to the base rate
+  lr_plateau_factor: 0.5  # ReduceLROnPlateau on val/outcome_mrr
+  lr_plateau_patience: 2
+  early_stopping_patience: 5  # Epochs without a higher val/outcome_mrr
   warmup_steps: 500
   use_warmup_cosine: false  # Set to true for large training jobs with many epochs
 
   trainer:
-    max_epochs: 10
+    max_epochs: 40
     accelerator: auto
     devices: 1
     precision: "bf16-mixed"  # On CUDA; elsewhere the trainer runs at 32-true
     gradient_clip_val: 1.0
-    accumulate_grad_batches: 2
+    accumulate_grad_batches: 1
     log_every_n_steps: 10
     val_check_interval: 1.0
