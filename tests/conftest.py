@@ -20,6 +20,7 @@ pytest_plugins = (
     'tests.fixtures.regressor_panel',
     'tests.fixtures.shared_encoder',
     'tests.fixtures.supervision',
+    'tests.fixtures.checkpoint_runs',
 )
 
 # -------------------------------------------------------------------------------------------------

@@ -13,6 +13,7 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from typer.testing import CliRunner
 
 from naics_embedder.cli import app as cli_app
+from naics_embedder.cli.commands import tools as tools_cli
 from naics_embedder.cli.commands import training
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.window_summaries import summaries_identity
@@ -782,9 +783,10 @@ def test_train_records_the_run_settings_a_sweep_builds_for_its_accelerator(
 
     recorded = training_env.trainer.fit_calls[0]['model'].kwargs['run_settings']
     cfg = training.Config.from_yaml('config.yaml')
-    swept = utils_training.run_settings(
-        cfg, accelerator='cuda', precision=utils_training.effective_precision(cfg, 'cuda')
+    monkeypatch.setattr(
+        tools_cli, 'load_backbone', lambda name: (None, None, 'resolved'), raising=False
     )
+    swept = tools_cli._sweep_spec(cfg, name='reference', accelerator='cuda').settings
     assert recorded == swept
     assert type(recorded['logit_scale_range']) is list
     assert type(swept['logit_scale_range']) is list

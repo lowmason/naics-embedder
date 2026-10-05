@@ -18,11 +18,13 @@ Commands:
     diagnostics: Report Req 6's structural diagnostics over every codebook code.
     export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
     outcome-panel: Score an arm on the outcome panel's validation split (Stage 6).
+    sweep: Read trained seeds on all three validation panels and write an arm record.
 '''
 
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Optional
 
 import polars as pl
@@ -30,10 +32,11 @@ import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
-from naics_embedder.decision.decide import decide, fix_margins
-from naics_embedder.decision.records import ArmRecord, MarginRecord, read_record, write_record
+from naics_embedder.decision.decide import _check_monitor_records, decide, fix_margins
+from naics_embedder.decision.records import ArmRecord, ArmSpec, MarginRecord, read_record, write_record
 from naics_embedder.decision.rule import TieUnresolvedError
 from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.decision.sweep import run_seed_sweep
 from naics_embedder.metrics.diagnostics import GEOMETRIES, diagnostics_report
 from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
@@ -49,10 +52,12 @@ from naics_embedder.panels.regressor import (
     load_regressor_panel,
     summarize,
 )
-from naics_embedder.panels.text_only import build_text_only_table, provenance_path
-from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
+from naics_embedder.panels.text_only import build_text_only_table, load_backbone, provenance_path
+from naics_embedder.panels.window_summaries import summaries_identity
+from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
+from naics_embedder.text_model.checkpoint_runner import CheckpointRunner
 from naics_embedder.text_model.export import code_token_config, export_code_table
 from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.metrics_tools import visualize_metrics
@@ -65,7 +70,7 @@ from naics_embedder.utils.config import (
     load_config,
 )
 from naics_embedder.utils.console import configure_logging
-from naics_embedder.utils.training import parse_config_overrides
+from naics_embedder.utils.training import effective_precision, parse_config_overrides, run_settings
 from naics_embedder.utils.utilities import pick_device
 from naics_embedder.utils.validation import ValidationError, require_valid_supervision_bundle
 
@@ -783,6 +788,117 @@ def _run_bundle(cfg: Config) -> ValidatedSupervisionBundle:
     '''
 
     return require_valid_supervision_bundle(cfg)
+
+def _sweep_spec(cfg: Config, *, name: str, accelerator: str) -> ArmSpec:
+    '''The arm's settings and text identities, from its config and cached backbone (P21, P32).'''
+
+    _, _, revision = load_backbone(cfg.model.base_model_name)
+    return ArmSpec(
+        name=name,
+        components=1,
+        dimension=cfg.model.dimension,
+        geometry='hyperbolic',
+        backbone=cfg.model.base_model_name,
+        backbone_revision=revision,
+        descriptions_sha256=sha256_file(cfg.data_loader.streaming.descriptions_parquet),
+        summaries_sha256=summaries_identity(cfg.data_loader.tokenization.tokenizer_name),
+        max_length=cfg.data_loader.streaming.max_length,
+        settings=run_settings(
+            cfg, accelerator=accelerator, precision=effective_precision(cfg, accelerator)
+        )
+    )
+
+@app.command('sweep')
+def sweep_command(
+    runs: Annotated[str,
+                    typer.Option('--runs', help='Run directory pattern containing {seed}')],
+    seed: Annotated[List[int],
+                    typer.Option('--seed', help='Trained seed to read (repeatable)')],
+    text_only: Annotated[str,
+                         typer.Option('--text-only', help='Frozen-backbone comparator table')],
+    store: Annotated[str, typer.Option('--store', help='Content-addressed artifact store')],
+    output: Annotated[str,
+                      typer.Option('--output', help='New arm record JSON; never overwritten')],
+    purpose: Annotated[str,
+                       typer.Option('--purpose', help='Why these validation reads happen')],
+    name: Annotated[str,
+                    typer.Option('--name', help='Arm name in its decision record')] = 'reference',
+    accelerator: Annotated[str,
+                           typer.Option(
+                               '--accelerator', help='Training accelerator: cuda, mps or cpu'
+                           )] = 'cuda',
+    log: Annotated[
+        Optional[str],
+        typer.Option('--log', help='Selection log (default: the outcome-panel config)')] = None,
+    config_file: Annotated[
+        str, typer.Option('--config', help='Training config YAML')] = 'conf/config.yaml',
+    overrides: Annotated[Optional[List[str]],
+                         typer.Argument(help='Training config overrides, as key=value')] = None,
+):
+    '''
+    Read each trained seed once on all three validation panels and save its arm record.
+
+    Every seed's checkpoints and monitor reads are checked before the first decision read. The
+    record carries the monitor reads that selected each checkpoint. ``--accelerator`` describes
+    training; the export and decision reads use this machine's device.
+    '''
+
+    configure_logging('tools_sweep.log')
+    try:
+        _require_new_record(Path(output))
+        if not purpose.strip():
+            raise ValueError('every selection-log record needs a purpose')
+        if accelerator not in ('cuda', 'mps', 'cpu'):
+            raise ValueError('--accelerator must be cuda, mps or cpu')
+        if '{seed}' not in runs:
+            raise ValueError('--runs must contain {seed}')
+        if len(set(seed)) != len(seed):
+            raise ValueError(f'a seed repeats: {seed}')
+        directories = {number: Path(runs.format(seed=number)) for number in seed}
+        cfg = _run_config(config_file, overrides)
+        bundle = _run_bundle(cfg)
+        spec = _sweep_spec(cfg, name=name, accelerator=accelerator)
+        panel_cfg = load_config(OutcomePanelConfig, 'data/outcome_panel.yaml')
+        log_path = log or panel_cfg.selection_log
+        panel = OutcomePanel.from_bundle(bundle, log_path)
+        runner = CheckpointRunner(
+            cfg, bundle, run_directory=directories.__getitem__, device=pick_device('auto')
+        )
+        for number in seed:
+            selected = runner.check(spec, number)
+            # Reuse check_arm's monitor gate before artifacts or decision reads exist. Only these
+            # fields are read: no fake artifact references or incomplete records are constructed.
+            arm = SimpleNamespace(spec=spec, panels=SimpleNamespace(outcome=panel.fingerprint))
+            run = SimpleNamespace(
+                seed=number,
+                training_run=selected.training_run,
+                checkpoint_epoch=selected.epoch,
+                monitor_records=selected.monitor_records
+            )
+            _check_monitor_records(arm, run)
+        regressor_cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
+        regressor = load_regressor_panel(
+            regressor_cfg,
+            bundle.artifact_path('codebook'),
+            log_path=log_path,
+            levels=[DECISION_LEVEL]
+        )
+        record = run_seed_sweep(
+            spec,
+            seed,
+            runner,
+            outcome_panel=panel,
+            regressor_panel=regressor,
+            text_only_table=text_only,
+            store=ArtifactStore(store),
+            purpose=purpose
+        )
+        write_record(record, output)
+    except (OSError, ValueError, KeyError, ValidationError) as exc:
+        console.print(f'[bold red]Sweep failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(f'Arm record: {output} ({len(record.runs)} seeds)')
 
 @app.command('export-table')
 def export_table(
