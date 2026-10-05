@@ -153,7 +153,8 @@ class OutcomePanel:
     def validation_queries(self, purpose: str) -> pl.DataFrame:
         '''Validation queries, logging the read.'''
 
-        return self._read(IndexRole.VALIDATION, purpose)
+        queries, _ = self._read(IndexRole.VALIDATION, purpose)
+        return queries
 
     def open_test(self, purpose: str, *, reopen_reason: Optional[str] = None) -> None:
         '''
@@ -191,7 +192,8 @@ class OutcomePanel:
             SealedSplitError: If this panel object has not opened the test split.
         '''
 
-        return self._read(IndexRole.TEST, purpose)
+        queries, _ = self._read(IndexRole.TEST, purpose)
+        return queries
 
     def score(
         self,
@@ -205,13 +207,36 @@ class OutcomePanel:
         Decode one split's queries over every candidate with the encoder, logging the read.
 
         ``detail`` joins the read's logged detail, so a caller can name the run it scores; it
-        cannot replace the encoder or the distance the panel logs.
+        cannot replace the encoder or the distance the panel logs. ``score_logged`` also returns
+        the record the read logged.
+        '''
+
+        result, _ = self.score_logged(encoder, split, purpose, distance=distance, detail=detail)
+        return result
+
+    def score_logged(
+        self,
+        encoder: QueryCodeEncoder,
+        split: Union[IndexRole, str],
+        purpose: str,
+        distance: Union[str, DistanceFn] = 'cosine',
+        detail: Optional[Mapping[str, Any]] = None,
+    ) -> Tuple[DecodingResult, Dict[str, Any]]:
+        '''
+        ``score``, also returning the record the read appended to the selection log.
+
+        The record is appended before any query is encoded, so a read that fails while it scores
+        is logged all the same. A caller that keeps its own copy of its reads, as the training
+        monitor keeps ``monitor_reads.jsonl``, keeps this record as it was logged.
+
+        Returns:
+            The decoding scores, and the read's record as the log appended it.
         '''
 
         name, _ = resolve_distance(distance)
         logged = {'encoder': type(encoder).__name__, 'distance': name}
-        queries = self._read(IndexRole(split), purpose, merge_read_detail(logged, detail))
-        return score_decoding(
+        queries, record = self._read(IndexRole(split), purpose, merge_read_detail(logged, detail))
+        result = score_decoding(
             encoder.encode_queries(queries.get_column('text').to_list()),
             queries.get_column('code').to_list(),
             encoder.encode_codes(list(self.candidates)),
@@ -219,6 +244,7 @@ class OutcomePanel:
             distance=distance,
             query_ids=queries.get_column('entry_id').to_list(),
         )
+        return result, record
 
     def _split(self, role: IndexRole) -> pl.DataFrame:
         return self._rows.filter(pl.col('role') == role.value).select('entry_id', 'code', 'text')
@@ -228,7 +254,9 @@ class OutcomePanel:
         role: IndexRole,
         purpose: str,
         detail: Optional[Dict[str, Any]] = None,
-    ) -> pl.DataFrame:
+    ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
+        '''The split's queries, and the read's record as the log appended it.'''
+
         if role not in (IndexRole.VALIDATION, IndexRole.TEST):
             raise ValueError(
                 f'only validation and test splits are read as selections, not {role.value!r}'
@@ -238,7 +266,7 @@ class OutcomePanel:
                 'the outcome test split is sealed: call open_test(purpose) first, which is logged'
             )
         queries = self._split(role)
-        self.log.append(
+        record = self.log.append(
             SelectionEvent.READ,
             panel=OUTCOME_PANEL,
             split=role.value,
@@ -247,4 +275,4 @@ class OutcomePanel:
             n_queries=queries.height,
             detail=detail,
         )
-        return queries
+        return queries, record

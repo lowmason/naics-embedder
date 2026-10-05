@@ -9,6 +9,7 @@ import numpy as np
 import polars as pl
 import pytest
 import torch
+from transformers import AutoTokenizer
 
 from naics_embedder.cli.commands import training as training_cli
 from naics_embedder.panels.regressor import coordinate_matrix, table_fingerprint
@@ -16,6 +17,7 @@ from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.supervision.checkpoints import contract_for_bundle, shared_encoder_architecture
+from naics_embedder.text_model import export as encoding
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.export import (
     COORDINATES,
@@ -24,6 +26,7 @@ from naics_embedder.text_model.export import (
     export_code_table,
     load_arm_model,
 )
+from naics_embedder.text_model.fields import QUERY, tokenize_field
 from naics_embedder.utils.config import Config
 from tests.fixtures.shared_encoder import (
     ARM_DIMENSION,
@@ -73,6 +76,40 @@ def test_rows_encode_to_float64_cpu_tensors_in_row_order(
         whole = shared_model(stack_text_inputs(rows))
     assert torch.allclose(encoded['tangent'], whole['tangent'].to(torch.float64), atol=1e-6)
     assert torch.allclose(encoded['embedding'], whole['embedding'].to(torch.float64), atol=1e-6)
+
+def test_rows_encode_each_rows_radius_and_direction_too(
+    shared_model, five_code_token_config, validated_bundle
+):
+    '''The training cache reads r and û from the export's own encode (spec 4.3).'''
+
+    rows = five_code_token_rows(five_code_token_config, validated_bundle)
+
+    encoded = encode_token_rows(shared_model, rows)
+
+    assert set(encoded) == {'tangent', 'embedding', 'radius', 'direction'}
+    assert encoded['radius'].shape == (5, )
+    assert encoded['direction'].shape == (5, ARM_DIMENSION)
+    # Five rows are one batch, so each output is the whole forward's float32 value, in float64
+    with torch.no_grad():
+        whole = shared_model(stack_text_inputs(rows))
+    for name in ('radius', 'direction'):
+        assert (encoded[name].dtype, encoded[name].device.type) == (torch.float64, 'cpu')
+        assert torch.equal(encoded[name], whole[name].to(torch.float64))
+
+def test_query_texts_encode_marked_through_the_model(shared_model):
+    '''One query path for the arm encoder and the training monitor (spec 4.4).'''
+
+    tokenizer = AutoTokenizer.from_pretrained(MINILM)
+    texts = ['Edamame farming', 'Lignite mining', 'Coal mining']
+
+    tangent = encoding.encode_query_texts(shared_model, tokenizer, texts, TOKEN_WINDOW)
+
+    rows = [{QUERY: tokenize_field(tokenizer, QUERY, text, TOKEN_WINDOW)} for text in texts]
+    with torch.no_grad():
+        whole = shared_model(stack_text_inputs(rows, fields=(QUERY, )))
+    assert (tangent.dtype, tangent.device.type) == (torch.float64, 'cpu')
+    assert tangent.shape == (3, ARM_DIMENSION)
+    assert torch.equal(tangent, whole['tangent'].to(torch.float64))
 
 def test_rows_encode_in_eval_mode(shared_model, five_code_token_config, validated_bundle):
     rows = five_code_token_rows(five_code_token_config, validated_bundle)

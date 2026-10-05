@@ -6,6 +6,8 @@ data processing, and model components.
 '''
 
 import logging
+from pathlib import Path
+from typing import Iterator, Optional
 
 import polars as pl
 import pytest
@@ -78,6 +80,52 @@ def dummy_window_summaries(request, monkeypatch):
     for backbone in list(window_summaries.WINDOW_SUMMARIES):
         monkeypatch.delitem(window_summaries.WINDOW_SUMMARIES, backbone)
     monkeypatch.setitem(window_summaries.WINDOW_SUMMARIES, MINILM, DUMMY_SUMMARIES_PIN)
+
+# -------------------------------------------------------------------------------------------------
+# The repository's selection log: no test writes it
+# -------------------------------------------------------------------------------------------------
+
+# The shipped configs log every read to ./logs/selection_log.jsonl, relative to the working
+# directory, which is the repository root when the suite runs. A test that reads a panel, builds a
+# training monitor, trains or sweeps points the log at tmp_path.
+REPOSITORY_SELECTION_LOG = Path(__file__).resolve().parents[1] / 'logs' / 'selection_log.jsonl'
+
+def selection_log_size(path: Path) -> Optional[int]:
+    '''The log's size in bytes, or None if it does not exist.'''
+
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return None
+
+def _described_size(size: Optional[int]) -> str:
+    return 'absent' if size is None else f'{size} bytes'
+
+def refuse_a_changed_selection_log(path: Path, size: Optional[int]) -> None:
+    '''
+    Fail if the log is no longer the size it was (``size``, None if it did not exist).
+
+    The log is append-only, so any write changes its size.
+    '''
+
+    now = selection_log_size(path)
+    if now != size:
+        pytest.fail(
+            f'the suite wrote {path} (its size went from {_described_size(size)} to '
+            f'{_described_size(now)}): a test that logs a read points its log at tmp_path',
+            pytrace=False,
+        )
+
+@pytest.fixture(scope='session', autouse=True)
+def guard_the_repository_selection_log() -> Iterator[Path]:
+    '''
+    Record the repository's selection log at the session's start, and fail the session at its end
+    if the log changed. It only reads the log's size: it never creates or writes the file.
+    '''
+
+    size = selection_log_size(REPOSITORY_SELECTION_LOG)
+    yield REPOSITORY_SELECTION_LOG
+    refuse_a_changed_selection_log(REPOSITORY_SELECTION_LOG, size)
 
 # -------------------------------------------------------------------------------------------------
 # Hyperbolic Geometry Fixtures

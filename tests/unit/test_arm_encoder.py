@@ -3,12 +3,14 @@ The arm encoder: queries through the checkpoint's model, codes from its exported
 (spec 4.3).
 '''
 
+import inspect
 import json
 
 import polars as pl
 import pytest
 import torch
 
+import naics_embedder.text_model.arm_encoder as arm_encoder_module
 from naics_embedder.panels.decoding import lorentz_distances
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.regressor import table_fingerprint
@@ -92,6 +94,32 @@ def test_a_query_embeds_through_the_same_forward_as_a_code(arm):
         output = arm.model(stack_text_inputs([{QUERY: tokens}], fields=(QUERY, )))
 
     assert torch.equal(arm.encode_queries(['Edamame farming']), exp_map_origin(output['tangent']))
+
+def test_queries_encode_through_the_query_path_the_training_monitor_shares(arm, monkeypatch):
+    '''One query path, so a live read and a read of the export put a query at one point.'''
+
+    shared = arm_encoder_module.encode_query_texts
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(inspect.signature(shared).bind(*args, **kwargs).arguments)
+        return shared(*args, **kwargs)
+
+    monkeypatch.setattr(arm_encoder_module, 'encode_query_texts', spy)
+
+    queries = arm.encode_queries(QUERIES)
+
+    assert calls == [
+        {
+            'model': arm.model,
+            'tokenizer': arm.tokenizer,
+            'texts': QUERIES,
+            'max_length': arm.max_length,
+            'batch_size': arm.batch_size,
+        }
+    ]
+    expected = shared(arm.model, arm.tokenizer, QUERIES, arm.max_length)
+    assert torch.equal(queries, exp_map_origin(expected))
 
 def test_codes_decode_from_the_table_in_the_order_asked(arm, exported_table):
     tangent = _table_tangent(exported_table)

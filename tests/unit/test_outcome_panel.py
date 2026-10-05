@@ -5,6 +5,7 @@ A one-hot stub encoder stands in for a trained arm: each code sits on its own ax
 sits on the axis of the code the stub assigns it, so every rank below is worked out by hand.
 '''
 
+import inspect
 import json
 
 import polars as pl
@@ -277,6 +278,37 @@ def test_a_read_cannot_replace_what_the_panel_logs(panel, log, encoder):
         panel.score(encoder, 'validation', 'seed sweep', detail={'distance': 'euclidean'})
 
     assert log.records() == []
+
+# -------------------------------------------------------------------------------------------------
+# The logged score: the decoding and the record its read appended
+# -------------------------------------------------------------------------------------------------
+
+def test_a_logged_score_returns_its_decoding_and_the_record_the_log_appended(panel, log, encoder):
+    detail = {'training_run': 'run-a', 'epoch': 0}
+
+    result, record = panel.score_logged(encoder, 'validation', 'training monitor', detail=detail)
+
+    [logged] = log.records()
+    assert record == logged
+    assert record['detail'] == {
+        'encoder': 'OneHotStubEncoder',
+        'distance': 'cosine',
+        'training_run': 'run-a',
+        'epoch': 0,
+    }
+    again = panel.score(encoder, 'validation', 'training monitor')
+    assert result.per_query.equals(again.per_query)
+    assert result.summary == again.summary
+    assert result.summary['mrr'] == pytest.approx((1 + 1 / 5 + 1) / 3)
+
+def test_score_keeps_its_signature_and_its_logged_form_shares_it():
+    score = inspect.signature(OutcomePanel.score)
+    logged = inspect.signature(OutcomePanel.score_logged)
+
+    assert list(score.parameters) == ['self', 'encoder', 'split', 'purpose', 'distance', 'detail']
+    assert score.parameters['distance'].default == 'cosine'
+    assert score.parameters['detail'].default is None
+    assert logged.parameters == score.parameters
 
 # -------------------------------------------------------------------------------------------------
 # Loading from preprocessing outputs

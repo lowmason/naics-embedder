@@ -4,7 +4,8 @@ An arm as the outcome panel reads it: queries through its checkpoint, codes from
 
 ``ArmEncoder`` implements ``QueryCodeEncoder`` (``panels/outcome.py``):
 
-- A query is marked ``query:`` and goes through the checkpoint's model.
+- A query is marked ``query:`` and goes through the checkpoint's model (``encode_query_texts``, the
+  query path the training monitor's live encoder shares).
 - A code's vector is decoded from the table ``tools export-table`` wrote from the checkpoint.
 
 Both pass through one float64 exp map at the origin. The code vectors a read decodes against are
@@ -32,8 +33,11 @@ from naics_embedder.panels.text_only import matrix_fingerprint, provenance_path
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
 from naics_embedder.supervision.schema import IndexRole
-from naics_embedder.text_model.export import encode_token_rows, load_arm_model
-from naics_embedder.text_model.fields import QUERY, tokenize_field
+from naics_embedder.text_model.export import (
+    ENCODE_BATCH_SIZE,
+    encode_query_texts,
+    load_arm_model,
+)
 from naics_embedder.utils.config import TokenizationConfig
 
 # -------------------------------------------------------------------------------------------------
@@ -112,7 +116,7 @@ class ArmEncoder:
         max_length: int,
         table: pl.DataFrame,
         checkpoint_sha256: str,
-        batch_size: int = 32,
+        batch_size: int = ENCODE_BATCH_SIZE,
     ):
         codes, matrix = coordinate_matrix(table)
         self.model = model
@@ -134,7 +138,7 @@ class ArmEncoder:
         token_config: TokenizationConfig,
         *,
         device: Union[str, torch.device] = 'cpu',
-        batch_size: int = 32,
+        batch_size: int = ENCODE_BATCH_SIZE,
     ) -> 'ArmEncoder':
         '''
         The arm of a checkpoint and the table exported from it.
@@ -216,10 +220,9 @@ class ArmEncoder:
     def encode_queries(self, texts: Sequence[str]) -> torch.Tensor:
         '''Marked ``query:`` texts through the model, then the exp map: (Q, d + 1), float64.'''
 
-        tokens = [tokenize_field(self.tokenizer, QUERY, text, self.max_length) for text in texts]
-        rows = [{QUERY: row} for row in tokens]
-        tangent = encode_token_rows(self.model, rows, fields=(QUERY, ),
-                                    batch_size=self.batch_size)['tangent']
+        tangent = encode_query_texts(
+            self.model, self.tokenizer, texts, self.max_length, batch_size=self.batch_size
+        )
         return exp_map_origin(tangent)
 
     def encode_codes(self, codes: Sequence[str]) -> torch.Tensor:
