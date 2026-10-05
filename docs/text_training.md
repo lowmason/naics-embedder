@@ -167,8 +167,12 @@ The guards check the experiment directory, bundle, encoder, preprocessing, seed 
 21 settings from `run_settings`. Those include effective accelerator/precision, query batch
 size, optimizer and stopping settings, epoch budget, clipping and accumulation. A fresh start
 refuses an already used checkpoint directory. A resume from another directory or with other
-settings exits 1 before model or data construction. `--checkpoint-load-mode` accepts only
-`exact`; there is no weights-only path.
+settings exits 1 before model or data construction. A supplementary guard compares saved
+constructor hyperparameters with the current config: LoRA rank, alpha and dropout always, plus
+MoE expert count, top-k, hidden dimension and load-balancing coefficient under active MoE fusion.
+Missing required values are refused; inactive MoE settings are ignored. This preserves the
+21-key `run_settings` and `ArmSpec.settings` identity without rewriting checkpoints.
+`--checkpoint-load-mode` accepts only `exact`; there is no weights-only path.
 
 Resume restores the training-run id, optimizer, warmup/plateau and callback state, rebuilds the
 code cache, and retains both JSONL files through the resumed epoch before continuing. Kept lines
@@ -236,7 +240,9 @@ uv run naics-embedder tools margins \
 `tools sweep` independently resolves the arm's cached backbone revision; a comparator cannot
 supply that revision. Before any export or decision read, its combined preflight checks every
 seed's complete epochs through `last.ckpt`, earliest best epoch, selected checkpoint, seed,
-training-run id and 21 settings. It also verifies that monitor records identify validation reads
+training-run id and 21 settings. It applies the supplementary constructor-hyperparameter check
+to both `last.ckpt` and the selected checkpoint against the arm config before any seed export
+or decision read. It also verifies that monitor records identify validation reads
 from the correct panel, with valid fingerprints and the correct seed, rather than test reads or
 opening events. A selected epoch with a versioned sibling or a saved best score that differs
 from the monitor is refused.

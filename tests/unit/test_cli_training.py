@@ -222,6 +222,13 @@ def training_env(monkeypatch, tmp_path):
             },
             'hyper_parameters': {
                 'seed': cfg.seed,
+                'lora_r': cfg.model.lora.r,
+                'lora_alpha': cfg.model.lora.alpha,
+                'lora_dropout': cfg.model.lora.dropout,
+                'num_experts': cfg.model.moe.num_experts,
+                'top_k': cfg.model.moe.top_k,
+                'moe_hidden_dim': cfg.model.moe.hidden_dim,
+                'load_balancing_coef': cfg.model.moe.load_balancing_coef,
                 'run_settings': utils_training.run_settings(
                     cfg, accelerator=hardware.accelerator, precision=hardware.precision
                 ),
@@ -978,3 +985,37 @@ def test_a_config_at_the_edge_of_every_added_key_builds_the_model(
 
     assert float(model.logit_scale_task().detach()) == pytest.approx(cfg.loss.logit_scale_init)
     assert model.hparams['lr_plateau_patience'] == 0
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'fusion, name, value', [
+        ('masked_mean', 'lora_r', 4),
+        ('masked_mean', 'lora_alpha', 32),
+        ('masked_mean', 'lora_dropout', 0.6),
+        ('moe', 'num_experts', 8),
+        ('moe', 'top_k', 1),
+        ('moe', 'moe_hidden_dim', 512),
+        ('moe', 'load_balancing_coef', 0.2),
+        ('masked_mean', 'lora_alpha', None),
+        ('moe', 'top_k', None),
+    ]
+)
+def test_exact_resume_refuses_other_constructor_settings_before_construction(
+    training_env, fusion, name, value
+):
+    saved = training_env.matching_checkpoint()
+    saved['hyper_parameters']['run_settings']['fusion'] = fusion
+    if value is None:
+        del saved['hyper_parameters'][name]
+    else:
+        saved['hyper_parameters'][name] = value
+    training_env.saved_checkpoint = saved
+    training_env.checkpoint_info = CheckpointInfo(path='foo.ckpt', is_same_stage=True, exists=True)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        training.train(ckpt_path='last', skip_validation=True, overrides=[f'model.fusion={fusion}'])
+
+    assert excinfo.value.exit_code == 1
+    assert name in str(excinfo.value.__context__)
+    assert training_env.trainer is None
+    assert not {'datamodule', 'monitor', 'model'}.intersection(training_env.events)

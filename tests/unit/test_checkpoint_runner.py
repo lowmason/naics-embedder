@@ -55,7 +55,14 @@ def _write_records(directory, records):
 
 @pytest.fixture
 def fixture_run(tmp_path, shared_model, validated_bundle):
-    cfg = Config().override({'model.dimension': shared_model.hparams.dimension})
+    cfg = Config().override(
+        {
+            'model.dimension': shared_model.hparams.dimension,
+            'model.lora.r': shared_model.hparams.lora_r,
+            'model.lora.alpha': shared_model.hparams.lora_alpha,
+            'model.lora.dropout': shared_model.hparams.lora_dropout,
+        }
+    )
     # _spec's descriptions hash is a file identity; this fixture never exports a table.
     cfg.data_loader.streaming.descriptions_parquet = str(tmp_path / 'descriptions.parquet')
     Path(cfg.data_loader.streaming.descriptions_parquet).write_bytes(b'fixture-descriptions')
@@ -354,3 +361,46 @@ def test_tools_sweep_refuses_bad_arguments_before_loading_a_panel(sweep_env, mon
     result = CliRunner().invoke(tools_cli.app, args)
     assert result.exit_code == 1
     assert SelectionLog(sweep_env.log).records() == []
+
+@pytest.mark.parametrize('checkpoint_name', ['last.ckpt', 'epoch=001.ckpt'])
+@pytest.mark.parametrize('name, value', [('lora_alpha', 32), ('lora_dropout', 0.6)])
+def test_preflight_refuses_constructor_changes_in_both_checkpoints(
+    fixture_run, monkeypatch, checkpoint_name, name, value
+):
+    module = importlib.import_module('naics_embedder.text_model.checkpoint_runner')
+    monkeypatch.setattr(module, 'export_code_table', lambda *args, **kwargs: pytest.fail('export'))
+    path = fixture_run.directory / checkpoint_name
+    saved = read_checkpoint(path)
+    saved['hyper_parameters'][name] = value
+    torch.save(saved, path)
+    with pytest.raises(ValueError, match=name):
+        _runner(fixture_run).run(fixture_run.spec, 7)
+    assert not list(fixture_run.directory.glob('*.parquet'))
+
+@pytest.mark.parametrize('checkpoint_name', ['last.ckpt', 'selected'])
+def test_all_seed_preflight_refuses_constructor_changes_before_any_export_or_panel(
+    sweep_env, monkeypatch, checkpoint_name
+):
+    directory = sweep_env.root / 'seed-5'
+    if checkpoint_name == 'selected':
+        records = read_monitor_records(directory / MONITOR_RECORDS)
+        best = max(record['mrr'] for record in records)
+        epoch = min(
+            record['read']['detail']['epoch'] for record in records if record['mrr'] == best
+        )
+        checkpoint_name = f'epoch={epoch:03d}.ckpt'
+    path = directory / checkpoint_name
+    saved = read_checkpoint(path)
+    saved['hyper_parameters']['lora_alpha'] *= 2
+    torch.save(saved, path)
+    module = importlib.import_module('naics_embedder.text_model.checkpoint_runner')
+    monkeypatch.setattr(module, 'export_code_table', lambda *args, **kwargs: pytest.fail('export'))
+    monkeypatch.setattr(
+        tools_cli, 'load_regressor_panel', lambda *args, **kwargs: pytest.fail('panel')
+    )
+    result = CliRunner().invoke(tools_cli.app, sweep_env.args)
+    assert result.exit_code == 1, result.output
+    assert 'seed 5' in result.output and 'lora_alpha' in result.output
+    assert SelectionLog(sweep_env.log).records() == []
+    assert not sweep_env.output.exists()
+    assert not list(sweep_env.root.glob('**/*.parquet'))

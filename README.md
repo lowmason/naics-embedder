@@ -84,7 +84,11 @@ uv run naics-embedder tools visualize   --summary checkpoints/reference/epoch_su
 ```
 
 Resume only `last`, with the same experiment directory, bundle, encoder, preprocessing, seed
-and settings. An early-stopped run exits 1 with `early stopping ended the run at epoch k`;
+and settings. A supplementary check compares saved constructor hyperparameters with the
+current configuration: LoRA rank, alpha and dropout, plus expert count, top-k, hidden dimension
+and load-balancing coefficient when MoE fusion is active. Missing required values are refused.
+The arm identity retains its 21 `run_settings` keys. An early-stopped run exits 1 with
+`early stopping ended the run at epoch k`;
 a spent epoch budget trains no further epochs. Changing the budget or other settings requires
 a fresh run directory. The code cache is rebuilt, and both JSONL files continue from the
 restored epoch.
@@ -149,7 +153,7 @@ uv run ruff check src/ tests/
 uv run mkdocs build --strict
 ```
 
-The suite contains 2,287 tests in 83 unit files and one integration file. On a host with MPS,
-2,285 pass and two skip; without MPS, 2,277 pass and ten skip. Coverage is measured separately,
-not inferred from these counts. See [tests/README.md](tests/README.md) for test contracts and
+The suite collects 2,315 tests in 83 unit files and one integration file. Actual skip counts
+depend on local data and hardware capabilities, including MPS. Coverage is measured separately,
+not inferred from collection counts. See [tests/README.md](tests/README.md) for test contracts and
 [CLAUDE.md](CLAUDE.md) for project conventions.

@@ -170,6 +170,12 @@ The contract identifies objective `req11-v1`, bundle, encoder and preprocessing.
 checkpoints are refused before model loading in training, export, outcome reads and the HGCN
 feeder. Nothing migrates weights into this objective.
 
+Exact resume also compares saved constructor hyperparameters against the current config: LoRA
+rank/alpha/dropout always, and MoE expert count/top-k/hidden dimension/load-balancing coefficient
+under active MoE fusion. Missing required values fail closed; inactive MoE controls are ignored.
+Campaign preflight checks both last and selected checkpoints before exports or decision reads.
+The literal 21-key `run_settings` identity and finished artifacts remain unchanged.
+
 Exact resume requires the same experiment directory, seed and all 21 `run_settings`, including
 budget, precision, clipping and accumulation, as well as the contract. Fresh starts refuse
 used checkpoint directories. Resume only `--ckpt-path last`; an older kept checkpoint can rewind
@@ -240,9 +246,9 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects 2,287 tests: **2285 passed, 2 skipped** on a host with MPS;
-**2277 passed, 10 skipped** without MPS. Tests use fixture data and tiny models. These counts
-are not coverage percentages. Do not read real sealed splits or run a real campaign to verify
+The current suite collects **2,315 tests**. Actual skip counts depend on local data and hardware
+capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
+coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
 
 ## Code Style and Conventions

@@ -33,6 +33,7 @@ from naics_embedder.utils.training import (
     outcome_checkpoint,
     read_checkpoint,
     refuse_a_resume_under_other_settings,
+    refuse_other_constructor_settings,
 )
 
 # -------------------------------------------------------------------------------------------------
@@ -87,6 +88,7 @@ class CheckpointRunner:
         if contract.encoder != expected:
             raise ValueError('the checkpoint encoder contract differs from the arm (D2)')
         refuse_a_resume_under_other_settings(saved, spec.settings, seed=seed)
+        refuse_other_constructor_settings(saved, self.cfg)
 
     def check(self, spec: ArmSpec, seed: int) -> SeedSelection:
         '''

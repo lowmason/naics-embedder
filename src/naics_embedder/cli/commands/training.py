@@ -57,6 +57,7 @@ from naics_embedder.utils.training import (
     refuse_a_resume_from_another_directory,
     refuse_a_resume_of_a_stopped_run,
     refuse_a_resume_under_other_settings,
+    refuse_other_constructor_settings,
     resolve_checkpoint,
     run_settings,
     save_training_summary,
@@ -272,12 +273,11 @@ def generate_embeddings_from_checkpoint(
     logger.info('Loading model from checkpoint...')
     model = NAICSContrastiveModel.load_from_checkpoint(
         checkpoint_path,
-        map_location=device,
+        map_location='cpu',
         supervision_manifest_path=str(bundle.manifest_path),
         supervision_bundle=bundle,
     )
-    model.eval()
-    model.to(device)
+    model.to(device).eval()
     logger.info('Model loaded successfully')
 
     # Load descriptions parquet
@@ -573,6 +573,7 @@ def train(
             saved = read_checkpoint(checkpoint_path)
             refuse_a_resume_from_another_directory(saved, checkpoint_dir)
             refuse_a_resume_under_other_settings(saved, settings, seed=cfg.seed)
+            refuse_other_constructor_settings(saved, cfg)
             refuse_a_resume_of_a_stopped_run(saved, cfg.training.early_stopping_patience)
             logger.info(
                 'Supervision contract, checkpoint directory and run settings match, and early '

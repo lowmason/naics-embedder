@@ -197,7 +197,8 @@ Rerunning `remote up` on the same host is safe: it pushes only what changed, rer
    instance before launch. Resume only from `last.ckpt`, never the selected checkpoint or an
    earlier epoch. Skip finished runs before any automatic resume loop: runs ended by early
    stopping or by exhaustion of the saved epoch budget must never be relaunched. Preserve all
-   saved run settings, including the epoch budget.
+   saved run settings, including the epoch budget, and the supplementary saved constructor
+   hyperparameters (LoRA always; expert/routing/balancing controls under active MoE).
 5. Write the segment record (§10.2) under `.remote/segments/<segment_id>/` on the instance, and
    copy the current push's code record next to it.
 6. Launch in tmux session `naics-train`, writing the exit code to
@@ -269,7 +270,7 @@ selection before δ.
 |---|---|---|---|
 | Tool check | `up` | `rsync --version` reports GNU rsync 3.2+ | Stops with `brew install rsync` |
 | Bundle gate | `up`, on the Mac and again on the instance | `supervision.manifest_path` is set; the bundle validates (`load_validated_bundle`); the parquet's SHA-256 equals the manifest's `description_fingerprint` | Stops. If unset: "run `uv run naics-embedder data supervision`, then set `supervision.manifest_path`". If mismatched: explains that the parquet changed and a new bundle requires a fresh run; older objectives are refused with nothing migrating (D2) |
-| Resume pre-check | `train --resume`, on the Mac | `validate_exact_resume` of the Mac's `last.ckpt` against the canonical bundle's runtime contract (bundle ID, codebook, objective, encoder record and summaries); no reads of the dropped `supervision_mode`, `structural_preference_loss_version` or `mining_contract_version` fields; saved run settings and absolute checkpoint directory match; the run is unfinished; both JSONL histories are present and all three uploaded SHA-256 values match | Stops before any GPU time is spent |
+| Resume pre-check | `train --resume`, on the Mac | `validate_exact_resume` of the Mac's `last.ckpt` against the canonical bundle's runtime contract (bundle ID, codebook, objective, encoder record and summaries); no reads of the dropped `supervision_mode`, `structural_preference_loss_version` or `mining_contract_version` fields; saved run settings and supplementary LoRA/active-MoE constructor hyperparameters match the current config (missing required values are refused; the 21-key identity is unchanged); absolute checkpoint directory matches; the run is unfinished; both JSONL histories are present and all three uploaded SHA-256 values match | Stops before any GPU time is spent |
 | Fresh-run collision | `train` without `--resume` | Neither the Mac nor the instance has `checkpoints/<experiment>/` | Stops; choose a new `experiment_name` |
 | Code record | Every push | Untracked files total at most the cap | Stops and names the files to commit or ignore |
 | Instance edits | Repeat pushes in a session, and `finish` | Instance files vs the last push's hash list (modified or deleted), plus new files outside the instance-scan ignore patterns | Stops and lists the files; `--pull-edits` rescues them, `--force` overwrites |

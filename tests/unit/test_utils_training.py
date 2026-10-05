@@ -674,3 +674,68 @@ def test_read_checkpoint_loads_a_saved_checkpoint_on_the_cpu(tmp_path, current_s
     assert loaded['hyper_parameters'] == saved['hyper_parameters']
     assert loaded['state_dict']['w'].device.type == 'cpu'
     assert torch.equal(loaded['state_dict']['w'], torch.ones(2))
+
+@pytest.mark.unit
+@pytest.mark.parametrize('fusion', ['masked_mean', 'attention', 'moe'])
+def test_saved_constructor_controls_match_without_changing_the_21_key_identity(fusion):
+    cfg = Config().override({'model.fusion': fusion})
+    saved = {
+        'hyper_parameters': {
+            'lora_r': 8,
+            'lora_alpha': 16,
+            'lora_dropout': 0.1,
+            'num_experts': 4,
+            'top_k': 2,
+            'moe_hidden_dim': 1024,
+            'load_balancing_coef': 0.01,
+        }
+    }
+    before = utils_training.run_settings(cfg, accelerator='cpu', precision='32-true')
+    utils_training.refuse_other_constructor_settings(saved, cfg)
+    assert utils_training.run_settings(cfg, accelerator='cpu', precision='32-true') == before
+    assert len(before) == 21
+
+@pytest.mark.unit
+@pytest.mark.parametrize('fusion', ['masked_mean', 'attention'])
+def test_inactive_moe_controls_do_not_change_constructor_identity(fusion):
+    cfg = Config().override(
+        {
+            'model.fusion': fusion,
+            'model.moe.num_experts': 8,
+            'model.moe.top_k': 1,
+            'model.moe.hidden_dim': 512,
+            'model.moe.load_balancing_coef': 0.2,
+        }
+    )
+    # Inactive controls need not even be saved; neither fusion constructs experts (R11).
+    saved = {'hyper_parameters': {'lora_r': 8, 'lora_alpha': 16, 'lora_dropout': 0.1}}
+    utils_training.refuse_other_constructor_settings(saved, cfg)
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'name', [
+        'lora_r',
+        'lora_alpha',
+        'lora_dropout',
+        'num_experts',
+        'top_k',
+        'moe_hidden_dim',
+        'load_balancing_coef',
+    ]
+)
+def test_missing_active_constructor_controls_fail_closed(name):
+    cfg = Config().override({'model.fusion': 'moe'})
+    saved = {
+        'hyper_parameters': {
+            'lora_r': 8,
+            'lora_alpha': 16,
+            'lora_dropout': 0.1,
+            'num_experts': 4,
+            'top_k': 2,
+            'moe_hidden_dim': 1024,
+            'load_balancing_coef': 0.01,
+        }
+    }
+    del saved['hyper_parameters'][name]
+    with pytest.raises(ValueError, match=f'{name}: saved absent'):
+        utils_training.refuse_other_constructor_settings(saved, cfg)

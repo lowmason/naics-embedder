@@ -275,7 +275,10 @@ uv run naics-embedder tools outcome-panel --checkpoint checkpoints/reference/epo
 Keep the store and JSON records under `~/naics-artifacts`, outside every worktree.
 Build one arm record from complete trained seed directories. Before the first export or decision
 read, the runner checks every seed's epoch coverage, panel fingerprint, training-run id, seed,
-21 settings, earliest best checkpoint and exact saved best score. A selected epoch with a
+21 settings, earliest best checkpoint and exact saved best score. Both last and selected
+checkpoints must also match the current config in their saved LoRA rank/alpha/dropout and active
+MoE expert count/top-k/hidden dimension/load-balancing coefficient. Missing required values are
+refused; the arm retains its 21-key settings identity. A selected epoch with a
 versioned sibling is ambiguous and refused. The arm's backbone revision is resolved independently
 from its cached backbone; it cannot be copied from the text-only comparator.
 
@@ -440,7 +443,10 @@ refused. `training.trainer.val_check_interval` is retained but unread.
 
 Fresh starts refuse used checkpoint directories. Exact resume requires the same experiment
 directory, bundle, encoder, preprocessing, seed and all 21 run settings, including the epoch
-budget. The code cache is rebuilt; `monitor_reads.jsonl` and `epoch_summary.jsonl` retain lines
+budget. A supplementary saved-constructor check compares LoRA rank/alpha/dropout always, and
+MoE expert count/top-k/hidden dimension/load-balancing coefficient under active MoE fusion,
+before model/data construction. Missing required values fail closed; inactive MoE controls are
+ignored. The code cache is rebuilt; `monitor_reads.jsonl` and `epoch_summary.jsonl` retain lines
 through the resumed epoch and then continue. A run that early stopping ended exits 1 with
 `early stopping ended the run at epoch k`. A spent epoch budget is a harmless no-op. Launchers
 must treat the early-stopping message as finished rather than retrying it.

@@ -2,10 +2,9 @@
 
 ## Current Status
 
-The suite contains **83 unit** test files and **1 integration** file, with **2,287 collected
-nodes**. The current fixture gates give **2285 passed, 2 skipped** on a host with MPS and
-**2277 passed, 10 skipped** without MPS. The additional eight skips require MPS; they are not
-missing CPU coverage. These counts describe the checked suite, not measured coverage percentages.
+The suite contains **83 unit** test files and **1 integration** file, with **2,315 collected
+nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
+Collection counts describe the suite inventory, not measured coverage percentages.
 
 Tests use immutable fixture bundles and tiny backbones. Training/panel outputs belong under
 `tmp_path`; verification does not read real sealed splits, train a real NAICS model or run a
@@ -32,7 +31,7 @@ tests/
 | Epoch loader | `test_datamodule.py`, `test_tokenization_cache.py`: seed/epoch permutations, exact coverage, code chunks, query tokens and cache identities |
 | Cache and outcome monitor | `test_monitor.py`: eval/no-grad refresh, detached candidates, live-anchor replacement, validation reads and durable records |
 | Selection-log guard | `test_selection_log_guard.py`: fail-closed refusals before appending reads or openings |
-| Training and contracts | `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`, `test_export.py`, `test_arm_encoder.py`: objective refusal, settings/directory/seed guards and export/read provenance |
+| Training and contracts | `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`, `test_export.py`, `test_arm_encoder.py`: objective refusal, settings/directory/seed guards, saved constructor controls, CPU/MPS float64 callback transport and export/read provenance |
 | Campaign runner | `test_checkpoint_runner.py`: all-seed preflight, earliest best, epoch coverage, saved-score/version-sibling refusals and monitor-record pass-through |
 | Verification and summary | `test_radius_report.py`, `test_epoch_summary.py`, `test_visualize_metrics.py`: live gradients, radius/distance checks, durable finite health, resume and SD bands |
 | Trainer integration | `integration/test_reference_training.py`: cache/monitor order, earliest tied best, warmup/plateau, early stopping, exact resume and health |

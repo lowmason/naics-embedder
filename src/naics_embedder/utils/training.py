@@ -480,6 +480,52 @@ def refuse_a_resume_under_other_settings(
             'or start a new run under another experiment_name'
         )
 
+def constructor_settings(cfg: Config) -> Dict[str, Any]:
+    '''
+    Behavior and shape controls saved in model hyperparameters, supplementary to P21's 21 keys.
+
+    LoRA always participates. Expert settings affect construction and the objective only under
+    MoE fusion (R11); changing inactive expert settings cannot change a masked-mean/attention run.
+    '''
+
+    settings = {
+        'lora_r': cfg.model.lora.r,
+        'lora_alpha': cfg.model.lora.alpha,
+        'lora_dropout': cfg.model.lora.dropout,
+    }
+    if cfg.model.fusion == 'moe':
+        settings.update(
+            num_experts=cfg.model.moe.num_experts,
+            top_k=cfg.model.moe.top_k,
+            moe_hidden_dim=cfg.model.moe.hidden_dim,
+            load_balancing_coef=cfg.model.moe.load_balancing_coef,
+        )
+    return settings
+
+def refuse_other_constructor_settings(checkpoint: Mapping[str, Any], cfg: Config) -> None:
+    '''
+    Refuse missing or changed saved constructor controls before exact resume or seed export.
+
+    Lightning tensor restoration does not restore controls such as LoRA scaling/dropout or MoE
+    routing. Current checkpoints save these constructor arguments separately from run_settings;
+    checking them preserves the literal 21-key arm identity without rewriting checkpoint files.
+    '''
+
+    saved = checkpoint.get('hyper_parameters') or {}
+    differences = [
+        (key, saved.get(key, _ABSENT), value) for key, value in constructor_settings(cfg).items()
+        if saved.get(key, _ABSENT) != value
+    ]
+    if differences:
+        named = '; '.join(
+            f'{key}: saved {_described(old)}, now {_described(new)}'
+            for key, old, new in differences
+        )
+        raise ValueError(
+            f'checkpoint constructor settings differ ({named}): resume or read with the model '
+            'configuration it started with; missing controls cannot establish exact identity'
+        )
+
 def refuse_a_resume_of_a_stopped_run(checkpoint: Mapping[str, Any], patience: int) -> None:
     '''
     Refuse an exact resume of a run that early stopping ended (P19, spec 4.4).

@@ -131,15 +131,41 @@ def test_no_rows_are_refused(shared_model):
 # The HGCN feeder
 # -------------------------------------------------------------------------------------------------
 
+@pytest.mark.parametrize(
+    'device', [
+        'cpu',
+        pytest.param(
+            'mps',
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason='MPS is unavailable'
+            )
+        ),
+    ]
+)
 def test_the_hgcn_feeder_writes_d_plus_one_lorentz_columns(
-    monkeypatch, tmp_path, shared_checkpoint, validated_bundle, five_code_descriptions_parquet
+    monkeypatch, tmp_path, shared_checkpoint, validated_bundle, five_code_descriptions_parquet,
+    device
 ):
     # The fixture bundle's description fingerprint hashes the frame, not the file, so the real
     # gate would refuse it
     monkeypatch.setattr(
         training_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle
     )
-    monkeypatch.setattr(training_cli, 'pick_device', lambda *_args: torch.device('cpu'))
+    monkeypatch.setattr(training_cli, 'pick_device', lambda *_args: torch.device(device))
+    saved = torch.load(shared_checkpoint, map_location='cpu', weights_only=False)
+    saved['callbacks'] = {
+        'ModelCheckpoint': {
+            'best_model_score': torch.tensor(0.25, dtype=torch.float64)
+        }
+    }
+    torch.save(saved, shared_checkpoint)
+    original_load = training_cli.NAICSContrastiveModel.load_from_checkpoint
+
+    def cpu_load(*args, **kwargs):
+        assert kwargs['map_location'] == 'cpu'
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(training_cli.NAICSContrastiveModel, 'load_from_checkpoint', cpu_load)
     # code_token_config keeps the default ./data/token_cache path; the descriptions path is
     # absolute, so it survives the move
     monkeypatch.chdir(tmp_path)

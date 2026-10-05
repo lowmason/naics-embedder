@@ -30,7 +30,9 @@ checkpoint_info = resolve_checkpoint('last', Path('checkpoints'), 'reference')
 `TrainingResult.best_score` is outcome validation MRR, not an in-sample loss. The four guards
 refuse used fresh directories, cross-directory resumes, different settings/seed, and a run
 that early stopping ended. A spent epoch budget is a no-op. Exact resume uses `last`, with its
-monitor and epoch-summary files. `run_settings` records 21 settings including effective
+monitor and epoch-summary files. `refuse_other_constructor_settings` separately checks saved
+LoRA rank/alpha/dropout and active MoE expert/routing/balancing controls against the current
+config, refusing missing required values. Inactive MoE controls are ignored. `run_settings` records 21 settings including effective
 accelerator/precision, accumulation, clipping and epoch budget.
 
 ## Data Classes
@@ -66,6 +68,8 @@ Structured result from a completed training run.
         - refuse_a_fresh_start_into_a_used_directory
         - refuse_a_resume_from_another_directory
         - refuse_a_resume_under_other_settings
+        - constructor_settings
+        - refuse_other_constructor_settings
         - refuse_a_resume_of_a_stopped_run
         - outcome_checkpoint
         - outcome_early_stopping
