@@ -49,8 +49,8 @@ invariant would break.
 - Editing code on the instance as a workflow. Such edits are detected and rescued (§8), not
   supported.
 - Training commands other than `naics-embedder train`; the CLI has no other training command.
-- Weights-only starts from an older checkpoint (for example after a bundle rebuild). `remote train`
-  supports fresh runs and exact resume only; weights-only starts are run by hand for now.
+- Migration from an older objective or supervision bundle. `remote train` supports fresh runs and
+  exact resume only; incompatible checkpoints are refused, and nothing migrates (D2).
 
 ## 3. Success criteria
 
@@ -78,8 +78,8 @@ invariant would break.
   `301cce28-539c-42ea-8781-496bbdcf511c`, was built on 2026-09-26 by roadmap Stage 5 (plan 7)
   and is pinned to that stage's descriptions parquet (sha256 `fe8c54e3…`). It replaced bundle
   `18403d29-3b23-444e-9e81-371d0ca8b7ea`, whose contract main no longer loads. Rebuild it only
-  when the parquet changes; a new bundle means older checkpoints can only load with
-  `--checkpoint-load-mode weights_only`.
+  when the parquet changes; a new bundle requires a fresh run. Stage 7 checkpoints must name
+  `objective: req11-v1`; older objectives are refused, and nothing migrates (D2).
 - SSH access with the user's existing key: `ssh ubuntu@IP` works without a password prompt.
 
 ## 5. Chosen approach and rejected alternatives
@@ -163,7 +163,8 @@ checkout) and use the host recorded in `.remote/state.json`.
 5. Push code (§7.3).
 6. Bootstrap by running `src/naics_embedder/remote/bootstrap.sh` from the pushed tree: install uv
    if missing, `uv sync --locked`, confirm `torch.cuda.is_available()`, and ensure tmux and rsync
-   are installed.
+   are installed. Check that the instance clock is NTP-synchronized before training: monitor
+   read timestamps participate in the margins-first guard.
 7. Upload the canonical inputs to the same repo-relative paths, then validate them on the
    instance with the checks from step 2.
 8. Record host, session, and push in `.remote/state.json`.
@@ -186,11 +187,17 @@ Rerunning `remote up` on the same host is safe: it pushes only what changed, rer
 
 1. Resolve the effective config (`--config`, default `conf/config.yaml`, plus overrides) with the
    repo's config loader to get `experiment_name`. `--config` must be a repo-relative path, since
-   the pushed tree carries it to the instance.
+   the pushed tree carries it to the instance. Keep one absolute instance checkpoint directory
+   per run (`~/naics-embedder/checkpoints/<experiment>/`, resolved under the same user), unchanged
+   across segments and instances: exact resume checks the saved ModelCheckpoint `dirpath`.
 2. Refuse if a training tmux session is already running on the instance.
 3. Without `--resume`: fresh-run collision guard (§8).
-4. With `--resume`: resume pre-check (§8); upload `checkpoints/<experiment>/last.ckpt`; confirm its
-   SHA-256 on the instance.
+4. With `--resume`: resume pre-check (§8); upload `last.ckpt`, `monitor_reads.jsonl` and
+   `epoch_summary.jsonl` from the same run's checkpoint directory; confirm each SHA-256 on the
+   instance before launch. Resume only from `last.ckpt`, never the selected checkpoint or an
+   earlier epoch. Skip finished runs before any automatic resume loop: runs ended by early
+   stopping or by exhaustion of the saved epoch budget must never be relaunched. Preserve all
+   saved run settings, including the epoch budget.
 5. Write the segment record (§10.2) under `.remote/segments/<segment_id>/` on the instance, and
    copy the current push's code record next to it.
 6. Launch in tmux session `naics-train`, writing the exit code to
@@ -199,7 +206,7 @@ Rerunning `remote up` on the same host is safe: it pushes only what changed, rer
    ```bash
    uv run naics-embedder train [--config PATH] \
      [--ckpt-path last --checkpoint-load-mode exact] \
-     supervision.manifest_path=<repo-relative path> [OVERRIDES...]
+     supervision.manifest_path=<repo-relative path> [OVERRIDES...] < /dev/null
    ```
 
 7. Start the sync loop on the Mac if it is not running.
@@ -213,6 +220,9 @@ Rerunning `remote up` on the same host is safe: it pushes only what changed, rer
 | `logs/` | `logs/remote/<session_id>/` |
 | `.remote/segments/` | `outputs/remote/<session_id>/segments/` |
 
+- Pull each run's entire checkpoint directory: every kept checkpoint, `last.ckpt`,
+  `monitor_reads.jsonl` and `epoch_summary.jsonl`. Both JSONL histories travel with checkpoints
+  on pulls and resume uploads, preserving the run layout across sessions.
 - Pulls add or update files; they never delete anything on the Mac.
 - rsync writes to a temporary file (`--partial-dir`) and replaces the Mac's copy only when the
   transfer completes.
@@ -246,14 +256,21 @@ Shows the host and session, whether training is running (or its exit code), GPU 
 last successful sync, the number of files still pending (a dry run), and whether the sync loop is
 alive.
 
+Only the within-run outcome validation monitor reads on the instance. QCEW slices, the artifact
+store, exports and decision-panel reads stay on the Mac. The instance's selection log returns
+under `logs/remote/<session_id>/`; never overwrite or merge it into the Mac's decision log during
+sync. The Stage 7 campaign waits until its first code PR merges and the remote workflow plan
+lands. It uses 10 seeds and fixes each panel's δ at 3 SD on the Mac, with no configuration
+selection before δ.
+
 ## 8. Guards
 
 | Guard | Runs in | Checks | If it fails |
 |---|---|---|---|
 | Tool check | `up` | `rsync --version` reports GNU rsync 3.2+ | Stops with `brew install rsync` |
-| Bundle gate | `up`, on the Mac and again on the instance | `supervision.manifest_path` is set; the bundle validates (`load_validated_bundle`); the parquet's SHA-256 equals the manifest's `description_fingerprint` | Stops. If unset: "run `uv run naics-embedder data supervision`, then set `supervision.manifest_path`". If mismatched: explains that the parquet changed and a new bundle makes older checkpoints weights-only |
-| Resume pre-check | `train --resume`, on the Mac | `validate_exact_resume` of the Mac's `last.ckpt` against the canonical bundle's runtime contract (bundle ID, codebook, loss and mining versions); the uploaded copy's SHA-256 matches | Stops before any GPU time is spent |
-| Fresh-run collision | `train` without `--resume` | The Mac has no `checkpoints/<experiment>/` | Stops; choose a new `experiment_name` |
+| Bundle gate | `up`, on the Mac and again on the instance | `supervision.manifest_path` is set; the bundle validates (`load_validated_bundle`); the parquet's SHA-256 equals the manifest's `description_fingerprint` | Stops. If unset: "run `uv run naics-embedder data supervision`, then set `supervision.manifest_path`". If mismatched: explains that the parquet changed and a new bundle requires a fresh run; older objectives are refused with nothing migrating (D2) |
+| Resume pre-check | `train --resume`, on the Mac | `validate_exact_resume` of the Mac's `last.ckpt` against the canonical bundle's runtime contract (bundle ID, codebook, objective, encoder record and summaries); no reads of the dropped `supervision_mode`, `structural_preference_loss_version` or `mining_contract_version` fields; saved run settings and absolute checkpoint directory match; the run is unfinished; both JSONL histories are present and all three uploaded SHA-256 values match | Stops before any GPU time is spent |
+| Fresh-run collision | `train` without `--resume` | Neither the Mac nor the instance has `checkpoints/<experiment>/` | Stops; choose a new `experiment_name` |
 | Code record | Every push | Untracked files total at most the cap | Stops and names the files to commit or ignore |
 | Instance edits | Repeat pushes in a session, and `finish` | Instance files vs the last push's hash list (modified or deleted), plus new files outside the instance-scan ignore patterns | Stops and lists the files; `--pull-edits` rescues them, `--force` overwrites |
 | Unfinished session | `up` on a new host | The previous session was finished or abandoned | Warns with that session's last sync time; continues only with `--force` |
@@ -303,8 +320,10 @@ Every test is written first and seen to fail, per the repo's rules.
 - **Bundle gate:** build a tiny real bundle in `tmp_path` with the repo's bundle builder. A valid
   bundle passes; an unset `manifest_path` gives the build instruction; changing one byte of the
   parquet gives the mismatch message.
-- **Resume pre-check:** a checkpoint whose contract matches the bundle passes; one with a
-  different `bundle_id` stops.
+- **Resume pre-check:** a current-objective checkpoint whose contract matches the bundle passes;
+  a different `bundle_id` or older objective stops. No check reads the dropped contract fields.
+  Tests also enforce identical saved run settings and absolute checkpoint path, resume only from
+  `last.ckpt`, both JSONL histories restored before launch, and refusal to relaunch a finished run.
 - **Code record round trip:** in a temp git repo, commit, modify a tracked file, and add an
   untracked one. Applying `uncommitted.patch` and `untracked.tar` to a clean checkout of
   `head_sha` must reproduce `hashes.json` exactly. The untracked-file cap has its own test.
@@ -325,8 +344,9 @@ skipped when GNU rsync 3.2+ is not on `PATH`.
   `data/` and `checkpoints/` on the instance are untouched.
 - An edit on the instance makes the next push stop and name the file; `--pull-edits` copies it to
   `.remote/instance-edits/<session_id>/`.
-- New checkpoints arrive and older ones on the Mac survive; session 2's `train.log` lands in its
-  own folder without overwriting session 1's.
+- New checkpoints and both JSONL histories arrive, older checkpoints on the Mac survive, and
+  histories survive transfer to the resumed instance; session 2's `train.log` lands in its own
+  folder without overwriting session 1's.
 - A file modified moments ago is skipped by a background pass and picked up by `finish`.
 - A clean `finish` finds zero differences; after a Mac copy is tampered with, `finish` reports it
   and withholds "safe to terminate".
@@ -336,12 +356,16 @@ skipped when GNU rsync 3.2+ is not on `PATH`.
 1. On the Mac: `brew install rsync`, build the canonical bundle, set `supervision.manifest_path`.
 2. Launch instance A. `remote up --host ubuntu@<A>` passes the tool check, bundle gate, bootstrap,
    and input validation.
-3. `remote train training.trainer.max_epochs=1`; `remote status` shows it running and then
-   exited 0. `outputs/remote/<session>/segments/<segment>/segment.json` records the `bundle_id`.
-4. `remote finish` prints "Safe to terminate". Terminate instance A.
-5. Launch instance B. `remote up --host ubuntu@<B>`, then
-   `remote train --resume training.trainer.max_epochs=2`. Training resumes exactly at epoch 1,
-   and the segment record's `resumed_from` SHA-256 matches the Mac's `last.ckpt`.
+3. `remote train training.trainer.max_epochs=40`; `remote status` shows it running. After a
+   completed epoch, interrupt while the run is still unfinished. The segment record at
+   `outputs/remote/<session>/segments/<segment>/segment.json` records the `bundle_id`.
+4. `remote finish --stop-training` interrupts and pulls `last.ckpt` and both JSONL histories,
+   then prints "Safe to terminate". Terminate instance A.
+5. Launch instance B under the same user and absolute checkpoint directory. Run
+   `remote up --host ubuntu@<B>`, then `remote train --resume training.trainer.max_epochs=40`
+   with every other run setting unchanged. Training resumes from the next epoch after
+   `last.ckpt`; both histories continue without duplicated surviving epochs, and the segment
+   record's `resumed_from` SHA-256 matches the Mac's `last.ckpt`.
 6. `remote finish`; terminate instance B. The Mac holds both sessions' logs in separate folders
    and the final checkpoint.
 7. Negative checks: an edit made on the instance stops the next push; with
