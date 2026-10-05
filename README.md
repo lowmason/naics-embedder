@@ -150,6 +150,6 @@ uv run mkdocs build --strict
 ```
 
 The suite contains 2,287 tests in 83 unit files and one integration file. On a host with MPS,
-2,283 pass and two skip; without MPS, 2,276 pass and nine skip. Coverage is measured separately,
+2,285 pass and two skip; without MPS, 2,277 pass and ten skip. Coverage is measured separately,
 not inferred from these counts. See [tests/README.md](tests/README.md) for test contracts and
 [CLAUDE.md](CLAUDE.md) for project conventions.
