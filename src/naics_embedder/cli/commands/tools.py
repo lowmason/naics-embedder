@@ -10,7 +10,6 @@ configuration, visualizing training metrics, and investigating model behavior.
 Commands:
     config: Display current training configuration.
     visualize: Generate visualizations from training log files.
-    investigate: Analyze hierarchy preservation metrics.
     outcome-baseline: Score the lexical stub encoder on the outcome panel's validation split.
     text-only-table: Embed every code's text with the arm's backbone, frozen (roadmap D9).
     regressor-panel: Score an arm on the regressor panel's validation or sealed test split.
@@ -56,7 +55,7 @@ from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
 from naics_embedder.text_model.export import code_token_config, export_code_table
 from naics_embedder.tools.config_tools import show_current_config
-from naics_embedder.tools.metrics_tools import investigate_hierarchy, visualize_metrics
+from naics_embedder.tools.metrics_tools import visualize_metrics
 from naics_embedder.utils.config import (
     Config,
     DecisionConfig,
@@ -98,11 +97,12 @@ def config(
     ] = 'conf/config.yaml',
 ):
     '''
-    Display the current training and curriculum configuration.
+    Display the training configuration a run would use.
 
-    Loads the specified configuration file and displays a formatted summary
-    of all settings including data paths, model architecture, training
-    hyperparameters, and loss function weights.
+    Validates the configuration file over the defaults and displays the run's name, seed and
+    inputs, then the settings every run records. A file that sets a key the configuration
+    no longer has is refused (spec 4.5). A missing file, or one the configuration refuses,
+    prints the error and exits 1.
 
     Args:
         config_file: Path to the YAML configuration file to display.
@@ -120,7 +120,8 @@ def config(
 
     configure_logging('tools_config.log')
 
-    show_current_config(config_file)
+    if not show_current_config(config_file):
+        raise typer.Exit(code=1)
 
 # -------------------------------------------------------------------------------------------------
 # Visualize metrics
@@ -192,70 +193,6 @@ def visualize(
                 '\n[bold green]✓[/bold green] Visualization saved to: '
                 f'[cyan]{result["output_file"]}[/cyan]\n'
             )
-
-    except Exception as e:
-        console.print(f'[bold red]Error:[/bold red] {e}')
-        raise typer.Exit(code=1)
-
-# -------------------------------------------------------------------------------------------------
-# Investigate hierarchy preservation metrics
-# -------------------------------------------------------------------------------------------------
-
-@app.command('investigate')
-def investigate(
-    distance_matrix: Annotated[
-        Optional[str],
-        typer.Option(
-            '--distance-matrix',
-            help='Path to ground truth distance matrix',
-        ),
-    ] = None,
-    config_file: Annotated[
-        Optional[str],
-        typer.Option(
-            '--config',
-            help='Path to config file (default: conf/config.yaml)',
-        ),
-    ] = None,
-):
-    '''
-    Analyze why hierarchy preservation correlations might be low.
-    
-    Investigates potential causes for poor hierarchy preservation metrics
-    by analyzing the ground truth distance matrix, evaluation configuration,
-    and providing diagnostic recommendations.
-    
-    Use this command when training produces unexpectedly low hierarchy
-    correlation metrics to identify configuration or data issues.
-    
-    Args:
-        distance_matrix: Path to the ground truth distance matrix parquet.
-            When omitted, uses the path from the configuration file.
-        config_file: Path to the configuration file. When omitted, uses
-            the default ``conf/config.yaml``.
-    
-    Example:
-        Investigate hierarchy metrics::
-        
-            $ uv run naics-embedder tools investigate
-        
-        Use custom distance matrix::
-        
-            $ uv run naics-embedder tools investigate \\
-                --distance-matrix data/custom_distances.parquet
-    '''
-
-    configure_logging('tools_investigate.log')
-
-    try:
-        dist_path = Path(distance_matrix) if distance_matrix else None
-        config_path = Path(config_file) if config_file else None
-
-        result = investigate_hierarchy(distance_matrix_path=dist_path, config_path=config_path)
-        for key, value in result.items():
-            console.print(f'[bold green]{key}:[/bold green] {value}')
-
-        console.print('\n[bold green]Investigation complete![/bold green]\n')
 
     except Exception as e:
         console.print(f'[bold red]Error:[/bold red] {e}')

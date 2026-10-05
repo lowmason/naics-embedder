@@ -2,7 +2,7 @@
 # Positive Sampling Helper
 #
 # Taxonomy-based positive enumeration and stratified sampling for contrastive training.
-# Shared by both text_model and graph_model streaming pipelines.
+# HGCN's streaming dataset (graph_model) uses it; the text stage samples no positives (spec 4.5).
 # -------------------------------------------------------------------------------------------------
 
 import logging

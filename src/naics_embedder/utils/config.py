@@ -799,50 +799,35 @@ class StreamingConfig(BaseModel):
         check_window(self.tokenizer_name, self.max_length)
         return self
 
-class SansStaticConfig(BaseModel):
-    '''Configuration for static SANS-style sampling buckets.'''
+class TextStreamingConfig(BaseModel):
+    '''
+    The text stage's streaming keys: the descriptions, the tokenizer and the window (P22).
+
+    The sampling keys and the legacy paths left with the old objective (spec 4.5); HGCN's cache
+    keeps them in ``StreamingConfig``.
+    '''
 
     model_config = ConfigDict(extra='forbid')
 
-    near_distance_threshold: float = Field(
-        default=4.0,
-        ge=0.0,
-        description='Tree-distance threshold separating near vs far negatives',
+    descriptions_parquet: str = Field(
+        default='./data/naics_descriptions.parquet',
+        description='Path to descriptions parquet file'
     )
-    near_bucket_weight: float = Field(
-        default=0.65,
-        ge=0.0,
-        description='Probability mass assigned to near negatives before normalization',
+    tokenizer_name: str = Field(
+        default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace tokenizer name'
     )
-    far_bucket_weight: float = Field(
-        default=0.35,
-        ge=0.0,
-        description='Probability mass assigned to far negatives before normalization',
-    )
-    default_distance: float = Field(
-        default=12.0,
-        ge=0.0,
-        description='Fallback tree distance when lookup data is missing',
+    max_length: int = Field(
+        default=128,
+        ge=1,
+        description="Tokens kept per channel text, at most the backbone's trained window",
     )
 
     @model_validator(mode='after')
-    def validate_bucket_weights(self) -> 'SansStaticConfig':
-        if self.near_bucket_weight + self.far_bucket_weight <= 0:
-            raise ValueError('near_bucket_weight + far_bucket_weight must be > 0')
+    def fit_the_trained_window(self) -> 'TextStreamingConfig':
+        '''Refuse a max_length beyond the backbone's trained window (Req 9).'''
+
+        check_window(self.tokenizer_name, self.max_length)
         return self
-
-class SamplingConfig(BaseModel):
-    '''Top-level sampling configuration (data layer strategies).'''
-
-    model_config = ConfigDict(extra='forbid')
-
-    strategy: Literal['sadc', 'sans_static'] = Field(
-        default='sadc',
-        description='Sampling strategy for dataloader (dynamic SADC vs static SANS)',
-    )
-    sans_static: SansStaticConfig = Field(
-        default_factory=SansStaticConfig, description='Parameters for SANS baseline'
-    )
 
 class DataLoaderConfig(BaseModel):
     '''Data loading and preprocessing configuration.'''
@@ -852,8 +837,9 @@ class DataLoaderConfig(BaseModel):
     tokenization: TokenizationConfig = Field(
         default_factory=TokenizationConfig, description='Tokenization configuration'
     )
-    streaming: StreamingConfig = Field(
-        default_factory=StreamingConfig, description='Streaming configuration'
+    streaming: TextStreamingConfig = Field(
+        default_factory=TextStreamingConfig,
+        description='The descriptions, tokenizer and window the text stage reads',
     )
     queries_per_step: int = Field(
         default=128,
@@ -863,26 +849,6 @@ class DataLoaderConfig(BaseModel):
             'steps, and the codes are cut into as many near-equal chunks (spec 4.3)'
         ),
     )
-    batch_size: int = Field(default=32, gt=0, le=512, description='Training batch size')
-    num_workers: int = Field(default=4, ge=0, le=32, description='Number of data loading workers')
-    val_split: float = Field(default=0.05, gt=0, lt=1, description='Validation split fraction')
-    n_epochs: int = Field(
-        default=100,
-        gt=0,
-        description=(
-            'Sampling epochs pre-built for the training and validation rows; one training epoch '
-            'reads them all'
-        ),
-    )
-
-    @field_validator('batch_size')
-    @classmethod
-    def warn_large_batch(cls, v: int) -> int:
-        '''Warn about potentially problematic batch sizes.'''
-
-        if v > 128:
-            logger.warning(f'Large batch_size={v} may cause OOM errors')
-        return v
 
 # -------------------------------------------------------------------------------------------------
 # Model Configuration
@@ -946,38 +912,10 @@ class ModelConfig(BaseModel):
         default_factory=MoEConfig,
         description='Mixture of Experts configuration, read only under fusion moe',
     )
-    eval_sample_size: int = Field(
-        default=500, gt=0, le=2125, description='Number of codes to sample for evaluation'
-    )
-    eval_every_n_epochs: int = Field(default=1, gt=0, description='Run evaluation every N epochs')
-    parent_eval_top_k: int = Field(
-        default=1,
-        ge=1,
-        description='Top-k nearest neighbors used for parent retrieval diagnostics',
-    )
-    child_eval_top_k: int = Field(
-        default=5,
-        ge=1,
-        description='Top-k nearest neighbors used for child retrieval diagnostics',
-    )
 
 # -------------------------------------------------------------------------------------------------
 # Loss Configuration
 # -------------------------------------------------------------------------------------------------
-
-class StructuralPreferenceConfig(BaseModel):
-    '''Pairwise structural preference over each anchor's positive plus selected negatives.'''
-
-    model_config = ConfigDict(extra='forbid')
-
-    weight: float = Field(
-        default=0.35, ge=0.0, le=1.0, description='Structural preference loss weight'
-    )
-    margin: float = Field(default=0.1, ge=0.0, description='Ordering margin on learned distances')
-    temperature: float = Field(default=1.0, gt=0.0, description='Softplus temperature')
-    tie_tolerance: float = Field(
-        default=1e-6, ge=0.0, description='Structural distances within this tolerance are ties'
-    )
 
 class LossConfig(BaseModel):
     '''
@@ -1027,49 +965,6 @@ class LossConfig(BaseModel):
             '[low, high], the range both logit scales are clamped to, with 0 < low < high; the '
             'scales take no weight decay'
         ),
-    )
-    temperature: float = Field(
-        default=0.07, gt=0, le=1, description='Temperature for contrastive loss'
-    )
-    curvature: float = Field(default=1.0, gt=0, description='Curvature for hyperbolic space')
-    base_margin: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=2.0,
-        description='Base margin for adaptive margin miner (higher = stricter separation)',
-    )
-    hierarchy_weight: float = Field(
-        default=0.1,
-        ge=0,
-        le=1.0,
-        description='Weight for hierarchy preservation loss component (0.0 to disable)',
-    )
-    structural_preference: StructuralPreferenceConfig = Field(
-        default_factory=StructuralPreferenceConfig,
-        description='Structural preference loss (replaces LambdaRank)',
-    )
-    rank_order_weight: Optional[float] = Field(
-        default=None,
-        ge=0,
-        le=1.0,
-        description=(
-            'Legacy LambdaRank weight, retained only so a configuration that sets it is '
-            'rejected with a migration message'
-        ),
-    )
-    radius_reg_weight: float = Field(
-        default=0.01,
-        ge=0,
-        le=1.0,
-        description=(
-            'Weight for radius regularization to prevent hyperbolic radius instability (0.0 to disable)'
-        ),
-    )
-    level_radius_weight: float = Field(
-        default=0.05,
-        ge=0,
-        le=1.0,
-        description='Weight for hierarchy-level-aware radius prior (0.0 to disable)',
     )
 
     @field_validator('logit_scale_range')
@@ -1177,119 +1072,6 @@ class TrainerConfig(BaseModel):
             raise ValueError(f'precision must be one of {valid}')
         return v
 
-class AnnealConfig(BaseModel):
-    '''Configuration for curriculum annealing schedules.'''
-
-    model_config = ConfigDict(extra='forbid')
-
-    enabled: bool = Field(default=False, description='Enable continuous annealing schedule')
-    alpha_start: float = Field(
-        default=1.5, gt=0, description='Starting tree-distance exponent for Phase 1 weighting'
-    )
-    alpha_end: float = Field(
-        default=0.8, gt=0, description='Ending tree-distance exponent after annealing'
-    )
-    epochs: int = Field(default=50, gt=0, description='Number of epochs over which to anneal')
-    metric_name: Optional[str] = Field(
-        default=None,
-        description='Optional metric key; when satisfied, annealing completes immediately',
-    )
-    metric_threshold: Optional[float] = Field(
-        default=None,
-        description='Threshold for metric trigger (requires metric_name)',
-    )
-    metric_direction: Literal['above', 'below'] = Field(
-        default='below',
-        description='Interpret metric as reaching threshold when going "below" or "above" it',
-    )
-    router_mix_start: float = Field(
-        default=0.3,
-        ge=0.0,
-        le=1.0,
-        description='Initial ratio of router-guided negatives during annealing',
-    )
-    router_mix_end: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description='Final ratio of router-guided negatives once annealing completes',
-    )
-
-class CurriculumConfig(BaseModel):
-    '''Structure-Aware Dynamic Curriculum (SADC) scheduler configuration.'''
-
-    model_config = ConfigDict(extra='forbid')
-
-    phase1_end: float = Field(
-        default=0.3,
-        ge=0,
-        le=1,
-        description='End of Phase 1 (Structural Initialization) as fraction of max epochs',
-    )
-    phase2_end: float = Field(
-        default=0.7,
-        ge=0,
-        le=1,
-        description='End of Phase 2 (Geometric Refinement) as fraction of max epochs',
-    )
-    phase3_end: float = Field(
-        default=1.0,
-        ge=0,
-        le=1,
-        description='End of Phase 3 (False Negative Mitigation) as fraction of max epochs',
-    )
-    tree_distance_alpha: float = Field(
-        default=1.5, gt=0, description='Exponent for inverse tree-distance weighting of negatives'
-    )
-    sibling_distance_threshold: float = Field(
-        default=2.0, ge=0, description='Distance threshold for sibling masking in Phase 1'
-    )
-    fn_curriculum_start_epoch: int = Field(
-        default=10, ge=0, description='Epoch to begin clustering-based false-negative elimination'
-    )
-    fn_cluster_every_n_epochs: int = Field(
-        default=5, gt=0, description='Frequency (in epochs) for refreshing clustering in Phase 3'
-    )
-    fn_num_clusters: int = Field(
-        default=500, gt=0, description='Number of clusters used in false-negative elimination'
-    )
-    phase_mode: Literal['three_phase', 'two_phase'] = Field(
-        default='three_phase',
-        description='Use legacy three-phase schedule or merge phases 2/3 into one stage',
-    )
-    anneal: AnnealConfig = Field(
-        default_factory=AnnealConfig, description='Continuous annealing schedule configuration'
-    )
-
-    @model_validator(mode='after')
-    def validate_phase_boundaries(self) -> 'CurriculumConfig':
-        '''Ensure curriculum phases progress monotonically.'''
-
-        if not (self.phase1_end <= self.phase2_end <= self.phase3_end):
-            raise ValueError(
-                'Curriculum phases must satisfy phase1_end <= phase2_end <= phase3_end'
-            )
-        return self
-
-class FalseNegativeConfig(BaseModel):
-    '''Configuration for handling false negatives during training.'''
-
-    model_config = ConfigDict(extra='forbid')
-
-    strategy: Literal['eliminate', 'attract', 'hybrid'] = Field(
-        default='eliminate',
-        description='False negative handling strategy (mask, attract, or hybrid)',
-    )
-    attraction_weight: float = Field(
-        default=0.1,
-        ge=0.0,
-        description='Weight of auxiliary attraction loss when strategy != eliminate',
-    )
-    attraction_metric: Literal['cosine', 'l2'] = Field(
-        default='cosine',
-        description='Metric used for attraction losses when strategy requires it',
-    )
-
 class TrainingConfig(BaseModel):
     '''Optimizer and training configuration.'''
 
@@ -1326,12 +1108,6 @@ class TrainingConfig(BaseModel):
         default=5,
         ge=1,
         description='The epochs without a higher val/outcome_mrr before training stops',
-    )
-    warmup_steps: int = Field(default=500, ge=0, description='Number of warmup steps')
-    use_warmup_cosine: bool = Field(
-        default=False,
-        description='Use warmup + cosine decay scheduler instead of ReduceLROnPlateau. '
-        'Beneficial for large training jobs with many epochs.',
     )
     trainer: TrainerConfig = Field(
         default_factory=TrainerConfig, description='PyTorch Lightning Trainer config'
@@ -1561,15 +1337,6 @@ class GraphConfig(BaseModel):
 # Main Configuration
 # -------------------------------------------------------------------------------------------------
 
-# Legacy streaming paths, which training never reads: it reads structural facts and training
-# pairs from the supervision bundle.
-LEGACY_STREAMING_PATHS = (
-    'distances_parquet',
-    'distance_matrix_parquet',
-    'relations_parquet',
-    'triplets_parquet',
-)
-
 class Config(BaseModel):
     '''Main configuration for NAICS training.'''
 
@@ -1580,10 +1347,6 @@ class Config(BaseModel):
         description='Experiment name: the run checkpoints into <checkpoint_dir>/<experiment_name>',
     )
     seed: int = Field(default=42, ge=0, description='Random seed for reproducibility')
-    curriculum: CurriculumConfig = Field(
-        default_factory=CurriculumConfig,
-        description='Dynamic SADC curriculum scheduler configuration',
-    )
     dirs: DirConfig = Field(default_factory=DirConfig, description='File system paths')
     data: DataConfig = Field(default_factory=DataConfig, description='Data configuration')
     data_loader: DataLoaderConfig = Field(
@@ -1596,40 +1359,10 @@ class Config(BaseModel):
     training: TrainingConfig = Field(
         default_factory=TrainingConfig, description='Training configuration'
     )
-    sampling: SamplingConfig = Field(
-        default_factory=SamplingConfig, description='Sampling strategy configuration'
-    )
-    false_negatives: FalseNegativeConfig = Field(
-        default_factory=FalseNegativeConfig, description='False negative mitigation strategy'
-    )
     supervision: SupervisionRuntimeConfig = Field(
         default_factory=SupervisionRuntimeConfig,
         description='Stage-3 supervision contract and authoritative bundle',
     )
-
-    @model_validator(mode='after')
-    def validate_supervision_contract(self) -> 'Config':
-        '''Training rejects settings whose semantics the repaired contract replaced.'''
-        if self.loss.rank_order_weight is not None:
-            raise ValueError(
-                'loss.rank_order_weight is a legacy LambdaRank setting; '
-                'configure loss.structural_preference instead'
-            )
-        if self.data_loader.streaming.phase1_exclusion_weight is not None:
-            raise ValueError(
-                'data_loader.streaming.phase1_exclusion_weight is invalid: an explicit '
-                'exclusion is never a negative'
-            )
-        for name in LEGACY_STREAMING_PATHS:
-            if getattr(self.data_loader.streaming, name) != (
-                StreamingConfig.model_fields[name].default
-            ):
-                raise ValueError(
-                    f'data_loader.streaming.{name} is a legacy path, which training never '
-                    'reads: structural facts and training pairs come from the bundle at '
-                    'supervision.manifest_path. Remove the key'
-                )
-        return self
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'Config':

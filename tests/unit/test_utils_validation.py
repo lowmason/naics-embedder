@@ -9,7 +9,6 @@ from naics_embedder.utils.validation import (
     require_valid_supervision_bundle,
     validate_data_paths,
     validate_descriptions_schema,
-    validate_distances_schema,
     validate_tokenization_cache,
     validate_training_config,
 )
@@ -21,16 +20,9 @@ def _touch(path):
 
 @pytest.mark.unit
 def test_validate_data_paths_all_present(tmp_path):
+    # The descriptions are the one data path: structural facts come from the bundle
     cfg = Config()
-    streaming = cfg.data_loader.streaming
-    streaming.descriptions_parquet = _touch(tmp_path / 'descriptions.parquet')
-    streaming.distances_parquet = _touch(tmp_path / 'distances.parquet')
-    streaming.distance_matrix_parquet = _touch(tmp_path / 'distance_matrix.parquet')
-    streaming.relations_parquet = _touch(tmp_path / 'relations.parquet')
-    triplets_dir = tmp_path / 'triplets'
-    triplets_dir.mkdir()
-    (triplets_dir / 'batch.parquet').write_text('rows')
-    streaming.triplets_parquet = str(triplets_dir)
+    cfg.data_loader.streaming.descriptions_parquet = _touch(tmp_path / 'descriptions.parquet')
 
     result = validate_data_paths(cfg)
     assert result.valid
@@ -64,15 +56,21 @@ def test_validate_descriptions_schema_success(tmp_path):
     assert result.valid
 
 @pytest.mark.unit
-def test_validate_distances_schema_missing_column(tmp_path):
-    path = tmp_path / 'distances.parquet'
-    pl.DataFrame({'idx_i': [0], 'idx_j': [1]}).write_parquet(path)
+def test_validate_descriptions_schema_missing_column(tmp_path):
+    path = tmp_path / 'descriptions.parquet'
+    pl.DataFrame({
+        'index': [0],
+        'code': ['11'],
+        'level': [2],
+        'title': ['Manufacturing'],
+    }).write_parquet(path)
     cfg = Config()
-    cfg.data_loader.streaming.distances_parquet = str(path)
+    cfg.data_loader.streaming.descriptions_parquet = str(path)
 
-    result = validate_distances_schema(cfg)
+    result = validate_descriptions_schema(cfg)
     assert result.valid is False
-    assert any('missing columns' in err for err in result.errors)
+    # The bracketed list names only what is missing; the message's Expected list names every column
+    assert any("missing columns: ['description']" in err for err in result.errors)
 
 @pytest.mark.unit
 def test_validate_tokenization_cache_missing_returns_warning(tmp_path):
@@ -177,14 +175,3 @@ def test_supervision_gate_rejects_a_tampered_bundle(
 
     with pytest.raises(ValueError):
         require_valid_supervision_bundle(cfg)
-
-@pytest.mark.unit
-def test_repaired_data_paths_do_not_require_legacy_artifacts(tmp_path):
-    # Structural facts and training pairs come from the bundle, which the supervision gate
-    # validates; no mode reads the legacy long-form paths (roadmap D2).
-    cfg = Config()
-    cfg.data_loader.streaming.descriptions_parquet = _touch(tmp_path / 'descriptions.parquet')
-    cfg.data_loader.streaming.distances_parquet = str(tmp_path / 'missing_distances.parquet')
-    cfg.data_loader.streaming.triplets_parquet = str(tmp_path / 'missing_triplets')
-
-    assert validate_data_paths(cfg).valid

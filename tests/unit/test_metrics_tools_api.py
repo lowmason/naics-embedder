@@ -1,23 +1,14 @@
 '''
 Unit tests for metrics_tools API module.
 
-Tests the high-level API for visualizing metrics and investigating hierarchy.
+Tests the high-level API for visualizing metrics.
 '''
 
 import pytest
 
-try:
-    import yaml
-
-    HAS_YAML = True
-except ImportError:
-    HAS_YAML = False
-
 from naics_embedder.tools.metrics_tools import (
-    HAS_INVESTIGATE,
     HAS_MATPLOTLIB,
     HAS_VISUALIZE,
-    investigate_hierarchy,
     visualize_metrics,
 )
 
@@ -44,24 +35,6 @@ def sample_log_file(tmp_path):
     log_file = tmp_path / 'logs' / 'train_sequential.log'
     log_file.parent.mkdir(parents=True)
     log_file.write_text(log_content)
-    return tmp_path
-
-@pytest.fixture
-def project_with_config(tmp_path):
-    '''Create project directory with config file.'''
-    if not HAS_YAML:
-        pytest.skip('yaml not available')
-
-    # Create config
-    config = {'model': {'eval_sample_size': 500}}
-    config_path = tmp_path / 'conf' / 'config.yaml'
-    config_path.parent.mkdir(parents=True)
-    with open(config_path, 'w') as f:
-        yaml.dump(config, f)
-
-    # Create data directory
-    (tmp_path / 'data').mkdir()
-
     return tmp_path
 
 # -------------------------------------------------------------------------------------------------
@@ -154,47 +127,6 @@ class TestVisualizeMetrics:
             assert result['output_file'].exists()
 
 # -------------------------------------------------------------------------------------------------
-# Tests for investigate_hierarchy()
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestInvestigateHierarchy:
-    '''Tests for investigate_hierarchy() function.'''
-
-    @pytest.mark.skipif(not HAS_INVESTIGATE, reason='investigation tools not available')
-    def test_investigate_hierarchy_returns_dict(self, project_with_config):
-        '''Test that investigate_hierarchy returns a dictionary.'''
-        result = investigate_hierarchy(project_root=project_with_config)
-
-        assert isinstance(result, dict)
-
-    @pytest.mark.skipif(not HAS_INVESTIGATE, reason='investigation tools not available')
-    def test_investigate_hierarchy_checks_distance_matrix(self, project_with_config):
-        '''Test that distance matrix analysis is performed.'''
-        result = investigate_hierarchy(project_root=project_with_config)
-
-        assert 'distance_matrix_analyzed' in result
-
-    @pytest.mark.skipif(not HAS_INVESTIGATE, reason='investigation tools not available')
-    def test_investigate_hierarchy_returns_eval_sample_size(self, project_with_config):
-        '''Test that eval_sample_size is returned.'''
-        result = investigate_hierarchy(project_root=project_with_config)
-
-        assert 'eval_sample_size' in result
-        if result['eval_sample_size'] is not None:
-            assert result['eval_sample_size'] == 500
-
-    @pytest.mark.skipif(not HAS_INVESTIGATE, reason='investigation tools not available')
-    def test_investigate_hierarchy_handles_missing_config(self, tmp_path):
-        '''Test handling of missing config file.'''
-        # Create empty project without config
-        (tmp_path / 'data').mkdir()
-
-        result = investigate_hierarchy(project_root=tmp_path)
-
-        assert result['eval_sample_size'] is None
-
-# -------------------------------------------------------------------------------------------------
 # Edge case tests
 # -------------------------------------------------------------------------------------------------
 
@@ -219,4 +151,3 @@ class TestEdgeCases:
         '''Test that HAS_* flags are booleans.'''
         assert isinstance(HAS_MATPLOTLIB, bool)
         assert isinstance(HAS_VISUALIZE, bool)
-        assert isinstance(HAS_INVESTIGATE, bool)

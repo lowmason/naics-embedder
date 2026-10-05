@@ -9,11 +9,11 @@ performance benchmarking.
 
 ### Current Status
 
-**Test files:** 53 unit, 3 integration
+**Test files:** 53 unit, 1 integration
 
 - ✅ **Well Tested**: Text model pipeline (encoding, MoE, loss, hyperbolic ops, evaluation)
-- ✅ **Tested since this file was written**: Data processing, graph model (HGCN), clustering,
-  training and validation utilities, CLI commands
+- ✅ **Tested since this file was written**: Data processing, graph model (HGCN), training and
+  validation utilities, CLI commands
 
 **Recent additions:**
 
@@ -50,17 +50,12 @@ tests/
 │   ├── test_arm_encoder.py   # The arm encoder and the outcome read ✅
 │   ├── test_naics_model.py   # PyTorch Lightning module ✅
 │   ├── test_evaluation.py    # Text model evaluation metrics ✅
-│   ├── test_curriculum.py    # Curriculum scheduling ✅
-│   ├── test_hard_negative_mining.py  # Hard negative mining ✅
-│   ├── test_false_negative_strategy.py  # False negative mitigation ✅
 │   ├── test_tokenization_cache.py  # Tokenization caching ✅
 │   ├── test_datamodule.py    # Two-stream steps and the data module ✅
-│   ├── test_streaming_dataset.py  # Streaming dataset utilities ✅
-│   ├── test_streaming_sampling.py  # Sampling strategies ✅
 │   ├── test_data_distances.py  # Distance computation ✅
 │   ├── test_config.py        # Configuration management ✅
 │   └── ...
-├── integration/              # Integration tests (3 files)
+├── integration/              # Integration tests (1 file)
 ├── fixtures/                 # Test data and fixtures
 └── conftest.py              # Shared pytest fixtures
 
@@ -116,15 +111,13 @@ The following modules have comprehensive test coverage:
 1. **text_model/hyperbolic.py** ✅ - `test_hyperbolic.py`
    - LorentzOps (exp/log maps, distances, inner products)
    - HyperbolicHead (norm cap and exp map, no parameters)
-   - LorentzDistance computation
    - Manifold validity checks
    - Numerical stability tests
    - Property-based tests with Hypothesis
 
 2. **text_model/loss.py** ✅ - `test_loss.py`
-   - HyperbolicInfoNCELoss (DCL-based contrastive learning)
-   - HierarchyPreservationLoss (distance correlation)
-   - StructuralPreferenceLoss (pairwise structural ordering; gradient-direction contracts)
+   - task_loss, code_code_loss and radial_loss (Req 11's three terms)
+   - LogitScale (the learned logit scales, clamped to their range)
 
 3. **text_model/shared_encoder.py** ✅ - `test_encoder.py`
    - One LoRA-adapted backbone over marked fields and queries
@@ -140,7 +133,6 @@ The following modules have comprehensive test coverage:
 5. **text_model/naics_model.py** ✅ - `test_naics_model.py`
    - NAICSContrastiveModel PyTorch Lightning module
    - Training step (forward + loss)
-   - Validation step (metrics)
    - Optimizer configuration
 
 6. **metrics/core.py** ✅ - `test_evaluation.py`
@@ -149,18 +141,6 @@ The following modules have comprehensive test coverage:
    - HierarchyMetrics (cophenetic/Spearman correlation, distortion)
    - EmbeddingStatistics (norm, radius, diversity, collapse detection)
    - NAICSEvaluationRunner (full evaluation pipeline, in `metrics/runner.py`)
-
-7. **text_model/curriculum.py** ✅ - `test_curriculum.py`
-   - Dynamic structure-aware curriculum scheduling
-   - Difficulty progression
-
-8. **text_model/hard_negative_mining.py** ✅ - `test_hard_negative_mining.py`
-   - Hard negative sampling strategies
-   - Distance-based selection
-
-9. **text_model/false_negative_strategies.py** ✅ - `test_false_negative_strategy.py`
-   - False negative detection strategies
-   - Masking logic
 
 #### Data Loading Pipeline
 
@@ -177,13 +157,6 @@ The following modules have comprehensive test coverage:
     - NAICSDataModule: the two streams from the bundle and the code rows in codebook order
     - The one train loader, no validation loader, and the epoch set at each epoch start
 
-3. **text_model/dataloader/streaming_dataset.py** ✅ - `test_streaming_dataset.py`
-    - Taxonomy utilities
-    - Ancestor/descendant generation
-    - Matrix loading
-    - Sampling weight computation
-    - Multi-epoch cache path generation
-
 #### Configuration & Utilities
 
 1. **utils/config.py** ✅ - `test_config.py`
@@ -199,19 +172,19 @@ The following modules have comprehensive test coverage:
 ### Closed Gaps
 
 The gap analysis added in `b1ee4df` (November 2025) flagged nine areas as untested. Each now
-has tests:
+has tests, except one whose module is gone:
 
 | Area | Modules | Tests |
 |------|---------|-------|
 | Graph model (HGCN) | `graph_model/hgcn.py`, `graph_model/dataloader/hgcn_datamodule.py`, `graph_model/dataloader/hgcn_streaming_dataset.py`, `metrics/graph.py` (was `graph_model/evaluation.py`) | `test_hgcn.py`, `test_hgcn_metrics.py`, `test_hgcn_datamodule.py`, `test_hgcn_streaming_dataset.py`, `test_graph_downstream_evaluation.py` |
-| Hyperbolic clustering | `text_model/hyperbolic_clustering.py` | `test_hyperbolic_clustering.py` |
+| Hyperbolic clustering | `text_model/hyperbolic_clustering.py` | None: the module was deleted with the old objective (spec 4.5) |
 | Training utilities | `utils/training.py` | `test_utils_training.py` |
 | Validation utilities | `utils/validation.py` | `test_utils_validation.py` |
 | Data generation | `data/compute_relations.py`, `data/create_triplets.py`, `data/download_data.py` | `test_data_relations.py`, `test_data_triplets.py`, `test_data_download.py` |
 | CLI commands | `cli/commands/data.py`, `cli/commands/tools.py`, `cli/commands/training.py` | `test_cli_commands.py` (data, tools), `test_cli_training.py` (training) |
 | Backend and console utilities | `utils/backend.py`, `utils/utilities.py`, `utils/warnings.py`, `utils/console.py` | `test_utils_backend.py`, `test_utils_utilities.py`, `test_warnings.py`, `test_utils_console.py` |
-| Tools and visualization | `tools/config_tools.py`, `tools/metrics_tools.py`, `tools/_visualize_metrics.py`, `tools/_investigate_hierarchy.py` | `test_config_tools.py`, `test_metrics_tools_api.py`, `test_visualize_metrics.py`, `test_investigate_hierarchy_tool.py` |
-| Integration | Cross-component | `integration/test_stage3_training_step.py` (the checked negative selection, until the old objective's machinery goes), `integration/test_distributed_supervision.py` (distributed selection), `integration/test_reference_training.py` (training the reference bundle through `create_trainer`) |
+| Tools and visualization | `tools/config_tools.py`, `tools/metrics_tools.py`, `tools/_visualize_metrics.py` | `test_config_tools.py`, `test_metrics_tools_api.py`, `test_visualize_metrics.py` |
+| Integration | Cross-component | `integration/test_reference_training.py` (training the reference bundle through `create_trainer`) |
 
 Module paths are relative to `src/naics_embedder/`. The per-module test skeletons that used to
 follow here were removed, since the test files are the reference now. The original analysis and
@@ -225,8 +198,8 @@ skeletons are in `b1ee4df`.
   health logs and exact resume. HGCN has no such test: `test_hgcn_metrics.py` fits it one batch
   an epoch, to test the epoch its metrics are recorded under.
 - **Whole-system run.** No test runs data generation → text training → HGCN → evaluation end to
-  end. Tests described as full-pipeline or end-to-end cover sub-pipelines: graph preprocessing,
-  positive sampling, and distributed selection.
+  end. Tests described as full-pipeline or end-to-end cover sub-pipelines: graph preprocessing
+  and positive sampling.
 - **Coverage numbers.** This README no longer records current coverage. Measure it against
   the [targets](#target-coverage-metrics) with the commands in
   [Measuring Coverage](#measuring-coverage).
@@ -679,7 +652,7 @@ uv run pytest tests/ --benchmark-only
 | Category | Status |
 |----------|--------|
 | **Total Source Modules** | 67 (excluding `__init__.py`) |
-| **Total Test Files** | 53 unit, 3 integration |
+| **Total Test Files** | 53 unit, 1 integration |
 | **Target Coverage** | >70% |
 
 ### Critical Missing Tests

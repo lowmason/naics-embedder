@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import yaml
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from naics_embedder.text_model.dataloader.datamodule import TrainDatasetEpochCallback
@@ -278,8 +279,17 @@ def test_save_training_summary_writes_files(tmp_path):
     assert 'yaml' in paths and Path(paths['yaml']).exists()
     assert 'json' in paths and Path(paths['json']).exists()
     summary = json.loads(Path(paths['json']).read_text())
-    snapshot = summary['config_snapshot']['model']
-    assert (snapshot['fusion'], snapshot['dimension']) == ('masked_mean', 16)
+    # The snapshot holds the settings the run records, by train's rule (P21, P31), so it reads none
+    # of the old objective's keys (spec 4.5)
+    settings = utils_training.run_settings(cfg, accelerator='cpu', precision='32-true')
+    model = {
+        'base_model': cfg.model.base_model_name,
+        'lora_rank': cfg.model.lora.r,
+        'num_experts': cfg.model.moe.num_experts,
+    }
+    assert summary['config_snapshot'] == {'model': model, 'run_settings': settings}
+    from_yaml = yaml.safe_load(Path(paths['yaml']).read_text())
+    assert from_yaml['config_snapshot'] == summary['config_snapshot']
     # The best score is the kept epoch's validation MRR, not a loss
     assert summary['results']['best_score'] == 0.42
     assert 'best_loss' not in summary['results']

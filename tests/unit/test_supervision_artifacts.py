@@ -19,6 +19,7 @@ from naics_embedder.data.supervision_bundle import (
 )
 from naics_embedder.panels.index_roles import verify_role_leakage
 from naics_embedder.supervision.artifacts import (
+    METADATA_BUNDLE,
     REDIRECTIONS_SCHEMA,
     REQUIRED_VALIDATION_RESULTS,
     load_validated_bundle,
@@ -498,6 +499,23 @@ def test_loader_rejects_a_missing_member(generated_bundle):
 
     with pytest.raises(ValueError, match='training_pairs artifact missing'):
         load_validated_bundle(generated_bundle)
+
+def test_loader_rejects_mixed_bundle_metadata(generated_bundle):
+    manifest = json.loads(generated_bundle.read_text())
+    member = manifest['artifacts']['pair_facts']['files'][0]
+    pair_path = generated_bundle.parent / member['path']
+    table = pq.read_table(pair_path)
+    metadata = dict(table.schema.metadata or {})
+    metadata[METADATA_BUNDLE] = b'bundle-b'
+    pq.write_table(table.replace_schema_metadata(metadata), pair_path)
+    member['sha256'] = sha256_file(pair_path)
+    generated_bundle.write_text(json.dumps(manifest, indent=2))
+
+    with pytest.raises(ValueError, match='pair_facts.*bundle-a.*bundle-b'):
+        load_validated_bundle(
+            generated_bundle,
+            expected_contract='stage3-supervision-v2',
+        )
 
 def test_loader_rejects_rehashed_inconsistent_pair_facts(generated_bundle):
     _rewrite_member(

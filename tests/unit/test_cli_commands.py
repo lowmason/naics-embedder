@@ -5,6 +5,7 @@ import click
 import polars as pl
 import pytest
 import torch
+import typer
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
@@ -242,20 +243,18 @@ def test_tools_visualize_handles_exception(monkeypatch, runner):
     assert result.exit_code == 1
     assert 'Error' in result.output
 
-def test_tools_investigate_success(monkeypatch, runner):
-    monkeypatch.setattr(
-        tools_cli,
-        'investigate_hierarchy',
-        lambda **_: {
-            'reason': 'ok',
-            'suggestion': 'none'
-        },
-    )
+def test_tools_investigate_is_gone(runner):
+    '''Spec 4.4: Req 6's statistics come only from tools diagnostics, so investigate is retired.'''
+
+    # Checked before invoking, so the command never runs while it still exists
+    assert 'investigate' not in typer.main.get_command(tools_cli.app).commands
+    assert not hasattr(tools_cli, 'investigate_hierarchy')
 
     result = runner.invoke(tools_cli.app, ['investigate'])
 
-    assert result.exit_code == 0
-    assert 'Investigation complete' in result.output
+    # Click's usage error: no such command
+    assert result.exit_code == 2
+    assert "No such command 'investigate'" in click.unstyle(result.output).replace('\n', '')
 
 # -------------------------------------------------------------------------------------------------
 # Decisions (Req 5) and diagnostics (Req 6)

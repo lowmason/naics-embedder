@@ -20,11 +20,9 @@ from naics_embedder.panels.decoding import lorentz_distances
 from naics_embedder.text_model import hyperbolic
 from naics_embedder.text_model.hyperbolic import (
     HyperbolicHead,
-    LorentzDistance,
     LorentzOps,
     check_lorentz_manifold_validity,
     compute_hyperbolic_radii,
-    log_hyperbolic_diagnostics,
 )
 from tests.fixtures.hyperboloid import hyperboloid_points
 
@@ -370,76 +368,6 @@ class TestPolarDistance:
         assert torch.isfinite(directions.grad).all()
 
 # -------------------------------------------------------------------------------------------------
-# LorentzDistance Tests
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestLorentzDistance:
-    '''Test suite for LorentzDistance module.'''
-
-    def test_distance_output_shape(self, sample_lorentz_embeddings):
-        '''Test that distance computation produces correct output shape.'''
-
-        distance_fn = LorentzDistance(curvature=1.0)
-        x = sample_lorentz_embeddings[:8]
-        y = sample_lorentz_embeddings[8:]
-
-        distances = distance_fn(x, y)
-
-        assert distances.shape == (8, )
-
-    def test_batched_distance_shape(self, sample_lorentz_embeddings, test_device):
-        '''Test batched distance computation with broadcasting.'''
-
-        distance_fn = LorentzDistance(curvature=1.0)
-
-        batch_size = 4
-        k_negatives = 4  # Adjusted to work with 16 samples (4 * 4 = 16)
-        dim = sample_lorentz_embeddings.shape[1]
-
-        anchor = sample_lorentz_embeddings[:batch_size]  # (4, dim)
-        negatives = sample_lorentz_embeddings[:batch_size
-                                              * k_negatives].view(batch_size, k_negatives, dim)
-
-        distances = distance_fn.batched_forward(anchor, negatives)
-
-        assert distances.shape == (batch_size, k_negatives)
-
-    def test_batched_distance_correctness(self, sample_lorentz_embeddings) -> None:
-        '''Test batched distance matches pairwise computation.'''
-
-        distance_fn = LorentzDistance(curvature=1.0)
-
-        batch_size = 4
-        k = 3
-        dim = sample_lorentz_embeddings.shape[1]
-
-        anchor = sample_lorentz_embeddings[:batch_size]
-        points = sample_lorentz_embeddings[:batch_size * k].view(batch_size, k, dim)
-
-        batched_dist = distance_fn.batched_forward(anchor, points)
-
-        # Compute pairwise for comparison
-        pairwise_dist = torch.zeros(batch_size, k)
-        for i in range(batch_size):
-            for j in range(k):
-                pairwise_dist[i, j] = distance_fn(anchor[i:i + 1], points[i, j:j + 1, :]).item()
-
-        assert torch.allclose(batched_dist, pairwise_dist, atol=1e-5)
-
-    def test_lorentz_dot_product(self, sample_lorentz_embeddings):
-        '''Test Lorentz inner product computation.'''
-
-        distance_fn = LorentzDistance(curvature=1.0)
-
-        x = sample_lorentz_embeddings[:8]
-
-        # Self dot product should equal Lorentz norm (-1/c)
-        dot_self = distance_fn.lorentz_dot(x, x)
-
-        assert torch.allclose(dot_self, torch.tensor(-1.0), atol=1e-3)
-
-# -------------------------------------------------------------------------------------------------
 # Manifold Validity Tests
 # -------------------------------------------------------------------------------------------------
 
@@ -543,45 +471,6 @@ class TestHyperbolicRadii:
         radius = compute_hyperbolic_radii(origin)
 
         assert torch.allclose(radius, torch.tensor([1.0], device=test_device), atol=1e-6)
-
-# -------------------------------------------------------------------------------------------------
-# Diagnostics Tests
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestHyperbolicDiagnostics:
-    '''Test suite for hyperbolic diagnostics logging.'''
-
-    def test_diagnostics_returns_dict(self, sample_lorentz_embeddings):
-        '''Test that diagnostics returns a dictionary of metrics.'''
-
-        diagnostics = log_hyperbolic_diagnostics(sample_lorentz_embeddings, curvature=1.0)
-
-        assert isinstance(diagnostics, dict)
-        assert 'manifold_valid' in diagnostics
-        assert 'radius_mean' in diagnostics
-        assert 'lorentz_norm_mean' in diagnostics
-
-    def test_diagnostics_reports_valid_manifold(self, sample_lorentz_embeddings):
-        '''Test that diagnostics correctly reports valid manifold.'''
-
-        diagnostics = log_hyperbolic_diagnostics(sample_lorentz_embeddings, curvature=1.0)
-
-        assert diagnostics['manifold_valid'] is True
-        assert abs(diagnostics['lorentz_norm_mean'] - (-1.0)) < 1e-2
-
-    def test_diagnostics_with_level_labels(self, sample_lorentz_embeddings, test_device):
-        '''Test diagnostics with hierarchy level labels.'''
-
-        batch_size = sample_lorentz_embeddings.shape[0]
-        level_labels = torch.randint(2, 7, (batch_size, ), device=test_device)
-
-        diagnostics = log_hyperbolic_diagnostics(
-            sample_lorentz_embeddings, curvature=1.0, level_labels=level_labels
-        )
-
-        assert isinstance(diagnostics, dict)
-        assert diagnostics['manifold_valid'] is True
 
 # -------------------------------------------------------------------------------------------------
 # Property-Based Tests (Hypothesis)

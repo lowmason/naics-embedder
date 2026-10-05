@@ -10,9 +10,6 @@ The model's three mixins:
 - LoggingMixin: the epoch's health logs (P20)
 - OptimizerMixin: AdamW, the warmup, the plateau on the monitor's MRR and the logit scales' clamp
   (P16)
-
-``curriculum.py``, ``distributed.py`` and ``validation.py`` hold the old objective's mixins, which
-the model no longer has; they go with the rest of its machinery (spec 4.5).
 '''
 
 from naics_embedder.text_model.mixins.logging import LoggingMixin

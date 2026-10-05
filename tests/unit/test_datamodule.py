@@ -3,7 +3,6 @@ Unit tests for the text stage's data path (Req 10; spec 4.3).
 
 Tests cover:
 - stack_text_inputs, which batches the token rows of every encode
-- The repaired training rows of streaming_dataset
 - Two-stream epochs: the steps, the permutations, the even chunks, the tokenized task queries and
   the step dataset
 - NAICSDataModule: the two streams from the bundle, the code rows in codebook order, the one train
@@ -102,47 +101,6 @@ def test_stack_text_inputs_builds_a_query_batch():
 
     assert list(batch) == ['query']
     assert batch['query']['present'].tolist() == [True]
-
-# -------------------------------------------------------------------------------------------------
-# The repaired training rows of streaming_dataset
-# -------------------------------------------------------------------------------------------------
-
-@pytest.fixture
-def hierarchy_bundle(hierarchy_manifest):
-    from naics_embedder.supervision.artifacts import load_validated_bundle
-    from naics_embedder.supervision.index import SupervisionIndex
-
-    bundle = load_validated_bundle(hierarchy_manifest)
-    return bundle, SupervisionIndex.from_bundle(bundle)
-
-@pytest.fixture
-def repaired_streaming_config(hierarchy_descriptions_parquet):
-    from naics_embedder.utils.config import StreamingConfig
-
-    return StreamingConfig(
-        descriptions_parquet=hierarchy_descriptions_parquet,
-        n_negatives=3,
-        n_candidates=4,
-        n_negatives_phase1=3,
-        seed=5,
-    )
-
-def test_repaired_rows_never_use_an_exclusion_as_the_positive(
-    hierarchy_bundle, repaired_streaming_config
-):
-    from naics_embedder.text_model.dataloader.streaming_dataset import (
-        build_repaired_triplet_rows,
-    )
-    from naics_embedder.utils.config import SamplingConfig
-
-    bundle, index = hierarchy_bundle
-    rows = build_repaired_triplet_rows(
-        repaired_streaming_config, SamplingConfig(), bundle, index, sampling_epoch=0
-    )
-
-    for row in rows:
-        assert row['positive_code_id'] not in index.exclusion_code_ids(row['anchor_code_id'])
-        assert row['raw_candidates']
 
 # -------------------------------------------------------------------------------------------------
 # Two-stream epochs (Req 10; spec 4.3; section 6, "Coverage", the data half)

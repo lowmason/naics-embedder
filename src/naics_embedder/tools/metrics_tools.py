@@ -1,7 +1,8 @@
 '''
-Metrics visualization and investigation tools.
+Metrics visualization tools.
 
-Provides functions to visualize training metrics and investigate hierarchy correlations.
+Provides a function to visualize training metrics. Req 6's structural statistics come from
+``tools diagnostics`` alone: ``tools investigate`` is retired (spec 4.4).
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -29,17 +30,6 @@ try:
     HAS_VISUALIZE = True
 except ImportError:
     HAS_VISUALIZE = False
-
-try:
-    from naics_embedder.tools._investigate_hierarchy import (
-        analyze_correlation_issues,
-        analyze_ground_truth_distances,
-        check_evaluation_sample_size,
-    )
-
-    HAS_INVESTIGATE = True
-except ImportError:
-    HAS_INVESTIGATE = False
 
 # -------------------------------------------------------------------------------------------------
 # Visualize metrics
@@ -116,54 +106,3 @@ def visualize_metrics(
         'stage': stage,
         'num_epochs': len(metrics),
     }
-
-# -------------------------------------------------------------------------------------------------
-# Investigate hierarchy preservation metrics
-# -------------------------------------------------------------------------------------------------
-
-def investigate_hierarchy(
-    distance_matrix_path: Optional[Path] = None,
-    config_path: Optional[Path] = None,
-    project_root: Optional[Path] = None,
-) -> Dict:
-    '''
-    Investigate why hierarchy preservation correlations might be low.
-
-    Args:
-        distance_matrix_path: Path to ground truth distance matrix
-        config_path: Path to config file
-        project_root: Project root directory
-
-    Returns:
-        Dictionary with investigation results
-    '''
-
-    if project_root is None:
-        project_root = Path.cwd()
-
-    if distance_matrix_path is None:
-        distance_matrix_path = project_root / 'data' / 'naics_distance_matrix.parquet'
-
-    if config_path is None:
-        config_path = project_root / 'conf' / 'config.yaml'
-
-    if not HAS_INVESTIGATE:
-        raise ImportError('Investigation tools not available. Missing dependencies.')
-
-    results = {}
-
-    # Analyze ground truth distances
-    distances = analyze_ground_truth_distances(distance_matrix_path)
-    results['distance_matrix_analyzed'] = distances is not None
-
-    # Check evaluation config
-    if config_path.exists():
-        eval_sample_size = check_evaluation_sample_size(config_path)
-        results['eval_sample_size'] = eval_sample_size
-    else:
-        results['eval_sample_size'] = None
-
-    # Provide analysis
-    analyze_correlation_issues()
-
-    return results

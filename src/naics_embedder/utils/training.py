@@ -700,21 +700,15 @@ def save_training_summary(
         'config_snapshot': {
             'model': {
                 'base_model': config.model.base_model_name,
-                'fusion': config.model.fusion,
-                'dimension': config.model.dimension,
                 'lora_rank': config.model.lora.r,
                 'num_experts': config.model.moe.num_experts,
             },
-            'training': {
-                'learning_rate': config.training.learning_rate,
-                'max_epochs': config.training.trainer.max_epochs,
-                'batch_size': config.data_loader.batch_size,
-            },
-            'loss': {
-                'temperature': config.loss.temperature,
-                'curvature': config.loss.curvature,
-                'hierarchy_weight': config.loss.hierarchy_weight,
-            },
+            # The settings the run recorded, by the rule train records them with (P21, P31)
+            'run_settings': run_settings(
+                config,
+                accelerator=hardware.accelerator,
+                precision=effective_precision(config, hardware.accelerator),
+            ),
         },
     }
 

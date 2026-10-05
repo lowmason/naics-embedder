@@ -40,7 +40,7 @@ CROSS_SECTOR_CAP_SEED = 0
 MAX_PAIRS_PER_BATCH = 4_000
 
 # Legacy margin weights, preserved for graph-model compatibility. The structural margin constants
-# live in supervision.schema so the runtime eligibility rule shares them.
+# live in supervision.schema; no training path reads the margins (D5).
 RELATION_MARGIN_WEIGHT = 0.3333
 DISTANCE_MARGIN_WEIGHT = 0.6667
 

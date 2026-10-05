@@ -286,12 +286,6 @@ def batch_size():
     return 16
 
 @pytest.fixture
-def embedding_dim():
-    '''Standard embedding dimension for testing.'''
-
-    return 384
-
-@pytest.fixture
 def num_channels():
     '''Number of text channels (title, description, examples, exclusions).'''
 

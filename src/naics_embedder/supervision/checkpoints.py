@@ -2,8 +2,8 @@
 Stage-3 checkpoint contracts: exact resume, and the checks of export and reads.
 
 A checkpoint records the supervision contract it was trained under and the encoder architecture
-its weights belong to. Exact resume restores optimizer, epoch, curriculum, and sampler state, so
-it requires an identical contract. Nothing loads a checkpoint under any other contract: there is
+its weights belong to. Exact resume restores the optimizer, epoch and monitor state, so it
+requires an identical contract. Nothing loads a checkpoint under any other contract: there is
 no weights-only migration (roadmap D2).
 
 A checkpoint saved before Stage 6 has no encoder record and reads as the legacy four-copy layout,

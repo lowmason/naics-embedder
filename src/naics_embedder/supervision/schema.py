@@ -3,8 +3,8 @@ Stage-3 supervision contract vocabulary and manifest schema.
 
 Every rebuilt supervision artifact belongs to one immutable bundle described by a
 ``SupervisionManifest``. The enums here separate three independent axes of meaning: structural
-facts (materialized hierarchy), semantic supervision (target and source), and sampling
-role/provenance.
+facts (materialized hierarchy), semantic supervision (target and source), and the sampling role
+a training pair gives each code.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -12,7 +12,7 @@ role/provenance.
 # -------------------------------------------------------------------------------------------------
 
 from datetime import datetime
-from enum import Enum, IntEnum
+from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Dict, Mapping, Tuple
 
@@ -30,16 +30,16 @@ MINING_CONTRACT_VERSION = 'negative-selection-v2'
 # -------------------------------------------------------------------------------------------------
 # Structural margin contract
 #
-# Shared by the training-pair generator (``data.create_triplets``) and the runtime eligibility rule
-# (``supervision.margins``), so both apply the identical margins. Distances are D* (Req 7):
-# integers with no half-step and no cross-sector constant, so the distance axis has one special
-# case left, the equal-distance tie.
+# The margins the training-pair generator (``data.create_triplets``) writes. No training path reads
+# them (D5): they stay in the training-pairs member until the next contract bump retires it.
+# Distances are D* (Req 7): integers with no half-step and no cross-sector constant, so the
+# distance axis has one special case left, the equal-distance tie.
 # -------------------------------------------------------------------------------------------------
 
 # The relation label cross-sector pairs carry: every reader finds them by it, not by a distance
 CROSS_SECTOR_RELATION_ID = 99
 CROSS_SECTOR_RELATION_NAME = 'cross_sector'
-# The relation axis keeps its cross-sector margin until Stage 7 retires the axis (D5)
+# The relation axis's cross-sector margin, which only the bundle build still writes (D5)
 CROSS_SECTOR_RELATION_MARGIN = 15.0
 EQUAL_DISTANCE_MARGIN = 0.3333
 
@@ -78,29 +78,6 @@ class SamplingRole(str, Enum):
 
     POSITIVE = 'positive'
     NEGATIVE = 'negative'
-
-SAMPLING_ROLE_TO_ID = {
-    SamplingRole.POSITIVE: 1,
-    SamplingRole.NEGATIVE: 2,
-}
-
-class SamplingProvenance(IntEnum):
-    '''How a runtime candidate entered the candidate pool.'''
-
-    GENERATED = 1
-    DIFFICULTY = 2
-    LOCAL_POOL = 3
-    DISTRIBUTED_POOL = 4
-    BACKFILL = 5
-
-class SelectionReason(IntEnum):
-    '''Why a candidate occupies a final negative slot.'''
-
-    EXCLUSION_QUOTA = 1
-    GEOMETRIC = 2
-    ROUTER = 3
-    DIFFICULTY = 4
-    BACKFILL = 5
 
 # -------------------------------------------------------------------------------------------------
 # Index-entry roles (outcome panel)

@@ -110,20 +110,10 @@ def training_env(monkeypatch, tmp_path):
         cfg.training.trainer.val_check_interval = 1.0
         cfg.training.trainer.gradient_clip_val = 0.5
         cfg.training.trainer.accumulate_grad_batches = 1
-        cfg.loss.__dict__['base_margin'] = 1.0
         return cfg
 
     monkeypatch.setattr(training.Config, 'from_yaml', classmethod(lambda cls, path: build_cfg()))
     monkeypatch.setattr(training, 'validate_training_config', lambda cfg: context.validation_result)
-
-    original_override = Config.override
-
-    def override_with_margin(self, overrides):
-        new_cfg = original_override(self, overrides)
-        new_cfg.loss.__dict__['base_margin'] = 1.0
-        return new_cfg
-
-    monkeypatch.setattr(Config, 'override', override_with_margin, raising=False)
 
     def fake_resolve(ckpt_path, checkpoint_dir, experiment_name):
         context.events.append('resolve_checkpoint')

@@ -213,22 +213,6 @@ def validate_descriptions_schema(cfg: Config) -> ValidationResult:
         'descriptions parquet',
     )
 
-def validate_distances_schema(cfg: Config) -> ValidationResult:
-    '''
-    Validate the distances parquet has required columns.
-
-    Args:
-        cfg: Configuration with data paths.
-
-    Returns:
-        ValidationResult for distances schema.
-    '''
-    return validate_parquet_schema(
-        cfg.data_loader.streaming.distances_parquet,
-        {'idx_i', 'idx_j', 'distance'},
-        'distances parquet',
-    )
-
 # -------------------------------------------------------------------------------------------------
 # Tokenization Cache Validation
 # -------------------------------------------------------------------------------------------------
