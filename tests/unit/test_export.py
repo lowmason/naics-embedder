@@ -18,6 +18,7 @@ from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.supervision.checkpoints import contract_for_bundle, shared_encoder_architecture
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.export import (
+    COORDINATES,
     code_token_config,
     encode_token_rows,
     export_code_table,
@@ -171,7 +172,7 @@ def test_the_table_is_in_reqs_export_form(exported_table):
     assert codes == FIVE_CODES
     assert matrix.shape == (5, ARM_DIMENSION)
 
-def test_the_table_holds_each_codes_capped_tangent(
+def test_the_table_holds_each_codes_bounded_tangent(
     exported_table, shared_checkpoint, validated_bundle, five_code_token_config
 ):
     model, _ = load_arm_model(
@@ -183,8 +184,26 @@ def test_the_table_holds_each_codes_capped_tangent(
     table = pl.read_parquet(exported_table)
 
     assert np.array_equal(table.select(COORDINATE_COLUMNS).to_numpy(), tangent.numpy())
-    # The head caps the tangent at norm 2 before its exp map; the table keeps the capped vector
-    assert (np.linalg.norm(tangent.numpy(), axis=1) <= 2.0 + 1e-6).all()
+    # The head bounds every radius below R before its exp map; the table keeps the bounded vector
+    bound = model.encoder.head.radius_bound
+    assert bound == 8.0
+    assert (np.linalg.norm(tangent.numpy(), axis=1) <= bound).all()
+    provenance = json.loads(provenance_path(exported_table).read_text())
+    assert provenance['coordinates'] == COORDINATES
+    assert COORDINATES.startswith('the bounded tangent vector at the origin')
+
+def test_a_read_rebuilds_the_head_at_the_checkpoints_radius_bound(
+    tmp_path, shared_model, validated_bundle
+):
+    # The bound is a saved hyperparameter, so export and reads never fall back to the default R
+    checkpoint = lightning_checkpoint(shared_model)
+    checkpoint['hyper_parameters']['radius_bound'] = 5.0
+    path = tmp_path / 'bound.ckpt'
+    torch.save(checkpoint, path)
+
+    model, _ = load_arm_model(path, validated_bundle, summaries=summaries_identity(MINILM))
+
+    assert model.encoder.head.radius_bound == 5.0
 
 def test_the_provenance_names_the_table_and_the_checkpoint(
     exported_table, shared_checkpoint, validated_bundle, five_code_descriptions_parquet

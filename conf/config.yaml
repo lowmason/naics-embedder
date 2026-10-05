@@ -117,6 +117,7 @@ model:
   base_model_name: sentence-transformers/all-MiniLM-L6-v2
   fusion: masked_mean  # masked_mean, attention, or moe (an ablation only)
   dimension: 16  # 8, 16 or 32: the one Linear(384 -> d) before the geometry head
+  radius_bound: 8.0  # R: the head gives a vector of norm v the radius R*tanh(v/R) (Req 13)
 
   lora:
     r: 8

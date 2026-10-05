@@ -120,8 +120,10 @@ class NAICSContrastiveModel(
         num_experts: Number of MoE experts (``moe`` only)
         top_k: Number of experts to select per code (``moe`` only)
         moe_hidden_dim: Hidden dimension of MoE layers (``moe`` only)
+        radius_bound: R, the head's bound on every radius: r = R · tanh(‖v‖ / R) (spec 4.2)
         temperature: Temperature for InfoNCE loss
-        curvature: Hyperbolic space curvature
+        curvature: The curvature of the interim losses and miners; the encoder and its head take
+            none (spec 4.2)
         hierarchy_weight: Weight for hierarchy preservation loss
         radius_reg_weight: Weight for radius regularization
         level_radius_weight: Weight for level-aware radius prior
@@ -171,6 +173,7 @@ class NAICSContrastiveModel(
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
+        radius_bound: float = 8.0,
         temperature: float = 0.07,
         curvature: float = 1.0,
         hierarchy_weight: float = 0.1,
@@ -285,7 +288,7 @@ class NAICSContrastiveModel(
             num_experts=num_experts,
             top_k=top_k,
             moe_hidden_dim=moe_hidden_dim,
-            curvature=curvature,
+            radius_bound=radius_bound,
         )
 
         # Initialize loss function
@@ -373,7 +376,8 @@ class NAICSContrastiveModel(
         Returns:
             Dictionary containing:
             - embedding: Lorentz points (batch_size, dimension + 1)
-            - tangent: Capped tangent vectors at the origin (batch_size, dimension)
+            - tangent: Bounded tangent vectors at the origin (batch_size, dimension)
+            - radius, direction: Each point's r (batch_size,) and û (batch_size, dimension)
             - gate_probs, top_k_indices: The experts' gates, under ``moe`` fusion only
         '''
         return self.encoder(channel_inputs)

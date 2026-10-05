@@ -269,6 +269,13 @@ def test_the_runtime_contract_records_the_configured_encoder(training_env):
     assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('attention', 8)
 
 @pytest.mark.unit
+@pytest.mark.parametrize(('overrides', 'bound'), [([], 8.0), (['model.radius_bound=5.0'], 5.0)])
+def test_the_model_takes_the_configured_radius_bound(training_env, overrides, bound):
+    training.train(skip_validation=True, overrides=overrides)
+
+    assert training_env.trainer.fit_calls[0]['model'].kwargs['radius_bound'] == bound
+
+@pytest.mark.unit
 def test_the_model_and_its_contract_record_the_tokenizers_summaries(training_env):
     training.train(skip_validation=True)
 

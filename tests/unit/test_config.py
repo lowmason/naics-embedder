@@ -700,6 +700,25 @@ def test_a_fusion_or_dimension_outside_its_set_is_refused(key, value):
     # A Literal refusal: before the keys are declared, the same override fails as extra_forbidden
     assert _error_locs_and_types(excinfo) == [(('model', key.split('.')[1]), 'literal_error')]
 
+def test_the_radius_bound_is_8_by_default_and_as_shipped(valid_config_dict):
+    # Spec 4.2 and 4.5: R = 8, so a six-digit code at its target r = 5 keeps dr/dν ≈ 0.61
+    assert Config().model.radius_bound == 8.0
+    assert Config.model_validate(valid_config_dict).model.radius_bound == 8.0
+    assert valid_config_dict['model']['radius_bound'] == 8
+
+@pytest.mark.parametrize(
+    ('value', 'error'),
+    [(0.0, 'greater_than'), (-1.0, 'greater_than'), (float('inf'), 'finite_number')],
+)
+def test_a_radius_bound_that_is_not_positive_and_finite_is_refused(value, error):
+    '''Spec section 5: a radius bound at or below 0 is refused; so is an infinite one.'''
+
+    with pytest.raises(ValidationError) as excinfo:
+        Config().override({'model.radius_bound': value})
+
+    # Pinned on the type: before the key is declared, the same override fails as extra_forbidden
+    assert _error_locs_and_types(excinfo) == [(('model', 'radius_bound'), error)]
+
 def test_repaired_config_rejects_legacy_rank_key(valid_config_dict):
     valid_config_dict['supervision'] = {'manifest_path': '/tmp/bundle/manifest.json'}
     valid_config_dict['loss']['rank_order_weight'] = 0.35

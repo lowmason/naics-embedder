@@ -3,13 +3,21 @@ Unit tests for hyperbolic geometry operations.
 
 Tests the core Lorentz model operations including exponential/logarithmic maps,
 distance computations, manifold validity checks, and numerical stability.
+
+The head and the polar distance follow spec 4.2 and §6 "Head and distance": a gradient-passing
+radius bound, and the training distance from (r, û), checked against the reads' float64 Lorentz
+distance up to r = R.
 '''
+
+import math
 
 import pytest
 import torch
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from naics_embedder.panels.decoding import lorentz_distances
+from naics_embedder.text_model import hyperbolic
 from naics_embedder.text_model.hyperbolic import (
     HyperbolicHead,
     LorentzDistance,
@@ -18,6 +26,10 @@ from naics_embedder.text_model.hyperbolic import (
     compute_hyperbolic_radii,
     log_hyperbolic_diagnostics,
 )
+from tests.fixtures.hyperboloid import hyperboloid_points
+
+# The shipped bound, model.radius_bound
+BOUND = 8.0
 
 # -------------------------------------------------------------------------------------------------
 # LorentzOps Tests
@@ -149,40 +161,213 @@ class TestLorentzOps:
 # HyperbolicHead Tests
 # -------------------------------------------------------------------------------------------------
 
+def _vectors_of_norm(norms, *, dimension: int = 16, seed: int = 0) -> torch.Tensor:
+    '''Float64 vectors in random directions with these norms, one row per norm.'''
+
+    generator = torch.Generator().manual_seed(seed)
+    directions = torch.randn(len(norms), dimension, generator=generator, dtype=torch.float64)
+    directions = directions / directions.norm(dim=1, keepdim=True)
+    return torch.tensor(norms, dtype=torch.float64).unsqueeze(1) * directions
+
 @pytest.mark.unit
 class TestHyperbolicHead:
-    '''The interim geometry head: no parameters, the cap, then the exp map at the origin.'''
+    '''The head: no parameters and no curvature, a gradient-passing bound, then the exp map.'''
 
     def test_the_head_has_no_parameters_and_names_its_distance(self):
-        head = HyperbolicHead(curvature=1.0)
+        head = HyperbolicHead()
 
         assert list(head.parameters()) == []
         assert head.distance == 'lorentz'
+        assert head.radius_bound == BOUND
 
-    def test_a_tangent_inside_the_cap_passes_unchanged(self):
-        tangent = torch.tensor([[0.3, -0.4], [1.0, 1.0]])
+    def test_the_head_takes_no_curvature_and_no_cap(self):
+        with pytest.raises(TypeError):
+            HyperbolicHead(curvature=1.0)
+        with pytest.raises(TypeError):
+            HyperbolicHead(max_norm=2.0)
 
-        capped, embedding = HyperbolicHead(curvature=1.0)(tangent)
+    @pytest.mark.parametrize('bound', [0.0, -1.0, math.inf, math.nan])
+    def test_a_bound_that_is_not_positive_and_finite_is_refused(self, bound):
+        with pytest.raises(ValueError, match='radius_bound must be a positive finite number'):
+            HyperbolicHead(radius_bound=bound)
 
-        assert torch.equal(capped, tangent)
-        assert embedding.shape == (2, 3)
+    def test_the_head_returns_the_tangent_the_point_the_radius_and_the_direction(self):
+        points = HyperbolicHead()(_vectors_of_norm([0.3, 5.0, 40.0], dimension=4))
 
-    def test_a_long_tangent_is_scaled_to_the_cap(self):
-        capped, _ = HyperbolicHead(curvature=1.0, max_norm=2.0)(torch.tensor([[3.0, 4.0]]))
+        assert isinstance(points, hyperbolic.HeadPoints)
+        assert points._fields == ('tangent', 'embedding', 'radius', 'direction')
+        assert points.tangent.shape == (3, 4)
+        assert points.embedding.shape == (3, 5)
+        assert points.radius.shape == (3, )
+        assert points.direction.shape == (3, 4)
 
-        torch.testing.assert_close(capped, torch.tensor([[1.2, 1.6]]))
+    @pytest.mark.parametrize('bound', [BOUND, 5.0])
+    def test_the_radius_is_the_bounded_norm_and_the_tangent_is_r_times_the_direction(self, bound):
+        '''Spec 4.2: r = R · tanh(ν / R), û = v / ν, and the tangent at o is r · û, at any R.'''
 
-    @pytest.mark.parametrize('curvature', [0.5, 1.0, 2.0])
-    def test_the_point_is_the_exp_map_of_the_capped_tangent(self, curvature):
-        tangent = torch.tensor([[0.3, -0.4], [3.0, 4.0]])
+        vectors = _vectors_of_norm([0.3, 5.0, 40.0, 1e3])
+        norm = vectors.norm(dim=1)
 
-        capped, embedding = HyperbolicHead(curvature=curvature)(tangent)
+        points = HyperbolicHead(radius_bound=bound)(vectors)
 
-        # LorentzOps takes a (B, d + 1) tangent and ignores its time slot
-        padded = torch.cat([torch.zeros(2, 1), capped], dim=1)
-        torch.testing.assert_close(embedding, LorentzOps.exp_map_zero(padded, c=curvature))
-        is_valid, _, _ = check_lorentz_manifold_validity(embedding, curvature=curvature)
+        torch.testing.assert_close(points.radius, bound * torch.tanh(norm / bound))
+        torch.testing.assert_close(points.direction, vectors / norm.unsqueeze(1))
+        torch.testing.assert_close(points.tangent, points.radius.unsqueeze(1) * points.direction)
+        torch.testing.assert_close(points.tangent.norm(dim=1), points.radius)
+        assert (points.radius <= bound).all()
+
+    def test_the_point_is_the_exp_map_of_the_bounded_tangent(self):
+        vectors = _vectors_of_norm([0.3, 2.0, 5.0, 20.0], dimension=2)
+
+        points = HyperbolicHead()(vectors)
+
+        # (cosh r, sinh r · û), which is LorentzOps' exp map at c = 1 of the bounded tangent; it
+        # takes a (B, d + 1) tangent and ignores its time slot
+        expected = torch.cat(
+            [
+                torch.cosh(points.radius).unsqueeze(1),
+                torch.sinh(points.radius).unsqueeze(1) * points.direction,
+            ],
+            dim=1,
+        )
+        torch.testing.assert_close(points.embedding, expected)
+        padded = torch.cat([torch.zeros(4, 1, dtype=torch.float64), points.tangent], dim=1)
+        torch.testing.assert_close(points.embedding, LorentzOps.exp_map_zero(padded, c=1.0))
+        is_valid, _, _ = check_lorentz_manifold_validity(points.embedding, tolerance=1e-6)
         assert is_valid
+
+    def test_at_nu_20_the_radius_still_takes_gradient_and_stays_below_the_bound(self):
+        '''Spec §6: at ν = 20 the gradient with respect to ν is nonzero, and r ≤ R (Req 13).'''
+
+        nu = torch.tensor(20.0, requires_grad=True)
+        direction = torch.nn.functional.normalize(torch.randn(1, 16), dim=1)
+
+        points = HyperbolicHead(radius_bound=BOUND)(nu * direction)
+        points.radius.sum().backward()
+
+        assert points.radius.item() <= BOUND
+        # dr/dν = sech²(ν / R), about 0.027 here; the interim cap passed about 1e-7
+        assert nu.grad.item() > 0.02
+        assert nu.grad.item() == pytest.approx(1.0 / math.cosh(20.0 / BOUND)**2, rel=1e-4)
+
+    @pytest.mark.parametrize('output', ['tangent', 'embedding', 'radius', 'direction'])
+    def test_the_zero_vector_is_the_origin_and_every_gradient_there_is_finite(self, output):
+        vectors = torch.zeros(2, 16, requires_grad=True)
+
+        points = HyperbolicHead()(vectors)
+        getattr(points, output).sum().backward()
+
+        assert torch.equal(points.tangent, torch.zeros(2, 16))
+        assert torch.equal(points.radius, torch.zeros(2))
+        assert torch.equal(points.direction, torch.zeros(2, 16))
+        origin = torch.zeros(2, 17)
+        origin[:, 0] = 1.0
+        assert torch.equal(points.embedding, origin)
+        assert torch.isfinite(vectors.grad).all()
+
+# -------------------------------------------------------------------------------------------------
+# The polar distance
+# -------------------------------------------------------------------------------------------------
+
+def _polar_parts(points: torch.Tensor):
+    '''(r, û) of float64 hyperboloid points: r = asinh ‖x_s‖, exact near the origin too.'''
+
+    space = points[:, 1:]
+    norm = space.norm(dim=1)
+    return torch.asinh(norm), space / norm.unsqueeze(1)
+
+def _points_up_to_the_bound() -> torch.Tensor:
+    '''Float64 c = 1 points in dimension 16 at radii in [0, R], four of them at exactly R.'''
+
+    inside = hyperboloid_points(64, seed=0, min_radius=0.0, max_radius=BOUND, spatial_dim=16)
+    at_bound = hyperboloid_points(4, seed=1, min_radius=BOUND, max_radius=BOUND, spatial_dim=16)
+    return torch.cat([inside, at_bound])
+
+def _off_diagonal(size: int) -> torch.Tensor:
+    return ~torch.eye(size, dtype=torch.bool)
+
+@pytest.mark.unit
+class TestPolarDistance:
+    '''Spec 4.2: d(x, y) from (r, û), the hyperbolic law of cosines in half-angle form.'''
+
+    def test_the_distance_is_pairwise_and_refuses_other_shapes(self):
+        radius_a, radius_b = torch.rand(3), torch.rand(5)
+        direction_a = torch.nn.functional.normalize(torch.randn(3, 16), dim=1)
+        direction_b = torch.nn.functional.normalize(torch.randn(5, 16), dim=1)
+
+        distances = hyperbolic.polar_distance(radius_a, direction_a, radius_b, direction_b)
+
+        assert distances.shape == (3, 5)
+        with pytest.raises(ValueError, match='polar_distance takes'):
+            hyperbolic.polar_distance(radius_a.unsqueeze(1), direction_a, radius_b, direction_b)
+        with pytest.raises(ValueError, match='polar_distance takes'):
+            hyperbolic.polar_distance(radius_a, direction_a, radius_b, direction_b[:, :8])
+
+    def test_the_polar_form_equals_the_float64_lorentz_distance_up_to_the_bound(self):
+        '''Spec §6: the reads' float64 arcosh(−⟨x, y⟩_L) (panels/decoding.py), up to r = R.'''
+
+        points = _points_up_to_the_bound()
+        radius, direction = _polar_parts(points)
+        assert radius.max().item() == pytest.approx(BOUND)
+
+        polar = hyperbolic.polar_distance(radius, direction, radius, direction)
+
+        # Off the diagonal: there the Lorentz form reads arcosh(1 + rounding), about 3e-5
+        off = _off_diagonal(len(points))
+        reference = lorentz_distances(points, points)
+        torch.testing.assert_close(polar[off], reference[off], rtol=1e-9, atol=0.0)
+
+    def test_float32_under_bf16_autocast_stays_within_tolerance_of_float64(self):
+        '''Spec §6: the float32 form, under CPU bf16 autocast too, on well-separated pairs.'''
+
+        points = _points_up_to_the_bound()
+        radius, direction = _polar_parts(points)
+        off = _off_diagonal(len(points))
+        reference = lorentz_distances(points, points)
+        assert reference[off].min().item() > 0.1
+
+        with torch.autocast('cpu', dtype=torch.bfloat16):
+            polar = hyperbolic.polar_distance(
+                radius.float(), direction.float(), radius.float(), direction.float()
+            )
+
+        assert polar.dtype == torch.float32
+        torch.testing.assert_close(polar.double()[off], reference[off], rtol=1e-5, atol=0.0)
+
+    def test_a_small_angle_is_resolved_from_explicit_differences(self):
+        '''‖û_x − û_y‖² by differences: 2 − 2 û_x · û_y would cancel at this angle in float32.'''
+
+        angle = 1e-3
+        generator = torch.Generator().manual_seed(3)
+        base, other = torch.randn(2, 16, generator=generator, dtype=torch.float64)
+        base = base / base.norm()
+        other = other - (other @ base) * base
+        other = other / other.norm()
+        turned = math.cos(angle) * base + math.sin(angle) * other
+        radius = torch.tensor([1.0])
+        first, second = base.float().unsqueeze(0), turned.float().unsqueeze(0)
+
+        polar = hyperbolic.polar_distance(radius, first, radius, second)
+
+        # Two points at radius r an angle θ apart: sinh(d / 2) = sinh r · sin(θ / 2)
+        exact = 2 * math.asinh(math.sinh(1.0) * math.sin(angle / 2))
+        assert polar.item() == pytest.approx(exact, rel=1e-3)
+
+    @pytest.mark.parametrize('radius', [0.0, 3.0, BOUND])
+    def test_zero_separation_has_a_finite_value_and_gradient(self, radius):
+        '''Spec §5: the polar distance and its gradient stay finite at zero separation.'''
+
+        radii = torch.tensor([radius], requires_grad=True)
+        unit = torch.nn.functional.normalize(torch.randn(1, 16), dim=1)
+        # The origin has no direction: the head gives û = 0 there
+        directions = (unit if radius > 0 else torch.zeros(1, 16)).requires_grad_(True)
+
+        distance = hyperbolic.polar_distance(radii, directions, radii, directions)
+        distance.sum().backward()
+
+        assert 0.0 <= distance.item() <= 1e-5
+        assert torch.isfinite(radii.grad).all()
+        assert torch.isfinite(directions.grad).all()
 
 # -------------------------------------------------------------------------------------------------
 # LorentzDistance Tests

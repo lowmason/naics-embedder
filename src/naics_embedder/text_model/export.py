@@ -6,8 +6,8 @@ marked query. The HGCN feeder, the table export and the arm encoder all encode t
 code embeds the same way wherever it is read.
 
 ``export_code_table`` writes Req 2's form of an arm: ``code``, ``index``, ``level`` and
-``e0 … e{d-1}``, each code's capped tangent vector at the origin (R6), in the bundle's codebook
-order. Its provenance ties the table to its checkpoint.
+``e0 … e{d-1}``, each code's bounded tangent vector at the origin (R6, Req 13), in the bundle's
+codebook order. Its provenance ties the table to its checkpoint.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -42,7 +42,10 @@ from naics_embedder.utils.config import Config, TokenizationConfig
 logger = logging.getLogger(__name__)
 
 TABLE_PREFIX = 'e'
-COORDINATES = 'the capped tangent vector at the origin (spec R6); no time coordinate'
+COORDINATES = (
+    'the bounded tangent vector at the origin, r * u with r = R * tanh(|v| / R) (Req 13); '
+    'no time coordinate'
+)
 
 # -------------------------------------------------------------------------------------------------
 # Encoding
@@ -200,7 +203,7 @@ def export_code_table(
 
     Every code goes through the checkpoint's model in eval mode, without gradient. The table
     holds ``code``, then ``index`` and ``level`` from the descriptions (Int64), then ``e0 …
-    e{d-1}`` (float64): each code's capped tangent vector at the origin, in the bundle's codebook
+    e{d-1}`` (float64): each code's bounded tangent vector at the origin, in the bundle's codebook
     order. The provenance is ``<stem>_provenance.json``.
 
     Args:

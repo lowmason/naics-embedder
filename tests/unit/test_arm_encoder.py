@@ -61,22 +61,24 @@ def _table_tangent(table_path) -> torch.Tensor:
 # -------------------------------------------------------------------------------------------------
 
 def test_the_exp_map_lands_on_the_hyperboloid_as_the_heads_does():
-    tangent = torch.randn(6, ARM_DIMENSION) * 0.2
-    tangent[0] = 0.0
-    # Below the head's cap, so the head maps these tangents unchanged
-    assert (torch.linalg.vector_norm(tangent, dim=1) < 2.0).all()
+    # The head bounds every vector, so its bounded tangent is what the export writes and the exp
+    # map reads. Float64, so radii up to the bound compare exactly: x0 is about 1,490 at r = 8
+    directions = torch.randn(6, ARM_DIMENSION, dtype=torch.float64)
+    directions = directions / directions.norm(dim=1, keepdim=True)
+    norms = torch.tensor([0.0, 0.1, 1.0, 5.0, 20.0, 100.0], dtype=torch.float64)
+    head_points = HyperbolicHead()(norms.unsqueeze(1) * directions)
 
-    points = exp_map_origin(tangent)
+    points = exp_map_origin(head_points.tangent)
 
     assert points.dtype == torch.float64
     assert points.shape == (6, ARM_DIMENSION + 1)
     lorentz_norm = -points[:, 0]**2 + (points[:, 1:]**2).sum(dim=1)
-    assert torch.allclose(lorentz_norm, torch.full((6, ), -1.0, dtype=torch.float64), atol=1e-12)
+    # |<x, x>_L + 1| within 1e-9 * x0^2, the "Radius" check's bound
+    assert ((lorentz_norm + 1.0).abs() <= 1e-9 * points[:, 0]**2).all()
     origin = torch.zeros(ARM_DIMENSION + 1, dtype=torch.float64)
     origin[0] = 1.0
     assert torch.equal(points[0], origin)
-    _, head_points = HyperbolicHead()(tangent)
-    assert torch.allclose(points, head_points.to(torch.float64), atol=1e-5)
+    torch.testing.assert_close(points, head_points.embedding, rtol=1e-12, atol=1e-12)
 
 # -------------------------------------------------------------------------------------------------
 # Queries and codes

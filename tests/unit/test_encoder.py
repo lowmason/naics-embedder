@@ -5,7 +5,8 @@ One backbone serves codes and queries; an absent channel never reaches the outpu
 affine map sits between fusion and the point; a field's texts go to the backbone in bounded chunks
 that leave every output and every gradient unchanged up to float noise; a new encoder is in train
 mode, so its dropout and gradient checkpointing engage, and a checkpointed backward replays the
-forward's dropout masks, on MPS too; and a step reaches every adapter and the projection.
+forward's dropout masks, on MPS too; a step reaches every adapter and the projection; and under
+autocast only the backbone runs in reduced precision.
 '''
 
 import contextlib
@@ -103,7 +104,6 @@ def make_encoder(tiny_backbone):
             'num_experts': 2,
             'top_k': 1,
             'moe_hidden_dim': 4,
-            'curvature': 1.0,
             'use_gradient_checkpointing': False,
         }
         return SharedEncoder(**{**settings, **overrides})
@@ -248,6 +248,15 @@ def test_one_lora_adapter_wraps_every_linear_layer_of_the_backbone(make_encoder)
     assert list(encoder.backbone.peft_config) == ['default']
     # The pooler's dense layer too, which mean pooling never reads (P8)
     assert len(adapted) == len(linear_layers) == 7
+
+def test_the_encoder_takes_no_curvature(make_encoder):
+    # Spec 4.2: curvature is fixed at 1, with no parameter in the text stage
+    with pytest.raises(TypeError):
+        make_encoder(curvature=1.0)
+
+def test_the_radius_bound_reaches_the_head(make_encoder):
+    assert make_encoder(radius_bound=5.0).head.radius_bound == 5.0
+    assert make_encoder().head.radius_bound == 8.0
 
 def test_an_unknown_fusion_or_dimension_is_refused(make_encoder):
     assert DIMENSIONS == (8, 16, 32)
@@ -453,20 +462,62 @@ def test_only_the_moe_fusion_emits_gates(make_encoder, fusion):
         output = make_encoder(fusion=fusion).eval()(stack_text_inputs(CODES))
 
     gates = {'gate_probs', 'top_k_indices'} if fusion == 'moe' else set()
-    assert set(output) == {'embedding', 'tangent'} | gates
+    assert set(output) == {'embedding', 'tangent', 'radius', 'direction'} | gates
 
 @pytest.mark.parametrize('dimension', DIMENSIONS)
-def test_the_point_is_the_head_of_the_capped_tangent(make_encoder, dimension):
+def test_the_point_is_the_exp_map_of_the_bounded_tangent(make_encoder, dimension):
     with torch.no_grad():
         output = make_encoder(dimension=dimension).eval()(stack_text_inputs(CODES))
 
     assert output['tangent'].shape == (2, dimension)
     assert output['embedding'].shape == (2, dimension + 1)
-    assert (output['tangent'].norm(dim=1) <= 2.0 + 1e-6).all()
+    assert output['radius'].shape == (2, )
+    assert output['direction'].shape == (2, dimension)
+    # One radial coordinate: r is the tangent's norm, below the bound, and the tangent is r · û
+    torch.testing.assert_close(output['tangent'].norm(dim=1), output['radius'])
+    assert (output['radius'] <= 8.0).all()
+    torch.testing.assert_close(
+        output['tangent'], output['radius'].unsqueeze(1) * output['direction']
+    )
+    expected = torch.cat(
+        [
+            torch.cosh(output['radius']).unsqueeze(1),
+            torch.sinh(output['radius']).unsqueeze(1) * output['direction'],
+        ],
+        dim=1,
+    )
+    torch.testing.assert_close(output['embedding'], expected)
     is_valid, _, _ = check_lorentz_manifold_validity(output['embedding'], curvature=1.0)
     assert is_valid
-    _, expected = HyperbolicHead(curvature=1.0)(output['tangent'])
-    torch.testing.assert_close(output['embedding'], expected)
+
+@pytest.mark.parametrize('fusion', FUSIONS)
+def test_under_bf16_autocast_only_the_backbone_runs_in_reduced_precision(make_encoder, fusion):
+    '''Spec 4.2 and §6 "Precision": from fusion on, through the projection and the head, the
+    encoder runs in float32 with autocast off.'''
+
+    encoder = make_encoder(fusion=fusion).eval()
+    dtypes = {}
+
+    def record(name):
+        # A forward hook that returns a value replaces the output, so this one returns None
+        def hook(_module, _inputs, output):
+            dtypes.setdefault(name, output.dtype)
+
+        return hook
+
+    backbone_linear = next(
+        module for module in encoder.backbone.modules() if isinstance(module, nn.Linear)
+    )
+    backbone_linear.register_forward_hook(record('backbone'))
+    encoder.projection.register_forward_hook(record('projection'))
+
+    with torch.no_grad(), torch.autocast('cpu', dtype=torch.bfloat16):
+        output = encoder(stack_text_inputs(CODES))
+
+    assert dtypes == {'backbone': torch.bfloat16, 'projection': torch.float32}
+    floating = {name for name, value in output.items() if value.is_floating_point()}
+    assert floating >= {'embedding', 'tangent', 'radius', 'direction'}
+    assert {output[name].dtype for name in floating} == {torch.float32}
 
 def test_a_malformed_batch_is_refused(make_encoder):
     encoder = make_encoder()

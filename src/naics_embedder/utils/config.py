@@ -922,6 +922,15 @@ class ModelConfig(BaseModel):
     dimension: Literal[8, 16, 32] = Field(
         default=16, description='Embedding dimension: the one Linear(hidden -> d) before the head'
     )
+    radius_bound: float = Field(
+        default=8.0,
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            'R, the bound on every radius: the head gives a vector of norm v the radius '
+            'R * tanh(v / R), which passes gradient at any length (Req 13)'
+        ),
+    )
     lora: LoRAConfig = Field(default_factory=LoRAConfig, description='LoRA configuration')
     moe: MoEConfig = Field(
         default_factory=MoEConfig,

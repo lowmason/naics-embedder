@@ -88,6 +88,7 @@ def build_model_from_config(
         num_experts=cfg.model.moe.num_experts,
         top_k=cfg.model.moe.top_k,
         moe_hidden_dim=cfg.model.moe.hidden_dim,
+        radius_bound=cfg.model.radius_bound,
         temperature=cfg.loss.temperature,
         curvature=cfg.loss.curvature,
         hierarchy_weight=cfg.loss.hierarchy_weight,

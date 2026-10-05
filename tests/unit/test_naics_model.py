@@ -203,11 +203,18 @@ class TestModelInitialization:
 
         encoder = naics_model.encoder
         assert isinstance(encoder, SharedEncoder)
-        assert encoder.curvature == model_config['curvature']
+        # The head takes the bound, not a curvature (spec 4.2)
+        assert encoder.head.radius_bound == 8.0
         assert sum(isinstance(module, PreTrainedModel) for module in naics_model.modules()) == 1
         assert encoder.fusion_name == 'masked_mean'
         assert (encoder.projection.in_features, encoder.projection.out_features) == (384, 16)
         assert list(encoder.head.parameters()) == []
+
+    def test_the_radius_bound_is_saved_and_reaches_the_head(self, model_config, tiny_backbone):
+        model = NAICSContrastiveModel(**model_config, radius_bound=5.0)
+
+        assert model.hparams['radius_bound'] == 5.0
+        assert model.encoder.head.radius_bound == 5.0
 
     def test_an_unknown_dimension_is_refused(self, model_config):
         with pytest.raises(ValueError, match='unknown dimension'):
@@ -312,15 +319,16 @@ class TestForwardPass:
     '''Test model forward pass.'''
 
     def test_forward_basic(self, naics_model, sample_training_batch):
-        '''The default fusion returns the point and its tangent, and no gates.'''
+        '''The default fusion returns the point, its tangent, radius and direction, and no gates.'''
 
         with torch.no_grad():
             output = naics_model(sample_training_batch['anchor'])
 
-        assert set(output) == {'embedding', 'tangent'}
+        assert set(output) == {'embedding', 'tangent', 'radius', 'direction'}
 
     def test_forward_output_shapes(self, naics_model, sample_training_batch):
-        '''The Lorentz point is (batch, 17) and its capped tangent (batch, 16).'''
+        '''The Lorentz point is (batch, 17), its bounded tangent and direction (batch, 16) and
+        its radius (batch,).'''
 
         batch_size = sample_training_batch['batch_size']
 
@@ -330,6 +338,8 @@ class TestForwardPass:
         assert naics_model.encoder.dimension == 16
         assert output['embedding'].shape == (batch_size, 17)
         assert output['tangent'].shape == (batch_size, 16)
+        assert output['radius'].shape == (batch_size, )
+        assert output['direction'].shape == (batch_size, 16)
 
 # -------------------------------------------------------------------------------------------------
 # Test: Training Step
