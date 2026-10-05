@@ -1,490 +1,116 @@
 # NAICS Hyperbolic Embedding System
 
-**Unified Framework for Hierarchical Representation Learning**
+## Architecture
 
----
+One shared LoRA-adapted backbone reads each present code field and each query. The reference
+fusion is the masked mean, followed by one `Linear(384, d)`, where d is 8, 16 or 32 (default 16).
+The text head represents direction and radius on the Lorentz hyperboloid at fixed curvature 1.
+The optional HGCN stage refines the explicit parent–child graph using its own curriculum.
 
-## Table of Contents
-
-1. [Overview](#1-overview)
-2. [System Architecture Overview](#2-system-architecture-overview)
-3. [Shared Text Encoding](#3-shared-text-encoding)
-4. [Fusion and Projection](#4-fusion-and-projection)
-5. [Hyperbolic Geometry and Lorentz Model](#5-hyperbolic-geometry-and-lorentz-model)
-6. [Contrastive Learning Framework](#6-contrastive-learning-framework)
-7. [Sampling Strategies](#7-sampling-strategies)
-8. [Curriculum Learning (SADC)](#8-structure-aware-dynamic-curriculum-sadc)
-9. [False Negative Mitigation](#9-false-negative-mitigation)
-10. [Additional Loss Components](#10-additional-loss-components)
-11. [Evaluation Metrics](#11-evaluation-metrics)
-12. [Distributed Training](#12-distributed-training)
-13. [Implementation Reference](#13-implementation-reference)
-
----
-
-## 1. Overview
-
-The NAICS Hyperbolic Embedding System is a unified framework for learning hierarchical representations of the North American Industry Classification System (NAICS) taxonomy. The system addresses a fundamental challenge in representation learning: embedding tree-structured categorical data into a continuous vector space while preserving hierarchical relationships.
-
-Unlike standard classification approaches that treat categories as equidistant entities, this system recognizes that NAICS codes exist within a rich taxonomic structure spanning from broad Sectors (2-digit) to precise National Industries (6-digit). The semantic distance between sibling codes like 541511 (Custom Computer Programming) and 541512 (Computer Systems Design) is fundamentally different from the distance to 111110 (Soybean Farming).
-
-### Key Architectural Decisions
-
-**1. Hyperbolic Geometry (Lorentz Model):** Euclidean space is geometrically incompatible with tree structures—tree nodes grow exponentially with depth while Euclidean volume grows only polynomially. Hyperbolic space, with its exponential volume growth, provides a natural, low-distortion embedding environment for hierarchies. The Lorentz model is chosen over the Poincaré ball for its superior numerical stability.
-
-**2. One Shared Encoder:** Each NAICS code has four text channels (title, description, examples,
-excluded) with heterogeneous informativeness. One LoRA-adapted backbone reads them all, each
-marked with its field, and reads queries through the same layers, so codes and queries share one
-space. A masked mean fuses the present channels; attention pooling and a Mixture-of-Experts are
-options, the MoE an ablation only.
-
-**3. Curriculum-Based Training:** A three-phase Structure-Aware Dynamic Curriculum (SADC) progressively introduces complexity: structural initialization → geometric refinement → false negative mitigation.
-
-**4. Decoupled Contrastive Learning:** DCL provides better gradient flow and numerical stability compared to standard InfoNCE, with the loss computed as:
-
-```
-L = (-pos_sim + logsumexp(neg_sims)).mean()
+```text
+Marked code fields and queries
+             |
+Shared LoRA backbone, mean pooling per present field
+             |
+Masked fusion -> one Linear(384, d)
+             |
+Bounded radius and direction -> Lorentz point
+             |
+Task + code-to-code + radial terms
+             |
+Outcome validation MRR -> earliest best checkpoint
+             |
+Tangent code-table export -> optional HGCN -> three-panel decision
 ```
 
----
-
-## 2. System Architecture Overview
-
-The system consists of four sequential stages, each designed to preserve or enhance the hierarchical geometry of NAICS codes:
-
-| Stage | Component | Output |
-|-------|-----------|--------|
-| 1 | Shared Text Encoding (one LoRA-adapted backbone, marked fields) | One vector per present channel (384) |
-| 2 | Fusion (masked mean by default) and one Linear(384 → d) | Tangent vector v (d, in {8, 16, 32}) |
-| 3 | Hyperbolic Head (norm cap, Lorentz exponential map, c = 1) | E_hyp (d + 1) |
-| 4 | Contrastive Learning (DCL + auxiliary losses) | Trained embeddings on Lorentz hyperboloid |
-
-### Data Flow Diagram
-
-```
-NAICS Code (4 text channels) or a query
-        ↓
-[Field markers] → 'title: …', 'description: …', 'excluded: …', 'examples: …', 'query: …'
-        ↓
-[Shared Encoder (one LoRA backbone)] → one vector per present channel (384)
-        ↓
-[Fusion: masked mean | attention | MoE ablation] → fused vector (384)
-        ↓
-[Linear(384 → d)] → tangent vector v (d)
-        ↓
-[Hyperbolic Head: cap at norm 2, exp map at the origin] → E_hyp (d + 1)
-        ↓
-[Lorentz Hyperboloid] → Final Embedding
-```
-
----
-
-## 3. Shared Text Encoding
-
-Each NAICS code is characterized by four distinct text fields, each providing complementary information about the industry classification:
-
-| Channel | Content | Purpose |
-|---------|---------|---------|
-| Title | Short code name (e.g., "Software Publishers") | Concise category identification |
-| Description | Detailed explanation of what the code encompasses | Rich semantic content |
-| Examples | Representative businesses in this category | Concrete instantiations |
-| Excluded | Codes explicitly NOT in this category | Disambiguation and boundaries |
-
-### LoRA Adaptation
-
-One LoRA-adapted transformer, based on sentence-transformers, encodes every field. Each present
-text is marked with its field (`'title: Software Publishers'`), so the backbone can tell the
-fields apart, and an absent text never enters it. LoRA (Low-Rank Adaptation) reduces trainable
-parameters while maintaining expressiveness:
-
-| Parameter | Default Value | Description |
-|-----------|---------------|-------------|
-| base_model | all-MiniLM-L6-v2 | Pre-trained sentence transformer (revision 1110a243) |
-| lora_r | 8 | LoRA rank (lower = fewer parameters) |
-| lora_alpha | 16 | LoRA scaling factor |
-| lora_dropout | 0.1 | Dropout rate for regularization |
-| target_modules | all-linear | Universal targeting for any transformer |
-
-Gradient checkpointing is enabled by default to reduce memory usage during backpropagation, which is critical for large batch sizes or limited GPU memory.
-
----
-
-## 4. Fusion and Projection
-
-The relative importance of text channels varies across NAICS codes, and some codes lack a channel
-altogether. Fusion turns the present channels' vectors into one, and `model.fusion` chooses how:
-
-| Option | Parameters | Function |
-|--------|------------|----------|
-| `masked_mean` (default) | None | Mean over the present channels |
-| `attention` | One learned query vector | Softmax-weighted mean over the present channels; starts as the masked mean |
-| `moe` (ablation only) | Gating network and experts | The masked mean, routed through top-2 experts (`text_model/moe.py`) |
-
-Every option masks absent channels itself, so perturbing an absent channel's input leaves the
-output unchanged (Req 9). The masked mean is also the D9 text-only comparator's pooling, so an
-arm and its comparator differ only by training, the projection and the field markers.
-
-Exactly one `Linear(384 → d)` then maps the fused vector to the arm's dimension, d in {8, 16, 32}
-(`model.dimension`, default 16). Its output is the tangent vector the hyperbolic head maps onto
-the hyperboloid (Section 5).
-
-### The Mixture-of-Experts Ablation
-
-Under `moe`, a gating network routes the fused vector to the top 2 of 4 expert MLPs (hidden size
-1024). Two mechanisms exist only for this option (spec R10, R11):
-
-- **Load balancing.** An auxiliary loss, `L_aux = α · N · Σ(f_i · P_i)`, keeps expert use even.
-  N is the number of experts, α = 0.01, f_i the share of inputs routed to expert i and P_i its
-  mean gate probability. Under distributed training the statistics are synchronized across
-  workers before the loss (Section 12).
-- **Router-guided mining** (Section 7), which needs the gate outputs.
-
-Under the other options the model has no gates, so neither runs and neither is logged.
-
----
-
-## 5. Hyperbolic Geometry and Lorentz Model
-
-### The Geometric Mismatch Problem
-
-Attempting to embed hierarchical data into Euclidean space faces a fundamental geometric incompatibility: the number of nodes in a tree grows exponentially with depth (~ b^L for branching factor b and depth L), while the volume of a Euclidean ball grows only polynomially with radius (~ r^d). This disparity inevitably leads to distortion.
-
-Hyperbolic geometry provides a principled solution. Hyperbolic spaces have constant negative curvature, causing volume to grow exponentially with radius (~ e^r). This makes hyperbolic space a natural, parsimonious, low-distortion environment for embedding hierarchies.
-
-### The Lorentz Model
-
-Two common models of hyperbolic space are the Poincaré Ball and the Lorentz (Hyperboloid) Model. The Lorentz model is chosen for its superior numerical stability—the Poincaré model suffers from "the NaN problem" as embeddings approach the boundary.
-
-The Lorentz model represents points as (x₀, x₁, ..., xₙ) on a hyperboloid satisfying:
-
-```
--x₀² + x₁² + ... + xₙ² = -1/c
-```
-
-Where x₀ is the time coordinate (hyperbolic radius), x₁...xₙ are spatial coordinates, and c is the curvature parameter (default: c = 1.0).
-
-### Key Operations
-
-**Lorentz Inner Product:**
-
-```
-⟨u, v⟩_L = u₁v₁ + ... + uₙvₙ - u₀v₀
-```
-
-**Lorentzian Distance (Geodesic):**
-
-```
-d(u, v) = √c · arccosh(-⟨u, v⟩_L)
-```
-
-**Exponential Map (Tangent → Hyperboloid):**
-
-```
-x₀ = cosh(||v|| / √c)
-x_rest = (sinh(||v|| / √c) · v) / ||v||
-```
-
-### The Hyperbolic Head
-
-The head (`HyperbolicHead`, `text_model/hyperbolic.py`) has no parameters, so the one linear map
-of Section 4 is the only affine map between the encoder and the point. It caps the tangent
-vector's norm at 2, then applies the exponential map at the origin, which adds the time
-coordinate (d → d + 1). It returns both the capped tangent, which the export writes (Req 2's
-form), and the point. The curvature is c = 1; export and reads refuse a checkpoint trained at any
-other (spec R8).
-
-### Hyperbolic Utilities (utils/hyperbolic.py)
-
-The system provides high-level abstractions for hyperbolic geometry through the `utils/hyperbolic` module:
-
-**LorentzManifold:** Extended Lorentz operations with validation and projection.
-
-- `minkowski_dot`: Minkowski inner product ⟨x, y⟩_L
-- `lorentz_norm_squared`: Squared Lorentz norm ⟨x, x⟩_L
-- `project_to_hyperboloid`: Ensures constraint ⟨x, x⟩_L = -1/c
-- `check_on_manifold`: Validates points lie on hyperboloid
-- `exp_map_zero` / `log_map_zero`: Maps between tangent space and manifold
-- `distance`: Geodesic distance computation
-- `parallel_transport`: Transport tangent vectors between points
-
-**CurvatureManager:** Phase-aware curvature management.
-
-| Phase | Curvature | Behavior |
-|-------|-----------|----------|
-| Phase 1 | Fixed high (2.0) | Anchoring structure |
-| Phases 2-4 | Learnable | Adapts to data |
-
-**ManifoldAdapter:** Wrapper for consistent hyperbolic operations with automatic projection and validation.
-
-```python
-from naics_embedder.utils.hyperbolic import ManifoldAdapter, CurvatureConfig
-
-adapter = ManifoldAdapter(
-    curvature_config=CurvatureConfig(phase1_curvature=2.0),
-    validate_manifold=True,
-    auto_project=True,
-)
-adapter.set_phase(2)  # Enable learnable curvature
-x_hyp = adapter.to_hyperboloid(tangent_vectors)
-```
-
----
-
-## 6. Contrastive Learning Framework
-
-### Decoupled Contrastive Learning (DCL)
-
-The system uses Decoupled Contrastive Learning rather than standard InfoNCE. DCL decouples the positive and negative terms for improved gradient flow and numerical stability:
-
-```
-pos_sim = -d(anchor, positive) / τ
-neg_sims = [-d(anchor, negative_i) / τ for all i]
-L = (-pos_sim + logsumexp(neg_sims)).mean()
-```
-
-Where τ is the temperature parameter (default: 0.07). In hyperbolic space, similarity is defined as negative Lorentzian distance.
-
-### Key Differences from InfoNCE
-
-| Aspect | InfoNCE | DCL |
-|--------|---------|-----|
-| Formulation | log(exp(pos) / Σexp(all)) | -pos + logsumexp(neg) |
-| Coupling | Positive in denominator | Decoupled terms |
-| Loss Range | Always ≥ 0 | Can be negative |
-| Gradient Flow | Coupled gradients | Independent gradients |
-
-### Gradient Analysis
-
-The gradient magnitude with respect to a negative sample n is proportional to its probability weight in the softmax distribution:
-
-```
-w_in = exp(-d_L(z_i, z_n) / τ) / Z_i
-```
-
-This mathematical structure dictates the informational value of negatives. **Easy negatives** (d >> d_pos) contribute near-zero gradient. **Hard negatives** (d ≈ d_pos) provide strong learning signal. **Collapsing negatives** (d < d_pos) represent current errors and yield maximal gradients.
-
-### False Negative Masking
-
-When false negatives are detected (samples from different but semantically related classes), they are masked from the loss computation using the elimination strategy—setting their similarities to -∞ rather than re-categorizing them as positives. This is more robust to noise in pseudo-labels.
-
-```python
-neg_similarities = neg_similarities.masked_fill(false_negative_mask, -inf)
-```
-
----
-
-## 7. Sampling Strategies
-
-The sampling strategy fundamentally governs learning dynamics. In dense hierarchical taxonomies like NAICS, the definition of "negative" is fluid and context-dependent.
-
-### The Gradient-Semantic Trade-off
-
-Standard contrastive learning treats all negatives equally. However, a model initialized with random weights will immediately separate "Farming" from "Programming" based on coarse lexical features. Triplets with distant negatives quickly satisfy the margin condition, driving loss to zero and extinguishing gradient signal.
-
-To learn fine-grained features distinguishing "Custom Programming" from "Systems Design", sampling must mine negatives from the local neighborhood—"cousins" and "siblings" of the hierarchy. Yet pushing semantically proximal nodes apart risks shattering cluster structure.
-
-### Negative Type Taxonomy
-
-| Type | Tree Distance | Gradient | Risk | Recommendation |
-|------|---------------|----------|------|----------------|
-| Siblings | d = 2 | Very High | False Negative | Mask in Phase 1 |
-| Cousins | d = 4 | High | Low | Optimal negatives |
-| 2nd Cousins | d = 6 | Medium | Very Low | Good negatives |
-| Distant | d ≥ 8 | Near Zero | None | Low utility |
-
-### Hard Negative Mining
-
-Embedding-based hard negative mining dynamically selects negatives that are currently close to the anchor in hyperbolic space. The LorentzianHardNegativeMiner computes distances to all candidate negatives and selects the top-k with smallest distances.
-
-This adapts to the model's current state, targeting exact boundaries where the model is confused. However, it risks the "False Negative Trap" in hierarchical data—embeddings closest to an anchor are likely siblings or cousins, which are semantically similar.
-
-### Router-Guided Sampling
-
-Under `model.fusion: moe` only (spec R10), router-guided sampling selects negatives that maximize
-confusion in the MoE gating network. If the router sends anchor and negative to the same experts
-with similar confidence, they are "computationally indistinguishable." Using these as contrastive
-negatives forces experts to become more discriminative and combats mode collapse. Under any other
-fusion the model has no gates, and the geometric miner takes every mining slot.
-
-### Global Batch Sampling
-
-A local micro-batch (e.g., size 32 per GPU) is statistically unlikely to contain "Cousin" negatives (distance-4). Cross-device negative sampling gathers embeddings from all GPUs to create a larger candidate pool, enabling selection of meaningful hard negatives.
-
----
-
-## 8. Structure-Aware Dynamic Curriculum (SADC)
-
-The optimal sampling strategy is not a single static configuration but a dynamic, structure-aware process that evolves over training. The SADC implements three phases:
-
-### Phase 1: Structural Initialization (0-30%)
-
-**Objective:** Establish global topology and local clustering based on the explicit NAICS tree.
-
-**Strategy:** Tree-Distance Weighted Sampling with Sibling Masking
-
-```
-P_S1(n|a) ∝ 1/d_tree(a,n)^α · 𝟙(d_tree(a,n) > 2)
-```
-
-Inverse distance weighting (α ≈ 1.5) biases selection toward "Cousins" (d=4). Siblings (d=2) are explicitly masked—treating siblings as negatives early in training is dangerous because the model lacks feature maturity to distinguish them subtly.
-
-**Curriculum Flags:** `use_tree_distance=True`, `mask_siblings=True`
-
-### Phase 2: Geometric Refinement (30-70%)
-
-**Objective:** Refine decision boundaries using the learned metric space.
-
-**Strategy:** Annealed Hard Negative Mining in Lorentz Space
-
-As the embedding space matures, transition from symbolic tree priors to learned semantics. Sample
-a candidate pool, then select top-k negatives minimizing Lorentzian distance. Under `moe`,
-router-guided sampling is also enabled to force expert specialization.
-
-**Curriculum Flags:** `enable_hard_negative_mining=True`, `enable_router_guided_sampling=True`
-(the router flag is read only under `moe`)
-
-### Phase 3: False Negative Mitigation (70-100%)
-
-**Objective:** Clean embedding space of artifacts; resolve semantic ambiguities.
-
-**Strategy:** Clustering-Based False Negative Elimination (FNE)
-
-Periodically freeze the encoder and perform Hyperbolic K-Means clustering. Assign cluster IDs as pseudo-labels. When sampling negatives, if Cluster(anchor) == Cluster(negative), eliminate that negative from the loss. This accepts that some distinct codes are semantically identical and stops fighting the data.
-
-**Curriculum Flags:** `enable_clustering=True`
-
-### Phase Transition Summary
-
-| Phase | Epochs | Key Features | Goal |
-|-------|--------|--------------|------|
-| 1 | 0-30% | Tree-distance weighting, sibling masking | Build skeleton |
-| 2 | 30-70% | Hard negative mining; router-guided sampling under `moe` | Refine shape |
-| 3 | 70-100% | Clustering-based FNE | Clean artifacts |
-
----
-
-## 9. False Negative Mitigation
-
-### The False Negative Problem
-
-In contrastive learning, a "false negative" is a sample treated as negative despite being semantically similar to the anchor. This problem is acute for NAICS: given anchor 541511 (Custom Computer Programming), sibling 541512 (Computer Systems Design) is semantically very close. Standard contrastive loss would incorrectly apply repulsive force, damaging hierarchical structure.
-
-The detrimental effect is pronounced in large-scale datasets with high semantic concept density—a perfect description of NAICS. Consequences include discarding valuable shared semantic information and slowed convergence.
-
-### Why Curriculum-Based Detection
-
-Attempting false negative detection too early is counterproductive. In initial training, the embedding space is largely random—any "semantic neighbors" identified via clustering would be spurious. The detection mechanism should activate only after the embedding space has stabilized (typically 70% of training).
-
-This creates a self-correction loop: the model first learns coarse representations, then uses that emergent structure to identify and correct inconsistencies in its own training objective, then refines representations based on this more accurate objective.
-
-### Detection via Hyperbolic K-Means
-
-Unlike standard Euclidean K-Means, the system uses Hyperbolic K-Means operating directly in Lorentz space. This is more appropriate for hyperbolic embeddings and preserves geometric structure during clustering.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| n_clusters | 500 | Number of semantic clusters |
-| curvature | 1.0 | Lorentz model curvature |
-| max_iter | 100 | Maximum K-Means iterations |
-| tol | 1e-4 | Convergence tolerance |
-| update_frequency | 5 epochs | Re-clustering interval in Phase 3 |
-
-### Elimination vs. Attraction Strategy
-
-Two mitigation strategies exist after identifying false negatives. **Elimination** removes false negatives from the denominator—the model ignores them. **Attraction** re-categorizes them as positives in the numerator—the model pulls them closer.
-
-Research indicates attraction is less tolerant to noise in pseudo-labels. Since clustering-based detection inevitably produces some noise, **elimination is the recommended and implemented strategy**.
-
----
-
-## 10. Additional Loss Components
-
-Beyond the primary DCL contrastive loss, the system includes several auxiliary losses to enforce specific geometric and structural properties:
-
-### Hierarchy Preservation Loss
-
-Directly optimizes embedding distances to match ground-truth tree distances:
-
-```
-L_hierarchy = weight · MSE(d_embedding, d_tree)
-```
-
-For each pair of codes in the batch, the loss penalizes deviations between Lorentzian geodesic distance and NAICS tree distance. Default weight: 0.325.
-
-### Structural Preference Loss (replaces LambdaRank)
-
-Pairwise structural ordering over each anchor's positive plus its selected negatives. For every
-pair with unequal structural distance, with `i` structurally closer than `j`:
-
-```
-L_ij = softplus((d_i - d_j + margin) / temperature)
-```
-
-The gradient pulls the structurally closer candidate in and pushes the farther one out. Explicit
-exclusions, padding, self, and duplicate codes never participate; comparisons are normalized per
-anchor. Default weight: 0.35 (`loss.structural_preference`). See the
-[Training Guide](text_training.md#structural-preference-loss).
-
-### Radius Regularization
-
-Prevents hyperbolic embeddings from collapsing to the origin or expanding too far:
-
-```
-L_radius = weight · ||r - target_radius||²
-```
-
-Where r is the hyperbolic radius (time coordinate x₀). Default weight: 0.01.
-
-### MoE Load Balancing Loss
-
-Under `model.fusion: moe` only, as described in Section 4, ensures even expert utilization:
-
-```
-L_aux = α · N · Σ(f_i · P_i)
-```
-
-Default coefficient α = 0.01.
-
-### Total Loss
-
-```
-L_total = L_DCL + L_hierarchy + L_structural_preference + L_radius + L_load_balancing
-```
-
-`L_load_balancing` is present under `model.fusion: moe` only (spec R11); under any other fusion it
-is neither computed nor logged.
-
-| Loss Component | Default Weight | Purpose |
-|----------------|----------------|---------|
-| DCL Contrastive | 1.0 (implicit) | Primary representation learning |
-| Hierarchy Preservation | 0.325 | Tree structure alignment |
-| Structural Preference | 0.35 | Structural ordering of selected candidates |
-| Radius Regularization | 0.01 | Embedding stability |
-| Load Balancing | 0.01 | Expert utilization balance (`moe` only) |
-
----
-
-## 11. Evaluation Metrics
-
-The system computes comprehensive evaluation metrics during training to monitor hierarchy preservation, embedding quality, and potential failure modes.
-
-### Hierarchy Preservation Metrics
-
-These structural statistics are logged for the record only (Req 6): no progress bar shows
-them and nothing selects on them. Configurations are compared under Req 5 on the outcome and
-regressor panels (`tools margins`, `tools decide`), and Req 6's stratified diagnostics come
-from `tools diagnostics` (see the [usage guide](usage.md#tools-diagnostics)).
-
-| Metric | Description |
-|--------|-------------|
-| Cophenetic Correlation | Correlation between embedding and tree distances |
-| Structural Spearman v1 (`structural_spearman_v1`) | Average-rank correlation of canonical unordered distance pairs |
-| NDCG@5 | Ranking quality (top 5 neighbors) |
-| NDCG@10 | Ranking quality (top 10 neighbors) |
-| NDCG@20 | Ranking quality (top 20 neighbors) |
-| Mean Distortion | Average distance distortion from tree |
+## Shared Text Encoding
+
+The fields are `title`, `description`, `examples`, `excluded`, and `query`. A present text is
+marked with its field, such as `title: Computer Systems Design Services`. Null or blank channels
+never enter the backbone and do not contribute to fusion. Every field shares the same LoRA
+adapters. The reference backbone is `sentence-transformers/all-MiniLM-L6-v2`.
+
+Texts longer than the backbone's trained input window use the committed window-fitting
+summaries. Token caches pin the descriptions, tokenizer and window; the checkpoint contract
+records the summary hash. Truncation is refused. See [input-window API](api/input_window.md).
+
+## Fusion and Projection
+
+`model.fusion` chooses masked mean, attention pooling, or MoE. Attention starts as the masked
+mean. MoE routes the masked mean through top-2 experts and adds its load-balancing term only for
+that ablation. Neither fusion choice introduces a mining or sampling curriculum. One affine
+projection maps the fused backbone vector to `model.dimension`.
+
+## Hyperbolic Geometry and Live Radius
+
+For projection v, let a be its norm and u its direction. The head computes
+`r = R * tanh(a / R)`, with `R = model.radius_bound` (default 8), then maps tangent r u to
+`(cosh(r), sinh(r) u)`. The zero vector maps to the origin. There is no learned or configurable
+text curvature and no fixed radius cap at 2. The head has no parameters; gradients reach the
+projection through r and u.
+
+Training distances use the stable polar form in float32, including zero distance for coincident
+anchors. Panel reads reconstruct Lorentz points from exported tangent coordinates and compute
+on the CPU in float64. Export columns are `code`, `index`, `level`, then `e0` through `e{d-1}`
+in the bundle's codebook order. Each embedding has d tangent coordinates; the reconstructed
+Lorentz point has d + 1 coordinates.
+
+## Three-Term Objective
+
+The objective has three terms with independent learned positive logit scales for the first two:
+
+- `task_loss`: a task query's cross-entropy sums probability over all its named target codes.
+- `code_code_loss`: each live code anchor matches a tree-distance soft target over all codes,
+  excluding itself and its unary partner.
+- `radial_loss`: squared error from the live anchor radius to `radial_step * (level - 1)`.
+
+The total is task loss plus `code_code_weight * code_code_loss` and
+`radial_weight * radial_loss`, with the MoE load-balancing term only under `fusion=moe`.
+There is no DCL term, false-negative clustering, structural-preference loss or geometric miner
+in text training. [The training guide](text_training.md#the-three-terms) defines the candidate
+sets and masks.
+
+## Epoch and Candidate Cache
+
+The data module makes two streams: code anchors and eligible task queries. A deterministic
+seed/epoch permutation visits each member once. The number of steps is the ceiling of query
+count divided by `queries_per_step`: 11,039 queries at 128 give 87 steps. Code anchors are split
+across those steps as evenly as possible.
+
+A detached cache encodes all code rows in eval mode without gradients at fit start and after
+each epoch. At each step, current live code anchors replace their cached rows. A task query's
+candidates therefore include live gradients where it targets current anchors and detached
+embeddings elsewhere. No text validation loader is constructed.
+
+## Monitor, Health and Exact Resume
+
+After refreshing the cache, the outcome validation monitor reads MRR, records the selection-log
+read, and writes `monitor_reads.jsonl`. That float64 MRR is `val/outcome_mrr`: the sole score for
+the earliest best checkpoint, plateau scheduler and early stopping. `epoch_summary.jsonl`
+records the same MRR alongside loss, scale and per-level radius health values.
+
+Text training uses one device. CUDA's backbone uses `bf16-mixed`; fusion, projection, head,
+distances and losses remain float32. CPU and MPS use `32-true`. The model uses AdamW, one warmup
+epoch and an MRR-driven plateau schedule. The learned scales have no weight decay and are
+clamped after each optimizer step.
+
+Checkpoints identify objective `req11-v1`, the bundle, encoder, preprocessing, seed and 21 run
+settings. A pre-objective checkpoint is refused before model loading. Exact resume requires the
+same experiment directory and settings, rebuilds the code cache, and continues both JSONL files
+after retaining records through the resumed epoch. Resume only `--ckpt-path last`. A completed
+early-stopped run exits 1 with `early stopping ended the run at epoch k`; a spent epoch budget
+is a no-op. See [exact resume](text_training.md#exact-resume).
+
+## Diagnostics and HGCN
+
+`tools diagnostics` reports Req 6's structural statistics without thresholds or selection.
+HGCN retains its four-phase graph curriculum, triplet objective, graph samplers and curvature
+utilities. Its structural validation statistics describe the graph model; they are not text
+checkpoint selectors. The HGCN feeder accepts the current text checkpoint contract and exports
+code embeddings from the selected checkpoint.
 
 ### Structural Spearman v1
+
 
 The definition identifier is `structural-spearman-v1`; external fields use
 `structural_spearman_v1`. The Python entry point remains
@@ -524,229 +150,39 @@ and are not directly comparable with v1. Do not rewrite, dual-write, or numerica
 artifacts.
 
 This rank repair does not validate the formula that produced the distance matrices. HGCN full
-evaluation remains fixed at curvature `1.0`; text comparison runs retain
-`loss.curvature: 1.0`. Non-unit-curvature metric corrections are a separate change.
+evaluation remains fixed at curvature `1.0`. The text objective uses unit curvature without a
+curvature configuration field. Non-unit-curvature HGCN metric corrections are a separate change.
 
-### Hyperbolic Geometry Metrics
+## Reference Campaign
 
-| Metric | Description | Notes |
-|--------|-------------|-------|
-| Lorentz Norm Mean | Average ⟨x,x⟩_L across embeddings | Should be ≈ -1/c |
-| Lorentz Norm Violations | Points violating hyperboloid constraint | Should be 0 |
-| Hyperbolic Radius Mean | Average x₀ (time coordinate) | Indicates hierarchy depth |
-| Hyperbolic Radius Std | Standard deviation of radii | Indicates spread |
+The reference campaign uses ten seeds and three panels: outcome validation MRR, and the
+regressor panel's seen and held-out regimes at level 6. `tools sweep` validates every run's
+checkpoint, settings and complete monitor records before any export or decision read. Its arm
+record carries the monitor reads as well as the three decision reads per seed.
 
-### Collapse Detection
+`tools margins --multiple 3` fixes the reference margins before candidate reads. `tools decide`
+uses paired two-stage resampling and the required non-inferiority/superiority rule. Structural
+diagnostics and training health cannot replace those panel decisions. The panel test splits
+remain sealed. See [the campaign workflow](text_training.md#reference-campaign).
 
-The system monitors for embedding collapse, where all embeddings converge to a single point or small region, indicating training failure:
+## Implementation Reference
 
-| Metric | Description | Warning Threshold |
-|--------|-------------|-------------------|
-| Norm CV | Coefficient of variation of norms | < 0.1 indicates collapse |
-| Distance CV | Coefficient of variation of pairwise distances | < 0.1 indicates collapse |
-| Variance Collapse | Boolean flag for detected collapse | True = problem |
+| Area | Modules |
+|------|---------|
+| Marked text and fusion | `text_model/fields.py`, `shared_encoder.py`, `fusion.py`, `moe.py` |
+| Query/target facts | `supervision/activity.py`, `queries.py`, `code_targets.py` |
+| Two-stream steps | `text_model/dataloader/datamodule.py` |
+| Objective and live radius | `text_model/loss.py`, `hyperbolic.py`, `naics_model.py` |
+| Cache and validation monitor | `text_model/monitor.py` |
+| Checkpoint campaign | `text_model/checkpoint_runner.py`, `decision/sweep.py` |
+| Health artifacts | `text_model/epoch_summary.py`, `radius_report.py` |
+| Graph refinement | `graph_model/hgcn.py`, `graph_model/curriculum/` |
 
----
-
-## 12. Distributed Training
-
-### Multi-GPU Support
-
-The system supports distributed training with automatic global batch sampling. Key features:
-
-**Global Negative Gathering:** When hard negative mining or router-guided sampling is enabled, negative embeddings are gathered from all GPUs using `torch.distributed.all_gather`. This creates a much larger candidate pool for hard negative selection.
-
-**Gradient Flow:** The implementation preserves gradients through all_gather operations. During backpropagation, gradients are scattered back to each rank, ensuring all GPUs receive gradient updates for their embeddings.
-
-**Global-Batch Load Balancing:** Under `moe`, expert utilization statistics are synchronized
-across all workers via AllReduce before computing the auxiliary loss, enabling true domain
-specialization.
-
-### Memory Management
-
-The system monitors and logs VRAM usage for distributed operations:
-
-| Metric | Example (batch=32, world=4, k=24) |
-|--------|-----------------------------------|
-| train/global_batch/global_negatives_memory_mb | ~9 MB per GPU |
-| train/global_batch/similarity_matrix_memory_mb | ~393 KB per batch |
-| train/global_batch/global_batch_size | 128 (32 × 4) |
-| train/global_batch/global_k_negatives | 96 (24 × 4) |
-
----
-
-## 13. Sampling Architecture
-
-- **Data Layer (Streaming Dataset):** Builds candidate pools that never admit an explicit exclusion of the anchor (Req 8(c)), applies Phase 1 inverse tree-distance weighting over D*, and masks siblings.
-- **Model Layer (NAICSContrastiveModel):** Performs Phase 2+ mining (embedding-based; router-guided
-  under `moe` only, spec R10), norm-adaptive margins, and Phase 3 false-negative masking.
-  Curriculum flags control which mechanisms are active.
-- **Interface:** Data layer supplies pre-weighted negatives and metadata; model reshapes/reorders
-  negatives for harder sampling and logs tree-distance metrics, plus router confusion metrics under
-  `moe` only (spec R10).
-- See `docs/sampling_architecture.md` for full details.
-
----
-
-## 13. Implementation Reference
-
-### Key Modules
-
-| Module | Location | Purpose |
-|--------|----------|---------|
-| `NAICSContrastiveModel` | `text_model/naics_model.py` | Main Lightning module (mixin-based) |
-| `SharedEncoder` | `text_model/shared_encoder.py` | One backbone, fusion, one Linear(384 → d), the head |
-| `build_fusion` | `text_model/fusion.py` | Masked mean, attention pooling, the MoE ablation |
-| `MixtureOfExperts` | `text_model/moe.py` | The experts of the `moe` ablation |
-| `HyperbolicHead` | `text_model/hyperbolic.py` | Norm cap and Lorentz exponential map |
-| `ArmEncoder` | `text_model/arm_encoder.py` | `QueryCodeEncoder` from a checkpoint and its table |
-| `export_code_table` | `text_model/export.py` | The 2,125-code table in Req 2's form |
-| `LorentzDistance` | `text_model/hyperbolic.py` | Geodesic distance |
-| `LorentzOps` | `text_model/hyperbolic.py` | Static utility class for Lorentz operations |
-| `HyperbolicInfoNCELoss` | `text_model/loss.py` | DCL implementation |
-| `HierarchyPreservationLoss` | `text_model/loss.py` | Tree alignment loss |
-| `StructuralPreferenceLoss` | `text_model/loss.py` | Structural ordering loss |
-| `CurriculumScheduler` | `text_model/curriculum.py` | SADC phase management |
-| `HyperbolicKMeans` | `text_model/hyperbolic_clustering.py` | Lorentz clustering |
-| `LorentzianHardNegativeMiner` | `text_model/hard_negative_mining.py` | HNM in hyperbolic space |
-| `RouterGuidedNegativeMiner` | `text_model/hard_negative_mining.py` | Router-confusion mining (`moe` only) |
-| `NormAdaptiveMargin` | `text_model/hard_negative_mining.py` | Sech-based adaptive margins |
-
-### Model Mixins
-
-The `NAICSContrastiveModel` is decomposed into functional mixins for maintainability:
-
-| Mixin | Location | Purpose |
-|-------|----------|---------|
-| `DistributedMixin` | `text_model/mixins/distributed.py` | Global batch sampling for multi-GPU |
-| `LossMixin` | `text_model/mixins/loss.py` | Loss computation (hierarchy, structural preference, radius) |
-| `CurriculumMixin` | `text_model/mixins/curriculum.py` | Checked negative selection (hard negative proposals; router-guided ones under `moe`) |
-| `LoggingMixin` | `text_model/mixins/logging.py` | Training and validation metric logging |
-| `ValidationMixin` | `text_model/mixins/validation.py` | Validation step and evaluation logic |
-| `OptimizerMixin` | `text_model/mixins/optimizer.py` | Optimizer and scheduler configuration |
-
-### torch.compile Support
-
-Core hyperbolic operations are optimized using PyTorch 2.0+ `torch.compile` for improved throughput via kernel fusion:
-
-| Module | Location | Purpose |
-|--------|----------|---------|
-| `CompileConfig` | `utils/compile.py` | Compile mode and backend configuration |
-| `CompiledLorentzOps` | `utils/compile.py` | Drop-in compiled replacement for LorentzOps |
-| `maybe_compile` | `utils/compile.py` | Conditional compilation decorator |
-
-**Compiled operations:**
-
-- `compiled_exp_map_zero`: Exponential map from tangent space to hyperboloid
-- `compiled_log_map_zero`: Logarithmic map from hyperboloid to tangent space
-- `compiled_lorentz_distance`: Geodesic distance computation
-- `compiled_minkowski_dot`: Minkowski inner product
-- `compiled_project_to_hyperboloid`: Projection onto Lorentz manifold
-
-**Configuration:**
-
-```python
-from naics_embedder.utils.compile import CompileConfig, set_compile_config
-
-# Configure compile behavior
-config = CompileConfig(
-    enabled=True,               # Enable torch.compile (requires PyTorch 2.0+)
-    mode='reduce-overhead',     # Best for small tensors and repeated calls
-    backend='inductor',         # Default, best performance
-    dynamic=True,               # Support varying batch sizes
-)
-set_compile_config(config)
-```
-
-Compilation can be disabled via environment variable: `NAICS_DISABLE_COMPILE=1`
-
-### Default Hyperparameters
-
-| Category | Parameter | Default |
-|----------|-----------|---------|
-| Model | base_model_name | all-MiniLM-L6-v2 |
-| Model | fusion / dimension | masked_mean / 16 |
-| LoRA | r / alpha / dropout | 8 / 16 / 0.1 |
-| MoE (`moe` only) | num_experts / top_k / hidden_dim | 4 / 2 / 1024 |
-| Loss | temperature / curvature | 0.07 / 1.0 |
-| Loss Weights | hierarchy / structural_preference / radius_reg / level_radius | 0.45 / 0.35 / 0.15 / 0.05 |
-| MoE (`moe` only) | load_balancing_coef | 0.01 |
-| Training | learning_rate / weight_decay | 2e-4 / 0.01 |
-| Training | warmup_steps | 500 |
-| Curriculum | phase1_end / phase2_end | 0.3 / 0.7 |
-| Clustering | n_clusters / update_freq | 500 / 5 epochs |
-
-### CLI Commands
+The text model has three mixins: `LossMixin` for MoE balancing, `LoggingMixin` for epoch health,
+and `OptimizerMixin` for AdamW, warmup, plateau and scale clamping. Geometry utility operations
+also have a `torch.compile` implementation for the callers that use it.
 
 ```bash
-# Data preprocessing
-uv run naics-embedder data all
-
-# Training
-uv run naics-embedder train
-
-# Export a checkpoint's code table, then read the outcome panel's validation split
-uv run naics-embedder tools export-table --checkpoint checkpoints/sadc_default/last.ckpt \
-  --output arm_table.parquet
-uv run naics-embedder tools outcome-panel --checkpoint checkpoints/sadc_default/last.ckpt \
-  --table arm_table.parquet --purpose 'why this read happens'
+uv run naics-embedder tools visualize --summary checkpoints/reference/epoch_summary.jsonl
+uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic   --codebook PATH/naics_codebook.parquet
 ```
-
----
-
-## Appendix A: Mathematical Notation Reference
-
-| Symbol | Meaning |
-|--------|---------|
-| ⟨u, v⟩_L | Lorentz inner product |
-| d_L(u, v) | Lorentzian geodesic distance |
-| d_tree(a, n) | Tree distance (shortest path in NAICS taxonomy) |
-| τ | Temperature parameter |
-| c | Curvature parameter |
-| x₀ | Time coordinate (hyperbolic radius) |
-| f_i | Fraction of tokens routed to expert i |
-| P_i | Average gating probability for expert i |
-| α | Load balancing coefficient |
-
----
-
-## Appendix B: Literature References
-
-**Hyperbolic Deep Learning & Graph Neural Networks ## Hyperbolic Geometry**
-
-- Chami et al. (2019). [Hyperbolic Graph Convolutional Neural Networks.](https://proceedings.neurips.cc/paper_files/paper/2019/file/0415740eaa4d9decbc8da001d3fd805f-Paper.pdf)
-- Liu et al. (2019). [Hyperbolic Graph Neural Networks.](https://proceedings.neurips.cc/paper_files/paper/2019/file/103303dd56a731e377d01f6a37badae3-Paper.pdf)
-- Nickel & Kiela (2017). [Poincaré Embeddings for Learning Hierarchical Representations.](https://papers.nips.cc/paper_files/paper/2017/file/59dfa2df42d9e3d41f5b02bfc32229dd-Paper.pdf)
-- Nickel & Kiela (2018). [Learning Continuous Hierarchies in the Lorentz Model of Hyperbolic Geometry.](https://proceedings.mlr.press/v80/nickel18a/nickel18a.pdf)
-- Ganea et al. (2018). [Hyperbolic Neural Networks.](https://proceedings.neurips.cc/paper_files/paper/2018/file/dbab2adc8f9d078009ee3fa810bea142-Paper.pdf)
-- Dai et al. (2021). [A Hyperbolic-to-Hyperbolic Graph Convolutional Network.](https://arxiv.org/pdf/2104.06942)
-
-**Contrastive Learning**
-
-- Yeh et al. (2022). [Decoupled Contrastive Learning.](https://arxiv.org/pdf/2110.06848)
-- Chen et al. (2020). [A Simple Framework for Contrastive Learning of Visual Representations.](https://proceedings.mlr.press/v119/chen20j/chen20j.pdf)
-- Khosla et al. (2020). [Supervised Contrastive Learning.](https://proceedings.neurips.cc/paper_files/paper/2020/file/d89a66c7c80a29b1bdbab0f2a1a94af8-Paper.pdf)
-- Ge et al. (2023). [Hyperbolic Contrastive Learning for Visual Representations beyond Objects.](https://arxiv.org/pdf/2212.00653)
-- Robinson et al. (2021). [Contrastive Learning with Hard Negative Samples.](https://arxiv.org/abs/2010.04592)
-- Zhang et al. (2022). [Use All The Labels: A Hierarchical Multi-Label Contrastive Learning Framework.](https://openaccess.thecvf.com/content/CVPR2022/papers/Zhang_Use_All_the_Labels_A_Hierarchical_Multi-Label_Contrastive_Learning_Framework_CVPR_2022_paper.pdf)
-- Ahrabian et al. (2020). [Structure Aware Negative Sampling in Knowledge Graphs.](https://www.researchgate.net/publication/344373367_Structure_Aware_Negative_Sampling_in_Knowledge_Graphs)
-- Alon et al. (2024). [Optimal Sample Complexity of Contrastive Learning.](https://openreview.net/forum?id=NU9AYHJvYe)
-
-**Mixture-of-Experts**
-
-- Shazeer et al. (2017). [Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer.](https://openreview.net/pdf?id=B1ckMDqlg)
-- Fedus et al. (2022). [Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity.](https://jmlr.org/papers/volume23/21-0998/21-0998.pdf)
-- Jacobs et al. (1991). [Adaptive Mixtures of Local Experts.](https://www.cs.toronto.edu/~fritz/absps/jjnh91.pdf)
-
-**NAICS & Industry Classification**
-
-- Whitehead & Dumbacher (2024). [Ensemble Modeling Techniques for NAICS Classification in the Economic Census.](https://www.census.gov/library/working-papers/2024/econ/ensemble-modeling-techniques-for-naics-classification-in-the-economic-census.html)
-- Vidali et al. (2024). [Unlocking NACE Classification Embeddings with OpenAI for Enhanced Analysis.](https://arxiv.org/abs/2409.11524)
-
-**Text Encoding & Parameter Efficiency**
-
-- Vaswani et al. (2017). [Attention Is All You Need.](https://proceedings.neurips.cc/paper_files/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf)
-- Hu et al. (2022). [LoRA: Low-Rank Adaptation of Large Language Models.](https://arxiv.org/pdf/2106.09685)
-- Reimers & Gurevych (2019). [Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks.](https://aclanthology.org/D19-1410.pdf)
-
----

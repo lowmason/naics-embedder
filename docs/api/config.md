@@ -1,46 +1,57 @@
-# Config API
+# Configuration API
 
-## Stage-3 supervision and structural preference
-
-Repaired Stage-3 training reads one immutable supervision bundle and configures the structural
-preference loss that replaces LambdaRank:
+## Reference Text Configuration
 
 ```yaml
+experiment_name: reference
+seed: 42
 supervision:
-  mode: repaired
   contract_version: stage3-supervision-v2
-  manifest_path: null  # data supervision prints the exact immutable path to set before training
-
+  manifest_path: null
+model:
+  base_model_name: sentence-transformers/all-MiniLM-L6-v2
+  fusion: masked_mean
+  dimension: 16
+  radius_bound: 8.0
 loss:
-  temperature: 0.07
-  curvature: 1.0
-  base_margin: 0.5
-  hierarchy_weight: 0.45
-  structural_preference:
-    weight: 0.35
-    margin: 0.1
-    temperature: 1.0
-    tie_tolerance: 0.000001
-  radius_reg_weight: 0.10
-  level_radius_weight: 0.15
+  code_code_weight: 1.0
+  radial_weight: 1.0
+  target_temperature: 1.0
+  radial_step: 1.0
+  logit_scale_init: 1.0
+  logit_scale_range: [0.01, 100.0]
+data_loader:
+  queries_per_step: 128
+training:
+  learning_rate: 0.0001
+  weight_decay: 0.01
+  warmup_epochs: 1
+  lr_plateau_factor: 0.5
+  lr_plateau_patience: 2
+  early_stopping_patience: 5
+  trainer:
+    max_epochs: 40
+    accelerator: auto
+    devices: 1
+    precision: bf16-mixed
+    gradient_clip_val: 1.0
+    accumulate_grad_batches: 1
 ```
 
-- `supervision.manifest_path: null` is a valid pre-generation state: the configuration parses, and
-  `train` stops at the mandatory supervision gate with the command that generates a bundle.
-- `loss.structural_preference.temperature` must be positive; `margin` and `tie_tolerance` must be
-  nonnegative.
-- Repaired configurations reject `loss.rank_order_weight` (a legacy LambdaRank setting; configure
-  `loss.structural_preference` instead) and `data_loader.streaming.phase1_exclusion_weight` (an
-  explicit exclusion is never a negative). The old key is never reinterpreted as the new loss
-  because the objectives differ.
-- Repaired configurations also reject a legacy streaming path (`distances_parquet`,
-  `distance_matrix_parquet`, `relations_parquet`, `triplets_parquet`) set to anything but its
-  default: repaired training reads structural facts and training pairs from the bundle.
-- The legacy keys and paths are accepted only with the explicit
-  `supervision.mode: legacy_containment`.
-- `train --checkpoint-load-mode [exact|weights_only]` selects exact resume (identical supervision
-  contract) or an explicit weights-only migration; see the
-  [Training Guide](../text_training.md#exact-resume-versus-weights-only-migration).
+The complete config also supplies LoRA/MoE settings and tokenization/description paths.
+`manifest_path: null` is a valid pre-generation state; `train` then refuses at the mandatory
+bundle gate and names the command to generate a bundle. The objective is `req11-v1`, and
+retired loss, curvature, mining, curriculum and streaming-path overrides are rejected.
+
+CUDA uses the configured `bf16-mixed` backbone precision. Fusion, projection, head, geometry and
+losses remain float32; CPU and MPS use `32-true`. Text training uses one device. The learned
+scales have no weight decay. `training.trainer.val_check_interval` remains a parsed field but is
+unread; the outcome monitor runs at each epoch end without a validation loader.
+
+`train --checkpoint-load-mode exact` is the sole load mode. Exact resume requires the same
+contract, seed, experiment directory and 21 run settings, including effective precision and
+budget. Old objective checkpoints cannot migrate weights. See
+[exact resume](../text_training.md#exact-resume).
 
 ## Reference
 

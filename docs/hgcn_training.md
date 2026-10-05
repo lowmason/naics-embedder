@@ -57,8 +57,9 @@ Refined Lorentz-model hyperbolic embeddings aligned with taxonomy structure.
 
 ## 8. Validation Metrics
 
-HGCN validation logs the text model's structural statistics for the record. No progress bar
-shows them and nothing selects on them (Req 6):
+HGCN validation logs structural statistics for the record. The text monitor instead selects
+on outcome validation MRR. No progress bar shows the graph statistics and nothing selects on
+them (Req 6):
 
 - **Cophenetic correlation** – correlation between embedding distances and tree distances.
 - **Structural Spearman v1** (`structural_spearman_v1`) - average-rank structural agreement,
@@ -103,7 +104,8 @@ No historical artifact is rewritten and no new legacy alias is emitted.
 Full HGCN evaluation remains explicitly fixed at curvature `1.0`. This rank repair does not
 repair non-unit-curvature distances or change the graph architecture, objectives, or curriculum.
 
-Metrics are logged once per validation run (default: every epoch). They require the precomputed tree distance matrix produced in Stage 2.
+Metrics are logged once per validation run (default: every epoch). They require the precomputed
+tree distance matrix from the configured supervision bundle.
 
 ### Configuration
 
@@ -115,7 +117,8 @@ Add the following keys to your `GraphConfig` (or `configs/hgcn.yaml`) to customi
 | `full_eval_frequency` | Run the expensive metrics every _N_ optimizer steps (default `1`, meaning every validation epoch). |
 | `ndcg_k_values` | List of K values used for NDCG logging. |
 
-If `distance_matrix_parquet` is missing, HGCN automatically skips the extra metrics and continues with the lightweight batch metrics (triplet accuracy, etc.).
+If the optional distance matrix is unavailable, HGCN skips the extra metrics and continues with
+lightweight batch metrics such as triplet accuracy.
 
 ## 9. Diagnostics and the Keep-or-Drop Decision
 

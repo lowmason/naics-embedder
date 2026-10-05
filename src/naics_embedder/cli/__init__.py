@@ -6,7 +6,7 @@ CLI command modules for NAICS Embedder.
 
 This package organizes CLI commands into logical groups:
 - data: Data generation and preprocessing commands
-- tools: Utility tools for configuration, GPU optimization, and metrics
+- tools: Utility tools for configuration, epoch health, panel reads, and decisions
 - training: Model training commands
 
 Importing this package configures the process for the CLI: it sets ``PYTORCH_ALLOC_CONF``

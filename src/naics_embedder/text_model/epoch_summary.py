@@ -73,6 +73,12 @@ def read_epoch_summary(path: Union[str, Path]) -> List[Dict[str, Any]]:
     Rows hold ``epoch``, ``mrr`` (None only without a monitor), and the flat P20 health keys as
     Python numbers. No values are rounded or recovered from Lightning's callback metrics.
 
+    Args:
+        path: The run's durable summary file.
+
+    Returns:
+        Validated rows in increasing epoch order.
+
     Raises:
         ValueError: If a row is invalid, nonfinite, repeats an epoch or is out of order.
         FileNotFoundError: If the summary does not exist.
@@ -87,6 +93,9 @@ class EpochSummary:
     The model starts it at fit start and appends after the refresh, monitor and health logs,
     before ModelCheckpoint saves. Exact resume keeps the lines through the restored epoch and
     drops a later interrupted segment's lines, as the monitor file does (spec 4.4).
+
+    Args:
+        path: The summary file beside the run's checkpoints.
     '''
 
     def __init__(self, path: Union[str, Path]):
@@ -95,6 +104,9 @@ class EpochSummary:
     def start(self, *, resumed_epoch: Optional[int]) -> None:
         '''
         Refuse an existing fresh file or atomically prune a resumed file to its checkpoint epoch.
+
+        Args:
+            resumed_epoch: The restored checkpoint epoch, or None for a fresh run.
 
         Raises:
             ValueError: If a fresh file exists, the resumed file is absent, the restored epoch is
@@ -123,6 +135,11 @@ class EpochSummary:
     def append(self, *, epoch: int, mrr: Optional[float], health: Mapping[str, float]) -> None:
         '''
         Append one completed epoch without rounding its health values.
+
+        Args:
+            epoch: The completed non-negative epoch, after every existing row.
+            mrr: Finite validation MRR in [0, 1], or None without a monitor.
+            health: Finite loss, scale and radius values under the permitted health keys.
 
         Raises:
             ValueError: If an epoch repeats or reorders the existing file, or a row is invalid.

@@ -16,6 +16,9 @@ nav:
               - Relationship Measures: api/compute_relations.md
               - Graph Distance Measures: api/compute_distances.md
           - Create Contrastive Training Triplets: api/create_triplets.md
+          - Activity Phrases: api/activity.md
+          - Task Queries: api/queries.md
+          - Code Targets: api/code_targets.md
           - Redirection Table: api/redirections.md
           - Window-Fitting Summaries: api/window_summaries.md
       - Training:
@@ -24,6 +27,12 @@ nav:
                   - Tokenization: api/tokenization_cache.md
                   - DataLoader: api/datamodule.md
               - Shared Encoder: api/encoder.md
+              - Text Model: api/naics_model.md
+              - Text Objective: api/loss.md
+              - Code Cache and Outcome Monitor: api/monitor.md
+              - Checkpoint Runner: api/checkpoint_runner.md
+              - Radius Verification: api/radius_report.md
+              - Epoch Summary: api/epoch_summary.md
               - Export and Arm Encoder: api/export.md
               - Mixture of Experts: api/moe.md
               - Hyperbolic Operations: api/hyperbolic.md

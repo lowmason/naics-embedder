@@ -969,11 +969,11 @@ def export_table(
     bundle. Its encoder record is its own, so a d = 8 checkpoint exports under a d = 16 config.
 
     Example:
-        Export a run's last checkpoint::
+        Export a run's selected checkpoint::
 
             $ uv run naics-embedder tools export-table \\
-                --checkpoint checkpoints/sadc_default/last.ckpt \\
-                --output data/plan8/arm_table.parquet supervision.manifest_path=PATH
+                --checkpoint checkpoints/reference/epoch=001.ckpt \\
+                --output data/reference/arm_table.parquet supervision.manifest_path=PATH
     '''
 
     configure_logging('tools_export_table.log')
@@ -1039,8 +1039,8 @@ def outcome_panel(
         Read the validation split for an exported table::
 
             $ uv run naics-embedder tools outcome-panel \\
-                --checkpoint checkpoints/sadc_default/last.ckpt \\
-                --table data/plan8/arm_table.parquet --purpose 'Stage 6 Exit reading' \\
+                --checkpoint checkpoints/reference/epoch=001.ckpt \\
+                --table data/reference/arm_table.parquet --purpose 'selected checkpoint validation' \\
                 supervision.manifest_path=PATH
     '''
 

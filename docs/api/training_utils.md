@@ -11,23 +11,27 @@ management, and summary artifact generation.
 ## Usage
 
 ```python
+from pathlib import Path
+
 from naics_embedder.utils.training import (
     detect_hardware,
     parse_config_overrides,
     resolve_checkpoint,
-    save_training_summary,
 )
 
-# Detect hardware
-hardware = detect_hardware(log_info=True)
-print(f"Training on {hardware.accelerator}")
-
-# Parse overrides
-overrides, invalid = parse_config_overrides(['lr=1e-4', 'epochs=10'])
-
-# Resolve checkpoint
-checkpoint_info = resolve_checkpoint('last', Path('checkpoints'), 'experiment')
+hardware = detect_hardware(log_info=True, cuda_precision='bf16-mixed')
+overrides, invalid = parse_config_overrides([
+    'training.learning_rate=1e-4',
+    'data_loader.queries_per_step=128',
+])
+checkpoint_info = resolve_checkpoint('last', Path('checkpoints'), 'reference')
 ```
+
+`TrainingResult.best_score` is outcome validation MRR, not an in-sample loss. The four guards
+refuse used fresh directories, cross-directory resumes, different settings/seed, and a run
+that early stopping ended. A spent epoch budget is a no-op. Exact resume uses `last`, with its
+monitor and epoch-summary files. `run_settings` records 21 settings including effective
+accelerator/precision, accumulation, clipping and epoch budget.
 
 ## Data Classes
 
@@ -67,4 +71,3 @@ Structured result from a completed training run.
         - outcome_early_stopping
         - create_trainer
         - save_training_summary
-

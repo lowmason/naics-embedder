@@ -1,180 +1,92 @@
 # Quickstart Guide
 
-This guide provides a quick introduction to the NAICS Embedder command-line interface.
-For complete command reference, see the [CLI Usage Guide](usage.md).
+Install the project with `uv`, then prepare one immutable supervision bundle. The commands
+below are operator examples; training and panel reads require the generated artifacts.
 
 ## Installation
-
-After cloning the repository, install dependencies with `uv`:
 
 ```bash
 git clone https://github.com/lowmason/naics-embedder.git
 cd naics-embedder
 uv sync
-```
-
-Verify the installation:
-
-```bash
 uv run naics-embedder --help
 ```
 
----
+`.python-version` pins Python 3.12. Use the locked environment for training and verification.
 
-## Common Workflows
-
-### 1. Prepare Training Data
-
-Generate all required data files for training:
+## Prepare Training Data
 
 ```bash
 uv run naics-embedder data all
 ```
 
-This runs the complete data pipeline:
+This preprocesses NAICS text and builds the `stage3-supervision-v2` bundle. It prints
+`Supervision manifest: <path>`. Set that exact immutable path as `supervision.manifest_path`.
+The bundle gate runs before model or data-loader construction and cannot be skipped.
 
-1. **Preprocess** - Downloads and cleans raw NAICS taxonomy files
-2. **Supervision** - Builds one immutable, validated Stage-3 supervision bundle (structural
-   facts, explicit exclusions, and training pairs) and prints `Supervision manifest: <path>`
-
-!!! tip "First-time setup"
-    The data pipeline only needs to run once. Generated files are cached in `data/`.
-
-### 2. Train the Model
-
-Start training with the printed manifest (or set `supervision.manifest_path` in
-`conf/config.yaml`):
+## Train the Reference Configuration
 
 ```bash
-uv run naics-embedder train supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --config conf/config.yaml   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-**Common options:**
+The defaults are `experiment_name=reference`, dimension 16, masked-mean fusion, radius bound
+8, and 128 task queries per step. CUDA uses `bf16-mixed`; CPU and MPS use `32-true`. The text
+Trainer uses one device. Fusion, projection, geometry and losses stay float32 under CUDA.
+
+For a fresh experiment, set a new name before changing settings:
 
 ```bash
-# Resume from last checkpoint (requires the same supervision contract)
-uv run naics-embedder train --ckpt-path last
-
-# Override hyperparameters
-uv run naics-embedder train training.learning_rate=1e-5 data_loader.batch_size=16
-
-# Skip the advisory data/cache checks (the supervision bundle gate always runs)
-uv run naics-embedder train --skip-validation
+uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-See [Stage-3 Supervision Integrity](text_training.md#stage-3-supervision-integrity) for exact
-resume versus weights-only migration.
+A fresh start refuses a directory that already contains checkpoints. A resume requires the
+same bundle, encoder, preprocessing, seed, settings and experiment directory:
 
-### 3. Monitor Training
+```bash
+uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+```
 
-View current configuration:
+Resume only `last` to continue the latest state. A run that early stopping ended exits 1 with
+`early stopping ended the run at epoch k`. A run whose epoch budget is spent trains no further
+epochs. Changing the epoch budget is a different run. There is no weights-only migration;
+pre-`req11-v1` checkpoints are refused before model loading.
+
+`--skip-validation` skips advisory data/cache checks; the immutable bundle gate still runs.
+See [Stage-3 supervision integrity](text_training.md#stage-3-supervision-integrity) and
+[exact resume](text_training.md#exact-resume).
+
+## Monitor and Visualize
+
+The outcome validation panel's MRR selects the earliest best epoch. Each epoch writes
+`monitor_reads.jsonl` and `epoch_summary.jsonl` in `checkpoints/<experiment_name>/`.
+The selected checkpoint is `epoch=NNN.ckpt`; `last.ckpt` is the latest training state.
 
 ```bash
 uv run naics-embedder tools config
+uv run naics-embedder tools visualize   --summary checkpoints/reference/epoch_summary.jsonl   --output-dir outputs/visualizations/reference
 ```
 
-Visualize training metrics:
+The figures show MRR, the three losses and their total, logit scales, and per-level radius
+means with SD bands. They read the epoch summary, not console logs or structural validation.
+
+## Export and Check Radius
+
+Use the checkpoint named by the monitor's earliest highest MRR, rather than assuming `last`
+is the selected one. This example uses `epoch=001.ckpt`:
 
 ```bash
-uv run naics-embedder tools visualize --stage 02_text
+uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-Investigate low hierarchy preservation:
+Export writes bounded tangent coordinates and their provenance. The radius report checks live
+radius gradients, per-level spread, sector radii, manifold validity, distance precision and the
+three terms' gradients. A failed criterion produces a report and exits 1.
 
-```bash
-uv run naics-embedder tools investigate
-```
+## Compare Configurations
 
----
-
-## Command Groups
-
-The CLI is organized into three main groups:
-
-| Group | Description | Example |
-|-------|-------------|---------|
-| `data` | Data generation and preprocessing | `data all`, `data preprocess` |
-| `tools` | Configuration and metrics utilities | `tools config`, `tools visualize` |
-| `train` | Model training (main command) | `train`, `train --ckpt-path last` |
-
-Use `--help` on any command for detailed options:
-
-```bash
-uv run naics-embedder data --help
-uv run naics-embedder train --help
-uv run naics-embedder tools --help
-```
-
----
-
-## Quick Reference
-
-### Data Commands
-
-| Command | Description |
-|---------|-------------|
-| `data all` | Run complete data pipeline |
-| `data preprocess` | Download and preprocess NAICS files |
-| `data supervision` | Build the immutable Stage-3 supervision bundle |
-| `data relations` / `distances` / `triplets` | Deprecated; build nothing and exit with status 1 |
-
-### Training Commands
-
-| Command | Description |
-|---------|-------------|
-| `train` | Train with current configuration |
-| `train --ckpt-path last` | Resume from last checkpoint |
-| `train-seq --legacy` | Sequential training (deprecated) |
-
-### Tools Commands
-
-| Command | Description |
-|---------|-------------|
-| `tools config` | Display current configuration |
-| `tools visualize` | Visualize training metrics |
-| `tools investigate` | Analyze hierarchy preservation |
-
----
-
-## Configuration Overrides
-
-Override any configuration value at runtime using dot notation:
-
-```bash
-uv run naics-embedder train \
-    training.learning_rate=1e-4 \
-    training.trainer.max_epochs=20 \
-    data_loader.batch_size=32 \
-    loss.hierarchy_weight=0.2
-```
-
-Common overrides:
-
-| Parameter | Description |
-|-----------|-------------|
-| `training.learning_rate` | Optimizer learning rate |
-| `training.trainer.max_epochs` | Maximum training epochs |
-| `data_loader.batch_size` | Training batch size |
-| `loss.hierarchy_weight` | Weight for hierarchy loss |
-| `loss.temperature` | Contrastive loss temperature |
-
----
-
-## Output Files
-
-After training, find outputs in:
-
-| Path | Contents |
-|------|----------|
-| `checkpoints/<experiment>/` | Model checkpoints and config |
-| `checkpoints/<experiment>/training_summary.yaml` | Training results summary |
-| `outputs/<experiment>/` | TensorBoard logs |
-| `logs/train.log` | Detailed training log |
-
----
-
-## Next Steps
-
-- [CLI Usage Guide](usage.md) - Complete command reference
-- [Text Training Guide](text_training.md) - Detailed training documentation
-- [Configuration Reference](api/config.md) - All configuration options
+The [reference campaign](text_training.md#reference-campaign) trains seeds 1–10, checks every
+run before the first decision read, writes a three-panel arm record with `tools sweep`, and fixes
+margins with `tools margins --multiple 3` before candidate reads. Panel test splits stay sealed.
+For all options, see [CLI usage](usage.md) or `uv run naics-embedder tools --help`.
