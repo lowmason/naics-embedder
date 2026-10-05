@@ -154,6 +154,18 @@ class TestShowCurrentConfig:
         assert 'data_loader.batch_size' in output
         assert 'learning_rate' not in output
 
+    def test_show_config_refuses_malformed_yaml_with_the_error(self, tmp_path, capsys):
+        malformed = tmp_path / 'malformed.yaml'
+        malformed.write_text('training: [')
+
+        assert show_current_config(str(malformed)) is False
+
+        output = click.unstyle(capsys.readouterr().out).replace('\n', '')
+        assert 'not a valid configuration' in output
+        assert str(malformed) in output
+        assert 'expected the node content' in output
+        assert 'Run settings:' not in output
+
     def test_show_config_handles_missing_file(self, tmp_path, capsys):
         '''Test error message for missing config file.'''
         nonexistent = str(tmp_path / 'nonexistent.yaml')
@@ -269,6 +281,19 @@ class TestToolsConfigCommand:
         assert result.exit_code == 1
         assert 'not a valid configuration' in _plain(result)
         assert 'data_loader.batch_size' in _plain(result)
+
+    def test_malformed_yaml_exits_1_with_the_error(self, runner, tmp_path):
+        malformed = tmp_path / 'malformed.yaml'
+        malformed.write_text('training: [')
+
+        result = runner.invoke(tools_cli.app, ['config', '--config', str(malformed)])
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)
+        assert 'not a valid configuration' in _plain(result)
+        assert str(malformed) in _plain(result)
+        assert 'expected the node content' in _plain(result)
+        assert 'Run settings:' not in _plain(result)
 
     def test_a_missing_file_exits_1_with_the_error(self, runner, tmp_path):
         missing = tmp_path / 'nonexistent.yaml'

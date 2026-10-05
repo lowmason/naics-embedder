@@ -104,3 +104,31 @@ def test_missing_samples_are_omitted_instead_of_plotted_as_zero(tmp_path, monkey
     assert high == pytest.approx(
         [rows[i]['radius/mean/level_2'] + rows[i]['radius/sd/level_2'] for i in [0, 2]]
     )
+
+@pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib not available')
+def test_radius_band_matches_its_mean_color_when_an_earlier_level_has_no_sd(tmp_path, monkeypatch):
+    from matplotlib.colors import to_rgba
+    from matplotlib.figure import Figure
+
+    figures = []
+    original_savefig = Figure.savefig
+
+    def savefig_spy(self, *args, **kwargs):
+        figures.append(self)
+        return original_savefig(self, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, 'savefig', savefig_spy)
+    rows = summary_rows()
+    for row in rows:
+        del row['radius/sd/level_2']
+    create_visualizations(rows, tmp_path)
+
+    radius_axis = figures[0].axes[3]
+    curves = {line.get_label(): line for line in radius_axis.lines}
+    assert set(curves) == {'radius/mean/level_2', 'radius/mean/level_6'}
+    assert len(radius_axis.collections) == 1
+    level_2_color = to_rgba(curves['radius/mean/level_2'].get_color())
+    level_6_color = to_rgba(curves['radius/mean/level_6'].get_color())
+    band_color = radius_axis.collections[0].get_facecolor()[0]
+    assert level_2_color != level_6_color
+    assert band_color == pytest.approx((*level_6_color[:3], 0.2))

@@ -75,6 +75,7 @@ def create_visualizations(metrics: List[Dict[str, Any]], output_dir: Path) -> Pa
              for key in row if key.startswith('radius/mean/')}
         )
         _plot_fields(radii, metrics, radius_keys)
+        radius_colors = {line.get_label(): line.get_color() for line in radii.lines}
         for key in radius_keys:
             sd_key = key.replace('/mean/', '/sd/')
             samples = [
@@ -86,6 +87,7 @@ def create_visualizations(metrics: List[Dict[str, Any]], output_dir: Path) -> Pa
                      for row in samples], [row[key] - row[sd_key] for row in samples], [
                          row[key] + row[sd_key] for row in samples
                      ],
+                    color=radius_colors[key],
                     alpha=0.2
                 )
         radii.set_title('Radius per level (mean ± SD)')

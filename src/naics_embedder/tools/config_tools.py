@@ -44,7 +44,7 @@ def show_current_config(config_path: Union[str, Path] = './conf/config.yaml') ->
 
     try:
         cfg = Config.from_yaml(config_path)
-    except ValidationError as error:
+    except (ValidationError, yaml.YAMLError) as error:
         console.print('[bold red]Error:[/bold red] not a valid configuration:')
         console.print(config_path, markup=False, highlight=False)
         console.print(str(error), markup=False, highlight=False)

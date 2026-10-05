@@ -272,6 +272,7 @@ uv run naics-embedder tools outcome-panel --checkpoint checkpoints/reference/epo
 
 ### `tools sweep`
 
+Keep the store and JSON records under `~/naics-artifacts`, outside every worktree.
 Build one arm record from complete trained seed directories. Before the first export or decision
 read, the runner checks every seed's epoch coverage, panel fingerprint, training-run id, seed,
 21 settings, earliest best checkpoint and exact saved best score. A selected epoch with a
@@ -279,7 +280,13 @@ versioned sibling is ambiguous and refused. The arm's backbone revision is resol
 from its cached backbone; it cannot be copied from the text-only comparator.
 
 ```bash
-uv run naics-embedder tools sweep --runs 'checkpoints/reference-seed-{seed}'   --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --seed 6 --seed 7 --seed 8 --seed 9 --seed 10   --text-only data/reference/text_only.parquet --store outputs/decision-store   --output outputs/reference.json --purpose 'reference campaign validation'   --name reference --accelerator cuda   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+mkdir -p ~/naics-artifacts/records/stage7
+uv run naics-embedder tools sweep --runs 'checkpoints/reference-seed-{seed}' \
+  --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --seed 6 --seed 7 --seed 8 --seed 9 --seed 10 \
+  --text-only data/reference/text_only.parquet --store ~/naics-artifacts \
+  --output ~/naics-artifacts/records/stage7/reference.json --purpose 'reference campaign validation' \
+  --name reference --accelerator cuda \
+  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
 - `--runs TEXT` is required and must contain `{seed}`.
@@ -330,8 +337,10 @@ before its margins were fixed.
 **Generates:** the margin record (JSON)
 
 ```bash
-uv run naics-embedder tools margins --reference reference.json --multiple 3 \
-  --name reference-margins --store ~/naics-artifacts --output margins.json
+uv run naics-embedder tools margins \
+  --reference ~/naics-artifacts/records/stage7/reference.json --multiple 3 \
+  --name reference-margins --store ~/naics-artifacts \
+  --output ~/naics-artifacts/records/stage7/margins.json
 ```
 
 **Options:**
@@ -360,9 +369,12 @@ references, the margins, every comparison with both intervals, the non-dominated
 order, the chosen arm, and each arm's reported gains over the sparse comparators
 
 ```bash
-uv run naics-embedder tools decide --arm candidate.json --arm reference.json \
-  --margins margins.json --name dimension-8 --question "Is dimension 8 enough?" \
-  --store ~/naics-artifacts --output decision.json
+uv run naics-embedder tools decide \
+  --arm ~/naics-artifacts/records/stage7/candidate.json \
+  --arm ~/naics-artifacts/records/stage7/reference.json \
+  --margins ~/naics-artifacts/records/stage7/margins.json \
+  --name dimension-8 --question "Is dimension 8 enough?" \
+  --store ~/naics-artifacts --output ~/naics-artifacts/records/stage7/decision.json
 ```
 
 **Options:**

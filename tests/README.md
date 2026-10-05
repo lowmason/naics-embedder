@@ -2,9 +2,9 @@
 
 ## Current Status
 
-The suite contains **83 unit** test files and **1 integration** file, with **2,282 collected
-nodes**. The current fixture gates give **2280 passed, 2 skipped** on a host with MPS and
-**2273 passed, 9 skipped** without MPS. The additional seven skips require MPS; they are not
+The suite contains **83 unit** test files and **1 integration** file, with **2,285 collected
+nodes**. The current fixture gates give **2283 passed, 2 skipped** on a host with MPS and
+**2276 passed, 9 skipped** without MPS. The additional seven skips require MPS; they are not
 missing CPU coverage. These counts describe the checked suite, not measured coverage percentages.
 
 Tests use immutable fixture bundles and tiny backbones. Training/panel outputs belong under
