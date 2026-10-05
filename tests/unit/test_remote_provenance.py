@@ -106,3 +106,37 @@ def test_changing_source_during_record_does_not_publish(remote_repo, monkeypatch
     with pytest.raises(ValueError, match='changed'):
         write_push_record(remote_repo.root, 'host', 'unstable', 10000000)
     assert not (remote_repo.root / '.remote/pushes/unstable').exists()
+
+@pytest.mark.parametrize('directory_component', [False, True])
+def test_ignored_intermediate_link_never_publishes(remote_repo, directory_component):
+    root = remote_repo.root
+    with (root / '.gitignore').open('a') as stream:
+        stream.write('ignored-link\n')
+    (root / 'ignored-link').symlink_to('src' if directory_component else 'src/tiny.py')
+    (root / 'visible-link').symlink_to(
+        'ignored-link/tiny.py' if directory_component else 'ignored-link'
+    )
+    with pytest.raises(ValueError, match='visible-link.*ignored-link'):
+        write_push_record(root, 'host', 'omitted-chain', 10000000)
+    assert not (root / '.remote/pushes/omitted-chain').exists()
+
+@pytest.mark.parametrize('directory_component', [False, True])
+def test_fully_included_link_chain_round_trip(remote_repo, tmp_path, directory_component):
+    root = remote_repo.root
+    (root / 'included-link').symlink_to('src' if directory_component else 'src/tiny.py')
+    (root / 'visible-link').symlink_to(
+        'included-link/tiny.py' if directory_component else 'included-link'
+    )
+    record = write_push_record(root, 'host', 'included-chain', 10000000)
+    clone = tmp_path / 'clone'
+    subprocess.run(['git', 'clone', '-q', str(root), str(clone)], check=True)
+    git(clone, 'checkout', '-q', record.head_sha)
+    with tarfile.open(record.directory / 'untracked.tar') as archive:
+        for member in archive.getmembers():
+            assert not Path(member.name).is_absolute() and '..' not in Path(member.name).parts
+            assert (clone / member.name).parent.joinpath(member.linkname).resolve().is_relative_to(
+                clone
+            )
+        archive.extractall(clone)
+    assert (clone / 'visible-link').read_bytes() == b'VALUE = 1\n'
+    assert code_entries(clone) == record.entries

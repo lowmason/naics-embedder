@@ -5,6 +5,7 @@ import hashlib
 import os
 import stat
 import subprocess
+from collections import deque
 from pathlib import Path, PurePosixPath
 
 from naics_embedder.remote.session import FileEntry
@@ -60,6 +61,48 @@ def _safe_link(root: Path, name: str) -> str:
     if is_credential_path(resolved.relative_to(root).as_posix()):
         raise ValueError(f'credential symlink target: {name!r}')
     return target
+
+def _require_link_closure(root: Path, name: str, present_names: set[str]) -> None:
+    '''Every traversed link and directory must exist in the reconstructed file set.'''
+    remaining = deque(PurePosixPath(name).parts)
+    current = root
+    while remaining:
+        component = remaining.popleft()
+        if component == '.':
+            continue
+        if component == '..':
+            current = current.parent
+            if not current.is_relative_to(root):
+                raise ValueError(f'symlink escapes pushed root: {name!r}')
+            continue
+        path = current / component
+        relative = path.relative_to(root).as_posix()
+        if is_credential_path(relative):
+            raise ValueError(f'credential symlink component: {name!r} -> {relative!r}')
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            raise ValueError(f'missing symlink component: {name!r} -> {relative!r}') from error
+        if stat.S_ISLNK(metadata.st_mode):
+            if relative not in present_names:
+                raise ValueError(
+                    f'symlink component outside pushed file set: {name!r} -> {relative!r}'
+                )
+            target = os.readlink(path)
+            if PurePosixPath(target).is_absolute():
+                raise ValueError(f'absolute symlink component: {name!r} -> {relative!r}')
+            remaining.extendleft(reversed(PurePosixPath(target).parts))
+        else:
+            represented = relative in present_names or (
+                stat.S_ISDIR(metadata.st_mode) and any(
+                    candidate.startswith(relative + '/') for candidate in present_names
+                )
+            )
+            if not represented:
+                raise ValueError(
+                    f'symlink target outside pushed file set: {name!r} -> {relative!r}'
+                )
+            current = path
 
 def file_entry(root: Path, name: str) -> FileEntry:
     '''Hash a regular file or a safe existing relative symlink using lstat semantics.'''
@@ -142,11 +185,7 @@ def code_entries(root: Path) -> tuple[FileEntry, ...]:
     for name in names:
         if (root / name).is_symlink():
             _safe_link(root, name)
-            target = (root / name).resolve().relative_to(root).as_posix()
-            if target != '.' and target not in present_names and not any(
-                candidate.startswith(target + '/') for candidate in present_names
-            ):
-                raise ValueError(f'symlink target is outside pushed file set: {name!r}')
+            _require_link_closure(root, name, present_names)
     _refuse_special_files(root)
     for line in git_bytes(root, 'ls-files', '-z', '--stage').split(b'\0'):
         if line:

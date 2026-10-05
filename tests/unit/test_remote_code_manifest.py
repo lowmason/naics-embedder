@@ -145,3 +145,15 @@ def test_safe_directory_link_is_preserved(remote_repo):
     assert next(
         item for item in code_entries(remote_repo.root) if item.path == 'source-link'
     ).target == 'src'
+
+@pytest.mark.parametrize('directory_component', [False, True])
+def test_ignored_intermediate_link_refuses_reconstruction(remote_repo, directory_component):
+    root = remote_repo.root
+    with (root / '.gitignore').open('a') as stream:
+        stream.write('ignored-link\n')
+    target = 'src' if directory_component else 'src/tiny.py'
+    (root / 'ignored-link').symlink_to(target)
+    visible_target = 'ignored-link/tiny.py' if directory_component else 'ignored-link'
+    (root / 'visible-link').symlink_to(visible_target)
+    with pytest.raises(ValueError, match='visible-link.*ignored-link'):
+        code_entries(root)
