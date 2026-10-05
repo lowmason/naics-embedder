@@ -9,7 +9,7 @@ configuration, visualizing training metrics, and investigating model behavior.
 
 Commands:
     config: Display current training configuration.
-    visualize: Generate visualizations from training log files.
+    visualize: Plot the durable monitor and epoch health summary.
     outcome-baseline: Score the lexical stub encoder on the outcome panel's validation split.
     text-only-table: Embed every code's text with the arm's backbone, frozen (roadmap D9).
     regressor-panel: Score an arm on the regressor panel's validation or sealed test split.
@@ -139,74 +139,29 @@ def config(
 
 @app.command('visualize')
 def visualize(
-    stage: Annotated[
-        str,
-        typer.Option(
-            '--stage',
-            '-s',
-            help="Stage name to filter (e.g., '02_text')",
-        ),
-    ] = '02_text',
-    log_file: Annotated[
-        Optional[str],
-        typer.Option(
-            '--log-file',
-            help='Path to log file (default: logs/train_sequential.log)',
-        ),
-    ] = None,
-    output_dir: Annotated[
-        Optional[str],
-        typer.Option(
-            '--output-dir',
-            help='Output directory for plots (default: outputs/visualizations/)',
-        ),
-    ] = None,
+    summary: Annotated[str, typer.Option('--summary', help="The run's epoch_summary.jsonl")],
+    output_dir: Annotated[Optional[str],
+                          typer.Option(
+                              '--output-dir',
+                              help='Plot directory (default: visualizations beside the summary)'
+                          )] = None,
 ):
     '''
-    Visualize training metrics from log files.
+    Plot the run's monitor MRR, loss means, logit scales and radius mean and SD per level.
 
-    Parses training log files and generates visualizations showing the
-    progression of key metrics including contrastive loss, hierarchy
-    correlation, embedding statistics, and learning rate schedules.
-
-    Output visualizations are saved as PNG files in the specified output
-    directory.
-
-    Args:
-        stage: Stage identifier used to filter metrics. Use this to focus
-            on a specific training stage like ``02_text``.
-        log_file: Path to the training log file to parse. When omitted,
-            defaults to ``logs/train_sequential.log``.
-        output_dir: Directory for saving visualization files. When omitted,
-            defaults to ``outputs/visualizations/``.
-
-    Example:
-        Visualize metrics from default log::
-
-            $ uv run naics-embedder tools visualize --stage 02_text
-
-        Visualize custom log file::
-
-            $ uv run naics-embedder tools visualize --log-file logs/train.log
+    Read ``epoch_summary.jsonl`` beside the run's checkpoints. The figure is ``epoch_metrics.png``
+    in ``--output-dir``, or ``visualizations`` beside the summary by default.
     '''
 
     configure_logging('tools_visualize.log')
-
     try:
-        log_path = Path(log_file) if log_file else None
-        output_path = Path(output_dir) if output_dir else None
-
-        result = visualize_metrics(stage=stage, log_file=log_path, output_dir=output_path)
-
-        if result.get('output_file'):
-            console.print(
-                '\n[bold green]✓[/bold green] Visualization saved to: '
-                f'[cyan]{result["output_file"]}[/cyan]\n'
-            )
-
-    except Exception as e:
-        console.print(f'[bold red]Error:[/bold red] {e}')
+        result = visualize_metrics(
+            summary=Path(summary), output_dir=Path(output_dir) if output_dir else None
+        )
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+        console.print(f'[bold red]Error:[/bold red] {exc}')
         raise typer.Exit(code=1)
+    console.print(f'Epoch metrics: {result["output_file"]} ({result["num_epochs"]} epochs)')
 
 # -------------------------------------------------------------------------------------------------
 # Outcome panel: lexical baseline

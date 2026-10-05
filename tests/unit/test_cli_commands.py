@@ -238,7 +238,7 @@ def test_tools_visualize_handles_exception(monkeypatch, runner):
 
     monkeypatch.setattr(tools_cli, 'visualize_metrics', boom)
 
-    result = runner.invoke(tools_cli.app, ['visualize'])
+    result = runner.invoke(tools_cli.app, ['visualize', '--summary', 'fixture-summary.jsonl'])
 
     assert result.exit_code == 1
     assert 'Error' in result.output

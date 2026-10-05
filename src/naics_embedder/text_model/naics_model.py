@@ -41,6 +41,7 @@ from naics_embedder.supervision.checkpoints import (
 )
 from naics_embedder.supervision.code_targets import NO_PARTNER, CodeTargets
 from naics_embedder.supervision.schema import CONTRACT_VERSION
+from naics_embedder.text_model.epoch_summary import EPOCH_SUMMARY, EpochSummary
 from naics_embedder.text_model.fusion import FUSIONS
 from naics_embedder.text_model.hyperbolic import polar_distance
 from naics_embedder.text_model.loss import LogitScale, code_code_loss, radial_loss, task_loss
@@ -322,6 +323,7 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         self.training_run: Optional[str] = None
         self._resumed_run: Optional[str] = None
         self._resumed_epoch: Optional[int] = None
+        self.epoch_summary: Optional[EpochSummary] = None
         self._reset_health()
 
     def forward(self, channel_inputs: Dict[str, Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
@@ -481,7 +483,7 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
     def on_train_start(self) -> None:
         '''
         Start the training run: keep the restored run's id or mint one, ready the monitor's
-        records, and build the code cache (spec 4.3, 4.4).
+        records and epoch summary, and build the code cache (spec 4.3, 4.4).
 
         On exact resume, ``on_load_checkpoint`` has stashed the checkpoint's training run and
         epoch: the run keeps its id, and the monitor keeps its records through that epoch. The
@@ -491,6 +493,14 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         self.training_run = self._resumed_run or uuid.uuid4().hex
         if self.monitor is not None:
             self.monitor.start(resumed_epoch=self._resumed_epoch)
+        callback = getattr(self.trainer, 'checkpoint_callback', None)
+        directory = getattr(callback, 'dirpath', None)
+        if directory is None and self.monitor is not None:
+            records = getattr(self.monitor, 'records_path', None)
+            directory = Path(records).parent if records is not None else None
+        if directory is not None:
+            self.epoch_summary = EpochSummary(Path(directory) / EPOCH_SUMMARY)
+            self.epoch_summary.start(resumed_epoch=self._resumed_epoch)
         self._reset_health()
         self.refresh_code_cache(self.trainer.datamodule.code_rows)
 
@@ -498,7 +508,7 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         '''
         End the epoch (P15, P18): refresh the cache; then, with a monitor, read the validation
         split on it, log the MRR as ``val/outcome_mrr``, step the plateau on it and append the
-        read to the run's records; then the health logs (P20).
+        read to the run's records; then log the health values and write the epoch summary (P20).
 
         The MRR is one float64 value: the one logged, the one the plateau steps on and the one the
         record holds. This hook runs before ModelCheckpoint's, so the epoch's checkpoint holds
@@ -506,6 +516,7 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         '''
 
         self.refresh_code_cache(self.trainer.datamodule.code_rows)
+        outcome_mrr = None
         if self.monitor is not None:
             read = self.monitor.read(
                 self,
@@ -514,11 +525,14 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
                 seed=self.hparams.seed,
                 epoch=self.current_epoch,
             )
+            outcome_mrr = read.mrr
             mrr = torch.tensor(read.mrr, dtype=torch.float64)
             self.log(OUTCOME_MRR, mrr, on_step=False, on_epoch=True, prog_bar=True, batch_size=1)
             self._step_plateau(mrr)
             self.monitor.append(read)
-        self._log_health()
+        health = self._log_health()
+        if self.epoch_summary is not None:
+            self.epoch_summary.append(epoch=self.current_epoch, mrr=outcome_mrr, health=health)
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         '''

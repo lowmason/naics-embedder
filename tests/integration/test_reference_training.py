@@ -538,7 +538,9 @@ def test_the_kept_checkpoint_is_the_earliest_epoch_with_the_highest_mrr(referenc
 
     run = reference_runs.build(cfg, ScriptedMonitor(mrrs)).fit()
 
-    assert _names(run.checkpoint_dir) == [f'epoch={kept:03d}.ckpt', 'last.ckpt']
+    assert _names(run.checkpoint_dir) == [
+        f'epoch={kept:03d}.ckpt', 'epoch_summary.jsonl', 'last.ckpt'
+    ]
     assert read_checkpoint(run.checkpoint_dir / f'epoch={kept:03d}.ckpt')['epoch'] == kept
     assert read_checkpoint(run.last)['epoch'] == len(mrrs) - 1
     assert Path(run.checkpoint.best_model_path).name == f'epoch={kept:03d}.ckpt'
@@ -563,7 +565,7 @@ def test_early_stopping_counts_a_tie_against_its_patience(reference_runs):
 
     assert [epoch for event, epoch in monitor.events if event == 'read'] == [0, 1, 2, 3]
     assert run.early_stopping.stopped_epoch == 3
-    assert _names(run.checkpoint_dir) == ['epoch=001.ckpt', 'last.ckpt']
+    assert _names(run.checkpoint_dir) == ['epoch=001.ckpt', 'epoch_summary.jsonl', 'last.ckpt']
     assert read_checkpoint(run.last)['epoch'] == 3
 
 def test_the_warmup_ramps_each_step_and_the_plateau_cuts_once_its_patience_is_spent(
@@ -728,7 +730,7 @@ def test_an_exact_resume_follows_the_uninterrupted_run(reference_runs, lost):
     # The uninterrupted run: stopped after epoch 6, with epoch 3 kept
     assert straight.hooks.epoch_ends == list(range(7))
     assert straight.early_stopping.stopped_epoch == 6
-    assert _names(straight.checkpoint_dir) == ['epoch=003.ckpt', 'last.ckpt']
+    assert _names(straight.checkpoint_dir) == ['epoch=003.ckpt', 'epoch_summary.jsonl', 'last.ckpt']
     # No replay: one read, plateau step and append for each epoch after the restored one
     assert resumed.hooks.epoch_ends == list(range(lost, 7))
     assert monitor.events == [('start', restored), *_reads_and_appends(range(lost, 7))]
@@ -741,7 +743,7 @@ def test_an_exact_resume_follows_the_uninterrupted_run(reference_runs, lost):
     for name in ('wait_count', 'stopped_epoch', 'patience'):
         assert getattr(resumed.early_stopping, name) == getattr(straight.early_stopping, name)
     assert resumed.early_stopping.best_score.item() == straight.early_stopping.best_score.item()
-    assert _names(resumed.checkpoint_dir) == ['epoch=003.ckpt', 'last.ckpt']
+    assert _names(resumed.checkpoint_dir) == ['epoch=003.ckpt', 'epoch_summary.jsonl', 'last.ckpt']
     assert Path(resumed.checkpoint.best_model_path).name == 'epoch=003.ckpt'
     assert resumed.checkpoint.best_model_score.item() == 0.6
     resumed_last, straight_last = read_checkpoint(resumed.last), read_checkpoint(straight.last)
@@ -943,7 +945,7 @@ def test_a_resume_of_a_run_early_stopping_ended_is_refused_leaving_its_files_as_
     assert _epochs(records) == [0, 1, 2, 3]
     assert [record['mrr'] for record in records] == list(mrrs[:4])
     files = {path.name: path.read_bytes() for path in run.checkpoint_dir.iterdir()}
-    assert sorted(files) == ['epoch=001.ckpt', 'last.ckpt', MONITOR_RECORDS]
+    assert sorted(files) == ['epoch=001.ckpt', 'epoch_summary.jsonl', 'last.ckpt', MONITOR_RECORDS]
     resumed_log = tmp_path / 'logs' / 'resumed.jsonl'
     resumed = reference_runs.build(
         cfg, _ScriptedReads(reference_runs.monitor(cfg, resumed_log), mrrs)
@@ -956,3 +958,41 @@ def test_a_resume_of_a_run_early_stopping_ended_is_refused_leaving_its_files_as_
     assert resumed.steps.steps == []
     assert resumed.hooks.epoch_ends == []
     assert not resumed_log.exists()
+
+def test_each_epoch_writes_the_exact_health_values_and_mrr_to_the_summary(reference_runs):
+    import importlib
+    module = importlib.import_module('naics_embedder.text_model.epoch_summary')
+    cfg = reference_runs.config('summary-run', {'training.trainer.max_epochs': 2})
+    mrrs = (0.123456789012345, 0.6)
+    run = reference_runs.build(cfg, ScriptedMonitor(mrrs)).fit()
+    rows = module.read_epoch_summary(run.checkpoint_dir / module.EPOCH_SUMMARY)
+    assert [row['epoch'] for row in rows] == [0, 1]
+    for epoch, row in enumerate(rows):
+        assert set(row) == HEALTH_KEYS | {'epoch', 'mrr'}
+        assert row['mrr'] == mrrs[epoch]
+        steps = [terms for terms in run.hooks.terms if terms['epoch'] == epoch]
+        for term in TERMS:
+            assert row[f'loss/{term}'] == statistics.fmean(step[term] for step in steps)
+        radius = run.hooks.cache('end', epoch).radius.cpu().to(torch.float64)
+        for level in LEVELS:
+            values = radius[run.model.code_levels.cpu() == level]
+            assert row[f'radius/mean/level_{level}'] == values.mean().item()
+            assert row[f'radius/sd/level_{level}'] == values.std(correction=0).item()
+
+def test_an_exact_resume_prunes_the_interrupted_epochs_summary_and_continues(reference_runs):
+    import importlib
+    module = importlib.import_module('naics_embedder.text_model.epoch_summary')
+    cfg = reference_runs.config('summary-resume', {'training.trainer.max_epochs': 4})
+    mrrs = (0.3, 0.4, 0.5, 0.6)
+    interrupted = reference_runs.build(cfg, ScriptedMonitor(mrrs), callbacks=[_LoseTheInstance(2)])
+    with pytest.raises(InstanceLost):
+        interrupted.fit()
+    path = interrupted.checkpoint_dir / module.EPOCH_SUMMARY
+    before = path.read_text().splitlines()
+    assert [row['epoch'] for row in module.read_epoch_summary(path)] == [0, 1, 2]
+    resumed = reference_runs.build(cfg, ScriptedMonitor(mrrs)).fit(ckpt_path=interrupted.last)
+    rows = module.read_epoch_summary(path)
+    assert [row['epoch'] for row in rows] == [0, 1, 2, 3]
+    assert [row['mrr'] for row in rows] == list(mrrs)
+    assert path.read_text().splitlines()[:2] == before[:2]
+    assert resumed.hooks.epoch_ends == [2, 3]

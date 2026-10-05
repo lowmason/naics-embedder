@@ -1,380 +1,106 @@
-'''
-Unit tests for metrics visualization tools.
-
-Tests log file parsing, metric extraction, and visualization generation.
-'''
+'''Plot the durable epoch health and monitor values; no evaluation split is read (P20).'''
 
 import pytest
 
-from naics_embedder.tools._visualize_metrics import (
-    HAS_MATPLOTLIB,
-    create_visualizations,
-    parse_log_file,
-    print_analysis,
-)
+from naics_embedder.tools._visualize_metrics import HAS_MATPLOTLIB, create_visualizations
+from tests.fixtures.epoch_summary import summary_rows
 
-# -------------------------------------------------------------------------------------------------
-# Fixtures
-# -------------------------------------------------------------------------------------------------
+pytestmark = pytest.mark.unit
 
-@pytest.fixture
-def sample_log_content():
-    '''Sample log file content with training metrics.'''
-    return """
-2024-01-15 10:00:00 - INFO - Using curriculum stage: 02_text
-2024-01-15 10:01:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 10:01:01 - INFO - Hyperbolic radius: 2.5432 ± 0.1234
-2024-01-15 10:01:02 - INFO - Hierarchy preservation: cophenetic=0.4521 (500 pairs)
-2024-01-15 10:01:03 - INFO - Norm CV: 0.8765
-2024-01-15 10:01:04 - INFO - Distance CV: 0.7654
-2024-01-15 10:01:05 - INFO - Collapse: False
-
-2024-01-15 10:30:00 - INFO - Running evaluation metrics (epoch 1)
-2024-01-15 10:30:01 - INFO - Hyperbolic radius: 4.2345 ± 0.2345
-2024-01-15 10:30:02 - INFO - Hierarchy preservation: cophenetic=0.5678 (500 pairs)
-2024-01-15 10:30:03 - INFO - Norm CV: 0.7890
-2024-01-15 10:30:04 - INFO - Distance CV: 0.6789
-2024-01-15 10:30:05 - INFO - Collapse: False
-
-2024-01-15 11:00:00 - INFO - Running evaluation metrics (epoch 2)
-2024-01-15 11:00:01 - INFO - Hyperbolic radius: 8.7654 ± 0.3456
-2024-01-15 11:00:02 - INFO - Hierarchy preservation: cophenetic=0.6543 (500 pairs)
-2024-01-15 11:00:03 - INFO - Norm CV: 0.6543
-2024-01-15 11:00:04 - INFO - Distance CV: 0.5432
-2024-01-15 11:00:05 - INFO - Collapse: False
-"""
-
-@pytest.fixture
-def sample_log_with_stages():
-    '''Sample log with multiple stages.'''
-    return """
-2024-01-15 10:00:00 - INFO - Using curriculum stage: 01_text
-2024-01-15 10:01:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 10:01:01 - INFO - Hyperbolic radius: 1.0000 ± 0.1000
-2024-01-15 10:01:02 - INFO - Hierarchy preservation: cophenetic=0.2000 (500 pairs)
-
-2024-01-15 12:00:00 - INFO - Using curriculum stage: 02_text
-2024-01-15 12:01:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 12:01:01 - INFO - Hyperbolic radius: 2.0000 ± 0.2000
-2024-01-15 12:01:02 - INFO - Hierarchy preservation: cophenetic=0.4000 (500 pairs)
-
-2024-01-15 14:00:00 - INFO - Using curriculum stage: 03_text
-2024-01-15 14:01:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 14:01:01 - INFO - Hyperbolic radius: 3.0000 ± 0.3000
-2024-01-15 14:01:02 - INFO - Hierarchy preservation: cophenetic=0.6000 (500 pairs)
-"""
-
-@pytest.fixture
-def sample_log_file(tmp_path, sample_log_content):
-    '''Create temporary log file.'''
-    log_file = tmp_path / 'train.log'
-    log_file.write_text(sample_log_content)
-    return log_file
-
-@pytest.fixture
-def multi_stage_log_file(tmp_path, sample_log_with_stages):
-    '''Create temporary log file with multiple stages.'''
-    log_file = tmp_path / 'train_multi.log'
-    log_file.write_text(sample_log_with_stages)
-    return log_file
-
-# -------------------------------------------------------------------------------------------------
-# Tests for parse_log_file()
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestParseLogFile:
-    '''Tests for parse_log_file() function.'''
-
-    def test_parse_extracts_epoch_numbers(self, sample_log_file):
-        '''Test that epoch numbers are extracted correctly.'''
-        metrics = parse_log_file(sample_log_file)
-
-        epochs = [m['epoch'] for m in metrics]
-        assert epochs == [0, 1, 2]
-
-    def test_parse_extracts_hyperbolic_radius(self, sample_log_file):
-        '''Test extraction of hyperbolic radius mean and std.'''
-        metrics = parse_log_file(sample_log_file)
-
-        assert metrics[0]['radius_mean'] == pytest.approx(2.5432)
-        assert metrics[0]['radius_std'] == pytest.approx(0.1234)
-        assert metrics[2]['radius_mean'] == pytest.approx(8.7654)
-        assert metrics[2]['radius_std'] == pytest.approx(0.3456)
-
-    def test_parse_leaves_out_the_structural_statistic(self, sample_log_file):
-        '''Req 6: the cophenetic correlation the log still records is not read.'''
-        metrics = parse_log_file(sample_log_file)
-
-        assert metrics
-        assert all('cophenetic' not in m and 'n_pairs' not in m for m in metrics)
-
-    def test_parse_extracts_norm_cv(self, sample_log_file):
-        '''Test extraction of Norm CV.'''
-        metrics = parse_log_file(sample_log_file)
-
-        assert metrics[0]['norm_cv'] == pytest.approx(0.8765)
-        assert metrics[1]['norm_cv'] == pytest.approx(0.7890)
-
-    def test_parse_extracts_distance_cv(self, sample_log_file):
-        '''Test extraction of Distance CV.'''
-        metrics = parse_log_file(sample_log_file)
-
-        assert metrics[0]['dist_cv'] == pytest.approx(0.7654)
-        assert metrics[2]['dist_cv'] == pytest.approx(0.5432)
-
-    def test_parse_extracts_collapse_flag(self, sample_log_file):
-        '''Test extraction of collapse flag.'''
-        metrics = parse_log_file(sample_log_file)
-
-        assert metrics[0]['collapse'] is False
-        assert metrics[1]['collapse'] is False
-
-    def test_parse_extracts_timestamp(self, sample_log_file):
-        '''Test extraction of timestamp.'''
-        metrics = parse_log_file(sample_log_file)
-
-        assert metrics[0]['timestamp'] == '2024-01-15 10:01:00'
-        assert metrics[1]['timestamp'] == '2024-01-15 10:30:00'
-
-    def test_parse_filters_by_stage(self, multi_stage_log_file):
-        '''Test filtering by stage name.'''
-        metrics_01 = parse_log_file(multi_stage_log_file, stage='01_text')
-        metrics_02 = parse_log_file(multi_stage_log_file, stage='02_text')
-        metrics_03 = parse_log_file(multi_stage_log_file, stage='03_text')
-
-        # Each stage should have 1 epoch
-        assert len(metrics_01) == 1
-        assert len(metrics_02) == 1
-        assert len(metrics_03) == 1
-
-        # Values should match stage-specific data
-        assert metrics_01[0]['radius_mean'] == pytest.approx(1.0)
-        assert metrics_02[0]['radius_mean'] == pytest.approx(2.0)
-        assert metrics_03[0]['radius_mean'] == pytest.approx(3.0)
-
-    def test_parse_without_stage_filter(self, sample_log_file):
-        '''Test parsing without stage filter returns all metrics.'''
-        metrics = parse_log_file(sample_log_file, stage=None)
-
-        assert len(metrics) == 3
-
-    def test_parse_empty_log_returns_empty_list(self, tmp_path):
-        '''Test parsing empty log file.'''
-        empty_log = tmp_path / 'empty.log'
-        empty_log.write_text('')
-
-        metrics = parse_log_file(empty_log)
-        assert metrics == []
-
-    def test_parse_sorted_by_epoch(self, tmp_path):
-        '''Test that metrics are sorted by epoch.'''
-        # Create log with out-of-order epochs
-        log_content = """
-2024-01-15 10:00:00 - INFO - Running evaluation metrics (epoch 2)
-2024-01-15 10:00:01 - INFO - Hyperbolic radius: 3.0 ± 0.3
-
-2024-01-15 10:00:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 10:00:01 - INFO - Hyperbolic radius: 1.0 ± 0.1
-
-2024-01-15 10:00:00 - INFO - Running evaluation metrics (epoch 1)
-2024-01-15 10:00:01 - INFO - Hyperbolic radius: 2.0 ± 0.2
-"""
-        log_file = tmp_path / 'unordered.log'
-        log_file.write_text(log_content)
-
-        metrics = parse_log_file(log_file)
-
-        epochs = [m['epoch'] for m in metrics]
-        assert epochs == [0, 1, 2]
-
-    def test_parse_handles_missing_metrics(self, tmp_path):
-        '''Test handling of log with incomplete metrics.'''
-        log_content = """
-2024-01-15 10:00:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 10:00:01 - INFO - Hyperbolic radius: 2.5 ± 0.1
-"""
-        log_file = tmp_path / 'incomplete.log'
-        log_file.write_text(log_content)
-
-        metrics = parse_log_file(log_file)
-
-        assert len(metrics) == 1
-        assert metrics[0]['radius_mean'] == pytest.approx(2.5)
-        assert 'cophenetic' not in metrics[0]
-        assert 'norm_cv' not in metrics[0]
-
-    def test_parse_collapse_true(self, tmp_path):
-        '''Test parsing collapse flag when True.'''
-        log_content = """
-2024-01-15 10:00:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 10:00:01 - INFO - Hyperbolic radius: 2.5 ± 0.1
-2024-01-15 10:00:02 - INFO - Collapse: True
-"""
-        log_file = tmp_path / 'collapsed.log'
-        log_file.write_text(log_content)
-
-        metrics = parse_log_file(log_file)
-
-        assert metrics[0]['collapse'] is True
-
-# -------------------------------------------------------------------------------------------------
-# Tests for create_visualizations()
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
 class TestCreateVisualizations:
-    '''Tests for create_visualizations() function.'''
 
     @pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib not available')
-    def test_create_visualizations_creates_output_file(self, sample_log_file, tmp_path):
-        '''Test that visualization file is created.'''
-        metrics = parse_log_file(sample_log_file)
-        output_dir = tmp_path / 'output'
-
-        create_visualizations(metrics, output_dir, 'test_stage')
-
-        output_file = output_dir / 'test_stage_metrics.png'
-        assert output_file.exists()
-        assert output_file.stat().st_size > 0
+    def test_create_visualizations_creates_output_file(self, tmp_path):
+        path = create_visualizations(summary_rows(), tmp_path)
+        assert path == tmp_path / 'epoch_metrics.png'
+        assert path.exists() and path.stat().st_size > 0
 
     @pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib not available')
-    def test_create_visualizations_creates_output_dir(self, sample_log_file, tmp_path):
-        '''Test that output directory is created if it doesn't exist.'''
-        metrics = parse_log_file(sample_log_file)
-        output_dir = tmp_path / 'nested' / 'output'
+    def test_create_visualizations_creates_output_dir(self, tmp_path):
+        directory = tmp_path / 'nested' / 'output'
+        create_visualizations(summary_rows(), directory)
+        assert directory.exists()
 
-        create_visualizations(metrics, output_dir, 'test_stage')
-
-        assert output_dir.exists()
-
-    def test_create_visualizations_handles_empty_metrics(self, tmp_path, capsys):
-        '''Test handling of empty metrics list.'''
-        create_visualizations([], tmp_path, 'test_stage')
-
-        captured = capsys.readouterr()
-        assert 'No metrics found' in captured.out
+    def test_create_visualizations_handles_empty_metrics(self, tmp_path):
+        with pytest.raises(ValueError, match='No metrics'):
+            create_visualizations([], tmp_path)
+        assert not list(tmp_path.iterdir())
 
     @pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib not available')
     def test_create_visualizations_handles_single_epoch(self, tmp_path):
-        '''Test visualization with single epoch.'''
-        metrics = [
-            {
-                'epoch': 0,
-                'timestamp': '2024-01-15 10:00:00',
-                'radius_mean': 2.5,
-                'radius_std': 0.1,
-                'cophenetic': 0.5,
-                'n_pairs': 500,
-            }
-        ]
+        path = create_visualizations(summary_rows()[:1], tmp_path)
+        assert path.exists() and path.stat().st_size > 0
 
-        create_visualizations(metrics, tmp_path, 'single')
+@pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib not available')
+def test_plots_use_every_durable_field_including_moe_and_radius_sd(tmp_path, monkeypatch):
+    from matplotlib.axes import Axes
+    plots, bands = [], []
+    original_plot, original_fill = Axes.plot, Axes.fill_between
 
-        output_file = tmp_path / 'single_metrics.png'
-        assert output_file.exists()
+    def plot_spy(self, x, y, *args, **kwargs):
+        plots.append((kwargs.get('label'), list(x), list(y)))
+        return original_plot(self, x, y, *args, **kwargs)
 
-# -------------------------------------------------------------------------------------------------
-# Tests for print_analysis()
-# -------------------------------------------------------------------------------------------------
+    def band_spy(self, x, low, high, *args, **kwargs):
+        bands.append((list(x), list(low), list(high)))
+        return original_fill(self, x, low, high, *args, **kwargs)
 
-@pytest.mark.unit
-class TestPrintAnalysis:
-    '''Tests for print_analysis() function.'''
-
-    def test_print_analysis_empty_metrics(self, capsys):
-        '''Test handling of empty metrics.'''
-        print_analysis([], 'test_stage')
-
-        captured = capsys.readouterr()
-        assert 'No metrics to analyze' in captured.out
-
-    def test_print_analysis_shows_stage(self, sample_log_file, capsys):
-        '''Test that stage name is shown in output.'''
-        metrics = parse_log_file(sample_log_file)
-
-        print_analysis(metrics, 'test_stage')
-
-        captured = capsys.readouterr()
-        assert 'TEST_STAGE' in captured.out
-
-    def test_print_analysis_shows_radius_info(self, sample_log_file, capsys):
-        '''Test that radius analysis is shown.'''
-        metrics = parse_log_file(sample_log_file)
-
-        print_analysis(metrics, 'test_stage')
-
-        captured = capsys.readouterr()
-        assert 'HYPERBOLIC RADIUS' in captured.out
-        assert 'Initial' in captured.out
-        assert 'Latest' in captured.out
-
-    def test_print_analysis_grades_no_structural_statistic(self, sample_log_file, capsys):
-        '''Req 6: no grade, trend or recommendation reads a structural statistic.'''
-        metrics = parse_log_file(sample_log_file)
-        for m in metrics:
-            m['cophenetic'] = 0.1
-
-        print_analysis(metrics, 'test_stage')
-
-        captured = capsys.readouterr()
-        assert 'HIERARCHY PRESERVATION' not in captured.out
-        assert 'ophenetic' not in captured.out
-
-    def test_print_analysis_warns_large_radius(self, tmp_path, capsys):
-        '''Test warning for large radius.'''
-        metrics = [{
-            'epoch': 0,
-            'radius_mean': 25.0,
-            'radius_std': 1.0,
-        }]
-
-        print_analysis(metrics, 'test')
-
-        captured = capsys.readouterr()
-        assert 'WARNING' in captured.out or 'large' in captured.out.lower()
-
-    def test_print_analysis_shows_recommendations(self, sample_log_file, capsys):
-        '''Test that recommendations are shown.'''
-        metrics = parse_log_file(sample_log_file)
-
-        print_analysis(metrics, 'test_stage')
-
-        captured = capsys.readouterr()
-        assert 'RECOMMENDATIONS' in captured.out
-
-# -------------------------------------------------------------------------------------------------
-# Edge case tests
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestEdgeCases:
-    '''Edge case tests for visualization tools.'''
-
-    def test_parse_handles_special_characters_in_path(self, tmp_path):
-        '''Test handling paths with special characters.'''
-        log_dir = tmp_path / 'dir with spaces'
-        log_dir.mkdir()
-        log_file = log_dir / 'train.log'
-        log_file.write_text(
-            """
-2024-01-15 10:00:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 10:00:01 - INFO - Hyperbolic radius: 2.5 ± 0.1
-"""
+    monkeypatch.setattr(Axes, 'plot', plot_spy)
+    monkeypatch.setattr(Axes, 'fill_between', band_spy)
+    rows = summary_rows()
+    for row in rows:
+        row['loss/load_balancing'] = 0.2 + row['epoch'] * 0.1
+    create_visualizations(rows, tmp_path)
+    curves = {label: (x, y) for label, x, y in plots}
+    assert set(curves) == {
+        'mrr', 'loss/task', 'loss/code_code', 'loss/radial', 'loss/total', 'loss/load_balancing',
+        'logit_scale/task', 'logit_scale/code_code', 'radius/mean/level_2', 'radius/mean/level_6'
+    }
+    for key, (x, y) in curves.items():
+        assert x == [0, 1, 2]
+        assert y == [row[key] for row in rows]
+    assert len(bands) == 2
+    for (x, low, high), level in zip(bands, [2, 6]):
+        assert x == [0, 1, 2]
+        assert low == pytest.approx(
+            [row[f'radius/mean/level_{level}'] - row[f'radius/sd/level_{level}'] for row in rows]
+        )
+        assert high == pytest.approx(
+            [row[f'radius/mean/level_{level}'] + row[f'radius/sd/level_{level}'] for row in rows]
         )
 
-        metrics = parse_log_file(log_file)
-        assert len(metrics) == 1
+@pytest.mark.skipif(not HAS_MATPLOTLIB, reason='matplotlib not available')
+def test_missing_samples_are_omitted_instead_of_plotted_as_zero(tmp_path, monkeypatch):
+    from matplotlib.axes import Axes
+    curves, bands = {}, []
+    original_plot, original_fill = Axes.plot, Axes.fill_between
 
-    def test_parse_handles_very_large_values(self, tmp_path):
-        '''Test parsing very large metric values.'''
-        log_content = """
-2024-01-15 10:00:00 - INFO - Running evaluation metrics (epoch 0)
-2024-01-15 10:00:01 - INFO - Hyperbolic radius: 999999.999 ± 99999.999
-"""
-        log_file = tmp_path / 'large_values.log'
-        log_file.write_text(log_content)
+    def plot_spy(self, x, y, *args, **kwargs):
+        curves[kwargs.get('label')] = (list(x), list(y))
+        return original_plot(self, x, y, *args, **kwargs)
 
-        metrics = parse_log_file(log_file)
+    def band_spy(self, x, low, high, *args, **kwargs):
+        bands.append((list(x), list(low), list(high)))
+        return original_fill(self, x, low, high, *args, **kwargs)
 
-        assert metrics[0]['radius_mean'] == pytest.approx(999999.999)
+    monkeypatch.setattr(Axes, 'plot', plot_spy)
+    monkeypatch.setattr(Axes, 'fill_between', band_spy)
+    rows = summary_rows()
+    del rows[1]['loss/task']
+    del rows[1]['radius/sd/level_2']
+    rows[1]['mrr'] = None
+    create_visualizations(rows, tmp_path)
+    assert curves['loss/task'] == ([0, 2], [rows[0]['loss/task'], rows[2]['loss/task']])
+    assert curves['mrr'] == ([0, 2], [0.5, 0.7])
+    assert curves['radius/mean/level_2'] == (
+        [0, 1, 2], [row['radius/mean/level_2'] for row in rows]
+    )
+    assert len(bands) == 2
+    x, low, high = bands[0]
+    assert x == [0, 2]
+    assert low == pytest.approx(
+        [rows[i]['radius/mean/level_2'] - rows[i]['radius/sd/level_2'] for i in [0, 2]]
+    )
+    assert high == pytest.approx(
+        [rows[i]['radius/mean/level_2'] + rows[i]['radius/sd/level_2'] for i in [0, 2]]
+    )
