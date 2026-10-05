@@ -7,17 +7,27 @@ Tests cover:
 - Sampling metadata accumulation
 - NAICSMapDataset indexing and __getitem__
 - Train-epoch propagation to epoch-aware datasets under a real Trainer (incl. persistent workers)
+- Two-stream epochs (Req 10; spec 4.3): the steps, the permutations, the even chunks, the
+  tokenized task queries and the step dataset
 '''
 
 import copy
-from collections import defaultdict
-from typing import Any, Dict, Optional, Set
+import dataclasses
+import hashlib
+import re
+from collections import Counter, defaultdict
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 import pytest
 import pytorch_lightning as pyl
 import torch
 from pytorch_lightning.callbacks import ModelCheckpoint
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
 
+from naics_embedder.supervision.code_targets import CodeTargets
+from naics_embedder.supervision.queries import build_task_queries
+from naics_embedder.text_model.dataloader import datamodule as two_stream
 from naics_embedder.text_model.dataloader.datamodule import (
     NAICSDataModule,
     NAICSMapDataset,
@@ -25,7 +35,11 @@ from naics_embedder.text_model.dataloader.datamodule import (
     collate_fn,
     stack_text_inputs,
 )
+from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
+from naics_embedder.text_model.fields import CHANNELS, QUERY, marker, tokenize_field
+from naics_embedder.utils.config import TokenizationConfig
 from tests.fixtures.epoch_datasets import EpochRecordingDataset
+from tests.fixtures.shared_encoder import MINILM
 
 # -------------------------------------------------------------------------------------------------
 # Fixtures
@@ -1283,3 +1297,563 @@ def test_mid_epoch_resume_samples_with_restored_epoch(tmp_path):
     )
 
     assert model.train_epochs == {1: {1}}
+
+# -------------------------------------------------------------------------------------------------
+# Two-stream epochs (Req 10; spec 4.3; section 6, "Coverage", the data half)
+#
+# A synthetic row's token ids name where it came from: a code row's ids are its code id in every
+# channel, and a query row's are QUERY_TOKEN_OFFSET plus the query's index.
+# -------------------------------------------------------------------------------------------------
+
+# Twelve codes in codebook order, at least two at each level
+SYNTHETIC_LEVELS = (2, 3, 4, 5, 6, 6, 2, 3, 4, 5, 6, 6)
+QUERY_TOKEN_OFFSET = 1000
+# The shipped window: the reference bundle's longest marked channel text is 44 tokens
+REFERENCE_WINDOW = 128
+
+def _token_row(value: int) -> Dict[str, Any]:
+    '''A present two-token row whose ids are ``value``.'''
+
+    return {
+        'input_ids': torch.full((2, ), value, dtype=torch.long),
+        'attention_mask': torch.ones(2, dtype=torch.long),
+        'present': True,
+    }
+
+def _code_rows(n_codes: int) -> List[Dict[str, Any]]:
+    '''Token rows of the codes 0..n-1 in codebook order, as the tokenization cache holds them.'''
+
+    rows = []
+    for code_id in range(n_codes):
+        row: Dict[str, Any] = {channel: _token_row(code_id) for channel in CHANNELS}
+        row['code'] = f'code-{code_id}'
+        rows.append(row)
+    return rows
+
+def _synthetic_queries(levels: Sequence[int], n_queries: int):
+    '''
+    Query q reads at the level of code a = q mod N with a as a target, and for odd q also the next
+    code at that level. Every third query has no forced negative; the others have a code at
+    another level, where there is one.
+    '''
+
+    by_level: Dict[int, List[int]] = defaultdict(list)
+    rank: Dict[int, int] = {}
+    for code, level in enumerate(levels):
+        rank[code] = len(by_level[level])
+        by_level[level].append(code)
+    elsewhere = {
+        level: [code for code, other in enumerate(levels) if other != level]
+        for level in by_level
+    }
+    targets, negatives = [], []
+    for query in range(n_queries):
+        anchor = query % len(levels)
+        same = by_level[levels[anchor]]
+        partner = same[(rank[anchor] + 1) % len(same)]
+        others = elsewhere[levels[anchor]]
+        targets.append(tuple(sorted({anchor, partner})) if query % 2 else (anchor, ))
+        negatives.append((others[query % len(others)], ) if others and query % 3 else ())
+    return two_stream.TokenizedQueries(
+        texts=tuple(f'query {query}' for query in range(n_queries)),
+        tokens=tuple(_token_row(QUERY_TOKEN_OFFSET + query) for query in range(n_queries)),
+        levels=tuple(levels[query % len(levels)] for query in range(n_queries)),
+        target_ids=tuple(targets),
+        negative_ids=tuple(negatives),
+    )
+
+def _step_dataset(
+    *,
+    n_queries: int = 10,
+    queries_per_step: int = 3,
+    seed: int = 0,
+    levels: Sequence[int] = SYNTHETIC_LEVELS,
+    queries: Any = None,
+    code_rows: Optional[List[Dict[str, Any]]] = None,
+    code_levels: Optional[Sequence[int]] = None,
+):
+    '''A step dataset over the synthetic codes and queries (12 codes and 10 queries by default).'''
+
+    return two_stream.StepDataset(
+        code_rows=_code_rows(len(levels)) if code_rows is None else code_rows,
+        code_levels=levels if code_levels is None else code_levels,
+        queries=_synthetic_queries(levels, n_queries) if queries is None else queries,
+        n_codes=len(levels),
+        seed=seed,
+        queries_per_step=queries_per_step,
+    )
+
+def _read_epoch(dataset, epoch: int) -> List[Dict[str, Any]]:
+    '''Every step of one epoch, in step order.'''
+
+    dataset.set_epoch(epoch)
+    return [dataset[step] for step in range(len(dataset))]
+
+def _query_indices(step: Dict[str, Any]) -> List[int]:
+    '''The synthetic queries a step reads, named by their token ids.'''
+
+    return (step['queries']['inputs'][QUERY]['input_ids'][:, 0] - QUERY_TOKEN_OFFSET).tolist()
+
+def _marked(mask_row: torch.Tensor) -> List[int]:
+    '''The code ids a mask row marks, ascending.'''
+
+    return torch.nonzero(mask_row).flatten().tolist()
+
+def _same(left: Any, right: Any) -> bool:
+    '''Equal nested dicts of equal tensors (dtype included) and plain values.'''
+
+    if isinstance(left, torch.Tensor):
+        if not isinstance(right, torch.Tensor) or left.dtype != right.dtype:
+            return False
+        return torch.equal(left, right)
+    if isinstance(left, dict):
+        if not isinstance(right, dict) or set(left) != set(right):
+            return False
+        return all(_same(left[key], right[key]) for key in left)
+    return left == right
+
+def _expected_permutation(seed: int, epoch: int, n: int, stream: str) -> torch.Tensor:
+    '''P12's rule written out: randperm on a CPU generator seeded by 63 bits of a sha256.'''
+
+    digest = hashlib.sha256(f'{seed}:{epoch}:{stream}'.encode('utf-8')).digest()
+    generator_seed = int.from_bytes(digest[:8], 'big') & (2**63 - 1)
+    return torch.randperm(n, generator=torch.Generator().manual_seed(generator_seed))
+
+# -------------------------------------------------------------------------------------------------
+# Two-stream epochs: the steps and their chunks
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ('n_queries', 'queries_per_step', 'steps'),
+    [(11039, 128, 87), (11, 3, 4), (12, 3, 4), (11, 1, 11), (11, 128, 1), (0, 128, 0)],
+)
+def test_steps_per_epoch_is_the_ceiling_of_queries_over_queries_per_step(
+    n_queries, queries_per_step, steps
+):
+    assert two_stream.steps_per_epoch(n_queries, queries_per_step) == steps
+
+@pytest.mark.parametrize('queries_per_step', [0, -1])
+def test_steps_per_epoch_refuses_fewer_than_one_query_per_step(queries_per_step):
+    with pytest.raises(
+        ValueError, match=f'queries_per_step must be at least 1, not {queries_per_step}'
+    ):
+        two_stream.steps_per_epoch(11, queries_per_step)
+
+def test_steps_per_epoch_refuses_a_negative_query_count():
+    with pytest.raises(ValueError, match='cannot be negative, not -1'):
+        two_stream.steps_per_epoch(-1, 128)
+
+@pytest.mark.parametrize(
+    ('n', 'steps', 'torch_chunks'),
+    [(2125, 87, 85), (17, 11, 9), (6, 4, 3)],
+    ids=['the-shipped-codes', 'the-reference-codes-at-one-query-per-step', 'six-over-four'],
+)
+def test_even_chunks_cuts_exactly_the_steps_where_torch_chunk_cuts_fewer(n, steps, torch_chunks):
+    order = torch.randperm(n, generator=torch.Generator().manual_seed(n))
+
+    chunks = two_stream.even_chunks(order, steps)
+
+    # The hazard is real: torch.chunk cuts chunks of ceil(n / steps) and runs out of elements
+    assert len(torch.chunk(order, steps)) == torch_chunks < steps
+    assert len(chunks) == steps
+    sizes = [len(chunk) for chunk in chunks]
+    assert min(sizes) >= 1 and max(sizes) - min(sizes) <= 1
+    assert torch.equal(torch.cat(chunks), order)
+
+@pytest.mark.parametrize('steps', [0, -1])
+def test_even_chunks_refuses_fewer_than_one_step(steps):
+    with pytest.raises(ValueError, match='at least one step'):
+        two_stream.even_chunks(torch.arange(5), steps)
+
+def test_even_chunks_refuses_an_order_that_is_not_one_dimensional():
+    with pytest.raises(ValueError, match=re.escape('one-dimensional, not of shape (2, 3)')):
+        two_stream.even_chunks(torch.arange(6).reshape(2, 3), 2)
+
+def test_the_shipped_epoch_has_87_steps_of_126_or_127_queries_and_24_or_25_codes():
+    '''Spec 4.3: 11,039 queries at 128 a step and 2,125 codes, both cut into S = 87 chunks.'''
+
+    dataset = _step_dataset(n_queries=11039, queries_per_step=128, levels=(6, ) * 2125)
+
+    read = _read_epoch(dataset, 0)
+
+    assert len(dataset) == len(read) == 87
+    assert Counter(len(step['codes']['ids']) for step in read) == {25: 37, 24: 50}
+    assert Counter(len(step['queries']['levels']) for step in read) == {127: 77, 126: 10}
+    anchors = torch.cat([step['codes']['ids'] for step in read])
+    assert sorted(anchors.tolist()) == list(range(2125))
+    assert sorted(index for step in read for index in _query_indices(step)) == list(range(11039))
+
+# -------------------------------------------------------------------------------------------------
+# Two-stream epochs: the permutations
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ('seed', 'epoch', 'stream'),
+    [(0, 0, 'codes'), (42, 3, 'queries'), (7, 39, 'codes')],
+)
+def test_an_epoch_permutation_is_drawn_under_the_sha256_of_seed_epoch_and_stream(
+    seed, epoch, stream
+):
+    permutation = two_stream.epoch_permutation(seed, epoch, 2125, stream)
+
+    assert permutation.dtype == torch.int64
+    assert torch.equal(permutation, _expected_permutation(seed, epoch, 2125, stream))
+    assert torch.equal(permutation.sort().values, torch.arange(2125))
+
+def test_epoch_permutations_depend_only_on_seed_epoch_and_stream():
+    first = two_stream.epoch_permutation(42, 3, 2125, 'codes')
+    # The conftest reseeds torch before every test, so move the global generator on first
+    torch.manual_seed(1234)
+    torch.rand(100)
+    two_stream.epoch_permutation(42, 4, 2125, 'codes')
+
+    assert torch.equal(two_stream.epoch_permutation(42, 3, 2125, 'codes'), first)
+    for seed, epoch, stream in [(43, 3, 'codes'), (42, 4, 'codes'), (42, 3, 'queries')]:
+        assert not torch.equal(two_stream.epoch_permutation(seed, epoch, 2125, stream), first)
+
+def test_drawing_an_epoch_permutation_leaves_the_global_generator_alone():
+    state = torch.get_rng_state()
+
+    two_stream.epoch_permutation(42, 3, 2125, 'codes')
+
+    assert torch.equal(torch.get_rng_state(), state)
+
+@pytest.mark.parametrize(
+    ('stream', 'epoch', 'match'),
+    [('code', 0, "unknown stream 'code'"), ('codes', -1, 'epoch must be at least 0, not -1')],
+    ids=['an-unknown-stream', 'a-negative-epoch'],
+)
+def test_an_epoch_permutation_refuses_an_unknown_stream_or_a_negative_epoch(stream, epoch, match):
+    with pytest.raises(ValueError, match=match):
+        two_stream.epoch_permutation(0, epoch, 5, stream)
+
+def test_an_epoch_permutation_refuses_a_negative_length():
+    with pytest.raises(ValueError, match='a stream cannot have a negative length, not -1'):
+        two_stream.epoch_permutation(0, 0, -1, 'codes')
+
+# -------------------------------------------------------------------------------------------------
+# Two-stream epochs: the step dataset
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize(('queries_per_step', 'steps'), [(1, 10), (3, 4), (10, 1), (128, 1)])
+def test_one_epoch_reads_every_code_as_an_anchor_once_and_every_query_once(queries_per_step, steps):
+    dataset = _step_dataset(n_queries=10, queries_per_step=queries_per_step)
+
+    assert len(dataset) == steps
+    for epoch in (0, 1, 7):
+        read = _read_epoch(dataset, epoch)
+        anchors = torch.cat([step['codes']['ids'] for step in read])
+        assert sorted(anchors.tolist()) == list(range(12))
+        assert sorted(index for step in read for index in _query_indices(step)) == list(range(10))
+        assert min(len(step['codes']['ids']) for step in read) >= 1
+        assert max(len(step['queries']['levels']) for step in read) <= queries_per_step
+
+def test_each_row_of_a_step_carries_its_own_tokens_level_targets_and_negatives():
+    queries = _synthetic_queries(SYNTHETIC_LEVELS, 10)
+    dataset = _step_dataset(queries=queries, queries_per_step=3)
+
+    for step in _read_epoch(dataset, 2):
+        codes, reads = step['codes'], step['queries']
+        assert codes['ids'].dtype == codes['levels'].dtype == torch.int64
+        assert codes['levels'].tolist() == [
+            SYNTHETIC_LEVELS[code] for code in codes['ids'].tolist()
+        ]
+        for channel in CHANNELS:
+            ids = codes['inputs'][channel]['input_ids']
+            assert torch.equal(ids, codes['ids'][:, None].expand_as(ids))
+            assert codes['inputs'][channel]['present'].all()
+        indices = _query_indices(step)
+        assert reads['levels'].dtype == torch.int64
+        assert reads['levels'].tolist() == [queries.levels[index] for index in indices]
+        assert reads['targets'].dtype == reads['negatives'].dtype == torch.bool
+        assert reads['targets'].shape == reads['negatives'].shape == (len(indices), 12)
+        for row, index in enumerate(indices):
+            assert _marked(reads['targets'][row]) == list(queries.target_ids[index])
+            assert _marked(reads['negatives'][row]) == list(queries.negative_ids[index])
+
+def test_a_step_carries_no_candidate_pool():
+    '''Spec 4.3: a step is its anchors and its queries; the candidates come from the code cache.'''
+
+    dataset = _step_dataset()
+    dataset.set_epoch(0)
+
+    step = dataset[0]
+
+    assert set(step) == {'codes', 'queries'}
+    assert set(step['codes']) == {'inputs', 'ids', 'levels'}
+    assert set(step['queries']) == {'inputs', 'levels', 'targets', 'negatives'}
+    # The only code texts a step carries are its anchors'
+    assert set(step['codes']['inputs']) == set(CHANNELS)
+    for channel in CHANNELS:
+        assert len(step['codes']['inputs'][channel]['input_ids']) == len(step['codes']['ids'])
+    assert set(step['queries']['inputs']) == {QUERY}
+    assert len(step['queries']['inputs'][QUERY]['input_ids']) == len(step['queries']['levels'])
+
+def test_an_epochs_steps_are_its_two_permutations_cut_into_even_chunks():
+    dataset = _step_dataset(seed=5)
+    codes = two_stream.even_chunks(two_stream.epoch_permutation(5, 4, 12, 'codes'), 4)
+    queries = two_stream.even_chunks(two_stream.epoch_permutation(5, 4, 10, 'queries'), 4)
+
+    read = _read_epoch(dataset, 4)
+
+    assert len(read) == 4
+    for index, step in enumerate(read):
+        assert torch.equal(step['codes']['ids'], codes[index])
+        assert _query_indices(step) == queries[index].tolist()
+
+def test_an_epochs_steps_depend_only_on_the_seed_and_the_epoch():
+    '''Exact resume needs this: epoch k's steps are the same whatever epochs were read before.'''
+
+    def orders(dataset, epoch):
+        return [
+            (step['codes']['ids'].tolist(), _query_indices(step))
+            for step in _read_epoch(dataset, epoch)
+        ]
+
+    resumed = _step_dataset(seed=5)
+    for epoch in range(3):
+        _read_epoch(resumed, epoch)
+
+    assert orders(resumed, 3) == orders(_step_dataset(seed=5), 3)
+    assert orders(_step_dataset(seed=6), 3) != orders(_step_dataset(seed=5), 3)
+    assert orders(resumed, 4) != orders(resumed, 3)
+
+def test_each_epochs_two_permutations_are_drawn_once_at_its_first_step(monkeypatch):
+    drawn = []
+    real = two_stream.epoch_permutation
+
+    def recording(seed, epoch, n, stream):
+        drawn.append((epoch, stream))
+        return real(seed, epoch, n, stream)
+
+    monkeypatch.setattr(two_stream, 'epoch_permutation', recording)
+    dataset = _step_dataset()
+
+    dataset.set_epoch(0)
+    assert drawn == []
+    _read_epoch(dataset, 0)
+    _read_epoch(dataset, 0)
+    assert sorted(drawn) == [(0, 'codes'), (0, 'queries')]
+    _read_epoch(dataset, 1)
+    assert sorted(drawn) == [(0, 'codes'), (0, 'queries'), (1, 'codes'), (1, 'queries')]
+
+def test_changing_a_steps_anchor_ids_leaves_the_epochs_order_alone():
+    dataset = _step_dataset()
+    dataset.set_epoch(0)
+    ids = dataset[0]['codes']['ids']
+    expected = ids.clone()
+
+    ids.fill_(-1)
+
+    assert torch.equal(dataset[0]['codes']['ids'], expected)
+
+def test_a_negative_epoch_is_refused():
+    with pytest.raises(ValueError, match='epoch must be at least 0, not -1'):
+        _step_dataset().set_epoch(-1)
+
+def test_a_step_read_before_any_epoch_is_set_is_refused():
+    '''P27: the epoch comes only from set_epoch, which TrainDatasetEpochCallback calls.'''
+
+    with pytest.raises(RuntimeError, match='set_epoch'):
+        _step_dataset()[0]
+
+@pytest.mark.parametrize('step', [4, -1])
+def test_a_step_outside_the_epoch_is_refused(step):
+    dataset = _step_dataset()
+    dataset.set_epoch(0)
+
+    with pytest.raises(IndexError, match=f'step {step} is outside the 4 steps of an epoch'):
+        dataset[step]
+
+def test_more_steps_than_codes_are_refused():
+    '''No step may be empty: code_code_loss and radial_loss refuse a step with no anchor.'''
+
+    with pytest.raises(
+        ValueError, match='13 steps for 12 codes: every step needs at least one anchor'
+    ):
+        _step_dataset(n_queries=13, queries_per_step=1)
+
+def test_as_many_steps_as_codes_give_each_step_one_anchor():
+    dataset = _step_dataset(n_queries=12, queries_per_step=1)
+
+    read = _read_epoch(dataset, 0)
+
+    assert [len(step['codes']['ids']) for step in read] == [1] * 12
+
+def test_an_epoch_without_task_queries_is_refused():
+    '''With no query there is no step, so no code would be an anchor (Req 10).'''
+
+    with pytest.raises(ValueError, match='no task queries'):
+        _step_dataset(n_queries=0)
+
+@pytest.mark.parametrize(
+    ('n_rows', 'n_levels', 'match'),
+    [(11, 12, '11 code token rows for 12 codes'), (12, 11, '11 code levels for 12 codes')],
+    ids=['a-row-short', 'a-level-short'],
+)
+def test_the_code_rows_and_levels_must_be_one_per_code(n_rows, n_levels, match):
+    with pytest.raises(ValueError, match=match):
+        _step_dataset(code_rows=_code_rows(n_rows), code_levels=SYNTHETIC_LEVELS[:n_levels])
+
+def test_the_code_levels_must_be_one_dimensional():
+    with pytest.raises(ValueError, match=re.escape('one-dimensional, not of shape (1, 12)')):
+        _step_dataset(code_levels=[list(SYNTHETIC_LEVELS)])
+
+@pytest.mark.parametrize(
+    ('field', 'ids', 'problem'),
+    [
+        ('target_ids', (12, ), 'names code ids [12], outside the 12 codes'),
+        ('negative_ids', (-1, ), 'names code ids [-1], outside the 12 codes'),
+        ('target_ids', (), 'has no target'),
+        ('target_ids', (1, ), 'has targets at another level: code ids [1]'),
+    ],
+    ids=[
+        'a-target-outside-the-codes',
+        'a-negative-outside-the-codes',
+        'no-target',
+        'a-target-at-another-level',
+    ],
+)
+def test_a_query_no_step_could_score_is_refused(field, ids, problem):
+    queries = _synthetic_queries(SYNTHETIC_LEVELS, 10)
+    broken = dataclasses.replace(queries, **{field: (ids, ) + getattr(queries, field)[1:]})
+
+    # Query 0 reads at the level of code 0, level 2
+    with pytest.raises(ValueError, match=re.escape(f"task query 'query 0' at level 2 {problem}")):
+        _step_dataset(queries=broken)
+
+def test_the_train_loader_hands_each_step_through_whole():
+    '''P12's loader: with batch_size None, each step is one batch, unchanged, in step order.'''
+
+    dataset = _step_dataset()
+    dataset.set_epoch(0)
+    loader = DataLoader(dataset, batch_size=None, shuffle=False, num_workers=0)
+
+    batches = list(loader)
+
+    assert len(loader) == len(batches) == len(dataset) == 4
+    for index, batch in enumerate(batches):
+        assert _same(batch, dataset[index])
+
+# -------------------------------------------------------------------------------------------------
+# Two-stream epochs: the reference bundle, end to end
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def minilm_tokenizer():
+    return AutoTokenizer.from_pretrained(MINILM)
+
+@pytest.fixture
+def reference_code_rows(tmp_path, reference_bundle) -> List[Dict[str, Any]]:
+    '''The reference codes' cached token rows at the shipped window, in codebook order.'''
+
+    parameters = reference_bundle.manifest.generation_parameters
+    config = TokenizationConfig(
+        descriptions_parquet=parameters['descriptions_parquet'],
+        tokenizer_name=MINILM,
+        max_length=REFERENCE_WINDOW,
+        output_path=str(tmp_path / 'token_cache' / 'token_cache.pt'),
+    )
+    cache = tokenization_cache(
+        config,
+        description_fingerprint=reference_bundle.manifest.description_fingerprint,
+        codebook_fingerprint=reference_bundle.manifest.codebook_fingerprint,
+    )
+    return [cache[code_id] for code_id in range(len(cache))]
+
+def _code_ids(bundle) -> Dict[str, int]:
+    '''Each code's id: its row in the codebook.'''
+
+    return {code: code_id for code_id, code in enumerate(CodeTargets.from_bundle(bundle).codes)}
+
+def test_task_queries_are_tokenized_once_as_query_texts_and_named_by_code_id(
+    reference_bundle, minilm_tokenizer
+):
+    queries = build_task_queries(reference_bundle)
+    codes = CodeTargets.from_bundle(reference_bundle).codes
+    # 'query: ' as tokens, which follow [CLS]
+    marker_ids = minilm_tokenizer(marker(QUERY), add_special_tokens=False)['input_ids']
+
+    tokenized = two_stream.tokenize_task_queries(
+        queries, minilm_tokenizer, REFERENCE_WINDOW, _code_ids(reference_bundle)
+    )
+
+    assert len(tokenized) == len(queries) == 11
+    assert tokenized.texts == tuple(query.text for query in queries)
+    assert tokenized.levels == tuple(query.level for query in queries)
+    for index, query in enumerate(queries):
+        tokens = tokenized.tokens[index]
+        expected = tokenize_field(minilm_tokenizer, QUERY, query.text, REFERENCE_WINDOW)
+        assert torch.equal(tokens['input_ids'], expected['input_ids'])
+        assert torch.equal(tokens['attention_mask'], expected['attention_mask'])
+        assert tokens['present'] is True
+        assert tokens['input_ids'][1:1 + len(marker_ids)].tolist() == marker_ids
+        assert [codes[code_id] for code_id in tokenized.target_ids[index]] == list(query.targets)
+        assert [codes[code_id]
+                for code_id in tokenized.negative_ids[index]] == list(query.negatives)
+
+def test_a_task_query_naming_a_code_without_a_code_id_is_refused(
+    reference_bundle, minilm_tokenizer
+):
+    code_ids = _code_ids(reference_bundle)
+    del code_ids['321111']
+
+    # The first query, in (level, text) order, to name 321111 sends wood flour grinding away
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "task query 'Wood flour grinding' at level 4 names codes with no code id: ['321111']"
+        ),
+    ):
+        two_stream.tokenize_task_queries(
+            build_task_queries(reference_bundle), minilm_tokenizer, REFERENCE_WINDOW, code_ids
+        )
+
+@pytest.mark.parametrize(('queries_per_step', 'steps'), [(1, 11), (2, 6), (11, 1)])
+def test_one_epoch_of_the_reference_bundle_reads_each_code_and_each_task_query_once(
+    reference_bundle, reference_code_rows, minilm_tokenizer, queries_per_step, steps
+):
+    targets = CodeTargets.from_bundle(reference_bundle)
+    queries = build_task_queries(reference_bundle)
+    tokenized = two_stream.tokenize_task_queries(
+        queries, minilm_tokenizer, REFERENCE_WINDOW, _code_ids(reference_bundle)
+    )
+    dataset = two_stream.StepDataset(
+        code_rows=reference_code_rows,
+        code_levels=targets.levels,
+        queries=tokenized,
+        n_codes=len(targets.codes),
+        seed=0,
+        queries_per_step=queries_per_step,
+    )
+    # A query is named by its tokens and its level: two texts are queries at two levels each
+    by_content = {
+        (tuple(tokens['input_ids'].tolist()), query.level): query
+        for tokens, query in zip(tokenized.tokens, queries)
+    }
+    assert len(by_content) == len(queries) == 11
+    assert [row['code'] for row in reference_code_rows] == list(targets.codes)
+
+    assert len(dataset) == steps
+    for epoch in (0, 1):
+        anchors, read = [], []
+        for step in _read_epoch(dataset, epoch):
+            ids = step['codes']['ids'].tolist()
+            anchors.extend(ids)
+            assert step['codes']['levels'].tolist() == targets.levels[ids].tolist()
+            for channel in CHANNELS:
+                expected = torch.stack(
+                    [reference_code_rows[code_id][channel]['input_ids'] for code_id in ids]
+                )
+                assert torch.equal(step['codes']['inputs'][channel]['input_ids'], expected)
+            reads = step['queries']
+            rows = zip(reads['inputs'][QUERY]['input_ids'], reads['levels'].tolist())
+            for row, (tokens, level) in enumerate(rows):
+                query = by_content[tuple(tokens.tolist()), level]
+                read.append(query)
+                assert [targets.codes[code_id]
+                        for code_id in _marked(reads['targets'][row])] == list(query.targets)
+                assert [targets.codes[code_id]
+                        for code_id in _marked(reads['negatives'][row])] == list(query.negatives)
+        assert sorted(anchors) == list(range(17))
+        assert sorted(read, key=lambda query: (query.level, query.text)) == queries
