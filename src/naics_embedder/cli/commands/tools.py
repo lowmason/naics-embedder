@@ -19,14 +19,17 @@ Commands:
     export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
     outcome-panel: Score an arm on the outcome panel's validation split (Stage 6).
     sweep: Read trained seeds on all three validation panels and write an arm record.
+    radius-report: Check radius variation, geometry and loss gradients for a selected checkpoint.
 '''
 
 import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional
 
+import numpy as np
 import polars as pl
 import typer
 from rich.console import Console
@@ -58,7 +61,9 @@ from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha
 from naics_embedder.supervision.schema import IndexRole
 from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
 from naics_embedder.text_model.checkpoint_runner import CheckpointRunner
+from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
 from naics_embedder.text_model.export import code_token_config, export_code_table
+from naics_embedder.text_model.radius_report import ANCHOR_GRADIENT_PREFIX, radius_report, term_gradients
 from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.metrics_tools import visualize_metrics
 from naics_embedder.utils.config import (
@@ -899,6 +904,87 @@ def sweep_command(
         raise typer.Exit(code=1)
 
     console.print(f'Arm record: {output} ({len(record.runs)} seeds)')
+
+@app.command('radius-report')
+def radius_report_command(
+    checkpoint: Annotated[str,
+                          typer.Option('--checkpoint', help='Selected checkpoint to check')],
+    table: Annotated[str, typer.Option('--table', help='Table exported from that checkpoint')],
+    output: Annotated[Optional[str],
+                      typer.Option('--output', help='Radius and gradient report JSON')] = None,
+    config_file: Annotated[str,
+                           typer.Option(
+                               '--config', help='Config naming the bundle and token cache'
+                           )] = 'conf/config.yaml',
+    overrides: Annotated[Optional[List[str]],
+                         typer.Argument(help='Config overrides, as key=value')] = None,
+):
+    '''
+    Check radius variation, geometry and loss gradients for one selected checkpoint.
+
+    Gradients use epoch 0, step 0 of the saved seed and saved query chunk size. The checkpoint
+    and its table must share an export provenance. The report is written even when a measured
+    criterion fails; a failure exits 1. No evaluation split is scored.
+    '''
+
+    configure_logging('tools_radius_report.log')
+    try:
+        if output:
+            _require_writable(Path(output))
+        cfg = _run_config(config_file, overrides)
+        bundle = _run_bundle(cfg)
+        tokens = code_token_config(cfg)
+        # This checks the checkpoint/table and preprocessing identities without a panel read.
+        encoder = ArmEncoder.from_files(checkpoint, table, bundle, tokens, device='cpu')
+        model = encoder.model
+        saved = model.hparams.run_settings or {}
+        data = NAICSDataModule(
+            tokens,
+            seed=model.hparams.seed,
+            queries_per_step=saved.get('queries_per_step', cfg.data_loader.queries_per_step),
+            supervision_manifest_path=str(bundle.manifest_path),
+            supervision_bundle=bundle
+        )
+        data.prepare_data()
+        data.setup('fit')
+        data.set_train_epoch(0)
+        batch = data.train_dataset[0]
+        model.refresh_code_cache(data.code_rows)
+        gradients = term_gradients(model, batch)
+        anchors = [
+            gradients.pop(f'{ANCHOR_GRADIENT_PREFIX}{row}')
+            for row in range(len(batch['codes']['ids']))
+        ]
+        radius = radius_report(pl.read_parquet(table), anchor_radius_gradient=np.array(anchors))
+        inert = [
+            name for name, value in gradients.items() if not (np.isfinite(value) and value > 0)
+        ]
+        report = {
+            'checkpoint': str(Path(checkpoint).resolve()),
+            'table': str(Path(table).resolve()),
+            'seed': int(model.hparams.seed),
+            'epoch': 0,
+            'step': 0,
+            'anchor_ids': batch['codes']['ids'].tolist(),
+            'radius': asdict(radius),
+            'term_gradients': {
+                name: value if np.isfinite(value) else None
+                for name, value in gradients.items()
+            },
+            'inert_terms': inert,
+            'passed': radius.passed and not inert
+        }
+        rendered = json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + '\n'
+        if output:
+            path = Path(output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(rendered)
+        console.print_json(rendered)
+    except (OSError, ValueError, RuntimeError, KeyError, ValidationError) as exc:
+        console.print(f'[bold red]Radius report failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+    if not report['passed']:
+        raise typer.Exit(code=1)
 
 @app.command('export-table')
 def export_table(
