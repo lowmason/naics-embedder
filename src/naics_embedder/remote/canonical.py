@@ -98,8 +98,18 @@ def canonical_inputs(root: Path, cfg: Config) -> InputSet:
     # Check paths before the bundle loader can read any member outside the canonical directory.
     manifest_hash = sha256_file(manifest)
     raw = json.loads(manifest.read_text())
-    for artifact in raw.get('artifacts', {}).values():
-        for member in artifact.get('files', []):
+    if not isinstance(raw, dict) or not isinstance(raw.get('artifacts'), dict):
+        raise ValueError(f'malformed manifest {manifest}: expected an artifacts object')
+    for name, artifact in raw['artifacts'].items():
+        if not isinstance(artifact, dict) or not isinstance(artifact.get('path'), str):
+            raise ValueError(f'malformed manifest {manifest}: artifact {name} needs a path')
+        if not isinstance(artifact.get('files'), list):
+            raise ValueError(f'malformed manifest {manifest}: artifact {name} needs a files list')
+        for member in artifact['files']:
+            if not isinstance(member, dict) or not isinstance(member.get('path'), str):
+                raise ValueError(
+                    f'malformed manifest {manifest}: artifact {name} member needs a path'
+                )
             relative_path(manifest.parent, member['path'])
             _regular_file(root, manifest.parent / member['path'])
         relative_path(manifest.parent, artifact['path'])

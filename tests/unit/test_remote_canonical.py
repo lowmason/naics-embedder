@@ -414,3 +414,41 @@ def test_member_changed_after_bundle_validation_refuses(remote_repo, monkeypatch
     monkeypatch.setattr(canonical, 'load_validated_bundle', changed)
     with pytest.raises(ValueError, match='changed|hash'):
         canonical_inputs(remote_repo.root, remote_repo.config)
+
+@pytest.mark.parametrize(
+    'corruption', [
+        'root', 'artifacts', 'artifact', 'files', 'member', 'member_path_missing',
+        'member_path_type', 'artifact_path_missing', 'artifact_path_type'
+    ]
+)
+def test_malformed_manifest_structure_refuses_before_loader(remote_repo, monkeypatch, corruption):
+    from naics_embedder.remote import canonical
+    manifest = remote_repo.manifest
+    raw = json.loads(manifest.read_text())
+    artifact_name = next(iter(raw['artifacts']))
+    artifact = raw['artifacts'][artifact_name]
+    if corruption == 'root':
+        raw = []
+    elif corruption == 'artifacts':
+        raw['artifacts'] = []
+    elif corruption == 'artifact':
+        raw['artifacts'][artifact_name] = []
+    elif corruption == 'files':
+        artifact['files'] = None
+    elif corruption == 'member':
+        artifact['files'][0] = None
+    elif corruption == 'member_path_missing':
+        del artifact['files'][0]['path']
+    elif corruption == 'member_path_type':
+        artifact['files'][0]['path'] = None
+    elif corruption == 'artifact_path_missing':
+        del artifact['path']
+    else:
+        artifact['path'] = None
+    manifest.write_text(json.dumps(raw))
+    monkeypatch.setattr(
+        canonical, 'load_validated_bundle', lambda path: pytest.fail('loader read malformed input')
+    )
+    with pytest.raises(ValueError, match='malformed manifest') as error:
+        canonical_inputs(remote_repo.root, remote_repo.config)
+    assert str(manifest) in str(error.value)
