@@ -3,8 +3,9 @@ The seed-sweep driver (roadmap Stage 4): run a configuration for N seeds, read e
 each of D8's three panels, and keep everything a decision record references.
 
 A runner trains (or loads) one seed of a configuration and returns its encoder checkpoint, its
-2,125-code table in the export form and a ``QueryCodeEncoder``. Until Stage 6 adds the export and
-the query path, only synthetic runners exist, in tests.
+2,125-code table in the export form and a ``QueryCodeEncoder``; for a trained seed, also its
+training run, its checkpoint's epoch and the monitor reads that selected it, which the seed's
+record carries (spec 4.4).
 
 Every read goes through the panels, so it is logged, and it carries the run's id, which is how
 the arm record picks its runs' records out of the selection log. The checkpoint, the table, the
@@ -22,7 +23,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Protocol, Sequence, Union
+from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Union
 
 import polars as pl
 
@@ -60,12 +61,21 @@ class SeedArtifacts:
             its export provenance beside it.
         encoder: Queries and codes embedded in one space, for the outcome panel.
         distance: The arm's decoding distance (``panels.decoding.DISTANCES``).
+        training_run: The id of the training run the checkpoint is from; None for a seed that
+            was not trained.
+        checkpoint_epoch: The checkpoint's epoch, for a trained seed: the earliest with the
+            highest monitor MRR.
+        monitor_records: A trained seed's ``monitor_reads.jsonl`` records, oldest first: the
+            reads that selected its checkpoint.
     '''
 
     checkpoint: Path
     table: Path
     encoder: QueryCodeEncoder
     distance: str
+    training_run: Optional[str] = None
+    checkpoint_epoch: Optional[int] = None
+    monitor_records: Sequence[Dict[str, Any]] = ()
 
 class ArmRunner(Protocol):
     '''Trains or loads one seed of a configuration.'''
@@ -181,6 +191,9 @@ def run_seed_sweep(
                     for panel in PANELS
                 },
                 log_records=_log_records(logs, run_id),
+                training_run=artifacts.training_run,
+                checkpoint_epoch=artifacts.checkpoint_epoch,
+                monitor_records=list(artifacts.monitor_records),
             )
         )
         logger.info(f'{spec.name} seed {seed}: {runs[-1].statistics}')

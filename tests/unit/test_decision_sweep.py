@@ -7,12 +7,14 @@ query near its code's axis and its table carries each code's employment level an
 uninformed arm's encoder puts each query near a random code's axis and its table is noise.
 '''
 
+from dataclasses import replace
+
 import numpy as np
 import polars as pl
 import pytest
 import torch
 
-from naics_embedder.decision.decide import decide, fix_margins
+from naics_embedder.decision.decide import check_arm, decide, fix_margins
 from naics_embedder.decision.records import DecisionRecord, read_record, write_record
 from naics_embedder.decision.scores import PANELS
 from naics_embedder.decision.store import ArtifactStore
@@ -22,7 +24,12 @@ from naics_embedder.panels.regressor import DECISION_LEVEL, RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.schema import IndexRole
-from tests.fixtures.decision import spec, write_export_provenance, write_text_only
+from tests.fixtures.decision import (
+    monitor_records,
+    spec,
+    write_export_provenance,
+    write_text_only,
+)
 from tests.fixtures.regressor_panel import CODEBOOK, HELDOUT_GROUPS, SETTINGS, SIX_DIGIT
 
 pytestmark = pytest.mark.unit
@@ -87,6 +94,35 @@ class SyntheticRunner:
             encoder=SyntheticEncoder(self.informed, seed),
             distance='cosine',
         )
+
+# A trained seed's monitor MRR by epoch, read before the sweep: its checkpoint is from epoch 2
+TRAINED_MRRS = (0.1, 0.3, 0.4, 0.4)
+TRAINED_AT = '2026-10-01T12:00:00+00:00'
+
+class TrainedRunner(SyntheticRunner):
+    '''
+    A synthetic runner whose seeds are trained runs: each names its training run and carries the
+    monitor reads of ``outcome``, the outcome panel's fingerprint, that selected its checkpoint.
+    It keeps what it returned for each seed.
+    '''
+
+    def __init__(self, directory, informed, signal, outcome):
+        super().__init__(directory, informed, signal)
+        self.outcome = outcome
+        self.returned = {}
+
+    def run(self, arm_spec, seed):
+        training_run = f'{arm_spec.name}-training-{seed}'
+        records = monitor_records(
+            training_run, seed, TRAINED_MRRS, time=TRAINED_AT, fingerprint=self.outcome
+        )
+        self.returned[seed] = replace(
+            super().run(arm_spec, seed),
+            training_run=training_run,
+            checkpoint_epoch=2,
+            monitor_records=tuple(records),
+        )
+        return self.returned[seed]
 
 def _signal(regressor_rows):
     '''Each codebook code's mean outcome and its trend over the feature years.'''
@@ -180,6 +216,35 @@ def test_every_seed_is_read_once_per_panel_and_its_records_are_the_logs(
     outcome_data = panels['outcome_panel'].data_fingerprint(IndexRole.VALIDATION)
     assert arm.panels.outcome_data == outcome_data
     assert arm.panels.regressor_data == panels['regressor_panel'].data_fingerprint(DECISION_LEVEL)
+
+def test_each_trained_seeds_monitor_reads_pass_through_to_its_run(
+    tmp_path, regressor_rows, panels, store, text_only, log
+):
+    '''Spec 4.4: a seed's monitor reads, training run and checkpoint epoch reach its record.'''
+
+    outcome = panels['outcome_panel'].fingerprint
+    runner = TrainedRunner(tmp_path / 'runs' / 'trained', False, _signal(regressor_rows), outcome)
+
+    arm = run_seed_sweep(
+        spec('trained', dimension=3),
+        SEEDS,
+        runner,
+        text_only_table=text_only,
+        store=store,
+        purpose=PURPOSE,
+        **panels,
+    )
+
+    for run in arm.runs:
+        returned = runner.returned[run.seed]
+        assert run.training_run == returned.training_run == f'trained-training-{run.seed}'
+        assert run.checkpoint_epoch == returned.checkpoint_epoch == 2
+        assert run.monitor_records == list(returned.monitor_records)
+        assert [record['mrr'] for record in run.monitor_records] == list(TRAINED_MRRS)
+        # The training's reads are in its own log; the sweep's log holds only the sweep's reads
+        assert all('training_run' not in record['detail'] for record in run.log_records)
+    assert len(log.records()) == 3 * len(SEEDS)
+    check_arm(arm, store, min_seeds=5)
 
 def test_the_artifacts_outlive_the_runners_files(
     tmp_path, regressor_rows, panels, store, text_only

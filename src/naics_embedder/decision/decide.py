@@ -9,18 +9,23 @@ Before any number is computed, every arm is checked:
   summaries and window (D9);
 - each run's log records are validation reads that name the run, its table and its text-only
   table by the fingerprints the store recorded;
+- a trained run's monitor records are its training run's reads of the outcome panel's validation
+  split, no epoch twice, and its checkpoint is from the earliest epoch with the highest MRR (spec
+  4.4); a run with no training run has neither monitor records nor a checkpoint epoch;
 - all arms read the same panels, with the same data on them and the same fit settings, so Δ
   pairs item for item.
 
 A decision also requires the margins to hold one δ per panel, for its decision statistic, and
-every run other than the margin record's own reference runs to have read nothing before the
-margins were fixed.
+every run other than the margin record's own reference runs to have read nothing, its monitor
+reads included, before the margins were fixed.
 '''
 
 # -------------------------------------------------------------------------------------------------
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import math
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -163,6 +168,7 @@ def check_arm(arm: ArmRecord, store: ArtifactStore, min_seeds: int) -> None:
         for reference in (run.checkpoint, run.table, run.scores, run.decoding, run.predictions):
             store.resolve(reference)
         _check_log_records(arm, run)
+        _check_monitor_records(arm, run)
 
 def _check_log_records(arm: ArmRecord, run: SeedRun) -> None:
     name = f'{arm.spec.name} seed {run.seed}'
@@ -192,6 +198,86 @@ def _check_log_records(arm: ArmRecord, run: SeedRun) -> None:
         wrong = sorted(key for key in named if logged[key] != named[key])
         if wrong:
             raise ValueError(f'{name}: a {record["panel"]} read names another {wrong}')
+
+def _monitor_record_problem(record: Any) -> Optional[str]:
+    '''What keeps a record from being a line of a run's ``monitor_reads.jsonl``, or None.'''
+
+    if not isinstance(record, dict) or set(record) != {'mrr', 'read'}:
+        return "it must be an object with exactly 'mrr' and 'read'"
+    mrr = record['mrr']
+    if isinstance(mrr, bool) or not isinstance(mrr, (int, float)) or not math.isfinite(mrr):
+        return 'its mrr is not a finite number'
+    read = record['read']
+    detail = read.get('detail') if isinstance(read, dict) else None
+    epoch = detail.get('epoch') if isinstance(detail, dict) else None
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+        return 'its read names no non-negative integer epoch'
+    return None
+
+def _check_monitor_records(arm: ArmRecord, run: SeedRun) -> None:
+    '''
+    Require a trained run's monitor records to be the reads that selected its checkpoint (spec
+    4.4): its training run's reads of the outcome panel's validation split, no epoch twice, with
+    the checkpoint from the earliest epoch with the highest MRR. A run with no training run has
+    neither monitor records nor a checkpoint epoch.
+
+    That the records cover every epoch through the run's last checkpoint is the runner's check
+    (spec §5): a record holds no last checkpoint to count the epochs against.
+    '''
+
+    name = f'{arm.spec.name} seed {run.seed}'
+    if run.training_run is None:
+        held: List[str] = []
+        if run.monitor_records:
+            held.append('monitor records')
+        if run.checkpoint_epoch is not None:
+            held.append('a checkpoint epoch')
+        if held:
+            raise ValueError(f'{name}: {" and ".join(held)} on a run that names no training run')
+        return
+    if not run.monitor_records:
+        raise ValueError(
+            f'{name}: training run {run.training_run} has no monitor records, so the reads that '
+            'selected its checkpoint are missing (Req 4)'
+        )
+    # A read's table is not named: it is its epoch's code cache, which equals the table exported
+    # from that epoch's checkpoint only when both were encoded on the CPU (spec 4.4)
+    named = {'fingerprint': arm.panels.outcome, 'training_run': run.training_run, 'seed': run.seed}
+    epochs: List[int] = []
+    for record in run.monitor_records:
+        problem = _monitor_record_problem(record)
+        if problem is not None:
+            raise ValueError(f'{name}: a monitor record is malformed: {problem}')
+        read, detail = record['read'], record['read']['detail']
+        event, panel, split = (read.get(key) for key in ('event', 'panel', 'split'))
+        if (event, panel, split) != ('read', OUTCOME_PANEL, VALIDATION):
+            raise ValueError(
+                f"{name}: a monitor record logs {event!r} on the {panel} panel's {split} split; "
+                "the monitor reads the outcome panel's validation split (Req 4)"
+            )
+        logged = {
+            'fingerprint': read.get('fingerprint'),
+            'training_run': detail.get('training_run'),
+            'seed': detail.get('seed'),
+        }
+        wrong = sorted(key for key in named if logged[key] != named[key])
+        if wrong:
+            raise ValueError(f'{name}: a monitor read names another {wrong}')
+        epochs.append(detail['epoch'])
+    repeated = sorted(epoch for epoch, count in Counter(epochs).items() if count > 1)
+    if repeated:
+        raise ValueError(
+            f'{name}: the monitor records repeat the epochs {repeated}; the monitor reads each '
+            'epoch of a run once'
+        )
+    mrrs = [record['mrr'] for record in run.monitor_records]
+    best = max(mrrs)
+    earliest = min(epoch for epoch, mrr in zip(epochs, mrrs) if mrr == best)
+    if run.checkpoint_epoch != earliest:
+        raise ValueError(
+            f'{name}: the earliest epoch with the highest monitor MRR, {best}, is {earliest}, but '
+            f'the checkpoint is from epoch {run.checkpoint_epoch} (spec 4.4)'
+        )
 
 def check_pairing(arms: Sequence[ArmRecord], margins: MarginRecord) -> None:
     '''
@@ -235,7 +321,8 @@ def check_margins(margins: MarginRecord) -> None:
 
 def check_margins_first(arms: Sequence[ArmRecord], margins: MarginRecord) -> None:
     '''
-    Require every run but the margin record's reference runs to read after the margins were fixed.
+    Require every run but the margin record's reference runs to read after the margins were fixed:
+    its decision reads and, for a trained run, the monitor reads that selected its checkpoint.
 
     Raises:
         ValueError: If a run read before ``margins.fixed_at``.
@@ -246,7 +333,8 @@ def check_margins_first(arms: Sequence[ArmRecord], margins: MarginRecord) -> Non
         for run in arm.runs:
             if run.run_id in reference:
                 continue
-            first = min(datetime.fromisoformat(record['time']) for record in run.log_records)
+            reads = [*run.log_records, *(record['read'] for record in run.monitor_records)]
+            first = min(datetime.fromisoformat(record['time']) for record in reads)
             if first < margins.fixed_at:
                 raise ValueError(
                     f'{arm.spec.name} seed {run.seed} read at {first.isoformat()}, before the '
