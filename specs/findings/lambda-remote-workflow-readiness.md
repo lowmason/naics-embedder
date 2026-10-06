@@ -1,8 +1,15 @@
 # Lambda remote workflow fixture readiness
 
-Substantive implementation SHA: `16e2a927b076d0b9942d6b3f8a64692b674e86ba`. This finding is a later documentation-only
+Substantive implementation SHA: `ca9b384a3eccd183d7db500a74139dd2b59e040e`. This finding is a later documentation-only
 commit and does not claim its own commit hash. Evidence covers fixture qualification of Plan 11
 Task 10. **Plan 10 Task 18 has not run. Real Lambda/Mac qualification remains pending.**
+
+Task 11 corrected only a symlink-rescue test's lexical path discovery for Python 3.10; the
+runtime and link-type/link-text/source-isolation assertions are unchanged. The original Task 10
+qualification below remains historical evidence at `16e2a927b076d0b9942d6b3f8a64692b674e86ba`.
+Required GNU requalification at the substantive SHA above passed 38 nodes with zero skips and
+72 visible CPU-fixture warnings on each Python version; ignored Task 11 evidence records the
+reproduced failure, scoped fix and fresh final branch gates. Manual qualification remains pending.
 
 ## Measured qualification
 
