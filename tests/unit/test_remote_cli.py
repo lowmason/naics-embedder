@@ -264,3 +264,78 @@ def test_defaults_are_forwarded_without_synthetic_overrides(cli_runner, fake_wor
         ('status', )
     ]
     assert fake_workflow.config_paths == [Path('conf/remote.yaml')] * 3
+
+@pytest.mark.parametrize(
+    'change', [
+        'finished', 'abandoned', 'config_changed', 'config_foreign', 'config_missing',
+        'config_incomplete'
+    ]
+)
+def test_one_shot_sync_revalidates_inside_public_transaction(
+    remote_sync_fixture, monkeypatch, change
+):
+    from contextlib import contextmanager
+
+    import naics_embedder.remote.sync as sync_module
+
+    env = remote_sync_fixture
+    observed = []
+    snapshot = {}
+    acquisitions = []
+    original_probe = env.transport.probe
+    original_lock = sync_module.state_lock
+
+    def files():
+        return {
+            path.relative_to(env.root).as_posix(): path.read_bytes() if path.is_file() else None
+            for path in env.root.rglob('*')
+        }
+
+    def probe(operation, payload):
+        observed.append((operation, payload))
+        return original_probe(operation, payload)
+
+    @contextmanager
+    def change_before_acquiring(root):
+        # Workflow preflight/transport construction already used the original ready/config.
+        assert read_state(root).status == 'ready'
+        if change in ('finished', 'abandoned'):
+            current = read_state(root)
+            current.status = change
+            write_state(root, current)
+        else:
+            path = root / '.remote/session-config.json'
+            envelope = json.loads(path.read_text())
+            if change == 'config_changed':
+                envelope['remote_config']['rsync_path'] = '/other/gnu-rsync'
+                envelope['remote_config']['sync_interval_seconds'] = 97
+            elif change == 'config_foreign':
+                envelope['session_id'] = 'foreign'
+            elif change == 'config_incomplete':
+                del envelope['remote_config']['rsync_path']
+            else:
+                path.unlink()
+            if change != 'config_missing':
+                path.write_text(json.dumps(envelope))
+        with original_lock(root):
+            acquisitions.append(root)
+            snapshot.update(files())
+            yield
+
+    def factory(host, cfg):
+        assert host == env.state.host
+        assert cfg == env.cfg
+        return env.transport
+
+    monkeypatch.setattr(env.transport, 'probe', probe)
+    monkeypatch.setattr(sync_module, 'state_lock', change_before_acquiring)
+    workflow = RemoteWorkflow(env.root, RemoteConfig(), factory, lambda: None)
+    with pytest.raises((ValueError, OSError)):
+        workflow.sync(True)
+    assert acquisitions == [env.root]
+    assert observed == []
+    assert env.transport.calls == []
+    assert files() == snapshot
+    assert read_state(env.root).status == (
+        change if change in ('finished', 'abandoned') else 'ready'
+    )

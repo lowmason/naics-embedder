@@ -272,7 +272,16 @@ def sync_once(
     root: Path, state: RemoteState, transport: object, cfg: RemoteConfig, final: bool = False
 ) -> SyncResult:
     '''Own the checkout lock for the entire recovery, transfer and promotion transaction.'''
+    from naics_embedder.remote.loop import _session_config
     with state_lock(root):
+        current = read_state(root)
+        if current is None or current.session_id != state.session_id:
+            raise ValueError('sync session changed or missing')
+        if current.status != 'ready':
+            raise ValueError('remote sync requires a ready session; run remote up')
+        if _session_config(root, current.session_id) != cfg:
+            raise ValueError('effective remote configuration changed before sync')
+        # Public preflight must share the mutation lock; finish/loop own their locked checks.
         return sync_once_locked(root, state, transport, cfg, final)
 
 def sync_once_locked(
