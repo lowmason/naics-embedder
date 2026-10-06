@@ -164,7 +164,6 @@ separate RED, GREEN, collection and command metadata; saved failed/cancelled CI 
 under `ci-pr126/`. Final frozen-head gates, independent reviews and corresponding CI subsequently passed; PR 126
 merged on 2026-10-06. Real Lambda/Mac Task 18 qualification and the campaign remain pending.
 
-
 ## Final implementation evidence and post-merge status (2026-10-06)
 
 Implementation PR [#126](https://github.com/lowmason/naics-embedder/pull/126) merged at
