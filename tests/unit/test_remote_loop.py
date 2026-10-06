@@ -400,3 +400,120 @@ def test_unregistered_pid_reuse_between_polls_is_not_signaled_again(
     loop.stop_loop(env.root, env.state.session_id)
     assert signals.count((456, 'old')) == 1
     assert (456, 'reused') not in signals
+
+@pytest.mark.parametrize('exit_delay', [0.4, None])
+def test_prefork_exec_command_transition_keeps_live_utility_owned(
+    remote_sync_fixture, monkeypatch, exit_delay
+):
+    env = remote_sync_fixture
+    install_processes(monkeypatch)
+    clock = install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    path = env.root / '.remote/sync.pid'
+    record = json.loads(path.read_text())
+    wrapper = {'start': 'child start', 'command': ' '.join(record['argv'])}
+    utility = {'start': 'child start', 'command': ' '.join(record['argv'][2:])}
+    identities = {123: record['identity'], 456: wrapper}
+    monkeypatch.setattr(loop, '_process_identity', lambda pid: identities.get(pid))
+    monkeypatch.setattr(
+        loop, '_worker_processes', lambda record: {456: identities[456]}
+        if identities.get(456) else {}
+    )
+    signals = []
+
+    def signal(pid, sig):
+        signals.append((pid, identities[pid]['command']))
+        if pid == 123:
+            identities.pop(123)
+        else:
+            assert json.loads(path.read_text())['observed_workers']['456'] == identities[456]
+
+    monkeypatch.setattr(loop, '_signal', signal)
+
+    def sleep(seconds):
+        assert path.exists()
+        clock[0] += seconds
+        identities[456] = utility
+        if exit_delay is not None and clock[0] >= exit_delay:
+            identities.pop(456)
+
+    monkeypatch.setattr(loop.time, 'sleep', sleep)
+    if exit_delay is None:
+        with pytest.raises(RuntimeError, match='timeout'):
+            loop.stop_loop(env.root, env.state.session_id)
+        assert path.exists() and identities[456] == utility
+        assert json.loads(path.read_text())['observed_workers']['456'] == utility
+    else:
+        loop.stop_loop(env.root, env.state.session_id)
+        assert clock[0] >= exit_delay and not path.exists() and 456 not in identities
+    assert (456, utility['command']) in signals
+
+@pytest.mark.parametrize('transition', ['utility', 'unexpected'])
+def test_prefork_exec_at_signal_boundary_persists_only_allowed_transition(
+    remote_sync_fixture, monkeypatch, transition
+):
+    env = remote_sync_fixture
+    install_processes(monkeypatch)
+    clock = install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    path = env.root / '.remote/sync.pid'
+    record = json.loads(path.read_text())
+    before = {'start': 'child start', 'command': ' '.join(record['argv'])}
+    after = {
+        'start': 'child start',
+        'command': ' '.join(record['argv'][2:]) if transition == 'utility' else 'unexpected'
+    }
+    identities = {123: record['identity'], 456: after}
+    monkeypatch.setattr(loop, '_process_identity', lambda pid: identities.get(pid))
+    scans = [0]
+
+    def scan(record):
+        scans[0] += 1
+        if scans[0] == 1:
+            return {456: before}
+        return {456: after} if transition == 'utility' and identities.get(456) else {}
+
+    monkeypatch.setattr(loop, '_worker_processes', scan)
+    signals = []
+
+    def signal(pid, sig):
+        signals.append(pid)
+        if pid == 123:
+            identities.pop(123)
+        else:
+            assert transition == 'utility'
+            assert json.loads(path.read_text())['observed_workers']['456'] == after
+
+    monkeypatch.setattr(loop, '_signal', signal)
+
+    def sleep(seconds):
+        assert path.exists()
+        clock[0] += seconds
+        if transition == 'utility' and clock[0] >= 0.3:
+            identities.pop(456, None)
+
+    monkeypatch.setattr(loop.time, 'sleep', sleep)
+    if transition == 'unexpected':
+        with pytest.raises(RuntimeError, match='timeout'):
+            loop.stop_loop(env.root, env.state.session_id)
+        assert 456 not in signals and path.exists()
+    else:
+        loop.stop_loop(env.root, env.state.session_id)
+        assert 456 in signals and clock[0] >= 0.3 and not path.exists()
+
+def test_unexpected_persisted_command_never_authorizes_signal(remote_sync_fixture, monkeypatch):
+    env = remote_sync_fixture
+    calls, identities = install_processes(monkeypatch)
+    install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    path = env.root / '.remote/sync.pid'
+    record = json.loads(path.read_text())
+    unexpected = {'start': 'child start', 'command': 'unexpected'}
+    record['observed_workers'] = {'456': unexpected}
+    path.write_text(json.dumps(record))
+    identities[456] = unexpected
+    monkeypatch.setattr(loop, '_worker_processes', lambda record: {})
+    with pytest.raises(RuntimeError, match='timeout'):
+        loop.stop_loop(env.root, env.state.session_id)
+    assert all(call[0] != 456 for call in calls)
+    assert path.exists()

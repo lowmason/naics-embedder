@@ -162,6 +162,24 @@ def _live_owned_workers(root: Path, session_id: str, record: dict) -> dict[int, 
     workers.update(_worker_processes(record))
     return workers
 
+def _allowed_process_identity(pid: int, previous: dict, current: dict, record: dict) -> bool:
+    commands = {' '.join(record['argv']), ' '.join(record['argv'][2:])}
+    if current['command'] not in commands:
+        return False
+    if previous == current:
+        return True
+    # Exec preserves PID/start. Only a child may advance from the exact wrapper command
+    # to its recorded Python utility; a changed start or any other command grants no signal.
+    return (
+        pid != record['pid'] and previous['start'] == current['start'] and previous['command']
+        == ' '.join(record['argv']) and current['command'] == ' '.join(record['argv'][2:])
+    )
+
+def _save_observed_workers(root: Path, record: dict, observed: dict) -> None:
+    if record.get('observed_workers') != observed:
+        record['observed_workers'] = dict(observed)
+        _atomic_json(root / '.remote/sync.pid', record)
+
 def _stop_loop_locked(root: Path, session_id: str) -> None:
     record = _record(root)
     if not record or record.get('session_id') != session_id:
@@ -180,19 +198,33 @@ def _stop_loop_locked(root: Path, session_id: str) -> None:
         workers = {}
         for pid, identity in discovered.items():
             previous = observed.setdefault(str(pid), identity)
-            if previous == identity:
+            if _allowed_process_identity(pid, previous, identity, record):
+                observed[str(pid)] = identity
                 workers[pid] = identity
-        # Retain discovered utility start identities across a timeout or interrupted shutdown.
-        if record.get('observed_workers') != observed:
-            record['observed_workers'] = dict(observed)
-            _atomic_json(root / '.remote/sync.pid', record)
-        if not workers:
+        # A same-start process with an unexpected command has not proved its exit. Keep
+        # ownership evidence and refuse quiescence, but never authorize that command to signal.
+        blocked = False
+        for pid, previous in list(observed.items()):
+            current = _process_identity(int(pid))
+            if current is not None and current['start'] == previous['start']:
+                if _allowed_process_identity(int(pid), previous, current, record):
+                    observed[pid] = current
+                    workers[int(pid)] = current
+                else:
+                    blocked = True
+        _save_observed_workers(root, record, observed)
+        if not workers and not blocked:
             (root / '.remote/sync.pid').unlink(missing_ok=True)
             return
         # Signal children before their wrapper; keep evidence until every owned identity exits.
         for pid, identity in sorted(workers.items(), key=lambda item: item[0] == record['pid']):
-            key = (pid, identity['start'], identity['command'])
-            if key not in signaled and _process_identity(pid) == identity:
+            current = _process_identity(pid)
+            if current is None or not _allowed_process_identity(pid, identity, current, record):
+                continue
+            observed[str(pid)] = current
+            _save_observed_workers(root, record, observed)
+            key = (pid, current['start'], current['command'])
+            if key not in signaled:
                 try:
                     _signal(pid, signal.SIGTERM)
                 except ProcessLookupError:
