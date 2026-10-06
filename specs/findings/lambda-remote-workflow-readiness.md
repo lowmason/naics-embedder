@@ -1,17 +1,62 @@
 # Lambda remote workflow fixture readiness
 
-Substantive implementation SHA: `ca9b384a3eccd183d7db500a74139dd2b59e040e`. This finding is a later documentation-only
+Substantive implementation SHA: `304bc34f07b462380e9d587cf5e9282ebcf511fc`. This finding is a later documentation-only
 commit and does not claim its own commit hash. Evidence covers fixture qualification of Plan 11
 Task 10. **Plan 10 Task 18 has not run. Real Lambda/Mac qualification remains pending.**
 
 Task 11 corrected only a symlink-rescue test's lexical path discovery for Python 3.10; the
 runtime and link-type/link-text/source-isolation assertions are unchanged. The original Task 10
 qualification below remains historical evidence at `16e2a927b076d0b9942d6b3f8a64692b674e86ba`.
-Required GNU requalification at the substantive SHA above passed 38 nodes with zero skips and
+Historical Task 11 GNU requalification at `ca9b384a3eccd183d7db500a74139dd2b59e040e`
+passed 38 nodes with zero skips and
 72 visible CPU-fixture warnings on each Python version; ignored Task 11 evidence records the
 reproduced failure, scoped fix and fresh final branch gates. Manual qualification remains pending.
 
-## Measured qualification
+## Whole-branch WB1–WB3 qualification
+
+The substantive fix preserves a session-owned cumulative Mac manifest with immutable original
+manifest references and their SHA256 values. Replacement sessions retain checkpoint/history,
+output and earlier session-log paths. Original manifest bytes remain immutable; later successful
+pulls may update the current cumulative file hashes. Missing, foreign, changed or unhashed
+referenced evidence refuses transfer, exact resume and finish. Manifest reads and publication
+use anchored descriptors and no-follow operations, and pending recovery checks that the journal
+retains cumulative paths and inherited provenance before promotion.
+
+The fixed production upload preparation uses only system Python and standard-library descriptor
+operations before the package exists. Its `prepare_results` operation has the closed four-root
+set `checkpoints`, `outputs`, `logs`, `.remote/segments`; all directory creation remains contained
+under the recorded repo without following links. Sparse `up` → `finish` creates no segment
+records and records null checkpoint/hash while executing all four actual zero GNU checksum gates.
+GNU rsync's supported minimum remains 3.2.
+
+A shared continuation-set validator now guards staged pulls and local exact resume. It requires
+every authoritative saved ModelCheckpoint reference and the earliest-best monitor epoch, checks
+literal directories, containment, run/seed/epoch consistency, and carries every extra present
+kept checkpoint. Real Trainer checkpoint paths, epochs, budgets and bytes remain unchanged.
+
+The required GNU 3.5.1 suites actually passed **47 nodes, zero skips** on Python 3.12.12 and
+3.10.19: **27 integration** plus **20 contract** nodes. Each emitted 82 unsuppressed Lightning
+warnings: 41 available-MPS/CPU-fixture notices and 41 low-worker notices. The affected remote
+suite passed **673 nodes, zero skips**, with 90 warnings (45 of each category); its five
+pytest-benchmark xdist notices precede the pytest session and are recorded separately. Full Ruff,
+YAPF and diff checks passed. Collect-only measured **2,996 nodes**, with unchanged 117 source,
+99 unit and two integration file counts. This is scoped qualification; the controller's fresh
+frozen-head full gates and independent reviews remain pending.
+
+Ignored evidence: `wbfix1-affected312-final.log`, `wbfix1-gnu312.log`, `wbfix1-gnu310.log`,
+`wbfix1-static-ruff.log`, `wbfix1-static-final.log`, `wbfix1-static-diff.log`, and
+`wbfix1-collect.log`. Each matching JSON records exact argv/env/cwd, UTC interval, return code,
+and start/end HEAD/status. The ignored whole-branch fix report retains every separate RED,
+intermediate failure and GREEN, including sparse missing-source code 23 and Mac `./` checksum
+type differences, both manifest ancestor races, and altered pending provenance.
+
+| Boundary | Current source | Regression nodes |
+|---|---|---|
+| WB1 replacement/integrity/recovery | remote/workflow.py:361; remote/session.py:69; remote/sync.py:69,115,170,233; remote/launch.py:189 | unit/test_remote_launch.py::test_replacement_preserves_verified_mac_bytes; unit/test_remote_launch.py::test_failed_replacement_up_retains_inherited_integrity; unit/test_remote_sync.py::test_inherited_original_manifest_provenance_refuses; unit/test_remote_sync.py::test_inherited_bytes_allow_legitimate_updates_and_recovery; unit/test_remote_sync.py::test_manifest_replacement_symlink_never_follows_external_bytes; unit/test_remote_sync.py::test_inherited_manifest_publication_never_follows_swapped_parent; unit/test_remote_sync.py::test_pending_recovery_cannot_drop_inherited_baseline |
+| WB2 production first-upload/sparse finish | remote/transport.py:62,95,314,376; remote/workflow.py:431; remote/sync.py:468 | integration/test_remote_workflow.py::test_production_ssh_first_metadata_upload_with_gnu; integration/test_remote_workflow.py::test_first_workflow_segment_upload_has_no_precreated_parent; integration/test_remote_workflow.py::test_sparse_up_finish_qualifies_empty_owned_roots |
+| WB3 authoritative complete set | remote/canonical.py:219,377; remote/sync.py:339,432 | integration/test_remote_workflow.py::test_missing_authoritative_kept_epoch_refuses_before_acceptance; unit/test_remote_canonical.py::test_earliest_best_tie_requires_its_checkpoint_even_when_later_exists; integration/test_remote_workflow.py::test_all_kept_checkpoints_and_both_histories_restore_on_instance_b |
+
+## Historical Task 10 qualification
 
 GNU rsync 3.5.1 at `/opt/homebrew/bin/rsync` ran the production `RemoteWorkflow` with
 `LocalTransport`, temporary Git checkouts, real file transfers and injected process boundaries.
@@ -61,18 +106,18 @@ are for the substantive SHA above. Every row is fixture/source evidence, not exe
 
 | Requirement | Delivering tasks | Implementation file:line | Qualified test nodes |
 |---|---|---|---|
-| 1: fresh overrides/name/tmux/DEVNULL | 1, 7, 9 | remote/launch.py:90,236; remote/worker.py:759 | unit/test_remote_task18_contract.py::test_fresh_overrides_own_name_and_devnull; unit/test_remote_launch.py::test_worker_launch_uses_devnull_explicit_cwd_and_recorded_visibility |
-| 2: all kept checkpoints, last, both JSONLs, logs | 6, 7, 10 | remote/canonical.py:221; remote/sync.py:287; remote/session.py:160 | integration/test_remote_workflow.py::test_all_kept_checkpoints_and_both_histories_restore_on_instance_b; integration/test_remote_workflow.py::test_sessions_keep_logs_outputs_and_remote_selection_logs_separate |
-| 3: synchronized NTP | 2, 7 | remote/bootstrap.sh:42; remote/launch.py:301 | unit/test_remote_task18_contract.py::test_bootstrap_clock_refuses_unavailable_or_unsynchronized; unit/test_remote_task18_contract.py::test_ntp_launch_recheck_refuses; unit/test_remote_bootstrap.py::test_bootstrap_refuses_failed_sync_or_ntp |
-| 4: Mac-only scientific operations; separate remote log | 1, 6, 9, 10 | remote/session.py:160; remote/workflow.py:432; remote/worker.py:626 | integration/test_remote_workflow.py::test_sessions_keep_logs_outputs_and_remote_selection_logs_separate; all workflow cases run with exported panel/export/QCEW/store/margin/decision API failure sentinels in tests/fixtures/remote.py:726 |
-| 5: exact-only start; old objective refusal | 4, 7, 9 | remote/launch.py:113,131; remote/canonical.py:266 | integration/test_remote_workflow.py::test_resume_only_last_preserves_absolute_path_and_skips_finished[interrupted]; unit/test_remote_launch.py::test_reserved_overrides_refuse; unit/test_remote_canonical.py::test_wrong_contract_is_refused |
-| 6: full histories restored before continuation | 4, 7, 10 | remote/launch.py:223,304,393 | integration/test_remote_workflow.py::test_all_kept_checkpoints_and_both_histories_restore_on_instance_b (hashes recorded in segment before injected launch); integration/test_remote_workflow.py::test_resume_only_last_preserves_absolute_path_and_skips_finished[interrupted] (newer instance refuses with sync-first) |
-| 7: same literal absolute checkpoint path | 1, 4, 5, 7 | remote/launch.py:37,199; remote/canonical.py:267; remote/transport.py:353 | integration/test_remote_workflow.py::test_all_kept_checkpoints_and_both_histories_restore_on_instance_b; unit/test_remote_canonical.py::test_other_directory_and_absent_callback_refused; unit/test_remote_up.py::test_checkpoint_config_change_refused_for_persisted_run |
-| 8: fresh empty/new directories on both sides | 4, 7 | remote/launch.py:290; remote/worker.py:728 | unit/test_remote_launch.py::test_fresh_nonempty_directory_refuses[local]; unit/test_remote_launch.py::test_fresh_nonempty_directory_refuses[remote]; unit/test_remote_task18_contract.py::test_fresh_overrides_own_name_and_devnull |
-| 9: finished run skip before uploads/records/GPU/loop | 4, 7, 10 | remote/canonical.py:145; remote/launch.py:284 | integration/test_remote_workflow.py::test_resume_only_last_preserves_absolute_path_and_skips_finished[finished]; unit/test_remote_task18_contract.py::test_actual_finished_trainer_has_no_upload_records_loop_or_gpu; unit/test_remote_canonical.py::test_early_stop_is_finished_and_corruption_refuses |
-| 10: dropped fields unrequired | 4, 9 | remote/canonical.py:266; supervision/checkpoints.py:206 | unit/test_remote_task18_contract.py::test_current_contract_omits_dropped_precheck_keys; unit/test_remote_canonical.py::test_retired_contract_fields_are_absent_and_unrequired |
-| Supplementary LoRA and active MoE controls | 4, 7, 10 | remote/canonical.py:273; utils/training.py:518 | integration/test_remote_workflow.py::test_resume_preflight_honors_lora_and_active_moe (7 active changes); unit/test_remote_task18_contract.py::test_missing_active_constructor_control_fails_closed (7 missing controls); unit/test_remote_canonical.py::test_inactive_moe_controls_are_ignored |
-| Native BF16, logical device 0, identical visibility, one device | 2, 7, 10 | remote/worker.py:25; remote/launch.py:62,319 | unit/test_remote_bootstrap.py::test_native_bf16_selects_zero_and_captures_evidence; unit/test_remote_bootstrap.py::test_unqualified_gpu_refuses; unit/test_remote_task18_contract.py::test_launch_rechecks_native_device_zero_and_visibility; unit/test_remote_task18_contract.py::test_gpu_probe_error_refuses_launch; unit/test_remote_task18_contract.py::test_one_device_contract |
+| 1: fresh overrides/name/tmux/DEVNULL | 1, 7, 9 | remote/launch.py:90,238; remote/worker.py:764 | unit/test_remote_task18_contract.py::test_fresh_overrides_own_name_and_devnull; unit/test_remote_launch.py::test_worker_launch_uses_devnull_explicit_cwd_and_recorded_visibility |
+| 2: all kept checkpoints, last, both JSONLs, logs | 6, 7, 10 | remote/canonical.py:320; remote/sync.py:367; remote/session.py:161 | integration/test_remote_workflow.py::test_all_kept_checkpoints_and_both_histories_restore_on_instance_b; integration/test_remote_workflow.py::test_sessions_keep_logs_outputs_and_remote_selection_logs_separate |
+| 3: synchronized NTP | 2, 7 | remote/bootstrap.sh:42; remote/launch.py:303 | unit/test_remote_task18_contract.py::test_bootstrap_clock_refuses_unavailable_or_unsynchronized; unit/test_remote_task18_contract.py::test_ntp_launch_recheck_refuses; unit/test_remote_bootstrap.py::test_bootstrap_refuses_failed_sync_or_ntp |
+| 4: Mac-only scientific operations; separate remote log | 1, 6, 9, 10 | remote/session.py:161; remote/workflow.py:437; remote/worker.py:626 | integration/test_remote_workflow.py::test_sessions_keep_logs_outputs_and_remote_selection_logs_separate; all workflow cases run with exported panel/export/QCEW/store/margin/decision API failure sentinels in tests/fixtures/remote.py:752 |
+| 5: exact-only start; old objective refusal | 4, 7, 9 | remote/launch.py:113,131; remote/canonical.py:365 | integration/test_remote_workflow.py::test_resume_only_last_preserves_absolute_path_and_skips_finished[interrupted]; unit/test_remote_launch.py::test_reserved_overrides_refuse; unit/test_remote_canonical.py::test_wrong_contract_is_refused |
+| 6: full histories restored before continuation | 4, 7, 10 | remote/launch.py:225,306,395 | integration/test_remote_workflow.py::test_all_kept_checkpoints_and_both_histories_restore_on_instance_b (hashes recorded in segment before injected launch); integration/test_remote_workflow.py::test_resume_only_last_preserves_absolute_path_and_skips_finished[interrupted] (newer instance refuses with sync-first) |
+| 7: same literal absolute checkpoint path | 1, 4, 5, 7 | remote/launch.py:37,201; remote/canonical.py:366; remote/transport.py:415 | integration/test_remote_workflow.py::test_all_kept_checkpoints_and_both_histories_restore_on_instance_b; unit/test_remote_canonical.py::test_other_directory_and_absent_callback_refused; unit/test_remote_up.py::test_checkpoint_config_change_refused_for_persisted_run |
+| 8: fresh empty/new directories on both sides | 4, 7 | remote/launch.py:292; remote/worker.py:733 | unit/test_remote_launch.py::test_fresh_nonempty_directory_refuses[local]; unit/test_remote_launch.py::test_fresh_nonempty_directory_refuses[remote]; unit/test_remote_task18_contract.py::test_fresh_overrides_own_name_and_devnull |
+| 9: finished run skip before uploads/records/GPU/loop | 4, 7, 10 | remote/canonical.py:147; remote/launch.py:286 | integration/test_remote_workflow.py::test_resume_only_last_preserves_absolute_path_and_skips_finished[finished]; unit/test_remote_task18_contract.py::test_actual_finished_trainer_has_no_upload_records_loop_or_gpu; unit/test_remote_canonical.py::test_early_stop_is_finished_and_corruption_refuses |
+| 10: dropped fields unrequired | 4, 9 | remote/canonical.py:365; supervision/checkpoints.py:206 | unit/test_remote_task18_contract.py::test_current_contract_omits_dropped_precheck_keys; unit/test_remote_canonical.py::test_retired_contract_fields_are_absent_and_unrequired |
+| Supplementary LoRA and active MoE controls | 4, 7, 10 | remote/canonical.py:372; utils/training.py:518 | integration/test_remote_workflow.py::test_resume_preflight_honors_lora_and_active_moe (7 active changes); unit/test_remote_task18_contract.py::test_missing_active_constructor_control_fails_closed (7 missing controls); unit/test_remote_canonical.py::test_inactive_moe_controls_are_ignored |
+| Native BF16, logical device 0, identical visibility, one device | 2, 7, 10 | remote/worker.py:25; remote/launch.py:62,321 | unit/test_remote_bootstrap.py::test_native_bf16_selects_zero_and_captures_evidence; unit/test_remote_bootstrap.py::test_unqualified_gpu_refuses; unit/test_remote_task18_contract.py::test_launch_rechecks_native_device_zero_and_visibility; unit/test_remote_task18_contract.py::test_gpu_probe_error_refuses_launch; unit/test_remote_task18_contract.py::test_one_device_contract |
 | R1–R11, ten seeds, δ=3 SD before selection | 9, 11 | docs/remote_workflow.md:195; remote/worker.py:626; remote/workflow.py:329 | all workflow cases run with prohibited-call sentinels; documentation handoff. Actual campaign/Task 18 remains pending. |
 
 ## Remaining execution boundary
