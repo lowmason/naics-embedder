@@ -6,6 +6,8 @@ import pytest
 import naics_embedder.remote.loop as loop
 from naics_embedder.remote.session import write_state
 
+REAL_WORKER_DISCOVERY = loop._worker_processes
+
 def install_processes(monkeypatch):
     calls = []
     identities = {}
@@ -19,7 +21,24 @@ def install_processes(monkeypatch):
 
     monkeypatch.setattr(loop, '_spawn', spawn)
     monkeypatch.setattr(loop, '_process_identity', lambda pid: identities.get(pid))
-    monkeypatch.setattr(loop, '_signal', lambda pid, sig: calls.append((pid, sig)))
+
+    def signal(pid, sig):
+        calls.append((pid, sig))
+        identities.pop(pid, None)
+
+    monkeypatch.setattr(loop, '_signal', signal)
+
+    def workers(record):
+        import os
+        commands = {' '.join(record['argv']), ' '.join(record['argv'][2:])}
+        return {
+            pid: identity
+            for pid, identity in identities.items()
+            if pid not in (record['pid'],
+                           os.getpid()) and identity and identity['command'] in commands
+        }
+
+    monkeypatch.setattr(loop, '_worker_processes', workers)
     return calls, identities
 
 def test_loop_owned_lifecycle_and_launch_argv(remote_sync_fixture, monkeypatch):
@@ -162,3 +181,222 @@ def test_reused_python_worker_pid_never_signaled(remote_sync_fixture, monkeypatc
     identities[456] = {'start': 'new', 'command': 'unowned'}
     loop.stop_loop(env.root, env.state.session_id)
     assert all(call[0] != 456 for call in calls)
+
+def install_shutdown_clock(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(loop.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(
+        loop.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+    return clock
+
+@pytest.mark.parametrize('registered', [False, True])
+def test_stop_verifies_delayed_worker_exit_and_retains_evidence(
+    remote_sync_fixture, monkeypatch, registered
+):
+    env = remote_sync_fixture
+    calls, identities = install_processes(monkeypatch)
+    clock = install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    path = env.root / '.remote/sync.pid'
+    record = json.loads(path.read_text())
+    child = {'start': 'child start', 'command': ' '.join(record['argv'][2:])}
+    identities[456] = child
+    if registered:
+        record.update(worker_pid=456, worker_identity=child)
+        path.write_text(json.dumps(record))
+    monkeypatch.setattr(
+        loop,
+        '_worker_processes',
+        lambda record: {456: child} if identities.get(456) else {},
+        raising=False
+    )
+
+    def signal(pid, sig):
+        assert path.exists()
+        calls.append((pid, sig))
+        if pid == 123:
+            identities.pop(123, None)
+
+    monkeypatch.setattr(loop, '_signal', signal)
+
+    def sleep(seconds):
+        assert path.exists()
+        clock[0] += seconds
+        if clock[0] >= 0.3:
+            identities.pop(456, None)
+
+    monkeypatch.setattr(loop.time, 'sleep', sleep)
+    loop.stop_loop(env.root, env.state.session_id)
+    assert clock[0] >= 0.3
+    assert not path.exists() and not identities.get(456)
+    assert any(call[0] == 456 for call in calls)
+
+@pytest.mark.parametrize('registered', [False, True])
+def test_stop_refuses_never_exiting_child_and_keeps_identity(
+    remote_sync_fixture, monkeypatch, registered
+):
+    env = remote_sync_fixture
+    calls, identities = install_processes(monkeypatch)
+    install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    path = env.root / '.remote/sync.pid'
+    record = json.loads(path.read_text())
+    child = {'start': 'child start', 'command': ' '.join(record['argv'][2:])}
+    identities[456] = child
+    if registered:
+        record.update(worker_pid=456, worker_identity=child)
+        path.write_text(json.dumps(record))
+    monkeypatch.setattr(loop, '_worker_processes', lambda record: {456: child}, raising=False)
+
+    def signal(pid, sig):
+        calls.append((pid, sig))
+        if pid == 123:
+            identities.pop(123, None)
+
+    monkeypatch.setattr(loop, '_signal', signal)
+    with pytest.raises(RuntimeError, match='exit|terminate|stop'):
+        loop.stop_loop(env.root, env.state.session_id)
+    assert path.exists()
+    assert json.loads(path.read_text())['token'] == record['token']
+    assert (env.root / '.remote/sync-stop.json').exists()
+
+def test_stop_detects_child_that_execs_after_wrapper_exit(remote_sync_fixture, monkeypatch):
+    env = remote_sync_fixture
+    calls, identities = install_processes(monkeypatch)
+    clock = install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    record = json.loads((env.root / '.remote/sync.pid').read_text())
+    child = {'start': 'forked child', 'command': ' '.join(record['argv'])}
+    identities[456] = child
+    monkeypatch.setattr(
+        loop,
+        '_worker_processes',
+        lambda record: {456: identities[456]} if identities.get(456) else {},
+        raising=False
+    )
+
+    def signal(pid, sig):
+        calls.append((pid, sig))
+        if pid == 123:
+            identities.pop(123, None)
+
+    monkeypatch.setattr(loop, '_signal', signal)
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if clock[0] >= 0.2:
+            identities.pop(456, None)
+
+    monkeypatch.setattr(loop.time, 'sleep', sleep)
+    loop.stop_loop(env.root, env.state.session_id)
+    assert clock[0] >= 0.2
+    assert any(call[0] == 456 for call in calls)
+
+def test_worker_discovery_matches_only_owned_commands_and_start_identity(
+    remote_sync_fixture, monkeypatch
+):
+    import subprocess
+    env = remote_sync_fixture
+    install_processes(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    record = json.loads((env.root / '.remote/sync.pid').read_text())
+    worker_command = ' '.join(record['argv'][2:])
+    wrapper_command = ' '.join(record['argv'])
+    response = (
+        '123 Mon Oct 5 12:00:00 2026 ' + wrapper_command + '\n'
+        '456 Mon Oct 5 12:00:01 2026 ' + worker_command + '\n'
+        '789 Mon Oct 5 12:00:02 2026 ' + worker_command.replace(record['token'], 'other') + '\n'
+        '654 Mon Oct 5 12:00:03 2026 ' + wrapper_command + '\n'
+    )
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, response, '')
+
+    monkeypatch.setattr(loop.subprocess, 'run', runner)
+    # Exercise the real parser after injecting the fixture helper's discovery seam.
+    # The function definition is retained separately before install_processes replaces it.
+    found = REAL_WORKER_DISCOVERY(record)
+    assert set(found) == {456, 654}
+    assert found[456] == {'start': 'Mon Oct 5 12:00:01 2026', 'command': worker_command}
+    assert calls[0][0] == ['ps', '-ww', '-axo', 'pid=,lstart=,command=']
+    assert calls[0][1]['timeout'] > 0
+
+def test_process_inspection_failure_retains_stop_evidence(remote_sync_fixture, monkeypatch):
+    env = remote_sync_fixture
+    install_processes(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+
+    def failure(record):
+        raise RuntimeError('process inspection unavailable')
+
+    monkeypatch.setattr(loop, '_worker_processes', failure)
+    with pytest.raises(RuntimeError, match='inspection'):
+        loop.stop_loop(env.root, env.state.session_id)
+    assert (env.root / '.remote/sync.pid').exists()
+    assert (env.root / '.remote/sync-stop.json').exists()
+
+def test_discovered_pid_reuse_at_signal_boundary_never_signaled(remote_sync_fixture, monkeypatch):
+    env = remote_sync_fixture
+    calls, identities = install_processes(monkeypatch)
+    install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    record = json.loads((env.root / '.remote/sync.pid').read_text())
+    before = {'start': 'old', 'command': ' '.join(record['argv'][2:])}
+    identities[456] = {'start': 'new', 'command': 'unowned'}
+    monkeypatch.setattr(loop, '_worker_processes', lambda record: {456: before})
+    with pytest.raises(RuntimeError, match='timeout'):
+        loop.stop_loop(env.root, env.state.session_id)
+    assert all(call[0] != 456 for call in calls)
+    assert (env.root / '.remote/sync.pid').exists()
+
+def test_registered_pid_reused_with_same_command_is_not_owned(remote_sync_fixture, monkeypatch):
+    env = remote_sync_fixture
+    calls, identities = install_processes(monkeypatch)
+    install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    path = env.root / '.remote/sync.pid'
+    record = json.loads(path.read_text())
+    command = ' '.join(record['argv'][2:])
+    record.update(worker_pid=456, worker_identity={'start': 'old', 'command': command})
+    path.write_text(json.dumps(record))
+    identities[456] = {'start': 'reused', 'command': command}
+    monkeypatch.setattr(
+        loop, '_worker_processes', lambda record: {456: identities[456]}
+        if identities.get(456) else {}
+    )
+    loop.stop_loop(env.root, env.state.session_id)
+    assert all(call[0] != 456 for call in calls)
+
+def test_unregistered_pid_reuse_between_polls_is_not_signaled_again(
+    remote_sync_fixture, monkeypatch
+):
+    env = remote_sync_fixture
+    calls, identities = install_processes(monkeypatch)
+    clock = install_shutdown_clock(monkeypatch)
+    loop.ensure_loop(env.root, env.state)
+    record = json.loads((env.root / '.remote/sync.pid').read_text())
+    command = ' '.join(record['argv'][2:])
+    identities[456] = {'start': 'old', 'command': command}
+    monkeypatch.setattr(loop, '_worker_processes', lambda record: {456: identities[456]})
+    signals = []
+
+    def signal(pid, sig):
+        signals.append((pid, identities[pid]['start']))
+        if pid == 123:
+            identities.pop(123)
+
+    monkeypatch.setattr(loop, '_signal', signal)
+
+    def sleep(seconds):
+        clock[0] += seconds
+        identities[456] = {'start': 'reused', 'command': command}
+        if clock[0] >= 0.2:
+            raise AssertionError('stop did not recognize original worker exit')
+
+    monkeypatch.setattr(loop.time, 'sleep', sleep)
+    loop.stop_loop(env.root, env.state.session_id)
+    assert signals.count((456, 'old')) == 1
+    assert (456, 'reused') not in signals

@@ -18,6 +18,8 @@ from naics_embedder.utils.config import RemoteConfig
 logger = logging.getLogger(__name__)
 _spawn = subprocess.Popen
 _signal = os.kill
+STOP_TIMEOUT_SECONDS = 10.0
+STOP_POLL_SECONDS = 0.1
 
 # -------------------------------------------------------------------------------------------------
 # Configuration and process ownership
@@ -116,32 +118,90 @@ def stop_loop(root: Path, session_id: str) -> None:
     with state_lock(root):
         _stop_loop_locked(root, session_id)
 
+def _worker_processes(record: dict) -> dict[int, dict[str, str]]:
+    # Registration takes the pass lock, so shutdown must qualify an unregistered utility
+    # independently. A prefork/exec child can temporarily retain the wrapper command.
+    commands = {' '.join(record['argv']), ' '.join(record['argv'][2:])}
+    result = subprocess.run(
+        ['ps', '-ww', '-axo', 'pid=,lstart=,command='],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10
+    )
+    if result.returncode:
+        raise RuntimeError('unable to verify sync worker exit: process inspection failed')
+    workers = {}
+    for row in result.stdout.splitlines():
+        fields = row.split(None, 6)
+        if len(fields) != 7 or fields[6] not in commands:
+            continue
+        pid = int(fields[0])
+        if pid != record['pid']:
+            workers[pid] = dict(start=' '.join(fields[1:6]), command=fields[6])
+    return workers
+
+def _live_owned_workers(root: Path, session_id: str, record: dict) -> dict[int, dict[str, str]]:
+    workers = {}
+    expected = record['argv']
+    valid_command = (
+        'sync-loop' in expected and '--token' in expected and record.get('token') in expected
+        and '--root' in expected and str(root) in expected and session_id in expected
+    )
+    if not valid_command:
+        raise ValueError('cannot verify worker exit with corrupt ownership record')
+    if _owned(root, session_id, record):
+        workers[record['pid']] = record['identity']
+    registered = record.get('worker_pid')
+    identity = _process_identity(registered) if registered else None
+    if identity is not None and identity == record.get('worker_identity') and (
+        identity['command'] == ' '.join(expected[2:])
+    ):
+        workers[registered] = identity
+    # Inspect after wrapper liveness: once the wrapper has gone it cannot fork another child.
+    workers.update(_worker_processes(record))
+    return workers
+
 def _stop_loop_locked(root: Path, session_id: str) -> None:
     record = _record(root)
-    if record and record.get('session_id') == session_id:
-        # Under the pass lock this prevents every later child pass, even if caffeinate exits
-        # without terminating its utility process. No wait for child registration is needed.
-        _atomic_json(
-            root / '.remote/sync-stop.json', dict(session_id=session_id, token=record.get('token'))
-        )
-        worker_pid = record.get('worker_pid')
-        worker_identity = _process_identity(worker_pid) if worker_pid else None
-        if worker_identity is not None and worker_identity == record.get('worker_identity'):
-            expected = record.get('argv', [])[2:]
-            if worker_identity['command'] == ' '.join(expected):
+    if not record or record.get('session_id') != session_id:
+        return
+    _atomic_json(
+        root / '.remote/sync-stop.json', dict(session_id=session_id, token=record.get('token'))
+    )
+    deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+    signaled = set()
+    observed = dict(record.get('observed_workers', {}))
+    observed[str(record['pid'])] = record['identity']
+    if record.get('worker_pid') is not None:
+        observed[str(record['worker_pid'])] = record['worker_identity']
+    while True:
+        discovered = _live_owned_workers(root, session_id, record)
+        workers = {}
+        for pid, identity in discovered.items():
+            previous = observed.setdefault(str(pid), identity)
+            if previous == identity:
+                workers[pid] = identity
+        # Retain discovered utility start identities across a timeout or interrupted shutdown.
+        if record.get('observed_workers') != observed:
+            record['observed_workers'] = dict(observed)
+            _atomic_json(root / '.remote/sync.pid', record)
+        if not workers:
+            (root / '.remote/sync.pid').unlink(missing_ok=True)
+            return
+        # Signal children before their wrapper; keep evidence until every owned identity exits.
+        for pid, identity in sorted(workers.items(), key=lambda item: item[0] == record['pid']):
+            key = (pid, identity['start'], identity['command'])
+            if key not in signaled and _process_identity(pid) == identity:
                 try:
-                    _signal(worker_pid, signal.SIGTERM)
+                    _signal(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-    if _owned(root, session_id, record):
-        # Recheck immediately at the signal boundary rather than trusting status output.
-        if _owned(root, session_id, record):
-            try:
-                _signal(record['pid'], signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-    if record and record.get('session_id') == session_id:
-        (root / '.remote/sync.pid').unlink(missing_ok=True)
+                signaled.add(key)
+        if time.monotonic() >= deadline:
+            raise RuntimeError('sync worker did not exit before stop timeout; ownership retained')
+        remaining = max(0.0, deadline - time.monotonic())
+        time.sleep(min(STOP_POLL_SECONDS, remaining))
 
 # -------------------------------------------------------------------------------------------------
 # Local worker entry

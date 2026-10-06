@@ -346,3 +346,30 @@ def test_next_stable_epoch_promotes_whole_bundle_preserving_kept(remote_sync_fix
     assert torch.load(local / 'last.ckpt', weights_only=False)['epoch'] == 1
     assert len((local / 'epoch_summary.jsonl').read_text().splitlines()) == 2
     verify_local_sync_manifest(env.root, env.state)
+
+def test_transport_timeout_retains_first_unreachable_and_last_good_then_recovers(
+    remote_sync_fixture
+):
+    import subprocess
+    env = remote_sync_fixture
+    sync_once(env.root, env.state, env.transport, env.cfg)
+    before = read_state(env.root)
+    probe = env.transport.probe
+
+    def timeout(operation, payload):
+        raise subprocess.TimeoutExpired(['ssh'], 30)
+
+    env.transport.probe = timeout
+    with pytest.raises(subprocess.TimeoutExpired):
+        sync_once(env.root, env.state, env.transport, env.cfg)
+    first = read_state(env.root)
+    assert first.unreachable_since is not None
+    assert first.last_sync_manifest == before.last_sync_manifest
+    assert first.last_sync_utc == before.last_sync_utc
+    with pytest.raises(subprocess.TimeoutExpired):
+        sync_once(env.root, env.state, env.transport, env.cfg)
+    assert read_state(env.root).unreachable_since == first.unreachable_since
+    env.transport.probe = probe
+    sync_once(env.root, env.state, env.transport, env.cfg)
+    assert read_state(env.root).unreachable_since is None
+    verify_local_sync_manifest(env.root, env.state)

@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -313,7 +314,7 @@ def sync_once_locked(
         )
         recover_pending_promotion(root, state)
         return SyncResult(pulled, pending, last_hashes)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
         if state.unreachable_since is None:
             state.unreachable_since = datetime.now(timezone.utc)
             write_state(root, state)
