@@ -5,9 +5,14 @@
 > implementation. Independent task reviews remain required in either mode. Steps use checkbox
 > (`- [ ]`) syntax for tracking.
 
-**Status:** APPROVED FOR IMPLEMENTATION (2026-10-05). The user approved the complete draft,
-including all twelve clarifications and the native-BF16 guard. Implementation is authorized;
-Lambda launch, real-instance training and the campaign remain outside this session.
+**Status: COMPLETE (2026-10-06)** — executed via subagent-driven-development; nothing deferred.
+
+The user approved the complete draft on 2026-10-05, including all twelve clarifications and the
+native-BF16 guard. Implementation PR [#126](https://github.com/lowmason/naics-embedder/pull/126)
+merged on 2026-10-06 at 11:50:29 UTC as `15de7a0310ff3bbfa9157f98ea9459c45741cf34`.
+Its tree equals reviewed `270bc72252077565cbd54e2cf1e86665e47c890f`; substantive runtime
+SHA is `304bc34f07b462380e9d587cf5e9282ebcf511fc`. Lambda launch, real-instance qualification
+and the campaign remain outside this completed implementation plan.
 
 > Workspace recovery: the planning chat archived its checkout during implementation preflight.
 > The native app recovered the approved draft from snapshot `19511544` into managed worktree
@@ -27,10 +32,49 @@ stage and verify coherent checkpoint generations before promoting files to the M
 standard-library subprocess, pathlib, hashlib, json, tarfile, fcntl and shlex; GNU rsync >=3.2,
 SSH, Linux tmux/timedatectl and Mac caffeinate. No new Python dependencies or lock changes.
 
+## Completion evidence and boundary
+
+All implementation task reviews and final evidence audits approved. Independent GPT-6.1 Ultra
+whole-branch coverage, WB1–WB3 fixes and portability round 2 approved the final reviewed head.
+Fresh locked local gates there passed: Python 3.12 **2,999 passed / 2 skipped / 171 warnings**;
+Python 3.10 **2,999 passed / 2 skipped / 642 warnings**. Required GNU tests passed **47 / zero
+skips / 82 warnings** on each version; four rendered preparation cases passed on each without
+warnings. Ruff, YAPF, strict docs, shell syntax, source/protected gates and five help commands
+passed. Quiet local output did not measure the two skip identities; no identity is invented.
+The extra 471 Python 3.10 numerical warnings retain their original source/message/count profile;
+no numerical assertion, tolerance or precision was changed.
+
+Corresponding PR CI run **37420123506**, attempt 1, at reviewed head `270bc722` passed docs,
+lint and both Python jobs. Each full job measured **2,990 passed / 11 skipped / 80 warnings**,
+**89.90% coverage** and successful XML/Codecov upload; each GNU step measured **47 passed /
+zero skips / 41 warnings**. GitHub used its PR merge ref for checkout. Earlier run 37416387201
+failed five Python 3.12 tests and cancelled Python 3.10; that failure remains historical.
+Phase 1's queued lint at merge is likewise not rewritten as a pass.
+
+Ignored evidence is preserved in primary `logs/plan11_worktree/`: the original `.sdd` workspace,
+execution ledger and review evidence comprise **906 files / zero symlinks / 23,172,194 bytes**.
+Receipt SHA256 is `a3d8494c3792fe685c120ddd318c1e8f64a9cddfffc7a45d42e747511b990a67`.
+Independent preservation audit approved; `postmerge-admin/archive-confirmation.json` confirms
+native archival of the implementation checkout and absence of its source path. The original
+116 protected files (198,306,791 bytes) and seven selection records remained unchanged.
+
+Resolve-before-defer found no skipped implementation work, unresolved review finding or needed
+human input. Real Lambda/Mac/image qualification was explicitly out of scope and remains the
+live specification's prerequisite, not deferred implementation work. The required existing-item
+ticking pass found no item implemented by Plan 11. Backlog: **28 open / 13 ever closed / 32%
+closure / zero aged >45 days**; a grouped read-only proposal is retained in completion evidence.
+No disposition was executed and no empty Plan 11 deferred section was appended.
+
+This retirement records completed implementation and archival in a separate post-merge
+checkout. Its independent documentation review, publication and new documentation PR CI/merge
+are administrative follow-ups; they are not claimed passed by this record. Plan 10 Task 18,
+Phase 2, its manual qualification and Stage 7 remain open. The normative task commands below
+are preserved as historical requirements, with actual results and deviations recorded here.
+
 ## Global Constraints
 
-- Implement [the approved specification](../lambda-remote-workflow.md), read from merged
-  `origin/main`, plus [Plan 10 Task 18](10-objective-anchors-and-live-radius.md) and this brief.
+- Implement [the approved specification](../../lambda-remote-workflow.md), read from merged
+  `origin/main`, plus [Plan 10 Task 18](../10-objective-anchors-and-live-radius.md) and this brief.
 - Preserve R1–R11 in `specs/objective-anchors-and-live-radius.md`. Ten reference seeds;
   δ = 3 SD; no configuration selection before δ. This plan implements transport, not selection.
 - Transport every kept checkpoint, `last.ckpt`, `monitor_reads.jsonl`, and
@@ -238,8 +282,11 @@ told other agents are present and that their edits must not be reverted.
 
 ### Pre-flight (controller, before Task 1)
 
-- [ ] Re-fetch origin, inspect branch/worktree state and open PRs. If origin gained overlapping
+- [x] Re-fetch origin, inspect branch/worktree state and open PRs. If origin gained overlapping
   changes, reconcile the plan before implementation. Do not bring the held commits into HEAD.
+
+> Deviation: native snapshot recovery restored the approved worktree after planning archival;
+> the approved branch/base and protected primary stayed unchanged.
 
 ```bash
 git -c core.fsmonitor=false fetch --prune origin
@@ -256,7 +303,7 @@ Expected: this managed worktree/branch, clean approved-plan commit(s) only; both
 exit **1**. Never treat their expected exit 1 as a setup failure or chain them with `&&`.
 Record a refreshed `BASE` equal to the remote merge base and the first implementation HEAD.
 
-- [ ] Record `uv.lock` hash. Set up `uv sync --locked` without re-locking. Run baseline gates:
+- [x] Record `uv.lock` hash. Set up `uv sync --locked` without re-locking. Run baseline gates:
 
 ```bash
 shasum -a 256 uv.lock
@@ -272,14 +319,14 @@ Expected: zero failures; record actual counts/skips/warnings. An isolated worktr
 data, so skips/counts can differ from preserved Phase 1 results. Do not copy real data to alter
 counts. Stop on baseline failures and report the evidence before changing unrelated code.
 
-- [ ] Resolve GNU rsync from `RemoteConfig.rsync_path` or PATH. Current PATH supplies
+- [x] Resolve GNU rsync from `RemoteConfig.rsync_path` or PATH. Current PATH supplies
   `/usr/bin/rsync` (`openrsync`, protocol 29), which must be rejected. Check installed optional
   `/opt/homebrew/bin/rsync` or `/usr/local/bin/rsync` if present. If none meets >=3.2, document
   `brew install rsync`; implementation unit tests can proceed, but real transport qualification
   cannot be reported passed with skipped tests. Installation is an execution prerequisite,
   not an action performed in this planning session.
 
-- [ ] Snapshot primary evidence hashes/counts above and hashes of all files under the preserved
+- [x] Snapshot primary evidence hashes/counts above and hashes of all files under the preserved
   smoke/evidence directories. Do not modify or copy them into implementation tests.
 
 ## File structure and public interfaces
@@ -380,7 +427,7 @@ existing: set[str], head: str = '') -> str`, `read_state(root: Path) -> RemoteSt
 `write_state(root: Path, state: RemoteState) -> None`, `state_lock(root: Path)` context manager,
 `pull_mappings(root: Path, session_id: str, info: RemoteInfo) -> tuple[PullMapping, ...]`.
 
-- [ ] Write tests first. Core cases:
+- [x] Write tests first. Core cases:
 
 ```python
 def test_pull_logs_cannot_replace_the_mac_selection_log(tmp_path):
@@ -407,19 +454,19 @@ override values follow existing last-wins parsing; invalid non-`=` tokens refuse
 atomic state save survives injected failure; ID collision refuses; concurrent lock acquisition
 fails with a named busy error; same session mapping and separate run records survive reopening.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/unit/test_remote_config.py tests/unit/test_remote_session.py -q
 ```
   Expected red: absent remote imports or behavior. Capture it before creating production files.
 
-- [ ] Implement models with `extra='forbid'`; UTC timestamps; ID `strftime('%Y%m%dT%H%M%SZ')`,
+- [x] Implement models with `extra='forbid'`; UTC timestamps; ID `strftime('%Y%m%dT%H%M%SZ')`,
   push suffix `-<shortsha>`; atomic sibling temp-file JSON write, fsync and `os.replace`.
   Use `fcntl.flock(LOCK_EX | LOCK_NB)` held for the transaction. Never unlink someone else's lock.
   Define the session-owned dataclass/state fields above. No persistence of secret contents.
 
-- [ ] Add the exact defaults:
+- [x] Add the exact defaults:
 
 ```yaml
 repo_dir: ~/naics-embedder
@@ -439,7 +486,7 @@ use `build_reference_bundle(tmp_path / 'inputs')`, copy its entire directory and
 under that repo, set relative config paths there. Fixture returns root/config/manifest and does
 not operate real inputs. Add `recorded_transport` fake with calls list and queued probe replies.
 
-- [ ] Run the focused tests to green; format listed Python paths; task commit
+- [x] Run the focused tests to green; format listed Python paths; task commit
   `feat(remote): define safe session state and configuration`; independent task review.
 
 ## Task 2: Transport operations and instance bootstrap
@@ -457,7 +504,7 @@ Add a fixed GPU-capability probe in `remote/worker.py`, reused by bootstrap and 
 produce `GpuEvidence` from the locked PyTorch environment. Real CUDA transport always requires
 non-null qualified evidence; optional evidence supports injected CPU transport fixtures only.
 
-- [ ] Write command-construction/bootstrap tests first:
+- [x] Write command-construction/bootstrap tests first:
 
 ```python
 def test_openrsync_is_refused():
@@ -481,14 +528,14 @@ connect timeout, quoting spaces/metacharacters as literal argv, changed host key
 manual `ssh-keygen -R` instruction, bounded command timeouts, no credential upload, checksum
 itemize parsing, `--from0` input, explicit deletion targets, and destination escape rejection.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/unit/test_remote_transport.py tests/unit/test_remote_bootstrap.py -q
 ```
   record red.
 
-- [ ] Implement subprocess argv with `shell=False`. Rsync uses `-rlpt`, `--from0`,
+- [x] Implement subprocess argv with `shell=False`. Rsync uses `-rlpt`, `--from0`,
   `--files-from=-`, `--partial-dir=.rsync-partial`, argument protection and explicit roots;
   add `--checksum` for result transfers to catch equal-size/equal-mtime rewrites. Never pass
   `--delete`, `--inplace` or append modes. File list comes through stdin as NUL-separated bytes.
@@ -496,13 +543,13 @@ uv run --locked pytest tests/unit/test_remote_transport.py tests/unit/test_remot
   stdin. The transport alone can invoke SSH/rsync. Initial identity probe reports actual
   `Path(...).expanduser().resolve()` remote roots. No speculative `/home/<user>` construction.
 
-- [ ] Add a fixed SSH transport-prerequisite operation before the initial code push: inspect
+- [x] Add a fixed SSH transport-prerequisite operation before the initial code push: inspect
   remote rsync and, if absent/too old, install the distro rsync package with `sudo -n apt-get`;
   qualify GNU >=3.2. It uses system tools and never imports this unpushed package. Do not rely
   on bootstrap.sh to install the very tool needed to upload bootstrap.sh. Test missing tool,
   unavailable sudo, old distro package and successful rerun using injected executables only.
 
-- [ ] Implement bootstrap as `bash` with `set -euo pipefail`, from the pushed source tree.
+- [x] Implement bootstrap as `bash` with `set -euo pipefail`, from the pushed source tree.
   Ensure tmux/rsync via noninteractive `sudo -n apt-get` only if missing; errors retain step
   output. Use system uv if available, otherwise the official standalone installer with
   `UV_INSTALL_DIR="$HOME/.local/bin" UV_NO_MODIFY_PATH=1`, downloaded to a temporary script,
@@ -512,7 +559,7 @@ uv run --locked pytest tests/unit/test_remote_transport.py tests/unit/test_remot
   and after sync. Return JSON RemoteInfo; diagnostics go to stderr, not the JSON channel.
   Never run data preparation, panel/export/decision tools, uv lock, or a training smoke here.
 
-- [ ] The fixed GPU probe checks `torch.cuda.is_available()`, enters
+- [x] The fixed GPU probe checks `torch.cuda.is_available()`, enters
   `with torch.cuda.device(0)`, and requires
   `torch.cuda.is_bf16_supported(including_emulation=False)` to return true. Do not accept the
   default emulation-inclusive result. Read device properties for name, major/minor capability
@@ -520,7 +567,7 @@ uv run --locked pytest tests/unit/test_remote_transport.py tests/unit/test_remot
   or a false result produces an actionable refusal before training, with no FP16/FP32 switch.
   Persist evidence in bootstrap/session records; do not add it to the 21-key run identity.
 
-- [ ] Bootstrap tests run only with fake executables/runner under `tmp_path`: already prepared,
+- [x] Bootstrap tests run only with fake executables/runner under `tmp_path`: already prepared,
   uv missing, no sudo, apt failure, locked sync failure, CUDA false, NTP false/unavailable,
   shell PATH missing uv, and stdout JSON with diagnostic stderr. GPU cases: native-BF16 true
   passes; CUDA unavailable, emulation-only support, missing API and probe exceptions refuse;
@@ -529,7 +576,7 @@ uv run --locked pytest tests/unit/test_remote_transport.py tests/unit/test_remot
   No real installer/network/apt/GPU is needed; inject the CUDA module/device context.
   `bash -n src/naics_embedder/remote/bootstrap.sh` must succeed.
 
-- [ ] Run focused tests green; format; task commit
+- [x] Run focused tests green; format; task commit
   `feat(remote): add tested SSH transport and bootstrap`;
   independent task review.
 
@@ -544,7 +591,7 @@ uv run --locked pytest tests/unit/test_remote_transport.py tests/unit/test_remot
 ignore: tuple[str, ...]) -> dict[str, tuple[str, ...]]`,
 `write_push_record(root: Path, host: str, push_id: str, cap_bytes: int) -> PushRecord`.
 
-- [ ] Write reconstruction and edit tests first:
+- [x] Write reconstruction and edit tests first:
 
 ```python
 def test_deleted_code_only_is_removed_from_a_push():
@@ -565,14 +612,14 @@ all hashes/types/modes. Test 10 MB total cap with named untracked paths, exactly
 external/broken links refuse, unexpected symlink/directory changes reported, ignored runtime
 files ignored, unexpected source file detected, and failed record write leaves no successful ID.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/unit/test_remote_provenance.py tests/unit/test_remote_code_manifest.py -q
 ```
   record red.
 
-- [ ] Enumerate `git ls-files -z --cached --others --exclude-standard`, deduplicate and sort;
+- [x] Enumerate `git ls-files -z --cached --others --exclude-standard`, deduplicate and sort;
   skip absent cached paths (their deletion is represented in `git diff --binary HEAD`), but
   refuse unsupported special files/submodules. Hash regular bytes and symlink target bytes
   separately using `lstat`. Preserve executable permissions and safe relative symlinks.
@@ -580,7 +627,7 @@ uv run --locked pytest tests/unit/test_remote_provenance.py tests/unit/test_remo
   filenames/extensions; name paths without reading their contents. Require commit/ignore before
   push rather than silently excluding them from the reconstruction promise.
 
-- [ ] Write immutable `.remote/pushes/<id>/provenance.json`, `uncommitted.patch`, `untracked.tar`,
+- [x] Write immutable `.remote/pushes/<id>/provenance.json`, `uncommitted.patch`, `untracked.tar`,
   `hashes.json` plus `files.json` (types/modes/targets). Capture full HEAD/branch/dirty, UTC/host,
   untracked path/hash/size and file count. Preserve hashes.json's path-to-SHA schema. Stage the
   record directory and rename only after its file contents and pushed file list stay unchanged.
@@ -592,7 +639,7 @@ uv run --locked pytest tests/unit/test_remote_provenance.py tests/unit/test_remo
   pending-push discard journal. Never discard files in generated/credential roots or a path
   outside the validated code scan. Without force, every edit category stops the push.
 
-- [ ] Run green/format; task commit
+- [x] Run green/format; task commit
   `feat(remote): record reconstructible pushes and detect instance edits`;
   independent task review.
 
@@ -608,12 +655,15 @@ No model/checkpoint schema changes.
 `finished_run(saved: Mapping[str, Any], patience: int, max_epochs: int) -> tuple[bool, str | None]`;
 directory guard gains keyword-only `resolved_dirpath: str | None = None`.
 
-- [ ] Write tests first using the real bundle builder and existing tiny trained checkpoints.
+- [x] Write tests first using the real bundle builder and existing tiny trained checkpoints.
   For `remote_repo` fixture, copy the tiny checkpoint directory from `trained_seeds` into its
   `checkpoints/<experiment>`; derive effective config from `trained_seeds.cfg` with relocated
   descriptions/manifest and explicit CPU precision for LocalTransport. Tests for production
   CUDA preflight change both saved/current settings in test copies only and use real callbacks.
   No fake checkpoint is evidence of training correctness.
+
+> Deviation: after user pause and an expired agent token, a fresh implementer recovered preserved
+> edits; original selective-red exact argv was unretained, while new measured green/reviews passed.
 
 ```python
 def test_the_shared_guard_accepts_an_instance_resolved_path(monkeypatch, tmp_path):
@@ -639,14 +689,14 @@ early stop and exhausted budget skip; malformed epoch/run ID/history/gaps/duplic
 seed/run/panel/split/nonfinite MRR refused. Interrupted rows beyond last's epoch are permitted
 only as valid same-run later rows, passed through untouched for existing resume pruning.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/unit/test_remote_canonical.py tests/unit/test_utils_training.py -q
 ```
   capture red before the guard change.
 
-- [ ] Extend the shared guard's expected path selection only:
+- [x] Extend the shared guard's expected path selection only:
 
 ```python
 def refuse_a_resume_from_another_directory(
@@ -693,26 +743,26 @@ Add tests that simulated Mac canonicalization cannot alter supplied remote path;
 without the keyword retain exact previous errors and behavior. Document that only a transport
 identity probe supplies this keyword, never an arbitrary unverified override.
 
-- [ ] Resolve config with the existing parser. Load bundle using `load_validated_bundle`, hash
+- [x] Resolve config with the existing parser. Load bundle using `load_validated_bundle`, hash
   configured descriptions bytes and compare `description_fingerprint`; require all canonical
   paths under repo `data/` and upload full bundle contents, including validated unread members.
   Read last checkpoint on CPU, call `validate_exact_resume(runtime_contract_for(...))`, directory,
   settings/seed and constructor guards. CUDA settings use `effective_precision(cfg, 'cuda')`,
   independent of the Mac's hardware. LocalTransport test hardware is injected explicitly.
 
-- [ ] Validate both histories through last's epoch: exactly epochs `0..epoch`, matching finite
+- [x] Validate both histories through last's epoch: exactly epochs `0..epoch`, matching finite
   MRR, seed/run ID, outcome validation read identity. Retain original bytes, including valid
   interrupted later rows. Inventory all `.ckpt` files plus histories and existing run config/
   summary artifacts; refuse links or unstable/malformed continuation files. SHA-256 all inputs.
   Do not call `CheckpointRunner.run`, panel score/export/store/decision functions.
 
-- [ ] Finished detection calls the existing early-stop guard: its actual stopped callback means
+- [x] Finished detection calls the existing early-stop guard: its actual stopped callback means
   finished; missing state remains an error. Budget detection uses saved completed nonnegative
   integer epoch + 1 >= unchanged max_epochs. Return finished status before uploads/segments/
   launch. No exception-message parsing: inspect the same saved callback fields after validating
   their existence. Unknown/corrupt completion state refuses rather than restarts.
 
-- [ ] Run green/format; task commit
+- [x] Run green/format; task commit
   `feat(remote): guard canonical inputs and exact resume identity`;
   independent task review.
 
@@ -728,7 +778,7 @@ transport: object) -> None`; `RemoteWorkflow(root: Path, remote_cfg: RemoteConfi
 transport_factory: Callable, clock: Callable)` with
 `up(host: str, config_path: str, overrides: list[str], force: bool = False) -> RemoteState`.
 
-- [ ] Write order/failure tests first:
+- [x] Write order/failure tests first:
 
 ```python
 def test_invalid_canonical_inputs_upload_nothing(remote_workflow_fixture):
@@ -750,14 +800,14 @@ input hash failure; bootstrap
 failure remains preparing; interrupted push retry retains old baseline; ready only after
 remote canonical validation; reused host lacking session marker requires new session/force.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/unit/test_remote_push.py tests/unit/test_remote_up.py -q
 ```
   record red.
 
-- [ ] Implement under the state lock: tool/canonical/unfinished-session/SSH/running gates first;
+- [x] Implement under the state lock: tool/canonical/unfinished-session/SSH/running gates first;
   then journal preparing state, create immutable push record, scan edits against the last
   successful baseline, ensure remote transport prerequisites, push files, delete only
   previous-code minus current-code, verify all
@@ -770,13 +820,13 @@ uv run --locked pytest tests/unit/test_remote_push.py tests/unit/test_remote_up.
   unexpected code outside the intended push requires the same named edit/force handling.
   A new session does not make preexisting unrecorded source trustworthy.
 
-- [ ] Run bootstrap, upload canonical inputs to identical repo-relative paths, validate again
+- [x] Run bootstrap, upload canonical inputs to identical repo-relative paths, validate again
   remotely with `canonical_inputs`. This is a validation operation, never generation. Compare
   byte hashes for every uploaded input. Remote paths resolve under the recorded root. Commit
   ready state/session marker only after all checks; refuse future user/root changes when a
   persisted run's absolute checkpoint location would change.
 
-- [ ] Run green/format; task commit
+- [x] Run green/format; task commit
   `feat(remote): prepare verified reproducible training sessions`;
   independent task review.
 
@@ -793,7 +843,7 @@ cfg: RemoteConfig, final: bool = False) -> SyncResult`,
 `ensure_loop(root: Path, state: RemoteState) -> None`, `stop_loop(root: Path,
 session_id: str) -> None`, `loop_status(root: Path, session_id: str) -> dict[str, object]`.
 
-- [ ] Write pull/coherence/process tests first:
+- [x] Write pull/coherence/process tests first:
 
 ```python
 def test_failed_transfer_keeps_the_previous_last_and_histories(remote_sync_fixture):
@@ -819,14 +869,14 @@ previous Mac file, checksum itemize difference, sparse mappings before first epo
 network loss, collision of concurrent sync calls, stale PID and PID reuse, no unowned kill,
 finished session worker exit and changed-session worker exit.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/unit/test_remote_sync.py tests/unit/test_remote_loop.py -q
 ```
   record red.
 
-- [ ] Inventory remote files with size/mtime/hash/type before copying. In background passes,
+- [x] Inventory remote files with size/mtime/hash/type before copying. In background passes,
   omit files modified inside `in_flight_seconds`; if any member of a run's kept checkpoint set,
   last or either history is busy, defer that entire run. Use a NUL file list, not newline rsync
   filters. Stage under `.remote/pulls/<pass-id>/`, with partial-dir; re-inventory source and
@@ -837,7 +887,7 @@ uv run --locked pytest tests/unit/test_remote_sync.py tests/unit/test_remote_loo
   and erasing evidence before finish's own check. Before the first last checkpoint exists,
   treat an incomplete run directory as pending, not a valid generation or a finished run.
 
-- [ ] Promote verified files only with same-filesystem atomic `os.replace`. Preserve every
+- [x] Promote verified files only with same-filesystem atomic `os.replace`. Preserve every
   Mac-only file, including earlier checkpoints. Journal promotions so a process crash midway
   can replay/complete them before any resume/finish; such a pending promotion blocks launching.
   Successful sync metadata/hashes are published only after all intended replacements complete.
@@ -845,14 +895,14 @@ uv run --locked pytest tests/unit/test_remote_sync.py tests/unit/test_remote_loo
   delete/prune, no merge into `logs/selection_log.jsonl`. Mark unreachable_since on first failure,
   retain last good sync and clear unreachable state after successful recovery.
 
-- [ ] Implement detached Mac worker as absolute current Python executable under
+- [x] Implement detached Mac worker as absolute current Python executable under
   `caffeinate -i`, `start_new_session=True`, stdin DEVNULL, stdout/stderr `.remote/sync.log`.
   Store PID/session/token/process start identity, verify command identity before treating PID as
   live or signaling it. The worker takes the lock per pass, reads current state, retries failures
   next interval and stops on finished/abandoned/different session. No cron or automation needed.
   Status/restart fake the runner; tests never launch real caffeinate or leave background workers.
 
-- [ ] Run green/format; task commit
+- [x] Run green/format; task commit
   `feat(remote): pull coherent run artifacts with owned sync lifecycle`;
   independent task review.
 
@@ -868,7 +918,7 @@ inputs: InputSet, info: RemoteInfo, resume: bool) -> tuple[str, ...]`,
 config_path: str, overrides: list[str], inputs: InputSet, resume: bool) -> LaunchResult`;
 `RemoteWorkflow.train(resume: bool, config_path: str, overrides: list[str]) -> LaunchResult`.
 
-- [ ] Write tests first:
+- [x] Write tests first:
 
 ```python
 def test_finished_resume_never_uploads_or_launches(remote_launch_fixture):
@@ -898,9 +948,9 @@ Add a bootstrap-pass/launch-fail GPU case: a later native-BF16 failure or probe 
 prevent tmux creation. Verify identical probe/wrapper CUDA visibility, one training device on a
 multi-GPU host, recorded GPU evidence, and no precision fallback or changed checkpoint identity.
 
-- [ ] Run `uv run --locked pytest tests/unit/test_remote_launch.py -q`; capture red.
+- [x] Run `uv run --locked pytest tests/unit/test_remote_launch.py -q`; capture red.
 
-- [ ] Resolve effective config; require ready session, no pending push/pull, unchanged pushed
+- [x] Resolve effective config; require ready session, no pending push/pull, unchanged pushed
   code and canonical inputs, and tmux stopped. If local code changed, stop with rerun-up
   instruction rather than silently launching stale code. Acquire the instance launch lock,
   recheck stopped/NTP under it, and validate exact remote roots and canonical fingerprints.
@@ -920,7 +970,7 @@ multi-GPU host, recorded GPU evidence, and no precision fallback or changed chec
   Add a regression where the Mac has epoch k and the stopped instance has epoch k+1 or a
   finished last checkpoint; require zero uploads/launches and preservation of instance bytes.
 
-- [ ] Build one authoritative argv from validated effective config. Reject remote-reserved
+- [x] Build one authoritative argv from validated effective config. Reject remote-reserved
   conflicting path overrides; append canonical repo-relative manifest and absolute checkpoint
   base after validating that the current effective values refer to the same locations.
   Keep run settings unchanged; freeze manifest/paths in the segment's effective-config record.
@@ -951,7 +1001,7 @@ resume adds `--ckpt-path last --checkpoint-load-mode exact`. Launch script in tm
 `naics-train` with a fixed segment-specific wrapper file. Do not interpolate overrides into
 shell snippets. Wrapper setup/launch failures release lock and leave a named failed segment.
 
-- [ ] Write immutable segment.json with spec §10.2 fields, full argv/rendered command, effective
+- [x] Write immutable segment.json with spec §10.2 fields, full argv/rendered command, effective
   config, full input/continuation hashes, remote path, lock hash and copied code record.
   Include fresh GPU evidence and exact CUDA visibility as execution metadata, separately from
   the existing settings/constructor identity; preserve the single-device BF16 campaign settings.
@@ -960,7 +1010,7 @@ shell snippets. Wrapper setup/launch failures release lock and leave a named fai
   Release instance launch lock only after tmux has been created or failure cleanup completes.
   Start/restart the owned sync loop only after successful launch.
 
-- [ ] Run green/format; task commit
+- [x] Run green/format; task commit
   `feat(remote): launch fresh and exact runs with tmux provenance`;
   independent task review.
 
@@ -973,7 +1023,7 @@ extend `tests/fixtures/remote.py` with `remote_finish_fixture`.
 **Interfaces:** `RemoteWorkflow.finish(stop_training: bool = False, pull_edits: bool = False,
 abandon: bool = False) -> FinishResult`; `RemoteWorkflow.status() -> dict[str, object]`.
 
-- [ ] Write tests first:
+- [x] Write tests first:
 
 ```python
 def test_tampering_is_detected_before_finish_repairs_it(remote_finish_fixture):
@@ -996,33 +1046,33 @@ and stops own worker; invalid abandon+stop/pull combinations refuse; GPU/process
 loop/last-sync/unreachable status; stale PID never signals another process; no runs yet finish
 may be safe with checkpoint/hash null and explicitly “no checkpoint”, rather than inventing one.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/unit/test_remote_finish.py tests/unit/test_remote_status.py -q
 ```
   capture red.
 
-- [ ] Finish coordinates the state lock and worker: quiesce any owned background pass, take
+- [x] Finish coordinates the state lock and worker: quiesce any owned background pass, take
   lock, check running; optional SIGINT via fixed tmux operation, poll until stopped with bounded
   timeout. Verify previous Mac sync hashes before final pull; run final coherent sync, then
   `rsync --dry-run --checksum --itemize-changes` for each mapping, requiring no file content/type
   differences and no pending promotion. Recheck training stopped before declaring safe.
 
-- [ ] Scan instance edits against the successful push snapshot. Rescue to immutable
+- [x] Scan instance edits against the successful push snapshot. Rescue to immutable
   `.remote/instance-edits/<session>/<rescue-id>/` with expected/actual entries and deletion
   tombstones, hash-verify it, mark that edit snapshot handled. Changed files never enter the
   working tree; a changed snapshot after rescue requires another rescue. Force permits
   overwriting only in `up` after edits are named; finish has no force-safe switch.
 
-- [ ] Stop only the owned sync worker; mark session finished only when all checks succeed.
+- [x] Stop only the owned sync worker; mark session finished only when all checks succeed.
   Include latest segment/run `last.ckpt` local/remote matching SHA in FinishResult. CLI prints
   exactly `Safe to terminate` only for safe=true. Unreachable finish remains unfinished;
   explicit abandon journals timestamp/last good sync/data-loss warning, closes session and
   returns abandoned=true/safe=false. Status is read-only and reports errors without making
   successful-sync/finish claims.
 
-- [ ] Run green/format; task commit
+- [x] Run green/format; task commit
   `feat(remote): verify termination readiness and report session status`;
   independent task review.
 
@@ -1040,7 +1090,7 @@ Extend `tests/fixtures/remote.py` with `fake_workflow` and the existing/new CliR
 Transport settings load from `conf/remote.yaml`; optional group `--remote-config PATH` supports
 an explicitly selected GNU rsync. Refusals exit 1; finished skips exit 0 with named reason.
 
-- [ ] Write Typer CliRunner tests first: help has all commands; no raw arbitrary command or
+- [x] Write Typer CliRunner tests first: help has all commands; no raw arbitrary command or
   weights-only switch; config/overrides preserved exactly; flags forwarded once; safe vs
   abandoned/error text; error Rich markup escaped; whitespace-normalized output expectations
   compatible with CI's 80-column wrapping; missing host/session/config refuses before transport.
@@ -1056,19 +1106,19 @@ def test_remote_finished_skip_is_success_without_a_launch(cli_runner, fake_workf
 Define fake_workflow fixture as a RemoteWorkflow-shaped object with call arguments and typed
 return values; monkeypatch the CLI factory, not the domain guards being tested elsewhere.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/unit/test_remote_cli.py tests/unit/test_cli_main.py -q
 ```
   capture red.
 
-- [ ] Add Typer group after existing data/tools registration; retain allocator initialization
+- [x] Add Typer group after existing data/tools registration; retain allocator initialization
   before imports and warning setup. Adapters parse/display; state/bootstrap/transport work stays
   in remote modules. `sync` without once ensures detached loop and returns immediately; once
   performs one verified pass. Do not install dependencies from a CLI help invocation.
 
-- [ ] Document commands, exact/fresh/finished behavior, same path/user across instances,
+- [x] Document commands, exact/fresh/finished behavior, same path/user across instances,
   canonical config and override precedence, whole checkpoint-set transport, tampering refusal,
   edit rescue, stale loop/reachability, GNU prerequisite, NTP fail-closed behavior, first-instance
   qualification and Mac-only reads. Explain the native-BF16 guard, capability-based GPU
@@ -1090,7 +1140,7 @@ Record approved draft clarifications in remote spec only. Explicitly replace its
 manual smoke with a post-merge qualification using a new experiment, never plan10_smoke, before
 depending on the tool. No campaign or Stage 7 completion claim from fixture tests.
 
-- [ ] Build docs `uv run --locked mkdocs build --strict`; check changed rendered anchors/navigation
+- [x] Build docs `uv run --locked mkdocs build --strict`; check changed rendered anchors/navigation
   and all five help commands; run focused tests green, format, task commit
   `feat(cli): expose and document the verified remote workflow`; independent task review.
 
@@ -1103,7 +1153,7 @@ create `specs/findings/lambda-remote-workflow-readiness.md`. No real training in
 **Interfaces:** Same production controller with LocalTransport; process responses injected.
 Produce a line-cited readiness matrix for Task 18, recorded against the final implementation SHA.
 
-- [ ] Write integration tests first; ensure failures demonstrate incomplete orchestration when
+- [x] Write integration tests first; ensure failures demonstrate incomplete orchestration when
   a substantive guard is disabled, rather than merely counting mocked calls. Use real GNU rsync
   and temporary directories/Git repos. If absent, explicitly skip with GNU prerequisite reason;
   obtain a passing GNU-enabled run before merge qualification can be marked complete.
@@ -1133,7 +1183,7 @@ dirpath or move real checkpoints to make a test pass. A separate existing real T
 test remains the numerical continuation gate; local transport tests prove byte preservation,
 identity gates and sequencing.
 
-- [ ] Run the focused red test command:
+- [x] Run the focused red test command:
 
 ```bash
 uv run --locked pytest tests/integration/test_remote_workflow.py tests/unit/test_remote_task18_contract.py -q
@@ -1142,12 +1192,12 @@ uv run --locked pytest tests/integration/test_remote_workflow.py tests/unit/test
   If all implementation already supports them, verify sensitivity by disabling one relevant
   guard in a temporary diff, observe its expected failure, then restore before green/commit.
 
-- [ ] Complete test fixtures/production fixes only for demonstrated failures. Qualify no-network
+- [x] Complete test fixtures/production fixes only for demonstrated failures. Qualify no-network
   bootstrap/process stubs so they cannot call apt/installers or launch a real tmux session.
   Task 18 tests spy on exported decision APIs and fail if workflow calls any panel/export/store/
   QCEW/decision operation. Loading/validating the bundle and history is allowed.
 
-- [ ] Run GNU-enabled green on Python 3.10 and 3.12, and record integration non-skip counts.
+- [x] Run GNU-enabled green on Python 3.10 and 3.12, and record integration non-skip counts.
   Create readiness finding with each row below citing implementation file/line and test node,
   not a blanket claim that “Task 18 passed”. Task 18 itself runs later from merged local main.
 
@@ -1167,7 +1217,7 @@ uv run --locked pytest tests/integration/test_remote_workflow.py tests/unit/test
 | Native BF16 on selected training device | 2, 7, 10 | Emulation-only/probe errors refuse; launch rechecks device 0 with identical visibility |
 | R1–R11; ten seeds; δ=3 SD; no early selection | 9, 11 | Documentation/handoff and no decision calls |
 
-- [ ] Update only measured file/test counts in CLAUDE.md/tests README if new files change them;
+- [x] Update only measured file/test counts in CLAUDE.md/tests README if new files change them;
   do not rewrite historical Phase 1 counts. Format/test green; task commit
   `test(remote): qualify complete transport and Phase 2 launch contracts`; independent task review.
 
@@ -1179,7 +1229,7 @@ the final reviewed HEAD is recorded in the ignored ledger to avoid a self-refere
 Correct test/docs failures only after
 reproduction and appropriate independent fix review.
 
-- [ ] Run complete local verification on the frozen candidate HEAD:
+- [x] Run complete local verification on the frozen candidate HEAD:
 
 ```bash
 HF_HUB_OFFLINE=1 uv run --locked pytest -n auto -q
@@ -1199,12 +1249,12 @@ actual failures/skips/warnings and changed rendered links. Run all five `remote 
 commands; they must not mutate .remote, inputs or selection logs. Recheck primary branch/HEAD,
 two held commits, preserved evidence hashes and selection-log count/hash against pre-flight.
 
-- [ ] Audit code boundaries: only transport.py invokes SSH/rsync; no result pull passes delete;
+- [x] Audit code boundaries: only transport.py invokes SSH/rsync; no result pull passes delete;
   remote worker has no panel scoring/export/QCEW/store/decision command; no retired resume key
   is required; all kept checkpoint/history sources map coherently; no sealed split call added.
   Inspect actual branch diff, not just log subjects, for local manifest pins or retired settings.
 
-- [ ] Dispatch fresh read-only **code-reviewer**, `gpt-6.1-sol`, `ultra`, fork context none.
+- [x] Dispatch fresh read-only **code-reviewer**, `gpt-6.1-sol`, `ultra`, fork context none.
   Give this full plan/spec/user contracts, precise BASE..HEAD, complete diff package, task-review
   results, local verification and preservation evidence. Review the entire branch, including
   transport race/failure recovery, data boundaries, active constructor controls and docs.
@@ -1213,19 +1263,26 @@ two held commits, preserved evidence hashes and selection-log count/hash against
   Skip a same-family Codex CLI second opinion per requesting-code-review/codex-review.md;
   GitHub Codex review is not requested or required. Neither replaces the independent Ultra gate.
 
-- [ ] Prepare a concrete PR description with problem/behavior, canonical/resume guarantees,
+> Deviation: explicit GPT-6.1 Medium/Ultra routing superseded legacy Claude names; the unavailable
+> typed reviewer used an independent read-only default seat with the same review contract.
+> Additional WB1–WB3 fixes received regression red/green, Medium review and Ultra re-review.
+
+- [x] Prepare a concrete PR description with problem/behavior, canonical/resume guarantees,
   all measured local gates and the Task 18 readiness matrix. Get the user's go-ahead to push
   only `codex/lambda-remote-workflow`, never main/held commits. Create PR against origin/main,
   attach it with the native artifact tool. No publishing or PR creation happens in planning.
 
-- [ ] Require new PR CI `lint`, `test (3.10)`, `test (3.12)` to pass at the reviewed head.
+- [x] Require new PR CI `lint`, `test (3.10)`, `test (3.12)` to pass at the reviewed head.
   Queued/cancelled/acquisition-failed is not passed; retain and report infrastructure evidence,
   retry failed infrastructure jobs without changing valid assertions. Do not loosen exact
   equality for host BLAS differences without measured failures and user adjudication.
   User merges, or explicitly authorizes exact-head merge. Check PR still open before follow-ups;
   if already merged, fixes require a new origin/main branch/PR.
 
-- [ ] Apply writing-plans completion protocol for **Plan 11 only** after tasks/reviews/gates
+> Deviation: actual CI exposed host-tool lookup and Rich wrapping fixture failures; controlled
+> local red/green led to a test-only portability fix, independent reviews and new successful CI.
+
+- [x] Apply writing-plans completion protocol for **Plan 11 only** after tasks/reviews/gates
   resolve: explicit leftover dispositions, completed markup, relevant deferred-item ticking,
   backlog report, retirement if appropriate. Do not tick/retire Plan 10 or Stage 7.
   Leave `specs/lambda-remote-workflow.md` at its current path as Plan 10's live contract through
@@ -1233,10 +1290,16 @@ two held commits, preserved evidence hashes and selection-log count/hash against
   Real-instance qualification remains explicitly pending; do not mark unexecuted manual checks
   passed. Keep the readiness finding clear about fixture qualification versus Lambda readiness.
 
-- [ ] Before native archival, preserve Plan 11 ignored execution/review evidence into a new
+> Deviation: the user had already merged PR #126, so tracked completion uses a new origin/main
+> documentation branch/PR; its pending administrative gates are separate from implementation.
+
+- [x] Before native archival, preserve Plan 11 ignored execution/review evidence into a new
   `logs/plan11_worktree/` directory in the primary checkout with verified file hashes and no
   overwrites. Never append implementation fixture logs to the primary selection log. Archive
   only this managed worktree after merge and evidence preservation; private commits untouched.
+
+> Deviation: complete evidence preservation and independently approved native implementation
+> archival preceded final markup in this separate checkout, so archival is now an actual result.
 
 ## Post-merge boundary: fresh Plan 10 Phase 2 session
 
@@ -1288,6 +1351,7 @@ Primary-source references checked during planning:
   `NTPSynchronized` reports the kernel synchronization state. Installer/image compatibility
   remains a real-instance qualification item, not an assumption certified by fixture tests.
 
-**Approval requested:** approve this architecture, the twelve recorded clarifications, task sequence
-and gates for a fresh implementation session. The plan is a reviewable draft; no runtime source,
-canonical artifact, campaign record or primary branch was changed to prepare it.
+**Approval:** the complete architecture, twelve clarifications, native-BF16 guard, task sequence
+and gates were approved on 2026-10-05. The planning statement that no runtime source, canonical
+artifact, campaign record or primary branch was changed described draft preparation. Completed
+implementation and its measured gates are recorded above; manual qualification remains pending.

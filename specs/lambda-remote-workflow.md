@@ -1,8 +1,21 @@
 # Lambda Remote Workflow
 
-**Status:** APPROVED (2026-09-23); implementation plan approved 2026-10-05.
-Implementation is under review on its feature branch. Merge, final branch gates and the
-post-merge real-instance qualification are not claimed by this specification.
+**Status:** IMPLEMENTATION LANDED (2026-10-06); live contract for Plan 10 Phase 2.
+Plan 11 was approved on 2026-10-05 and completed via subagent-driven-development. Implementation
+PR [#126](https://github.com/lowmason/naics-embedder/pull/126) merged at
+`15de7a0310ff3bbfa9157f98ea9459c45741cf34`, with the same tree as independently Ultra-reviewed
+`270bc72252077565cbd54e2cf1e86665e47c890f`. Corresponding CI run 37420123506 passed docs,
+lint and both Python jobs: each full job measured 2,990 passed / 11 skipped / 80 warnings,
+89.90% coverage; each GNU step passed 47 with zero skips. Fresh local full/GNU/static gates and
+independent task/evidence reviews also passed, as recorded in the
+[completed implementation plan](plans/completed/11-lambda-remote-workflow.md) and
+[fixture readiness finding](findings/lambda-remote-workflow-readiness.md).
+
+**Real Lambda/Mac qualification (§12), Plan 10 Task 18 onward and the campaign remain pending.**
+Fixture/source proof does not certify the actual image or process lifecycle. This specification
+stays at its current path through Phase 2; Plan 10 and Stage 7 remain open. Post-merge
+completion documentation review and its new PR publication/CI/merge are separate administration,
+not implementation or manual qualification results.
 
 ## 1. Purpose
 
