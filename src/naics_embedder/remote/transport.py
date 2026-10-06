@@ -11,6 +11,7 @@ from typing import Callable
 
 from naics_embedder.remote.session import GpuEvidence, PullMapping
 from naics_embedder.remote.worker import _credential_name, _generated_name
+from naics_embedder.utils.config import RemoteConfig
 
 # -------------------------------------------------------------------------------------------------
 # Tool and path boundaries
@@ -349,8 +350,18 @@ class SshTransport:
 class LocalTransport:
     '''Use real GNU rsync locally, with all process/GPU behavior injected.'''
 
-    def __init__(self, root: Path, process: object, rsync_path: str):
+    def __init__(
+        self,
+        root: Path,
+        process: object,
+        rsync_path: str,
+        logical_root: Path | None = None,
+        config: RemoteConfig | None = None
+    ):
         self.root = root.resolve()
+        self.logical_root = (logical_root or self.root).resolve()
+        self.repo = str(self.logical_root)
+        self.config = config
         self.process = process
         self.rsync = rsync_path
         gnu_rsync_version(
@@ -365,9 +376,10 @@ class LocalTransport:
         path = Path(value)
         if path.is_absolute():
             try:
-                path.relative_to(self.root)
+                path = self.root / path.relative_to(self.logical_root)
             except ValueError:
-                path = self.root / str(path).lstrip('/')
+                if not path.is_relative_to(self.root):
+                    raise ValueError('destination escapes logical instance root')
         else:
             path = self.root / path
         resolved = path.resolve()
@@ -382,7 +394,13 @@ class LocalTransport:
         if operation in {'bootstrap', 'training', 'gpu', 'clock', 'transport_prerequisites'}:
             return self.process.probe(operation, payload)
         if operation == 'identity':
-            return {'repo': str(self.root), 'checkpoint_base': str(self.root / 'checkpoints')}
+            result = run_probe(operation, payload, self.root)
+            result.update(
+                repo=str(self.logical_root), checkpoint_base=str(self.logical_root / 'checkpoints')
+            )
+            return result
+        if operation == 'inventory' and 'path' in payload:
+            payload = {**payload, 'path': str(self._path(str(payload['path'])))}
         return run_probe(operation, payload, self.root)
 
     def _transfer(

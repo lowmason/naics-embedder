@@ -400,6 +400,25 @@ def remote_launch_fixture(remote_workflow_fixture, remote_resume_fixture, monkey
             return env.now[0]
 
     monkeypatch.setattr('naics_embedder.remote.launch.datetime', LaunchDateTime)
+    # Guard exported scientific APIs after the authorized fixture Trainer monitor has finished.
+    from naics_embedder.decision import decide, store, sweep
+    from naics_embedder.panels import outcome, qcew_rows, regressor
+    from naics_embedder.text_model import export
+
+    def prohibited(*args, **kwargs):
+        pytest.fail('workflow crossed Mac-only scientific API boundary')
+
+    for owner, names in [
+        (decide, ['fix_margins', 'decide']),
+        (sweep, ['run_seed_sweep']),
+        (store.ArtifactStore, ['put', 'resolve', 'read_frame']),
+        (outcome.OutcomePanel, ['score', 'score_logged', 'open_test', 'test_queries']),
+        (regressor.RegressorPanel, ['validation', 'test', 'open_outer']),
+        (qcew_rows, ['read_national_slice', 'load_national_cells']),
+        (export, ['export_code_table']),
+    ]:
+        for name in names:
+            monkeypatch.setattr(owner, name, prohibited)
     loops = []
     monkeypatch.setattr('naics_embedder.remote.loop.ensure_loop', lambda *args: loops.append(args))
 
@@ -607,3 +626,240 @@ def fake_workflow(monkeypatch):
 
     monkeypatch.setattr(remote, '_workflow', factory)
     return fake
+
+# -------------------------------------------------------------------------------------------------
+# GNU transport qualification and an unmodified interrupted Trainer
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def gnu_rsync():
+    import os
+
+    from naics_embedder.remote.transport import gnu_rsync_version
+    requested = os.environ.get('REMOTE_RSYNC')
+    candidates = [requested] if requested else ['/opt/homebrew/bin/rsync', shutil.which('rsync')]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            try:
+                output = subprocess.run([candidate, '--version'], capture_output=True, check=True)
+                gnu_rsync_version(output.stdout.decode())
+                return candidate
+            except (ValueError, subprocess.CalledProcessError):
+                continue
+    message = 'GNU rsync >=3.2 required for remote integration qualification'
+    if os.environ.get('REMOTE_REQUIRE_GNU_RSYNC') == '1':
+        pytest.fail(message)
+    pytest.skip(message)
+
+@pytest.fixture
+def local_workflow(remote_repo, tmp_path, monkeypatch, gnu_rsync, minilm_tokenizer, request):
+    import json
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    import pytorch_lightning as pyl
+
+    from naics_embedder.cli.commands import training
+    from naics_embedder.remote.canonical import canonical_inputs, resume_plan
+    from naics_embedder.remote.transport import LocalTransport
+    from naics_embedder.remote.workflow import RemoteWorkflow
+    from naics_embedder.supervision.artifacts import load_validated_bundle
+    from naics_embedder.text_model import shared_encoder
+    from naics_embedder.utils.config import RemoteConfig
+    from naics_embedder.utils.training import HardwareInfo, create_trainer, run_settings
+    from tests.fixtures.checkpoint_runs import cached_tiny_backbone
+
+    root = remote_repo.root
+    mode = getattr(request, 'param', 'interrupted')
+    cfg = remote_repo.config.override(
+        {
+            'experiment_name': 'qualification',
+            'model.dimension': 8,
+            'data_loader.queries_per_step': 4,
+            'training.trainer.max_epochs': 2 if mode == 'finished' else 5,
+            'model.fusion': 'moe' if mode == 'moe' else 'masked_mean',
+            'model.moe.hidden_dim': 16,
+            'training.trainer.log_every_n_steps': 1,
+            'training.trainer.accelerator': 'cpu',
+            'training.trainer.precision': '32',
+            'dirs.output_dir': 'outputs',
+            'data_loader.tokenization.output_path': 'data/tokens/cache.pt',
+        }
+    )
+    cfg.to_yaml(str(root / 'conf/config.yaml'))
+    (root / '.gitignore').write_text('data/\n.remote/\ncheckpoints/\nlogs/\noutputs/\n')
+    (root / 'conf/data').mkdir()
+    shutil.copyfile(
+        Path(__file__).parents[2] / 'conf/data/outcome_panel.yaml',
+        root / 'conf/data/outcome_panel.yaml'
+    )
+    (root / 'uv.lock').write_text('fixture locked dependencies\n')
+    bundle = load_validated_bundle(remote_repo.manifest)
+    actual = cfg.override(
+        {
+            'supervision.manifest_path': str(remote_repo.manifest),
+            'data_loader.streaming.descriptions_parquet': str(
+                root / 'data/naics_descriptions.parquet'
+            ),
+            'data_loader.tokenization.output_path': str(root / 'data/tokens/cache.pt'),
+            'dirs.output_dir': str(root / 'outputs'),
+        }
+    )
+    directory = root / 'checkpoints/qualification'
+    monkeypatch.setattr(shared_encoder, 'load_base_model', cached_tiny_backbone)
+    monitor = training.build_monitor_from_config(
+        actual, bundle, directory, selection_log=root / 'logs/fixture-training.jsonl'
+    )
+    model = training.build_model_from_config(
+        actual,
+        training.runtime_contract_for(actual, bundle),
+        bundle,
+        run_settings=run_settings(actual, accelerator='cpu', precision='32-true'),
+        monitor=monitor
+    )
+    trainer, _, _ = create_trainer(actual, HardwareInfo('cpu', '32-true', 1), directory)
+
+    class Interrupted(Exception):
+        pass
+
+    class Interrupt(pyl.Callback):
+
+        def on_train_epoch_start(self, trainer, model):
+            if trainer.current_epoch == 2:
+                raise Interrupted('saved completed epoch 1; unchanged budget 5')
+
+    trainer.callbacks.append(Interrupt())
+    if mode == 'finished':
+        trainer.fit(model, training.build_datamodule_from_config(actual, bundle))
+    else:
+        with pytest.raises(Interrupted):
+            trainer.fit(model, training.build_datamodule_from_config(actual, bundle))
+    inputs = canonical_inputs(root, cfg)
+    plan = resume_plan(root, cfg, inputs, str(directory))
+    assert plan.epoch == 1 and plan.finished == (mode == 'finished')
+    # Guard exported scientific APIs after the authorized fixture Trainer monitor has finished.
+    from naics_embedder.decision import decide, store, sweep
+    from naics_embedder.panels import outcome, qcew_rows, regressor
+    from naics_embedder.text_model import export
+
+    def prohibited(*args, **kwargs):
+        pytest.fail('workflow crossed Mac-only scientific API boundary')
+
+    for owner, names in [
+        (decide, ['fix_margins', 'decide']),
+        (sweep, ['run_seed_sweep']),
+        (store.ArtifactStore, ['put', 'resolve', 'read_frame']),
+        (outcome.OutcomePanel, ['score', 'score_logged', 'open_test', 'test_queries']),
+        (regressor.RegressorPanel, ['validation', 'test', 'open_outer']),
+        (qcew_rows, ['read_national_slice', 'load_national_cells']),
+        (export, ['export_code_table']),
+    ]:
+        for name in names:
+            monkeypatch.setattr(owner, name, prohibited)
+    loops = []
+    monkeypatch.setattr('naics_embedder.remote.loop.ensure_loop', lambda *a: loops.append(a))
+    monkeypatch.setattr('naics_embedder.remote.loop.stop_loop', lambda *a: None)
+    monkeypatch.setattr('naics_embedder.remote.loop.loop_status', lambda *a: {'alive': False})
+
+    class Process:
+        running = False
+        ntp = True
+        gpu = dict(
+            logical_index=0,
+            name='fixture',
+            compute_capability=[8, 0],
+            total_memory_bytes=1,
+            native_bf16=True,
+            cuda_visible_devices=None
+        )
+        calls = None
+
+        def __init__(self):
+            self.calls = []
+
+        def probe(self, operation, payload):
+            self.calls.append(('probe', operation, payload))
+            if operation == 'bootstrap':
+                return dict(
+                    repo=str(root),
+                    checkpoint_base=str(root / 'checkpoints'),
+                    uv='/fixture/uv',
+                    python='/fixture/python',
+                    ntp=self.ntp,
+                    accelerator='cpu',
+                    gpu='fixture',
+                    gpu_evidence=self.gpu
+                )
+            if operation == 'clock':
+                return {'ntp': self.ntp}
+            if operation == 'gpu':
+                if isinstance(self.gpu, Exception):
+                    raise self.gpu
+                return self.gpu
+            if operation == 'training':
+                return dict(
+                    running=self.running,
+                    process_running=self.running,
+                    sessions=['naics-train'] if self.running else [],
+                    exit_code=0
+                )
+            if operation == 'transport_prerequisites':
+                return {'qualified': True}
+            raise AssertionError('unhandled process operation ' + operation)
+
+        def launch(self, script, segment):
+            self.calls.append(('launch', script, segment))
+
+        def interrupt_training(self, segment):
+            self.calls.append(('interrupt', segment))
+            self.running = False
+
+    from datetime import timedelta
+
+    from naics_embedder.remote import launch as launch_module
+
+    class LaunchClock(datetime):
+        tick = 0
+
+        @classmethod
+        def now(cls, tz=None):
+            cls.tick += 1
+            return datetime(2026, 10, 5, 12, tzinfo=timezone.utc) + timedelta(seconds=cls.tick)
+
+    monkeypatch.setattr(launch_module, 'datetime', LaunchClock)
+    monkeypatch.setattr('naics_embedder.remote.push.datetime', LaunchClock)
+    process = Process()
+    physical = tmp_path / 'instance-a'
+    physical.mkdir()
+    for name in ['checkpoints', 'outputs', 'logs', '.remote/segments']:
+        (physical / name).mkdir(parents=True, exist_ok=True)
+    (physical / '.remote/segments/bootstrap').mkdir()
+    (physical / '.remote/segments/bootstrap/exit_code').write_text('0\n')
+    (physical / 'outputs/event').write_text('fixture output\n')
+    (physical / 'logs/selection_log.jsonl').write_text('fixture remote log\n')
+    remote_cfg = RemoteConfig(repo_dir=str(root), rsync_path=gnu_rsync, in_flight_seconds=0)
+    transport = LocalTransport(physical, process, gnu_rsync, logical_root=root, config=remote_cfg)
+    transport.config = remote_cfg
+    transport.repo = str(root)
+    transports = {'a': transport}
+    workflow = RemoteWorkflow(
+        root, remote_cfg, lambda host, config: transports[host], lambda: LaunchClock.now(
+            timezone.utc
+        )
+    )
+    return SimpleNamespace(
+        root=root,
+        cfg=cfg,
+        inputs=inputs,
+        directory=directory,
+        plan=plan,
+        process=process,
+        transport=transport,
+        transports=transports,
+        workflow=workflow,
+        remote_cfg=remote_cfg,
+        loops=loops,
+        tmp_path=tmp_path,
+        gnu_rsync=gnu_rsync,
+        json=json
+    )
