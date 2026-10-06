@@ -285,9 +285,27 @@ def remote_sync_fixture(tmp_path):
     instance.mkdir()
     run = instance / 'checkpoints/run'
     run.mkdir(parents=True)
-    saved = dict(epoch=0, training_run='tiny-run', state_dict={}, hyper_parameters={'seed': 1})
+    from naics_embedder.utils.training import outcome_checkpoint
+    callback = outcome_checkpoint(run)
+    kept = str(run / 'epoch=000.ckpt')
+    saved = dict(
+        epoch=0,
+        training_run='tiny-run',
+        state_dict={},
+        hyper_parameters={'seed': 1},
+        callbacks={
+            callback.state_key: dict(
+                dirpath=str(run),
+                best_model_path=kept,
+                kth_best_model_path=kept,
+                last_model_path=str(run / 'last.ckpt'),
+                best_k_models={kept: torch.tensor(0.5)},
+                best_model_score=torch.tensor(0.5)
+            )
+        }
+    )
     torch.save(saved, run / 'last.ckpt')
-    shutil.copy2(run / 'last.ckpt', run / 'epoch=0.ckpt')
+    shutil.copy2(run / 'last.ckpt', run / 'epoch=000.ckpt')
     read = dict(
         event='read',
         panel='outcome',
@@ -367,6 +385,14 @@ def remote_launch_fixture(remote_workflow_fixture, remote_resume_fixture, monkey
         for callback in saved['callbacks'].values():
             if isinstance(callback, dict) and 'dirpath' in callback:
                 callback['dirpath'] = remote_directory
+                for name in ('best_model_path', 'kth_best_model_path', 'last_model_path'):
+                    if callback.get(name):
+                        callback[name] = remote_directory + '/' + Path(callback[name]).name
+                if 'best_k_models' in callback:
+                    callback['best_k_models'] = {
+                        remote_directory + '/' + Path(name).name: score
+                        for name, score in callback['best_k_models'].items()
+                    }
         torch.save(saved, path)
     base_probe = env.transport.probe
     ntp = [True]
@@ -473,7 +499,7 @@ def remote_finish_fixture(remote_sync_fixture, monkeypatch):
     saved['hyper_parameters']['run_settings'] = {}
     saved['stage3_supervision'] = dict(bundle_id='bundle', codebook_fingerprint='codebook')
     callback = outcome_checkpoint(env.root / 'checkpoints/run')
-    saved['callbacks'] = {callback.state_key: {'dirpath': str(env.run)}}
+    assert saved['callbacks'][callback.state_key]['dirpath'] == str(env.run)
     for path in env.run.glob('*.ckpt'):
         torch.save(saved, path)
     record = RunRecord(
@@ -812,10 +838,8 @@ def local_workflow(remote_repo, tmp_path, monkeypatch, gnu_rsync, minilm_tokeniz
     process = Process()
     physical = tmp_path / 'instance-a'
     physical.mkdir()
-    for name in ['checkpoints', 'outputs', 'logs', '.remote/segments']:
+    for name in ['checkpoints', 'outputs', 'logs']:
         (physical / name).mkdir(parents=True, exist_ok=True)
-    (physical / '.remote/segments/bootstrap').mkdir()
-    (physical / '.remote/segments/bootstrap/exit_code').write_text('0\n')
     (physical / 'outputs/event').write_text('fixture output\n')
     (physical / 'logs/selection_log.jsonl').write_text('fixture remote log\n')
     remote_cfg = RemoteConfig(repo_dir=str(root), rsync_path=gnu_rsync, in_flight_seconds=0)

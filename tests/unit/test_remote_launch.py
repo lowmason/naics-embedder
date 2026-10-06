@@ -232,7 +232,7 @@ def test_verified_pull_binds_training_run_before_session_replacement(
     write_state(env.root, state)
     shutil.rmtree(env.instance / 'checkpoints' / env.cfg.experiment_name)
     replacement = env.workflow.up('replacement', 'conf/config.yaml', [])
-    assert replacement.session_id != origin and replacement.last_sync_manifest is None
+    assert replacement.session_id != origin and replacement.last_sync_manifest is not None
     assert json.loads(run_path.read_text())['training_run'] == record['training_run']
     snapshot = json.loads((env.root / '.remote/session-inputs.json').read_text())
     assert snapshot['session_id'] == replacement.session_id
@@ -490,6 +490,7 @@ def test_remote_output_symlink_refuses_before_gpu(remote_launch_fixture):
     fresh(env)
     target = env.instance / '.remote/unpulled'
     target.mkdir()
+    (env.instance / 'outputs').rmdir()
     (env.instance / 'outputs').symlink_to(target, target_is_directory=True)
     with pytest.raises(ValueError, match='link'):
         launch(env)
@@ -585,3 +586,87 @@ def test_provenance_upload_does_not_hide_late_remote_changes(
     with pytest.raises(ValueError):
         launch(env)
     assert not any(c[0] == 'launch' for c in env.transport.calls)
+
+@pytest.mark.parametrize('transition', ['host', 'finished_same_host', 'marker'])
+@pytest.mark.parametrize(
+    'name', ['last.ckpt', 'epoch_summary.jsonl', 'session_log', 'session_output']
+)
+@pytest.mark.parametrize('remove', [False, True])
+def test_replacement_preserves_verified_mac_bytes(remote_launch_fixture, transition, name, remove):
+    from datetime import timedelta
+
+    from naics_embedder.remote.session import write_state
+    from naics_embedder.remote.sync import sync_once
+    from tests.fixtures.remote import SyncTransport
+
+    env = remote_launch_fixture
+    (env.instance / 'logs').mkdir(exist_ok=True)
+    (env.instance / 'logs/train.log').write_text('original session log')
+    (env.instance / 'outputs').mkdir(exist_ok=True)
+    (env.instance / 'outputs/only-a').write_text('original session output')
+    shutil.copytree(env.directory, env.instance / 'checkpoints' / env.cfg.experiment_name)
+    state = read_state(env.root)
+    sync_once(
+        env.root, state, SyncTransport(root=env.instance), env.workflow.remote_cfg, final=True
+    )
+    old_manifest = env.root / state.last_sync_manifest
+    old_bytes = old_manifest.read_bytes()
+    if transition == 'finished_same_host':
+        state.status = 'finished'
+        write_state(env.root, state)
+    if transition == 'marker':
+        (env.instance / '.remote/pushes/session.json').unlink()
+    env.now[0] += timedelta(seconds=2)
+    replacement = env.workflow.up(
+        'replacement' if transition == 'host' else state.host, 'conf/config.yaml', [], force=True
+    )
+    assert old_manifest.read_bytes() == old_bytes
+    path = (
+        env.root / 'logs/remote' / state.session_id / 'train.log'
+        if name == 'session_log' else env.root / 'outputs/remote' / state.session_id / 'only-a'
+        if name == 'session_output' else env.directory / name
+    )
+    path.unlink() if remove else path.write_bytes(b'altered Mac evidence')
+    sync_transport = SyncTransport(root=env.instance, calls=env.transport.calls)
+    env.transport.pull = sync_transport.pull
+    env.transport.checksum = sync_transport.checksum
+    env.transport.calls.clear()
+    for action in (
+        lambda: sync_once(
+            env.root, replacement, env.transport, env.workflow.remote_cfg, final=True
+        ),
+        lambda: env.workflow.train(True, 'conf/config.yaml', []),
+        lambda: env.workflow.finish(),
+    ):
+        with pytest.raises(ValueError, match='Mac file changed'):
+            action()
+        assert not path.exists() if remove else path.read_bytes() == b'altered Mac evidence'
+    assert not any(call[0] in {'push', 'pull', 'launch'} for call in env.transport.calls)
+
+def test_failed_replacement_up_retains_inherited_integrity(remote_launch_fixture):
+    from datetime import timedelta
+
+    from naics_embedder.remote.sync import sync_once
+    from tests.fixtures.remote import SyncTransport
+
+    env = remote_launch_fixture
+    (env.instance / 'logs').mkdir(exist_ok=True)
+    (env.instance / 'logs/train.log').write_text('original A log')
+    state = read_state(env.root)
+    sync_once(
+        env.root, state, SyncTransport(root=env.instance), env.workflow.remote_cfg, final=True
+    )
+    env.now[0] += timedelta(seconds=2)
+    env.transport.bootstrap_error = True
+    with pytest.raises(RuntimeError, match='bootstrap failed'):
+        env.workflow.up('replacement', 'conf/config.yaml', [], force=True)
+    pending = read_state(env.root)
+    assert pending.status == 'preparing' and pending.last_sync_manifest is not None
+    path = env.root / 'logs/remote' / state.session_id / 'train.log'
+    path.write_text('altered A log')
+    env.transport.bootstrap_error = False
+    env.transport.calls.clear()
+    with pytest.raises(ValueError, match='Mac file changed'):
+        env.workflow.up('replacement', 'conf/config.yaml', [], force=True)
+    assert path.read_text() == 'altered A log'
+    assert not any(call[0] == 'push' for call in env.transport.calls)

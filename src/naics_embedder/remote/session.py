@@ -66,6 +66,7 @@ class RemoteState(BaseModel):
     last_sync_utc: datetime | None = None
     unreachable_since: datetime | None = None
     last_sync_manifest: str | None = None
+    last_sync_manifest_sha256: str | None = None
 
     @field_validator('started_utc', 'last_sync_utc', 'unreachable_since')
     @classmethod

@@ -135,6 +135,7 @@ def test_no_run_returns_explicit_null_checkpoint(remote_finish_fixture):
     shutil.rmtree(env.root / '.remote/runs')
     env.state.active_segment_id = None
     env.state.last_sync_manifest = None
+    env.state.last_sync_manifest_sha256 = None
     from naics_embedder.remote.session import write_state
     write_state(env.root, env.state)
     result = env.workflow.finish()

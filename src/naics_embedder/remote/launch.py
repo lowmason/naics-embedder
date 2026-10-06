@@ -185,6 +185,8 @@ def _ready_code(root: Path, state: RemoteState, transport: object) -> PushRecord
         raise ValueError('pending push; rerun remote up before launch')
     if os.path.lexists(root / '.remote/pulls/pending.json'):
         raise ValueError('pending pull promotion; sync/recover first before launch')
+    from naics_embedder.remote.sync import verify_local_sync_manifest
+    verify_local_sync_manifest(root, state)
     record = read_push_record(root, state.push_id)
     if code_entries(root) != record.entries or git_bytes(root, 'rev-parse', 'HEAD'
                                                          ).decode().strip() != record.head_sha:

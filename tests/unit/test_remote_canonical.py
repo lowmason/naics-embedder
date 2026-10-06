@@ -452,3 +452,83 @@ def test_malformed_manifest_structure_refuses_before_loader(remote_repo, monkeyp
     with pytest.raises(ValueError, match='malformed manifest') as error:
         canonical_inputs(remote_repo.root, remote_repo.config)
     assert str(manifest) in str(error.value)
+
+@pytest.mark.parametrize('reference', ['best_model_path', 'kth_best_model_path', 'best_k_models'])
+def test_every_authoritative_kept_reference_is_required(remote_resume_fixture, reference):
+    from naics_embedder.utils.training import outcome_checkpoint
+
+    env = remote_resume_fixture
+    key = outcome_checkpoint(env.directory).state_key
+    missing = env.remote_directory + '/epoch=001.ckpt'
+    (env.directory / 'epoch=001.ckpt').unlink(missing_ok=True)
+
+    def change(saved):
+        callback = saved['callbacks'][key]
+        if reference == 'best_k_models':
+            callback[reference][missing] = torch.tensor(0.1)
+        else:
+            callback[reference] = missing
+
+    mutate_checkpoint(env, change)
+    with pytest.raises(ValueError, match='kept'):
+        plan(env)
+
+@pytest.mark.parametrize(
+    'mismatch', [
+        'outside_reference', 'unnormalized_reference', 'kept_directory', 'kept_seed', 'kept_epoch'
+    ]
+)
+def test_kept_set_identity_and_literal_directory_refuse(remote_resume_fixture, mismatch):
+    from naics_embedder.utils.training import outcome_checkpoint
+
+    env = remote_resume_fixture
+    key = outcome_checkpoint(env.directory).state_key
+    kept = next(env.directory.glob('epoch=*.ckpt'))
+    if mismatch in ('outside_reference', 'unnormalized_reference'):
+
+        def change(saved):
+            saved['callbacks'][key]['best_model_path'] = (
+                '/outside/' + kept.name if mismatch == 'outside_reference' else env.remote_directory
+                + '/../' + env.directory.name + '/' + kept.name
+            )
+
+        mutate_checkpoint(env, change)
+    else:
+        saved = read_checkpoint(kept)
+        if mismatch == 'kept_directory':
+            saved['callbacks'][key]['dirpath'] = '/other/literal/directory'
+        elif mismatch == 'kept_seed':
+            saved['hyper_parameters']['seed'] += 1
+        else:
+            saved['epoch'] += 1
+        torch.save(saved, kept)
+    with pytest.raises(ValueError, match='kept|directory'):
+        plan(env)
+
+def test_earliest_best_tie_requires_its_checkpoint_even_when_later_exists(remote_resume_fixture):
+    from naics_embedder.utils.training import outcome_checkpoint
+
+    env = remote_resume_fixture
+    key = outcome_checkpoint(env.directory).state_key
+    saved = read_checkpoint(env.directory / 'last.ckpt')
+    for name in ('monitor_reads.jsonl', 'epoch_summary.jsonl'):
+        path = env.directory / name
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for row in rows:
+            row['mrr'] = 0.5
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    later = env.remote_directory + '/epoch=001.ckpt'
+    callback = saved['callbacks'][key]
+    callback.update(
+        best_model_path=later,
+        kth_best_model_path=later,
+        best_k_models={later: torch.tensor(0.5)},
+        best_model_score=torch.tensor(0.5)
+    )
+    for path in env.directory.glob('epoch=*.ckpt'):
+        path.unlink()
+    torch.save(saved, env.directory / 'last.ckpt')
+    saved['epoch'] = 1
+    torch.save(saved, env.directory / 'epoch=001.ckpt')
+    with pytest.raises(ValueError, match='selected.*000|kept.*000'):
+        plan(env)

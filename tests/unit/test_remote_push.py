@@ -84,7 +84,7 @@ def test_force_journal_never_names_generated_credentials(remote_workflow_fixture
     up(env)
     (env.instance / '.aws').mkdir()
     (env.instance / '.aws/credentials').write_text('sensitive')
-    (env.instance / 'outputs').mkdir()
+    assert (env.instance / 'outputs').is_dir()
     (env.instance / 'outputs/result').write_text('result')
     (env.instance / 'new.py').write_text('new code')
     up(env, force=True)

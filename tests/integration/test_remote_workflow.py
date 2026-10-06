@@ -231,3 +231,110 @@ def test_pending_promotion_recovery_blocks_launch_until_coherent(local_workflow,
     assert not (env.root / '.remote/pulls/pending.json').exists()
     assert hashes(env.directory) == hashes(env.transport.root / 'checkpoints/qualification')
     assert not train(env).skipped
+
+@pytest.mark.parametrize('kind', ['pushes', 'segments'])
+@pytest.mark.parametrize('boundary', ['ssh', 'local'])
+def test_production_ssh_first_metadata_upload_with_gnu(tmp_path, gnu_rsync, kind, boundary):
+    import shlex
+    import sys
+
+    from naics_embedder.remote.transport import SshTransport
+
+    source, repo = tmp_path / 'source', tmp_path / 'instance'
+    source.mkdir()
+    repo.mkdir()
+    (source / 'record.json').write_text('first immutable record')
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append(argv)
+        if argv[0] == 'ssh':
+            command = shlex.split(argv[-1])
+            return subprocess.run(
+                [sys.executable, '-I', *command[1:]],
+                input=kwargs['input'],
+                capture_output=True,
+                timeout=kwargs['timeout']
+            )
+        if '--version' in argv:
+            return subprocess.run(argv, capture_output=True, timeout=kwargs['timeout'])
+        local = list(argv)
+        index = local.index('-e')
+        del local[index:index + 2]
+        local[-1] = local[-1].split(':', 1)[1]
+        return subprocess.run(
+            local, input=kwargs['input'], capture_output=True, timeout=kwargs['timeout']
+        )
+
+    transport = (
+        SshTransport('fixture', str(repo), gnu_rsync, runner)
+        if boundary == 'ssh' else LocalTransport(repo, None, gnu_rsync)
+    )
+    destination = repo / '.remote' / kind / 'first'
+    transport.push(source, str(destination), ('record.json', ))
+    assert (destination / 'record.json').read_bytes() == (source / 'record.json').read_bytes()
+    if boundary == 'ssh':
+        assert any(argv[0] == 'ssh' for argv in calls)
+
+def test_first_workflow_segment_upload_has_no_precreated_parent(local_workflow):
+    import shutil
+
+    env = local_workflow
+    up(env)
+    shutil.rmtree(env.transport.root / '.remote/segments', ignore_errors=True)
+    result = train(env)
+    assert not result.skipped
+    assert (env.transport.root / '.remote/segments' / result.segment_id / 'segment.json').is_file()
+
+def test_sparse_up_finish_qualifies_empty_owned_roots(local_workflow, monkeypatch):
+    import shutil
+
+    env = local_workflow
+    for name in ('checkpoints', 'outputs', 'logs', '.remote/segments'):
+        shutil.rmtree(env.transport.root / name, ignore_errors=True)
+    up(env)
+    assert not list((env.transport.root / '.remote/segments').glob('*/segment.json'))
+    checks = []
+    checksum = env.transport.checksum
+
+    def qualified_checksum(mapping):
+        checks.append(mapping.source)
+        return checksum(mapping)
+
+    monkeypatch.setattr(env.transport, 'checksum', qualified_checksum)
+    result = env.workflow.finish()
+    assert len(checks) == 4 and len(set(checks)) == 4
+    assert result.safe and result.latest_checkpoint is None
+    assert result.local_sha256 is None and result.remote_sha256 is None
+    for name in ('checkpoints', 'outputs', 'logs', '.remote/segments'):
+        assert (env.transport.root / name).is_dir()
+
+@pytest.mark.parametrize('boundary', ['once', 'finish', 'resume'])
+def test_missing_authoritative_kept_epoch_refuses_before_acceptance(local_workflow, boundary):
+    import shutil
+
+    env = local_workflow
+    state = up(env)
+    kept = next(env.directory.glob('epoch=*.ckpt'))
+    if boundary == 'resume':
+        kept.unlink()
+        before = hashes(env.directory)
+        with pytest.raises(ValueError, match='kept|selected'):
+            train(env)
+        assert hashes(env.directory) == before
+        assert not list((env.transport.root / '.remote/segments').glob('*/segment.json'))
+        assert not any(
+            call[:2] == ('probe', 'gpu') or call[0] == 'launch' for call in env.process.calls
+        )
+        assert not (env.transport.root / 'checkpoints/qualification/last.ckpt').exists()
+    else:
+        train(env)
+        (env.transport.root / 'checkpoints/qualification' / kept.name).unlink()
+        shutil.rmtree(env.directory)
+        before = hashes(env.transport.root / 'checkpoints/qualification')
+        with pytest.raises(ValueError, match='kept|selected'):
+            env.workflow.sync(once=True) if boundary == 'once' else env.workflow.finish()
+        assert not (env.directory / 'last.ckpt').exists()
+        assert hashes(env.transport.root / 'checkpoints/qualification') == before
+        assert read_state(env.root).status == 'ready'
+    assert state.last_sync_manifest is None

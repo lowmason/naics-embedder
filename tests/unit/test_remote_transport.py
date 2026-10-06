@@ -862,3 +862,77 @@ def test_hydrated_integrity_probe_uses_fixed_local_source(recorded_transport_run
 def test_initial_controlled_scan_accepts_absent_repository(tmp_path, rendered):
     scan, _ = integrity_functions(rendered)
     assert scan(tmp_path / 'absent', dict(expected=[], ignore=[])) == {'files': []}
+
+@pytest.mark.parametrize('kind', ['pushes', 'segments'])
+def test_first_ssh_metadata_upload_prepares_empty_parents(tmp_path, kind):
+    import shutil
+    import sys
+
+    source, repo = tmp_path / 'source', tmp_path / 'instance'
+    source.mkdir()
+    repo.mkdir()
+    (source / 'record.json').write_text('immutable fixture')
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if argv[0] == 'ssh':
+            command = shlex.split(argv[-1])
+            assert command[:2] == ['python3', '-c']
+            assert 'naics_embedder' not in command[2]
+            return subprocess.run(
+                [sys.executable, '-I', *command[1:]],
+                input=kwargs['input'],
+                capture_output=True,
+                timeout=kwargs['timeout']
+            )
+        if '--version' in argv:
+            return subprocess.CompletedProcess(argv, 0, b'rsync  version 3.2.0', b'')
+        target = Path(argv[-1].split(':', 1)[1])
+        if not target.parent.is_dir():
+            return subprocess.CompletedProcess(argv, 23, b'', b'missing upload parents')
+        target.mkdir(exist_ok=True)
+        shutil.copy2(source / 'record.json', target / 'record.json')
+        return subprocess.CompletedProcess(argv, 0, b'', b'')
+
+    from pathlib import Path
+    transport = SshTransport('fixture', str(repo), 'rsync', runner)
+    destination = repo / '.remote' / kind / 'first'
+    transport.push(source, str(destination), ('record.json', ))
+    assert (destination / 'record.json').read_bytes() == (source / 'record.json').read_bytes()
+    preparation = [call for call in calls if call[0][0] == 'ssh']
+    assert len(preparation) == 1 and preparation[0][1]['timeout'] == 120
+    assert calls[-1][1]['timeout'] == 1800
+
+@pytest.mark.parametrize('parent', ['.remote', '.remote/pushes'])
+def test_ssh_upload_parent_symlink_refuses_before_transfer(tmp_path, parent):
+    import sys
+
+    source, repo, outside = tmp_path / 'source', tmp_path / 'instance', tmp_path / 'outside'
+    source.mkdir()
+    repo.mkdir()
+    outside.mkdir()
+    (source / 'record').write_text('fixture')
+    link = repo / parent
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside, target_is_directory=True)
+    transfers = []
+
+    def runner(argv, **kwargs):
+        if argv[0] == 'ssh':
+            command = shlex.split(argv[-1])
+            return subprocess.run(
+                [sys.executable, '-I', *command[1:]],
+                input=kwargs['input'],
+                capture_output=True,
+                timeout=kwargs['timeout']
+            )
+        if '--version' in argv:
+            return subprocess.CompletedProcess(argv, 0, b'rsync  version 3.2.0', b'')
+        transfers.append(argv)
+        return subprocess.CompletedProcess(argv, 0, b'', b'')
+
+    transport = SshTransport('fixture', str(repo), 'rsync', runner)
+    with pytest.raises((ValueError, RuntimeError), match='upload|directory|Not a directory'):
+        transport.push(source, str(repo / '.remote/pushes/first'), ('record', ))
+    assert not transfers and not list(outside.iterdir())

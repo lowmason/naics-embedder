@@ -3,8 +3,9 @@
 import json
 import math
 import pickle
+import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 import torch
@@ -23,6 +24,7 @@ from naics_embedder.text_model.monitor import MONITOR_RECORDS, read_monitor_reco
 from naics_embedder.utils.config import Config
 from naics_embedder.utils.training import (
     effective_precision,
+    outcome_checkpoint,
     outcome_early_stopping,
     read_checkpoint,
     refuse_a_resume_from_another_directory,
@@ -214,6 +216,103 @@ def _histories(directory: Path, epoch: int, training_run: str, seed: int) -> Non
         if row['mrr'] is None:
             raise ValueError('epoch summary needs a finite monitor MRR')
 
+def validate_continuation_set(
+    directory: Path, saved: Mapping[str, Any], remote_directory: str
+) -> None:
+    '''Require the authoritative kept set and earliest-best monitor epoch without rewriting bytes.'''
+    refuse_a_resume_from_another_directory(saved, directory, resolved_dirpath=remote_directory)
+    epoch = _epoch(saved.get('epoch'))
+    run = saved.get('training_run')
+    seed = saved.get('hyper_parameters', {}).get('seed')
+    if (
+        not isinstance(run, str) or not run.strip() or isinstance(seed, bool) or not isinstance(
+            seed, int
+        )
+    ):
+        raise ValueError('checkpoint names no run or integer seed')
+    _histories(directory, epoch, run, seed)
+    key = outcome_checkpoint(directory).state_key
+    callback = saved['callbacks'][key]
+    if (
+        not isinstance(callback.get('best_model_path'), str) or not callback['best_model_path']
+        or not isinstance(callback.get('best_k_models'), dict) or not callback['best_k_models']
+    ):
+        raise ValueError('checkpoint names no authoritative kept ModelCheckpoint set')
+    required = set()
+    for state in saved['callbacks'].values():
+        if not isinstance(state, dict) or 'dirpath' not in state:
+            continue
+        if state['dirpath'] != remote_directory:
+            raise ValueError('kept callback directory differs from literal run directory')
+        references = [
+            state.get(field)
+            for field in ('best_model_path', 'kth_best_model_path', 'last_model_path')
+        ]
+        kept = state.get('best_k_models', {})
+        if not isinstance(kept, dict):
+            raise ValueError('malformed authoritative kept checkpoint mapping')
+        references.extend(kept)
+        for reference in references:
+            if reference in ('', None):
+                continue
+            if not isinstance(reference, str):
+                raise ValueError('kept checkpoint reference must be a literal path')
+            path = PurePosixPath(reference)
+            if '..' in path.parts or str(path) != reference:
+                raise ValueError('kept checkpoint reference is not a normalized literal path')
+            try:
+                relative = path.relative_to(PurePosixPath(remote_directory))
+            except ValueError as error:
+                raise ValueError(
+                    'kept checkpoint reference escapes literal run directory'
+                ) from error
+            if not relative.parts or path.suffix != '.ckpt':
+                raise ValueError('kept checkpoint reference names no checkpoint file')
+            required.add(directory / str(relative))
+    monitors = [
+        row for row in read_monitor_records(directory / MONITOR_RECORDS)
+        if row['read']['detail']['epoch'] <= epoch
+    ]
+    best = max(row['mrr'] for row in monitors)
+    selected_epoch = min(row['read']['detail']['epoch'] for row in monitors if row['mrr'] == best)
+    selected = directory / f'epoch={selected_epoch:03d}.ckpt'
+    required.add(selected)
+    for path in sorted(required):
+        if not path.is_file():
+            raise ValueError(f'missing authoritative kept or selected checkpoint: {path}')
+        _regular_file(directory, path)
+    if list(directory.glob(f'epoch={selected_epoch:03d}-v*.ckpt')):
+        raise ValueError('selected kept checkpoint has ambiguous version siblings')
+    for path in directory.rglob('*.ckpt'):
+        _regular_file(directory, path)
+        checkpoint = read_checkpoint(path)
+        kept_epoch = _epoch(checkpoint.get('epoch'))
+        kept_seed = checkpoint.get('hyper_parameters', {}).get('seed')
+        if (
+            not isinstance(checkpoint.get('state_dict'), Mapping) or
+            checkpoint.get('training_run') != run or isinstance(kept_seed, bool) or not isinstance(
+                kept_seed, int
+            ) or kept_seed != seed or kept_epoch > epoch
+        ):
+            raise ValueError('kept checkpoint names another run, seed or later epoch')
+        refuse_a_resume_from_another_directory(
+            checkpoint, directory, resolved_dirpath=remote_directory
+        )
+        named_epoch = re.fullmatch(r'epoch=(\d+)(?:-v\d+)?\.ckpt', path.name)
+        if named_epoch and int(named_epoch[1]) != kept_epoch:
+            raise ValueError('kept checkpoint filename and saved epoch differ')
+        if path == selected:
+            score = checkpoint['callbacks'][key].get('best_model_score')
+            if isinstance(score, torch.Tensor) and score.numel() == 1:
+                score = score.item()
+            if (
+                isinstance(score, bool) or not isinstance(score, (int, float))
+                or not math.isfinite(score) or score != best or kept_epoch != selected_epoch
+            ):
+                raise ValueError(
+                    'selected kept checkpoint epoch or best score differs from monitor'
+                )
+
 # -------------------------------------------------------------------------------------------------
 # Exact resume plan
 # -------------------------------------------------------------------------------------------------
@@ -275,7 +374,7 @@ def resume_plan(root: Path, cfg: Config, inputs: InputSet, remote_directory: str
     training_run = saved.get('training_run')
     if not isinstance(training_run, str) or not training_run.strip():
         raise ValueError('last.ckpt names no training run')
-    _histories(directory, epoch, training_run, cfg.seed)
+    validate_continuation_set(directory, saved, remote_directory)
     finished, reason = finished_run(
         saved, cfg.training.early_stopping_patience, cfg.training.trainer.max_epochs
     )

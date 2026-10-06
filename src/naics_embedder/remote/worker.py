@@ -646,6 +646,11 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
             'session_id': session,
             'push_id': push_id
         }
+    if operation == 'prepare_results':
+        from naics_embedder.remote.transport import _prepare_upload_directory
+        for name in ('checkpoints', 'outputs', 'logs', '.remote/segments'):
+            _prepare_upload_directory(root, str(root / name))
+        return {'prepared': True}
     if operation == 'gpu':
         if payload.get('action') == 'status':
             return _gpu_status()

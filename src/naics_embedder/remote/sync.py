@@ -1,7 +1,9 @@
 '''Coherent staged result pulls with recoverable promotion and cumulative Mac integrity.'''
 
+import hashlib
 import json
 import os
+import stat
 import subprocess
 import tempfile
 import uuid
@@ -17,7 +19,7 @@ from naics_embedder.remote.session import (
     state_lock,
     write_state,
 )
-from naics_embedder.remote.transport import safe_files
+from naics_embedder.remote.transport import _prepare_upload_directory, safe_files
 from naics_embedder.remote.worker import (
     _code_item_at,
     _code_item_from,
@@ -64,19 +66,73 @@ def _local_hash(root: Path, name: str) -> str | None:
         raise ValueError(f'unsafe Mac file: {name}')
     return item['sha256']
 
-def _manifest(root: Path, state: RemoteState) -> dict[str, str]:
-    if state.last_sync_manifest is None:
-        return {}
-    name = state.last_sync_manifest
+def _manifest_record(root: Path, name: str, session_id: str, digest: str | None) -> dict:
     safe_files((name, ))
     if not name.startswith('.remote/pulls/') or not name.endswith('/manifest.json'):
         raise ValueError('invalid sync manifest reference')
-    if _local_hash(root, name) is None:
+    actual = _local_hash(root, name)
+    if actual is None:
         raise ValueError('missing successful sync manifest')
-    record = json.loads((root / name).read_text())
-    if record['session_id'] != state.session_id or not isinstance(record['files'], dict):
+    if digest is None or actual != digest:
+        raise ValueError('successful sync manifest hash changed or missing')
+    descriptor = _root_descriptor(root)
+    parent = None
+    try:
+        parent = _parent_descriptor(descriptor, name)
+        opened = os.open(
+            name.split('/')[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent
+        )
+        with os.fdopen(opened, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError('unsafe sync manifest file')
+            content = stream.read()
+    finally:
+        for opened in (parent, descriptor):
+            if opened is not None:
+                os.close(opened)
+    if hashlib.sha256(content).hexdigest() != digest:
+        raise ValueError('successful sync manifest changed during read')
+    record = json.loads(content)
+    if record['session_id'] != session_id or not isinstance(record['files'], dict):
         raise ValueError('sync manifest session mismatch')
-    return record['files']
+    for inherited in record.get('inherited', []):
+        original = _manifest_record(
+            root, inherited['reference'], inherited['session_id'], inherited['sha256']
+        )
+        if not original['files'].keys() <= record['files'].keys():
+            raise ValueError('inherited sync manifest lost cumulative paths')
+    return record
+
+def _manifest(root: Path, state: RemoteState) -> dict[str, str]:
+    if state.last_sync_manifest is None:
+        if state.last_sync_manifest_sha256 is not None:
+            raise ValueError('sync manifest digest has no reference')
+        return {}
+    return _manifest_record(
+        root, state.last_sync_manifest, state.session_id, state.last_sync_manifest_sha256
+    )['files']
+
+def inherit_sync_manifest(root: Path, old: RemoteState, state: RemoteState) -> None:
+    '''Publish a new session baseline under the caller's state lock, retaining old provenance.'''
+    verify_local_sync_manifest(root, old)
+    if old.last_sync_manifest is None:
+        return
+    reference = '.remote/pulls/' + uuid.uuid4().hex + '/manifest.json'
+    record = dict(
+        session_id=state.session_id,
+        files=_manifest(root, old),
+        inherited=[
+            dict(
+                reference=old.last_sync_manifest,
+                session_id=old.session_id,
+                sha256=old.last_sync_manifest_sha256
+            )
+        ]
+    )
+    digest = _publish_manifest(root, reference, record)
+    state.last_sync_manifest = reference
+    state.last_sync_manifest_sha256 = digest
+    state.last_sync_utc = old.last_sync_utc
 
 def verify_local_sync_manifest(root: Path, state: RemoteState) -> None:
     '''Verify every cumulative successful Mac copy; never repair tampering silently.'''
@@ -110,6 +166,32 @@ def _promotion_parent(root: int, name: str) -> int:
     except BaseException:
         os.close(descriptor)
         raise
+
+def _publish_manifest(root: Path, reference: str, record: dict) -> str:
+    safe_files((reference, ))
+    content = (json.dumps(record, sort_keys=True) + '\n').encode()
+    descriptor = _root_descriptor(root)
+    parent = None
+    temporary = 'record-' + uuid.uuid4().hex
+    try:
+        parent = _promotion_parent(descriptor, reference)
+        opened = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent
+        )
+        with os.fdopen(opened, 'wb') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, reference.split('/')[-1], src_dir_fd=parent, dst_dir_fd=parent)
+    finally:
+        if parent is not None:
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+            os.close(parent)
+        os.close(descriptor)
+    return hashlib.sha256(content).hexdigest()
 
 def _verify_pending_destinations(root: Path, previous: dict, replacements: dict) -> None:
     for name, digest in previous.items():
@@ -158,6 +240,14 @@ def recover_pending_promotion(root: Path, state: RemoteState) -> None:
         raise ValueError('pending promotion belongs to another session')
     replacements = record['replacements']
     previous = _manifest(root, state)
+    inherited = (
+        _manifest_record(
+            root, state.last_sync_manifest, state.session_id, state.last_sync_manifest_sha256
+        ).get('inherited', []) if state.last_sync_manifest else []
+    )
+    expected = {**previous, **{name: item['new'] for name, item in replacements.items()}}
+    if record['files'] != expected or record.get('inherited', []) != inherited:
+        raise ValueError('pending promotion changed cumulative baseline or provenance')
     # Validate the entire transaction before completing even one replacement.
     _verify_pending_destinations(root, previous, replacements)
     for name, item in replacements.items():
@@ -178,8 +268,12 @@ def recover_pending_promotion(root: Path, state: RemoteState) -> None:
         if _local_hash(root, name) != item['new']:
             raise ValueError(f'Mac replacement changed during promotion: {name}')
     reference = record['pass_directory'] + '/manifest.json'
-    _atomic_json(root / reference, dict(session_id=state.session_id, files=record['files']))
+    digest = _publish_manifest(
+        root, reference,
+        dict(session_id=state.session_id, files=record['files'], inherited=inherited)
+    )
     state.last_sync_manifest = reference
+    state.last_sync_manifest_sha256 = digest
     state.last_sync_utc = datetime.fromisoformat(record['utc'])
     state.unreachable_since = None
     write_state(root, state)
@@ -242,29 +336,15 @@ def _source_inventory(transport: object, source: str) -> dict[str, dict]:
         result[name] = item
     return result
 
-def _validate_run(directory: Path) -> None:
-    from naics_embedder.remote.canonical import _epoch, _histories
-    from naics_embedder.utils.training import read_checkpoint
+def _validate_run(directory: Path, remote_directory: str | None = None) -> None:
+    from naics_embedder.remote.canonical import validate_continuation_set
+    from naics_embedder.utils.training import outcome_checkpoint, read_checkpoint
     try:
         saved = read_checkpoint(directory / 'last.ckpt')
-        epoch = _epoch(saved.get('epoch'))
-        run = saved.get('training_run')
-        seed = saved.get('hyper_parameters', {}).get('seed')
-        if not isinstance(run, str) or not run.strip() or isinstance(seed, bool) or not isinstance(
-            seed, int
-        ):
-            raise ValueError('checkpoint names no run or integer seed')
-        for path in directory.rglob('*.ckpt'):
-            checkpoint = read_checkpoint(path)
-            if (
-                not isinstance(checkpoint.get('state_dict'), dict) or checkpoint.get(
-                    'training_run'
-                ) != run or checkpoint.get('hyper_parameters', {}).get('seed') != seed or _epoch(
-                    checkpoint.get('epoch')
-                ) > epoch
-            ):
-                raise ValueError('kept checkpoint names another run, seed or later epoch')
-        _histories(directory, epoch, run, seed)
+        if remote_directory is None:
+            key = outcome_checkpoint(directory).state_key
+            remote_directory = saved.get('callbacks', {}).get(key, {}).get('dirpath')
+        validate_continuation_set(directory, saved, remote_directory)
     except Exception as error:
         raise ValueError(f'incoherent checkpoint/history run: {directory}: {error}') from error
 
@@ -300,6 +380,11 @@ def sync_once_locked(
         if state.remote_info is None:
             raise ValueError('sync requires recorded remote identity')
         previous = _manifest(root, state)
+        inherited = (
+            _manifest_record(
+                root, state.last_sync_manifest, state.session_id, state.last_sync_manifest_sha256
+            ).get('inherited', []) if state.last_sync_manifest is not None else []
+        )
         cumulative = dict(previous)
         pass_directory = '.remote/pulls/' + uuid.uuid4().hex
         replacements = {}
@@ -344,7 +429,7 @@ def sync_once_locked(
                     raise ValueError(f'unstable or truncated staged copy: {name}')
             if index == 0:
                 for run in {name.split('/')[0] for name in selected}:
-                    _validate_run(stage / run)
+                    _validate_run(stage / run, mapping.source + '/' + run)
             for name in sorted(selected):
                 local = (mapping.destination / name).relative_to(root).as_posix()
                 digest = before[name]['sha256']
@@ -368,6 +453,7 @@ def sync_once_locked(
                 pass_directory=pass_directory,
                 replacements=replacements,
                 files=cumulative,
+                inherited=inherited,
                 utc=now.isoformat()
             )
         )
@@ -384,5 +470,6 @@ def verify_final_mappings(root: Path, state: RemoteState, transport: object) -> 
     if state.remote_info is None:
         raise ValueError('final checksum requires remote identity')
     for mapping in pull_mappings(root, state.session_id, state.remote_info):
+        _prepare_upload_directory(root, str(mapping.destination))
         for line in transport.checksum(mapping):
             raise ValueError(f'final checksum difference: {line}')

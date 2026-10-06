@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import os
 import re
 import shlex
 import shutil
@@ -10,7 +11,12 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from naics_embedder.remote.session import GpuEvidence, PullMapping
-from naics_embedder.remote.worker import _credential_name, _generated_name
+from naics_embedder.remote.worker import (
+    _credential_name,
+    _generated_name,
+    _open_directory,
+    _root_descriptor,
+)
 from naics_embedder.utils.config import RemoteConfig
 
 # -------------------------------------------------------------------------------------------------
@@ -20,7 +26,7 @@ from naics_embedder.utils.config import RemoteConfig
 OPERATIONS = frozenset(
     {
         'identity', 'transport_prerequisites', 'bootstrap', 'canonical', 'inventory', 'training',
-        'gpu', 'write_record', 'launch_lock', 'edits', 'clock'
+        'gpu', 'write_record', 'launch_lock', 'edits', 'clock', 'prepare_results'
     }
 )
 SSH_OPTIONS = [
@@ -52,6 +58,52 @@ if not qualified():
     if p.returncode: raise SystemExit('rsync prerequisite: distro installation failed')
 if not qualified(): raise SystemExit('rsync prerequisite: distro GNU rsync must be >=3.2')
 print(json.dumps({'rsync':shutil.which('rsync'),'qualified':True}))"""
+
+def _prepare_upload_directory(root: Path, destination: str) -> None:
+    '''Prepare only a literal repo-contained upload directory, without following links.'''
+    target = Path(destination)
+    if (
+        not root.is_absolute() or not target.is_absolute() or '..' in root.parts + target.parts
+        or str(root) == '/' or str(target) != destination
+    ):
+        raise ValueError('upload destination must be a normalized absolute repo path')
+    try:
+        relative = target.relative_to(root)
+    except ValueError as error:
+        raise ValueError('upload destination escapes recorded repo') from error
+    parent = _root_descriptor(root.parent)
+    try:
+        try:
+            os.mkdir(root.name, dir_fd=parent)
+        except FileExistsError:
+            pass
+        descriptor = _open_directory(root.name, parent)
+    finally:
+        os.close(parent)
+    try:
+        for part in relative.parts:
+            try:
+                os.mkdir(part, dir_fd=descriptor)
+            except FileExistsError:
+                pass
+            child = _open_directory(part, descriptor)
+            os.close(descriptor)
+            descriptor = child
+    finally:
+        os.close(descriptor)
+
+def _upload_preparation_code(results: bool = False) -> str:
+    functions = (_open_directory, _root_descriptor, _prepare_upload_directory)
+    action = (
+        "for name in ('checkpoints','outputs','logs','.remote/segments'):\n"
+        " _prepare_upload_directory(Path(p['repo']),str(Path(p['repo'])/name))\n"
+        if results else "_prepare_upload_directory(Path(p['repo']),p['destination'])\n"
+    )
+    return (
+        'import json,os,sys\nfrom pathlib import Path\n' + '\n'.join(
+            inspect.getsource(function) for function in functions
+        ) + '\np=json.load(sys.stdin)\n' + action + "print(json.dumps({'prepared':True}))"
+    )
 
 def gnu_rsync_version(banner: str) -> tuple[int, int, int]:
     '''Require GNU rsync 3.2+; compatibility banners do not qualify.'''
@@ -259,6 +311,10 @@ class SshTransport:
             result = self._ssh(['python3', '-c', IDENTITY_CODE], payload)
             self.repo = str(result['repo'])
             return result
+        if operation == 'prepare_results':
+            return self._ssh(
+                ['python3', '-c', _upload_preparation_code(results=True)], {'repo': self.repo}
+            )
         if operation == 'transport_prerequisites':
             return self._ssh(['python3', '-c', PREREQUISITE_CODE], payload, 700)
         if operation == 'bootstrap':
@@ -320,6 +376,12 @@ class SshTransport:
     def push(self, source: Path, destination: str, files: tuple[str, ...]) -> None:
         safe_files(files)
         _contained_files(source, files)
+        self._ssh(
+            ['python3', '-c', _upload_preparation_code()], {
+                'repo': self.repo,
+                'destination': destination
+            }
+        )
         self._transfer(str(source), self.host + ':' + destination, files, True)
 
     def pull(self, source: str, destination: Path, files: tuple[str, ...]) -> None:
@@ -385,7 +447,7 @@ class LocalTransport:
         resolved = path.resolve()
         if not resolved.is_relative_to(self.root):
             raise ValueError('destination escapes local instance root')
-        return resolved
+        return path
 
     def probe(self, operation: str, payload: dict[str, object]) -> dict[str, object]:
         from naics_embedder.remote.worker import run_probe
@@ -434,7 +496,9 @@ class LocalTransport:
         )
 
     def push(self, source: Path, destination: str, files: tuple[str, ...]) -> None:
-        self._transfer(source, self._path(destination), files)
+        target = self._path(destination)
+        _prepare_upload_directory(self.root, str(target))
+        self._transfer(source, target, files)
 
     def pull(self, source: str, destination: Path, files: tuple[str, ...]) -> None:
         self._transfer(self._path(source), destination, files)

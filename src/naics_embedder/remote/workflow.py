@@ -356,6 +356,9 @@ class RemoteWorkflow:
                     known.add(old.session_id)
                 session = new_id('session', now, known)
                 state = RemoteState(host=host, session_id=session, started_utc=now)
+                if old is not None:
+                    from naics_embedder.remote.sync import inherit_sync_manifest
+                    inherit_sync_manifest(self.root, old, state)
                 if old is not None and old.host == host:
                     state.push_id = old.push_id
                     state.pending_push_id = old.pending_push_id
@@ -425,6 +428,8 @@ class RemoteWorkflow:
                     'hashes': inputs.hashes
                 }
             )
+            if transport.probe('prepare_results', {}) != {'prepared': True}:
+                raise ValueError('owned result-root preparation failed')
             state.status = 'ready'
             write_state(self.root, state)
             return state
