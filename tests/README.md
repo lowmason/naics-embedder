@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **83 unit** test files and **1 integration** file, with **2,315 collected
+The suite contains **99 unit** test files and **2 integration** files, with **2,939 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -14,7 +14,7 @@ real selection campaign. Hugging Face fixture dependencies are resolved locally.
 
 ```text
 tests/
-├── unit/                         # 83 unit test files
+├── unit/                         # 99 unit test files
 ├── integration/
 │   └── test_reference_training.py # tiny-backbone Trainer workflows
 ├── fixtures/                     # shared encoder, supervision, panels and run records
@@ -83,8 +83,8 @@ failures.
 
 The project registers unit, integration, slow and gpu markers. Check
 `pyproject.toml` for their descriptions. `.github/workflows/tests.yml` runs pytest/coverage on
-Python 3.10 and 3.12 and a separate Ruff/YAPF lint job. PR CI does not build MkDocs, so check
-rendered docs locally:
+Python 3.10 and 3.12 and a separate Ruff/YAPF lint job. PR CI also builds MkDocs with strict
+checks and locked dependencies; check rendered docs locally:
 
 ```bash
 uv run ruff check src/ tests/
