@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from naics_embedder.remote.launch import LaunchResult
+from naics_embedder.remote.session import RemoteState
+from naics_embedder.remote.sync import SyncResult
+from naics_embedder.remote.workflow import FinishResult
 from naics_embedder.utils.config import Config
 from tests.fixtures.supervision import build_reference_bundle
 
@@ -535,3 +539,71 @@ def remote_finish_fixture(remote_sync_fixture, monkeypatch):
     env.last = env.root / 'checkpoints/run/last.ckpt'
     env.transport.calls.clear()
     return env
+
+# -------------------------------------------------------------------------------------------------
+# CLI controller seam
+# -------------------------------------------------------------------------------------------------
+
+@dataclass
+class FakeWorkflow:
+    '''Record CLI forwarding without replacing domain guards in controller tests.'''
+
+    calls: list[tuple] = field(default_factory=list)
+    error: Exception | None = None
+    train_result: LaunchResult = field(default_factory=lambda: LaunchResult('segment', False, None))
+    finish_result: FinishResult = field(
+        default_factory=lambda: FinishResult(True, False, '/tmp/last.ckpt', 'abc', 'abc')
+    )
+    status_result: dict[str, object] = field(
+        default_factory=lambda: dict(status='ready', errors=[])
+    )
+    config_paths: list[Path] = field(default_factory=list)
+
+    def _call(self, name: str, *args: object) -> None:
+        self.calls.append((name, *args))
+        if self.error is not None:
+            raise self.error
+
+    def up(
+        self, host: str, config_path: str, overrides: list[str], force: bool = False
+    ) -> RemoteState:
+        from datetime import datetime, timezone
+        self._call('up', host, config_path, overrides, force)
+        return RemoteState(
+            host=host, session_id='fixture', started_utc=datetime.now(timezone.utc), status='ready'
+        )
+
+    def train(self, resume: bool, config_path: str, overrides: list[str]) -> LaunchResult:
+        self._call('train', resume, config_path, overrides)
+        return self.train_result
+
+    def sync(self, once: bool = False) -> SyncResult | None:
+        self._call('sync', once)
+        return SyncResult(3, 2, {'run': 'abc'}) if once else None
+
+    def finish(
+        self, stop_training: bool = False, pull_edits: bool = False, abandon: bool = False
+    ) -> FinishResult:
+        self._call('finish', stop_training, pull_edits, abandon)
+        return self.finish_result
+
+    def status(self) -> dict[str, object]:
+        self._call('status')
+        return self.status_result
+
+@pytest.fixture
+def cli_runner():
+    from typer.testing import CliRunner
+    return CliRunner()
+
+@pytest.fixture
+def fake_workflow(monkeypatch):
+    from naics_embedder.cli.commands import remote
+    fake = FakeWorkflow()
+
+    def factory(path):
+        fake.config_paths.append(path)
+        return fake
+
+    monkeypatch.setattr(remote, '_workflow', factory)
+    return fake

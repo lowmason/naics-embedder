@@ -8,8 +8,10 @@ nav:
   - Usage: 
       - Quickstart: quickstart.md
       - Usage: usage.md
+      - Remote Workflow: remote_workflow.md
   - API Reference:
       - CLI: api/cli.md
+      - Remote Workflow: api/remote.md
       - Data Preparation:
           - Download and Preprocess Data: api/download_data.md
           - Compute Distance Measures:

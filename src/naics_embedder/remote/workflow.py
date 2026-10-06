@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from naics_embedder.remote.canonical import canonical_inputs
 from naics_embedder.remote.code_manifest import is_credential_path
@@ -30,6 +30,9 @@ from naics_embedder.remote.session import (
     write_state,
 )
 from naics_embedder.utils.config import Config, RemoteConfig
+
+if TYPE_CHECKING:
+    from naics_embedder.remote.sync import SyncResult
 
 # -------------------------------------------------------------------------------------------------
 # Durable local orchestration records
@@ -443,6 +446,27 @@ class RemoteWorkflow:
             return launch_training(
                 self.root, state, transport, cfg, config_path, overrides, inputs, resume
             )
+
+    def sync(self, once: bool = False) -> 'SyncResult | None':
+        '''Delegate one verified pass or start the loop under its caller-owned lock.'''
+        from naics_embedder.remote.loop import _session_config, ensure_loop
+        from naics_embedder.remote.sync import sync_once
+        if once:
+            state = read_state(self.root)
+            if state is None or state.status != 'ready' or state.remote_info is None:
+                raise ValueError('remote sync requires a ready session; run remote up')
+            cfg = _session_config(self.root, state.session_id)
+            transport = self.transport_factory(state.host, cfg)
+            transport.repo = state.remote_info.repo
+            transport.python = state.remote_info.python
+            return sync_once(self.root, state, transport, cfg)
+        with state_lock(self.root):
+            state = read_state(self.root)
+            if state is None or state.status != 'ready' or state.remote_info is None:
+                raise ValueError('remote sync requires a ready session; run remote up')
+            _session_config(self.root, state.session_id)
+            ensure_loop(self.root, state)
+        return None
 
     def finish(
         self, stop_training: bool = False, pull_edits: bool = False, abandon: bool = False

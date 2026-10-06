@@ -70,6 +70,11 @@ class TestCliCommands:
         # Should show help for tools subcommand
         assert result.exit_code == 0
 
+    def test_remote_subcommand_registered(self, cli_runner):
+        result = cli_runner.invoke(app, ['remote', '--help'])
+        assert result.exit_code == 0
+        assert all(name in result.output for name in ('up', 'train', 'sync', 'finish', 'status'))
+
     def test_train_command_registered(self):
         '''Test that train command is registered.'''
         from typer.testing import CliRunner

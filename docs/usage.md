@@ -1,7 +1,7 @@
 # CLI Usage Guide
 
-The CLI has `data` and `tools` groups plus the top-level `train` command. Use `--help` on any
-command for its exact options. Operator examples below require the named generated artifacts.
+The CLI has `data`, `tools` and `remote` groups plus the top-level `train` command. Use `--help`
+on any command for its exact options. Operator examples below require the named generated artifacts.
 
 ## Installation
 
@@ -476,3 +476,19 @@ uv run naics-embedder tools visualize --help
 `conf/config.yaml` defines the text encoder, objective, two-stream loader and training settings.
 Panel pins and the selection log are configured under `conf/data/`; HGCN has `conf/graph.yaml`.
 See [the configuration API](api/config.md) and [text training](text_training.md).
+
+## Remote Commands
+
+The [remote workflow guide](remote_workflow.md) covers `remote up`, `train`, `sync`, `finish`
+and `status`, including transport configuration, canonical input precedence, exact continuation,
+coherent checkpoint/history pulls and termination verification. Run these adapters on the Mac;
+Lambda launch and termination remain the user's actions. Help is nonmutating:
+
+```bash
+uv run --locked naics-embedder remote --help
+uv run --locked naics-embedder remote train --help
+```
+
+A finished resume skips successfully; refusals exit 1. Only a verified safe finish prints
+`Safe to terminate`. Real-instance qualification is pending until the post-merge new-experiment
+checks run; local fixture tests do not qualify the image or complete Stage 7.
