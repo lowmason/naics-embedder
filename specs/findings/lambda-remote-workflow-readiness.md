@@ -40,8 +40,8 @@ warnings: 41 available-MPS/CPU-fixture notices and 41 low-worker notices. The af
 suite passed **673 nodes, zero skips**, with 90 warnings (45 of each category); its five
 pytest-benchmark xdist notices precede the pytest session and are recorded separately. Full Ruff,
 YAPF and diff checks passed. Collect-only measured **2,996 nodes**, with unchanged 117 source,
-99 unit and two integration file counts. This is scoped qualification; the controller's fresh
-frozen-head full gates and independent reviews remain pending.
+99 unit and two integration file counts. This is historical scoped qualification; the final frozen-head gates and independent
+reviews subsequently passed, as recorded below.
 
 Ignored evidence: `wbfix1-affected312-final.log`, `wbfix1-gnu312.log`, `wbfix1-gnu310.log`,
 `wbfix1-static-ruff.log`, `wbfix1-static-final.log`, `wbfix1-static-diff.log`, and
@@ -137,7 +137,7 @@ records, margins and decisions remain on the Mac; sealed test/outer splits stay 
 
 Historical Phase 1 truth remains local 2,314 passed/1 skip, CI 2,304 passed/11 skips, with lint
 QUEUED at the merge checkpoint. This finding does not alter those historical counts, retire
-Plan 10 or mark Stage 7 complete. Final whole-branch and real PR CI gates belong to Task 11.
+Plan 10 or mark Stage 7 complete. Final whole-branch and corresponding PR CI gates passed under Task 11, as recorded below.
 
 ## CI portability qualification
 
@@ -161,5 +161,51 @@ Python version with locked offline dependencies. Current collection is 3,001 nod
 version, five more than the historical WB qualification above. Full Ruff/YAPF and diff checks
 passed. Evidence is retained under ignored `logs/plan11_review_evidence/ciport-*`, including
 separate RED, GREEN, collection and command metadata; saved failed/cancelled CI logs remain
-under `ci-pr126/`. Fresh frozen-head full gates, independent reviews and new corresponding CI
-are pending. Real Lambda/Mac Task 18 qualification, the campaign and user merge remain pending.
+under `ci-pr126/`. Final frozen-head gates, independent reviews and corresponding CI subsequently passed; PR 126
+merged on 2026-10-06. Real Lambda/Mac Task 18 qualification and the campaign remain pending.
+
+
+## Final implementation evidence and post-merge status (2026-10-06)
+
+Implementation PR [#126](https://github.com/lowmason/naics-embedder/pull/126) merged at
+11:50:29 UTC as `15de7a0310ff3bbfa9157f98ea9459c45741cf34`. Its tree equals final reviewed
+`270bc72252077565cbd54e2cf1e86665e47c890f`; substantive runtime SHA remains `304bc34f` above.
+All task reviews and independent evidence audits approved. Final GPT-6.1 Ultra round 2 retained
+original whole-branch and WB1–WB3 review coverage and approved the complete portability scope.
+Its corresponding CI and user-merge conditions are now satisfied.
+
+| Final gate at reviewed head | Python 3.12 | Python 3.10 |
+|---|---|---|
+| Fresh locked local full suite | 2,999 passed / 2 skipped / 171 warnings | 2,999 passed / 2 skipped / 642 warnings |
+| Required GNU 3.5.1 local suite | 47 passed / zero skips / 82 warnings | 47 passed / zero skips / 82 warnings |
+| Rendered production preparation cases | 4 passed / zero skips / no warnings | 4 passed / zero skips / no warnings |
+| Corresponding PR CI full suite | 2,990 passed / 11 skipped / 80 warnings | 2,990 passed / 11 skipped / 80 warnings |
+| Corresponding PR CI GNU suite | 47 passed / zero skips / 41 warnings | 47 passed / zero skips / 41 warnings |
+
+Actual pull_request run **37420123506**, attempt 1, associated with reviewed `270bc722`, passed
+all four jobs: docs, lint, test (3.10), test (3.12). GitHub checked out its PR merge ref, not the
+literal source-head commit. Each coverage result was **89.90%**, with XML and Codecov upload
+successful; no subsequent Codecov processing result is inferred. Fresh local Ruff/YAPF, strict
+MkDocs, shell syntax, rendered links/anchors, five help/nonmutation, source and protected gates
+passed. Local quiet output did not measure the two skip identities. The additional 471 Python
+3.10 numerical warnings match the unchanged historical source/message/count profile; assertions,
+tolerances and precision were not changed. The failed/cancelled earlier CI and Phase 1 queued
+lint remain historical evidence, not passes.
+
+Preserved evidence lives under primary `logs/plan11_worktree/`: `.sdd/11-lambda-remote-workflow`,
+`logs/plan11_execution.md` and `logs/plan11_review_evidence`. Authoritative records include
+`completion-boundary.md`, `progress.md`, `whole-branch-review-round2.md`,
+`final-ci-preservation-audit.md` and `ci-pr126/head270-final-ci-record.json`. The byte-exact
+original copy has **906 files / zero symlinks / 23,172,194 bytes**; preservation receipt SHA256
+is `a3d8494c3792fe685c120ddd318c1e8f64a9cddfffc7a45d42e747511b990a67`.
+`postmerge-admin/preservation-audit.md` approved the complete copy before archival;
+`postmerge-admin/archive-confirmation.json` confirms actual native implementation archival and
+absence of its checkout. The original protected 116 files / 198,306,791 bytes and seven Mac
+selection records remained unchanged. These ignored records are preserved local evidence,
+not rendered public documentation links.
+
+[Plan 11](../plans/completed/11-lambda-remote-workflow.md) is complete, with nothing deferred.
+Its separate post-merge documentation review/new PR publication/CI/merge remain administrative
+follow-ups and are not claimed here. This finding remains fixture/source qualification only:
+real Lambda/Mac image, GPU/native-BF16/NTP/tmux/caffeinate and cross-instance qualification,
+Plan 10 Task 18 onward, the campaign and Plan 10/Stage 7 completion remain pending.
