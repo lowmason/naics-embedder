@@ -76,6 +76,32 @@ def safe_files(files: tuple[str, ...], code: bool = False) -> bytes:
             raise ValueError(f'protected code deletion: {name}')
     return b''.join(name.encode() + b'\0' for name in files)
 
+RESULT_CREDENTIAL_EXCLUDES = (
+    '.git/', '.ssh/', '.aws/', '.env', '.env.*', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+    'identity', '*.pem', '*.key', '*.p12', '*.pfx', '*.ppk'
+)
+ITEMIZE_WIDTH = 11
+
+def _checksum_paths(output: str, destination: Path) -> tuple[str, ...]:
+    differences = []
+    for line in output.splitlines():
+        if not re.match(rf'^[<>ch.*][^|]{{{ITEMIZE_WIDTH - 1}}}\|', line):
+            continue
+        item, name = line.split('|', 1)
+        path = destination / name
+        directory_metadata = (
+            item[0] == '.' and item[1] == 'd' and item[2:4] == '..' and path.is_dir()
+            and not path.is_symlink()
+        )
+        permission_only = (
+            item[0] == '.' and item[1] == 'f' and item[2:5] == '...' and path.is_file()
+            and not path.is_symlink()
+        )
+        if directory_metadata or permission_only:
+            continue
+        differences.append(name)
+    return tuple(differences)
+
 def _contained_files(root: Path, files: tuple[str, ...]) -> None:
     for name in files:
         if not (root / name).resolve().is_relative_to(root.resolve()):
@@ -99,6 +125,7 @@ def _system_probe_code(operation: str) -> str:
         _parent_descriptor,
         _pending_link,
         _remove_code,
+        _result_names,
         _root_descriptor,
         _safe_link,
         _same_metadata,
@@ -110,13 +137,16 @@ def _system_probe_code(operation: str) -> str:
     )
     preamble += f'TMUX_SESSION = {TMUX_SESSION!r}\n'
     functions = {
-        'inventory': [_inside, _inventory],
+        'inventory': [
+            _code_name, _credential_name, _same_metadata, _open_directory, _root_descriptor,
+            _parent_descriptor, _safe_link, _code_item_at, _result_names, _inventory
+        ],
         'training': [_training_status],
         'edits': [
             safe_files, _inside, _remove_code, _inventory, _code_name, _credential_name,
             _generated_name, _same_metadata, _open_directory, _root_descriptor, _parent_descriptor,
             _safe_link, _code_item_at, _code_item_from, _code_item, _code_names, _pending_link,
-            _controlled_inventory, _owned_remove
+            _controlled_inventory, _owned_remove, _result_names
         ]
     }[operation]
     code = preamble + '\n'.join(inspect.getsource(function) for function in functions)
@@ -227,7 +257,7 @@ class SshTransport:
                 raise RuntimeError('bootstrap must qualify CUDA native BF16 evidence')
             self.python = str(result['python'])
             return result
-        if operation == 'edits':
+        if operation in {'edits', 'inventory'}:
             return self._ssh(
                 [self.python or 'python3', '-c',
                  _system_probe_code(operation)], payload
@@ -259,7 +289,10 @@ class SshTransport:
         if checksum:
             args.append('--checksum')
         if dry:
-            args += ['--dry-run', '--itemize-changes', '--out-format=%i|%n']
+            args += [
+                '--dry-run', '--itemize-changes', '--out-format=%i|%n', '--exclude=.rsync-partial/'
+            ]
+            args += ['--exclude=' + pattern for pattern in RESULT_CREDENTIAL_EXCLUDES]
         args += [
             '-e',
             shlex.join(['ssh', *SSH_OPTIONS]), '--',
@@ -286,10 +319,7 @@ class SshTransport:
         result = self._transfer(
             self.host + ':' + mapping.source, str(mapping.destination), None, True, dry=True
         )
-        return tuple(
-            line.split('|', 1)[1] for line in _text(result.stdout).splitlines()
-            if re.match(r'^[<>ch.*][^|]{10}\|', line)
-        )
+        return _checksum_paths(_text(result.stdout), mapping.destination)
 
     def launch(self, script: str, segment_id: str) -> None:
         self.probe('training', {'action': 'launch', 'script': script, 'segment_id': segment_id})
@@ -354,7 +384,10 @@ class LocalTransport:
                     raise ValueError('destination escapes transfer root')
             args += ['--from0', '--files-from=-']
         if dry:
-            args += ['--dry-run', '--itemize-changes', '--out-format=%i|%n']
+            args += [
+                '--dry-run', '--itemize-changes', '--out-format=%i|%n', '--exclude=.rsync-partial/'
+            ]
+            args += ['--exclude=' + pattern for pattern in RESULT_CREDENTIAL_EXCLUDES]
         else:
             destination.mkdir(parents=True, exist_ok=True)
         args += ['--', str(source) + '/', str(destination) + '/']
@@ -378,10 +411,7 @@ class LocalTransport:
 
     def checksum(self, mapping: PullMapping) -> tuple[str, ...]:
         result = self._transfer(self._path(mapping.source), mapping.destination, None, dry=True)
-        return tuple(
-            line.split('|', 1)[1] for line in _text(result.stdout).splitlines()
-            if re.match(r'^[<>ch.*][^|]{10}\|', line)
-        )
+        return _checksum_paths(_text(result.stdout), mapping.destination)
 
     def launch(self, script: str, segment_id: str) -> None:
         self.process.launch(script, segment_id)

@@ -52,36 +52,52 @@ def _inside(root: Path, value: str) -> Path:
         raise ValueError(f'path escapes remote root: {value}')
     return path
 
+def _result_names(root: int, prefix: str = '') -> set[str]:
+    names = set()
+    for leaf in os.listdir(root):
+        name = prefix + leaf
+        if '.rsync-partial' in Path(name).parts or _credential_name(name):
+            continue
+        metadata = os.stat(leaf, dir_fd=root, follow_symlinks=False)
+        if stat.S_ISDIR(metadata.st_mode):
+            child = _open_directory(leaf, root)
+            try:
+                if not _same_metadata(metadata, os.fstat(child)):
+                    raise ValueError(f'result directory changed during inventory: {name}')
+                names.update(_result_names(child, name + '/'))
+            finally:
+                os.close(child)
+        else:
+            names.add(name)
+    return names
+
 def _inventory(root: Path, value: str) -> dict[str, object]:
-    directory = _inside(root, value)
-    entries = []
-    if directory.exists():
-        for path in sorted(directory.rglob('*')):
-            if path.is_dir() and not path.is_symlink():
-                continue
-            _inside(root, str(path))
-            metadata = path.lstat()
-            link = path.is_symlink()
-            digest = hashlib.sha256()
-            if link:
-                digest.update(os.readlink(path).encode())
-            else:
-                hash_block_bytes = 1024 * 1024
-                with path.open('rb') as stream:
-                    for block in iter(lambda: stream.read(hash_block_bytes), b''):
-                        digest.update(block)
-            entries.append(
-                {
-                    'path': path.relative_to(directory).as_posix(),
-                    'sha256': digest.hexdigest(),
-                    'size': metadata.st_size,
-                    'mode': metadata.st_mode & 0o777,
-                    'kind': 'symlink' if link else 'file',
-                    'target': os.readlink(path) if link else None,
-                    'mtime': metadata.st_mtime
-                }
-            )
-    return {'files': entries}
+    path = Path(value)
+    if path.is_absolute():
+        path = path.relative_to(root)
+    if '..' in path.parts or _credential_name(str(path)):
+        raise ValueError('unsafe result inventory root')
+    try:
+        descriptor = _root_descriptor(root / path)
+    except FileNotFoundError:
+        return {'files': []}
+    try:
+        entries = []
+        for name in sorted(_result_names(descriptor)):
+            parent = _parent_descriptor(descriptor, name)
+            try:
+                metadata = os.stat(name.split('/')[-1], dir_fd=parent, follow_symlinks=False)
+                item = _code_item_at(descriptor, parent, name)
+                after = os.stat(name.split('/')[-1], dir_fd=parent, follow_symlinks=False)
+                if not _same_metadata(metadata, after):
+                    raise ValueError(f'result changed during inventory: {name}')
+                item['mtime'] = metadata.st_mtime
+                entries.append(item)
+            finally:
+                os.close(parent)
+        return {'files': entries}
+    finally:
+        os.close(descriptor)
 
 def _code_name(name: str) -> None:
     path = Path(name)
@@ -601,7 +617,15 @@ def main() -> None:
     parser.add_argument('operation')
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--uv')
+    parser.add_argument('--session-id')
+    parser.add_argument('--token')
     args = parser.parse_args()
+    if args.operation == 'sync-loop':
+        if not args.session_id or not args.token:
+            parser.error('sync-loop requires session-id and token')
+        from naics_embedder.remote.loop import run_loop
+        run_loop(args.root, args.session_id, args.token)
+        return
     try:
         payload = json.load(sys.stdin)
         if args.uv is not None:

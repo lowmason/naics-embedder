@@ -236,3 +236,95 @@ def remote_workflow_fixture(remote_repo, tmp_path, monkeypatch):
         workflow=workflow,
         now=now
     )
+
+@dataclass
+class SyncTransport(RecordedTransport):
+    root: Path = field(default_factory=Path)
+    fail_next_pull: bool = False
+    after_pull: object = None
+    differences: tuple[str, ...] = ()
+
+    def probe(self, operation, payload):
+        from naics_embedder.remote.worker import run_probe
+        return run_probe(operation, payload, self.root)
+
+    def pull(self, source, destination, files):
+        self.calls.append(('pull', source, destination, files))
+        for name in files:
+            target = destination / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(Path(source) / name, target)
+            if self.fail_next_pull:
+                self.fail_next_pull = False
+                raise OSError('network loss')
+        if self.after_pull:
+            self.after_pull(Path(source))
+
+    def checksum(self, mapping):
+        return self.differences
+
+@pytest.fixture
+def remote_sync_fixture(tmp_path):
+    import json
+    import os
+    import time
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    import torch
+
+    from naics_embedder.remote.session import RemoteInfo, RemoteState, write_state
+    from naics_embedder.utils.config import RemoteConfig
+
+    root, instance = tmp_path / 'mac', tmp_path / 'instance'
+    root.mkdir()
+    instance.mkdir()
+    run = instance / 'checkpoints/run'
+    run.mkdir(parents=True)
+    saved = dict(epoch=0, training_run='tiny-run', state_dict={}, hyper_parameters={'seed': 1})
+    torch.save(saved, run / 'last.ckpt')
+    shutil.copy2(run / 'last.ckpt', run / 'epoch=0.ckpt')
+    read = dict(
+        event='read',
+        panel='outcome',
+        split='validation',
+        fingerprint='fixture',
+        detail=dict(epoch=0, seed=1, training_run='tiny-run')
+    )
+    (run / 'monitor_reads.jsonl').write_text(json.dumps(dict(mrr=0.5, read=read)) + '\n')
+    (run / 'epoch_summary.jsonl').write_text(json.dumps(dict(epoch=0, mrr=0.5)) + '\n')
+    for directory, name in [
+        ('outputs', 'tensor'), ('logs', 'selection_log.jsonl'),
+        ('.remote/segments/segment', 'exit_code')
+    ]:
+        path = instance / directory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('fixture\n')
+    now = time.time()
+    for path in instance.rglob('*'):
+        os.utime(path, (now - 600, now - 600))
+    info = RemoteInfo(
+        str(instance), str(instance / 'checkpoints'), '/uv', '/python', True, 'cuda', 'fixture'
+    )
+    state = RemoteState(
+        host='fixture',
+        session_id='session',
+        started_utc=datetime.now(timezone.utc),
+        status='ready',
+        remote_info=info
+    )
+    write_state(root, state)
+    cfg = RemoteConfig(repo_dir=str(instance), sync_interval_seconds=3, rsync_path='/custom/rsync')
+    (root / '.remote/session-config.json').write_text(
+        json.dumps(dict(session_id=state.session_id, remote_config=cfg.model_dump()))
+    )
+    return SimpleNamespace(
+        root=root,
+        instance=instance,
+        run=run,
+        state=state,
+        cfg=cfg,
+        now=now,
+        transport=SyncTransport(root=instance),
+        run_files=tuple(run.iterdir())
+    )
