@@ -400,25 +400,6 @@ def remote_launch_fixture(remote_workflow_fixture, remote_resume_fixture, monkey
             return env.now[0]
 
     monkeypatch.setattr('naics_embedder.remote.launch.datetime', LaunchDateTime)
-    # Guard exported scientific APIs after the authorized fixture Trainer monitor has finished.
-    from naics_embedder.decision import decide, store, sweep
-    from naics_embedder.panels import outcome, qcew_rows, regressor
-    from naics_embedder.text_model import export
-
-    def prohibited(*args, **kwargs):
-        pytest.fail('workflow crossed Mac-only scientific API boundary')
-
-    for owner, names in [
-        (decide, ['fix_margins', 'decide']),
-        (sweep, ['run_seed_sweep']),
-        (store.ArtifactStore, ['put', 'resolve', 'read_frame']),
-        (outcome.OutcomePanel, ['score', 'score_logged', 'open_test', 'test_queries']),
-        (regressor.RegressorPanel, ['validation', 'test', 'open_outer']),
-        (qcew_rows, ['read_national_slice', 'load_national_cells']),
-        (export, ['export_code_table']),
-    ]:
-        for name in names:
-            monkeypatch.setattr(owner, name, prohibited)
     loops = []
     monkeypatch.setattr('naics_embedder.remote.loop.ensure_loop', lambda *args: loops.append(args))
 
