@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from naics_embedder.remote.session import RemoteState, pull_mappings, read_state, state_lock, write_state
+from naics_embedder.remote.session import (
+    RemoteState,
+    RunRecord,
+    pull_mappings,
+    read_state,
+    state_lock,
+    write_state,
+)
 from naics_embedder.remote.transport import safe_files
 from naics_embedder.remote.worker import (
     _code_item_at,
@@ -177,6 +184,48 @@ def recover_pending_promotion(root: Path, state: RemoteState) -> None:
     state.unreachable_since = None
     write_state(root, state)
     journal.unlink()
+    bind_verified_runs(root, state)
+
+def bind_verified_runs(root: Path, state: RemoteState) -> None:
+    '''Bind run IDs only from the session's published successful pull and unchanged Mac bytes.'''
+    from naics_embedder.utils.training import read_checkpoint, refuse_a_resume_from_another_directory
+    verify_local_sync_manifest(root, state)
+    files = _manifest(root, state)
+    directory = root / '.remote/runs'
+    if not directory.exists():
+        return
+    for path in directory.glob('*.json'):
+        record = RunRecord.model_validate_json(path.read_text())
+        last = root / 'checkpoints' / record.experiment / 'last.ckpt'
+        name = last.relative_to(root).as_posix()
+        if name not in files:
+            continue
+        if _local_hash(root, name) != files[name]:
+            raise ValueError('last checkpoint differs from successful pull evidence')
+        saved = read_checkpoint(last)
+        _validate_run(last.parent)
+        hparams = saved.get('hyper_parameters', {})
+        contract = saved.get('stage3_supervision', {})
+        if (
+            hparams.get('seed') != record.seed
+            or hparams.get('run_settings') != record.settings or any(
+                hparams.get(key) != value for key, value in record.constructor_controls.items()
+            ) or contract.get('bundle_id') != record.bundle_id or contract.get(
+                'codebook_fingerprint'
+            ) != record.codebook_fingerprint
+        ):
+            raise ValueError('verified pulled checkpoint differs from persistent run identity')
+        refuse_a_resume_from_another_directory(
+            saved, last.parent, resolved_dirpath=record.remote_directory
+        )
+        run = saved['training_run']
+        if record.training_run is not None and record.training_run != run:
+            raise ValueError('verified pull names another training_run')
+        if record.training_run is None:
+            record.training_run = run
+            if _local_hash(root, name) != files[name]:
+                raise ValueError('last checkpoint changed during run binding')
+            _atomic_json(path, record.model_dump(mode='json'))
 
 # -------------------------------------------------------------------------------------------------
 # Stable source and run qualification
@@ -238,6 +287,7 @@ def sync_once_locked(
     try:
         recover_pending_promotion(root, state)
         verify_local_sync_manifest(root, state)
+        bind_verified_runs(root, state)
         if state.remote_info is None:
             raise ValueError('sync requires recorded remote identity')
         previous = _manifest(root, state)

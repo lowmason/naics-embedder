@@ -168,7 +168,7 @@ class WorkflowTransport(RecordedTransport):
     def probe(self, operation, payload):
         from naics_embedder.remote.worker import run_probe
         self.calls.append(('probe', operation, payload))
-        if operation == 'training':
+        if operation == 'training' and payload.get('action', 'status') == 'status':
             return {'running': self.running}
         if operation == 'transport_prerequisites':
             return {'qualified': True}
@@ -327,4 +327,107 @@ def remote_sync_fixture(tmp_path):
         now=now,
         transport=SyncTransport(root=instance),
         run_files=tuple(run.iterdir())
+    )
+
+@pytest.fixture
+def remote_launch_fixture(remote_workflow_fixture, remote_resume_fixture, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    import torch
+
+    from naics_embedder.remote.canonical import canonical_inputs
+    from naics_embedder.remote.session import read_state
+    from naics_embedder.utils.training import read_checkpoint
+
+    env = remote_workflow_fixture
+    source = remote_resume_fixture
+    cfg = source.cfg.override({'dirs.output_dir': 'outputs'})
+    cfg.to_yaml(str(env.root / 'conf/config.yaml'))
+    (env.root / '.gitignore').write_text(
+        'data/\n!conf/data/\n!conf/data/outcome_panel.yaml\n.remote/\ncheckpoints/\nlogs/\noutputs/\n'
+    )
+    (env.root / 'conf/data').mkdir()
+    shutil.copyfile(
+        Path(__file__).parents[2] / 'conf/data/outcome_panel.yaml',
+        env.root / 'conf/data/outcome_panel.yaml'
+    )
+    (env.root / 'uv.lock').write_text('fixture lock\n')
+    state = env.workflow.up('fixture', 'conf/config.yaml', [])
+    info = state.remote_info
+    directory = env.root / 'checkpoints' / cfg.experiment_name
+    # Fixture-only construction: make the tiny saved callback name this simulated instance.
+    remote_directory = info.checkpoint_base + '/' + cfg.experiment_name
+    for path in directory.glob('*.ckpt'):
+        saved = read_checkpoint(path)
+        for callback in saved['callbacks'].values():
+            if isinstance(callback, dict) and 'dirpath' in callback:
+                callback['dirpath'] = remote_directory
+        torch.save(saved, path)
+    base_probe = env.transport.probe
+    ntp = [True]
+    gpu = [
+        dict(
+            logical_index=0,
+            name='fixture GPU',
+            compute_capability=[8, 0],
+            total_memory_bytes=1,
+            native_bf16=True,
+            cuda_visible_devices=None
+        )
+    ]
+
+    def probe(operation, payload):
+        if operation in {'gpu', 'clock'}:
+            env.transport.calls.append(('probe', operation, payload))
+            if operation == 'clock':
+                return {'ntp': ntp[0]}
+            if isinstance(gpu[0], Exception):
+                raise gpu[0]
+            return gpu[0]
+        return base_probe(operation, payload)
+
+    monkeypatch.setattr(env.transport, 'probe', probe)
+
+    class LaunchDateTime(datetime):
+
+        @classmethod
+        def now(cls, tz=None):
+            return env.now[0]
+
+    monkeypatch.setattr('naics_embedder.remote.launch.datetime', LaunchDateTime)
+    loops = []
+    monkeypatch.setattr('naics_embedder.remote.loop.ensure_loop', lambda *args: loops.append(args))
+
+    def set_finished_budget():
+        pass  # The unmodified actual tiny run exhausted its saved three-epoch budget.
+
+    def set_unfinished():
+        for path in directory.glob('*.ckpt'):
+            saved = read_checkpoint(path)
+            if path.name != 'last.ckpt' and saved['epoch'] > 1:
+                path.unlink()
+                continue
+            saved['epoch'] = min(saved['epoch'], 1)
+            torch.save(saved, path)
+        for name in ('monitor_reads.jsonl', 'epoch_summary.jsonl'):
+            path = directory / name
+            path.write_text('\n'.join(path.read_text().splitlines()[:2]) + '\n')
+        return cfg
+
+    env.transport.calls.clear()
+    return SimpleNamespace(
+        **vars(env),
+        cfg=cfg,
+        inputs=canonical_inputs(env.root, cfg),
+        info=info,
+        state=read_state(env.root),
+        directory=directory,
+        remote_directory=remote_directory,
+        overrides=[],
+        loops=loops,
+        ntp=ntp,
+        gpu=gpu,
+        set_finished_budget=set_finished_budget,
+        set_unfinished=set_unfinished
     )

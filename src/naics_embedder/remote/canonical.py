@@ -221,9 +221,12 @@ def _histories(directory: Path, epoch: int, training_run: str, seed: int) -> Non
 def resume_plan(root: Path, cfg: Config, inputs: InputSet, remote_directory: str) -> ResumePlan:
     '''Resume only last.ckpt and retain all original continuation bytes for exact restoration.'''
     root = root.resolve()
-    directory = root / relative_path(root, cfg.dirs.checkpoint_dir) / relative_path(
-        root, cfg.experiment_name
-    )
+    base = cfg.dirs.checkpoint_dir
+    if Path(base).is_absolute():
+        if str(Path(remote_directory).parent) != base:
+            raise ValueError('configured absolute checkpoint base differs from remote run')
+        base = 'checkpoints'
+    directory = root / relative_path(root, base) / relative_path(root, cfg.experiment_name)
     last = directory / 'last.ckpt'
     paths = []
     if directory.is_symlink():

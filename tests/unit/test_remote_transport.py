@@ -302,12 +302,35 @@ def test_launch_refuses_unowned_script_before_any_process(tmp_path, monkeypatch)
             }, tmp_path
         )
 
-def test_launch_gpu_failure_prevents_tmux(tmp_path, monkeypatch):
-    from naics_embedder.remote import worker
-    directory = tmp_path / '.remote/segments/one'
+def _owned_launch_files(root, segment):
+    from dataclasses import asdict
+
+    from naics_embedder.remote.launch import _wrapper
+    from naics_embedder.remote.session import GpuEvidence, RemoteInfo
+    directory = root / '.remote/segments' / segment
     directory.mkdir(parents=True)
     script = directory / 'launch.sh'
-    script.write_text('exit 0')
+    evidence = GpuEvidence(0, 'fixture', (8, 0), 1, True, None)
+    argv = ('/uv', 'run', '--locked', 'naics-embedder', 'train')
+    info = RemoteInfo(
+        str(root), str(root / 'checkpoints'), '/uv', '/python', True, 'cuda', 'fixture'
+    )
+    script.write_text(_wrapper(info, argv, str(directory / 'exit_code'), None))
+    (directory / 'segment.json').write_text(
+        json.dumps(
+            {
+                'argv': list(argv),
+                'gpu_evidence': asdict(evidence),
+                'cuda_visible_devices': None
+            }
+        )
+    )
+    (root / '.remote/launch.lock').write_text(segment)
+    return script, evidence
+
+def test_launch_gpu_failure_prevents_tmux(tmp_path, monkeypatch):
+    from naics_embedder.remote import worker
+    script, _ = _owned_launch_files(tmp_path, 'one')
     monkeypatch.setattr(worker, '_clock', lambda: {'ntp': True})
 
     def refused():
@@ -408,10 +431,7 @@ def test_status_uses_fixed_session_even_with_segment_metadata(tmp_path, monkeypa
 
 def test_launch_and_interrupt_use_one_exact_tmux_target(tmp_path, monkeypatch):
     from naics_embedder.remote import worker
-    directory = tmp_path / '.remote/segments/record-one'
-    directory.mkdir(parents=True)
-    script = directory / 'launch.sh'
-    script.write_text('exit 0')
+    script, evidence = _owned_launch_files(tmp_path, 'record-one')
     calls = []
 
     def recorded(args, **kwargs):
@@ -419,7 +439,8 @@ def test_launch_and_interrupt_use_one_exact_tmux_target(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(args, 0, '', '')
 
     monkeypatch.setattr(worker, '_clock', lambda: {'ntp': True})
-    monkeypatch.setattr(worker, 'gpu_evidence', lambda: object())
+    monkeypatch.setattr(worker, 'gpu_evidence', lambda: evidence)
+    monkeypatch.setattr(worker, '_training_status', lambda payload: {'running': False})
     monkeypatch.setattr(subprocess, 'run', recorded)
     run_probe(
         'training', {

@@ -442,6 +442,19 @@ def _owned_remove(root: Path, payload: dict[str, object]) -> dict[str, object]:
         os.close(descriptor)
     return {'removed': names}
 
+def _launch_path(root: Path, value: str) -> Path:
+    '''Refuse redirected write paths before training can create a result or token cache.'''
+    path = _inside(root, value)
+    for parent in (path, *path.parents):
+        if parent == root:
+            break
+        if parent.is_symlink():
+            raise ValueError('links are forbidden in launch write paths')
+    ancestor = next(parent for parent in path.parents if parent.exists())
+    descriptor = _root_descriptor(ancestor)
+    os.close(descriptor)
+    return path
+
 def _training_status(payload: dict[str, object]) -> dict[str, object]:
     try:
         result = subprocess.run(
@@ -503,7 +516,7 @@ def bootstrap_info(root: Path, uv: str) -> dict[str, object]:
 
 def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[str, object]:
     '''Dispatch only named operations with constrained path and record destinations.'''
-    from naics_embedder.remote.transport import OPERATIONS, safe_files
+    from naics_embedder.remote.transport import OPERATIONS, _qualified_gpu, safe_files
     if operation not in OPERATIONS:
         raise ValueError(f'unknown remote operation: {operation}')
     root = root.resolve()
@@ -525,7 +538,21 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
             'push_id': push_id
         }
     if operation == 'gpu':
-        return asdict(gpu_evidence())
+        visibility = payload.get('cuda_visible_devices', os.environ.get('CUDA_VISIBLE_DEVICES'))
+        previous = os.environ.get('CUDA_VISIBLE_DEVICES')
+        try:
+            if visibility is None:
+                os.environ.pop('CUDA_VISIBLE_DEVICES', None)
+            elif isinstance(visibility, str):
+                os.environ['CUDA_VISIBLE_DEVICES'] = visibility
+            else:
+                raise ValueError('CUDA visibility must be a string or null')
+            return asdict(gpu_evidence())
+        finally:
+            if previous is None:
+                os.environ.pop('CUDA_VISIBLE_DEVICES', None)
+            else:
+                os.environ['CUDA_VISIBLE_DEVICES'] = previous
     if operation == 'clock':
         return _clock()
     if operation == 'bootstrap':
@@ -538,6 +565,12 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
         if relative.parts[:2] not in {('.remote', 'segments'), ('.remote', 'pushes')}:
             raise ValueError('record must be under .remote/segments or .remote/pushes')
         path.parent.mkdir(parents=True, exist_ok=True)
+        if payload.get('immutable'):
+            with path.open('x') as stream:
+                stream.write(json.dumps(payload['record'], indent=2) + '\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+            return {'written': str(relative)}
         temporary = path.with_name(path.name + '.tmp')
         _inside(root, str(temporary))
         temporary.write_text(json.dumps(payload['record'], sort_keys=True) + '\n')
@@ -576,6 +609,34 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
         action = payload.get('action', 'status')
         if action == 'status':
             return _training_status(payload)
+        if action == 'preflight':
+            from naics_embedder.remote.canonical import canonical_inputs, resume_plan
+            from naics_embedder.remote.launch import _mapped_path
+            from naics_embedder.utils.config import Config, OutcomePanelConfig, load_config
+            from naics_embedder.utils.training import refuse_a_fresh_start_into_a_used_directory
+            cfg = Config.model_validate(payload['config'])
+            directory = _launch_path(root, str(payload['remote_directory']))
+            panel_path = root / 'conf/data/outcome_panel.yaml'
+            if not panel_path.is_file():
+                raise ValueError('missing pushed outcome monitor configuration')
+            panel = load_config(OutcomePanelConfig, panel_path)
+            for value, mapping in (
+                (cfg.dirs.output_dir, 'outputs'), (cfg.dirs.log_dir, 'logs'), (
+                    panel.selection_log, 'logs'
+                ), (cfg.data_loader.tokenization.output_path, 'data')
+            ):
+                _mapped_path(str(root), value, mapping)
+                _launch_path(root, value)
+            if str(directory) != str(Path(cfg.dirs.checkpoint_dir) / cfg.experiment_name):
+                raise ValueError('preflight run directory differs')
+            inputs = canonical_inputs(root, cfg)
+            if payload['resume']:
+                plan = resume_plan(root, cfg, inputs, str(directory))
+                if plan.finished:
+                    raise ValueError('remote run is finished; do not relaunch')
+            else:
+                refuse_a_fresh_start_into_a_used_directory(directory)
+            return {'qualified': True}
         segment = str(payload['segment_id'])
         if not segment or any(
             char not in '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_'
@@ -590,13 +651,34 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
                 raise ValueError('launch script must exist under its owned segment directory')
             if not _clock()['ntp']:
                 raise RuntimeError('NTP synchronization required immediately before launch')
-            gpu_evidence()
+            record = json.loads((expected / 'segment.json').read_text())
+            if (root / '.remote/launch.lock').read_text() != segment:
+                raise ValueError('launch requires the owned instance lock')
+            evidence = run_probe(
+                'gpu', {'cuda_visible_devices': record['cuda_visible_devices']}, root
+            )
+            if not _qualified_gpu(evidence) or json.loads(json.dumps(evidence)
+                                                          ) != record['gpu_evidence']:
+                raise ValueError('launch native BF16 evidence or CUDA visibility changed')
+            from naics_embedder.remote.launch import _wrapper
+            info = RemoteInfo(
+                str(root), str(root / 'checkpoints'), record['argv'][0], sys.executable, True,
+                'cuda', evidence['name']
+            )
+            if script.read_text() != _wrapper(
+                info, tuple(record['argv']), str(expected / 'exit_code'),
+                record['cuda_visible_devices']
+            ):
+                raise ValueError('launch wrapper differs from recorded command or CUDA visibility')
+            if _training_status({})['running']:
+                raise ValueError('training tmux already running')
             subprocess.run(
                 [
                     'tmux', 'new-session', '-d', '-s', session,
                     'bash ' + shlex.quote(str(script)) + ' < /dev/null'
                 ],
                 stdin=subprocess.DEVNULL,
+                cwd=root,
                 check=True,
                 timeout=30
             )

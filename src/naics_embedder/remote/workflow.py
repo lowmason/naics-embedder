@@ -9,6 +9,7 @@ from typing import Callable
 from naics_embedder.remote.canonical import canonical_inputs
 from naics_embedder.remote.code_manifest import is_credential_path
 from naics_embedder.remote.config import effective_config
+from naics_embedder.remote.launch import LaunchResult
 from naics_embedder.remote.push import push_code, scan_code, upload_inputs
 from naics_embedder.remote.session import (
     GpuEvidence,
@@ -95,6 +96,9 @@ class RemoteWorkflow:
                 if is_credential_path(name):
                     raise ValueError(f'credential path forbidden in canonical inputs: {name}')
             old = read_state(self.root)
+            if old is not None and old.last_sync_manifest is not None:
+                from naics_embedder.remote.sync import bind_verified_runs
+                bind_verified_runs(self.root, old)
             new_session = old is None or old.host != host or old.status in ('finished', 'abandoned')
             loss = None
             if old is not None and old.host != host and old.status not in ('finished', 'abandoned'):
@@ -201,6 +205,32 @@ class RemoteWorkflow:
                 'push_id'
             ) != state.push_id:
                 raise ValueError('remote session marker verification failed')
+            _atomic_record(
+                self.root / '.remote/session-inputs.json', {
+                    'session_id': state.session_id,
+                    'push_id': state.push_id,
+                    'paths': list(inputs.paths),
+                    'hashes': inputs.hashes
+                }
+            )
             state.status = 'ready'
             write_state(self.root, state)
             return state
+
+    def train(self, resume: bool, config_path: str, overrides: list[str]) -> LaunchResult:
+        '''Resolve current inputs and launch while owning the workflow transaction lock.'''
+        from naics_embedder.remote.launch import launch_training
+        from naics_embedder.remote.loop import _session_config
+        with state_lock(self.root):
+            state = read_state(self.root)
+            if state is None or state.status != 'ready' or state.remote_info is None:
+                raise ValueError('remote train requires a ready session; run remote up')
+            remote_cfg = _session_config(self.root, state.session_id)
+            transport = self.transport_factory(state.host, remote_cfg)
+            transport.repo = state.remote_info.repo
+            transport.python = state.remote_info.python
+            cfg = effective_config(self.root, config_path, overrides)
+            inputs = canonical_inputs(self.root, cfg)
+            return launch_training(
+                self.root, state, transport, cfg, config_path, overrides, inputs, resume
+            )
