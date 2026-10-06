@@ -138,3 +138,28 @@ records, margins and decisions remain on the Mac; sealed test/outer splits stay 
 Historical Phase 1 truth remains local 2,314 passed/1 skip, CI 2,304 passed/11 skips, with lint
 QUEUED at the merge checkpoint. This finding does not alter those historical counts, retire
 Plan 10 or mark Stage 7 complete. Final whole-branch and real PR CI gates belong to Task 11.
+
+## CI portability qualification
+
+Test-only correction SHA: `fef570864a252ef9c11c3ef036f2ab26048faa3c`.
+PR 126 CI run 37416387201 attempt 1 at `2d29dedd59b56806c0eca18bc6f070a1772ce700`
+had five Python 3.12 failures: both missing-tmux apt failure cases, unavailable NTP, and both
+missing-training-config CLI cases. Full output measured 2,980 passes, 11 skips and 80 warnings;
+Python 3.10 was cancelled by matrix fail-fast and is not a passed gate. Lint/docs and both GNU
+qualification steps passed; each GNU step measured 47 passes, zero skips and 41 warnings.
+
+Controlled local RED reproduced the three bootstrap failures with safe populated-host lookup
+and the two CLI failures with genuine narrow-terminal wrapping on both Python 3.12.12 and
+3.10.19. Bootstrap RED had three passes alongside its three failures; CLI RED had two normal-width
+passes alongside its two narrow-width failures. The corrected fixture exposes only fake
+bootstrap tools and allowlisted shell utilities. The CLI assertion preserves the complete missing
+path across Rich display line breaks, exit 1, the specific config error and zero transport calls.
+Runtime, GPU/NTP guards, configuration, lock, CI gates and numerical assertions are unchanged.
+
+Both complete affected modules passed 72 nodes, zero skips and no emitted warnings on each
+Python version with locked offline dependencies. Current collection is 3,001 nodes on each
+version, five more than the historical WB qualification above. Full Ruff/YAPF and diff checks
+passed. Evidence is retained under ignored `logs/plan11_review_evidence/ciport-*`, including
+separate RED, GREEN, collection and command metadata; saved failed/cancelled CI logs remain
+under `ci-pr126/`. Fresh frozen-head full gates, independent reviews and new corresponding CI
+are pending. Real Lambda/Mac Task 18 qualification, the campaign and user merge remain pending.
