@@ -288,3 +288,18 @@ def test_editable_bootstrap_metadata_is_pruned_before_read(remote_workflow_fixtu
     assert env.workflow.remote_cfg.instance_scan_ignore == [
         '__pycache__/', '*.pyc', '.pytest_cache/', '.ipynb_checkpoints/'
     ]
+
+def test_managed_rsync_partial_recovers_without_force(remote_workflow_fixture):
+    env = remote_workflow_fixture
+    env.transport.push_error = True
+    env.transport.fail_after = 'AGENTS.md'
+    with pytest.raises(RuntimeError):
+        up(env)
+    directory = env.instance / 'src/.rsync-partial'
+    directory.mkdir(parents=True)
+    (directory / 'tiny.py').write_text('interrupted transfer bytes')
+    env.transport.push_error = False
+    assert up(env).status == 'ready'
+    (env.instance / 'src/tiny.py').write_text('unrelated instance edit')
+    with pytest.raises(ValueError, match='instance code edits'):
+        up(env)

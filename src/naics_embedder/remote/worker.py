@@ -105,6 +105,8 @@ def _generated_name(name: str, ignore: tuple[str, ...]) -> bool:
     # The locked editable build emits this project-specific directory (already Git-ignored).
     if parts[:2] == ('src', 'naics_embedder.egg-info'):
         return True
+    if '.rsync-partial' in parts:
+        return True
     if _credential_name(name):
         return True
     for pattern in ignore:
@@ -115,43 +117,111 @@ def _generated_name(name: str, ignore: tuple[str, ...]) -> bool:
             return True
     return False
 
-def _code_item(root: Path, name: str) -> dict[str, object] | None:
-    _code_name(name)
-    path = root / name
-    # A replaced ancestor must never redirect a read outside the controlled tree.
-    for parent in path.parents:
-        if parent == root:
-            break
-        if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
-            return dict(path=name, sha256='', size=0, mode=0, kind='unsafe_ancestor', target=None)
+def _same_metadata(left: os.stat_result, right: os.stat_result) -> bool:
+    stable = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    return all(getattr(left, key) == getattr(right, key) for key in stable)
+
+def _open_directory(name: str, parent: int | None = None) -> int:
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+
+def _root_descriptor(root: Path) -> int:
+    # Anchor every absolute component, including the repository's ancestors.
+    descriptor = _open_directory('/')
     try:
-        metadata = path.lstat()
+        for part in root.absolute().parts[1:]:
+            child = _open_directory(part, descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+def _parent_descriptor(root: int, name: str) -> int:
+    descriptor = os.dup(root)
+    try:
+        for part in name.split('/')[:-1]:
+            child = _open_directory(part, descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+def _safe_link(root: int, name: str, target: str) -> bool:
+    candidate = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+    if posixpath.isabs(target):
+        return False
+    for _ in range(40):
+        try:
+            _code_name(candidate)
+            if _credential_name(candidate):
+                return False
+            parts = candidate.split('/')
+            descriptor = os.dup(root)
+            replacement = None
+            try:
+                for index, part in enumerate(parts):
+                    metadata = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+                    if stat.S_ISLNK(metadata.st_mode):
+                        link = os.readlink(part, dir_fd=descriptor)
+                        after = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+                        if posixpath.isabs(link) or not _same_metadata(metadata, after):
+                            return False
+                        replacement = posixpath.normpath(
+                            posixpath.join(*parts[:index], link, *parts[index + 1:])
+                        )
+                        break
+                    if index < len(parts) - 1:
+                        child = _open_directory(part, descriptor)
+                        if not _same_metadata(metadata, os.fstat(child)):
+                            os.close(child)
+                            return False
+                        os.close(descriptor)
+                        descriptor = child
+                    elif not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+                        return False
+            finally:
+                os.close(descriptor)
+            if replacement is None:
+                return True
+            candidate = replacement
+        except (OSError, ValueError):
+            return False
+    return False
+
+def _code_item_at(root: int, parent: int, name: str) -> dict[str, object] | None:
+    leaf = name.split('/')[-1]
+    try:
+        metadata = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
     except FileNotFoundError:
         return None
     mode = metadata.st_mode
     target = None
     digest = hashlib.sha256()
     if stat.S_ISREG(mode):
-        with path.open('rb') as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b''):
-                digest.update(block)
-        kind = 'file'
-        after = path.lstat()
-        stable = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
-        if any(getattr(after, key) != getattr(metadata, key) for key in stable):
-            raise ValueError(f'code changed during inventory: {name}')
-    elif stat.S_ISLNK(mode):
-        target = os.readlink(path)
-        digest.update(os.fsencode(target))
+        # NONBLOCK prevents a regular-to-FIFO race from hanging before fstat qualification.
+        descriptor = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
         try:
-            resolved = path.resolve()
-            safe = (
-                not Path(target).is_absolute() and resolved.is_relative_to(root) and
-                resolved.exists() and not _credential_name(resolved.relative_to(root).as_posix())
-            )
-        except (OSError, RuntimeError):
-            safe = False
-        kind = 'symlink' if safe else 'unsafe_symlink'
+            if not _same_metadata(metadata, os.fstat(descriptor)):
+                raise ValueError(f'code changed during inventory: {name}')
+            for block in iter(lambda: os.read(descriptor, 1024 * 1024), b''):
+                digest.update(block)
+            after = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+            if not _same_metadata(metadata, after) or not _same_metadata(
+                metadata, os.fstat(descriptor)
+            ):
+                raise ValueError(f'code changed during inventory: {name}')
+        finally:
+            os.close(descriptor)
+        kind = 'file'
+    elif stat.S_ISLNK(mode):
+        target = os.readlink(leaf, dir_fd=parent)
+        if not _same_metadata(metadata, os.stat(leaf, dir_fd=parent, follow_symlinks=False)):
+            raise ValueError(f'code changed during inventory: {name}')
+        digest.update(os.fsencode(target))
+        kind = 'symlink' if _safe_link(root, name, target) else 'unsafe_symlink'
     else:
         kind = 'directory' if stat.S_ISDIR(mode) else 'special'
     return dict(
@@ -162,6 +232,45 @@ def _code_item(root: Path, name: str) -> dict[str, object] | None:
         kind=kind,
         target=target
     )
+
+def _code_item_from(root: int, name: str) -> dict[str, object] | None:
+    _code_name(name)
+    try:
+        parent = _parent_descriptor(root, name)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return dict(path=name, sha256='', size=0, mode=0, kind='unsafe_ancestor', target=None)
+    try:
+        return _code_item_at(root, parent, name)
+    finally:
+        os.close(parent)
+
+def _code_item(root: Path, name: str) -> dict[str, object] | None:
+    descriptor = _root_descriptor(root)
+    try:
+        return _code_item_from(descriptor, name)
+    finally:
+        os.close(descriptor)
+
+def _code_names(root: int, ignore: tuple[str, ...], prefix: str = '') -> set[str]:
+    names = set()
+    for leaf in os.listdir(root):
+        name = prefix + leaf
+        if _generated_name(name, ignore):
+            continue
+        metadata = os.stat(leaf, dir_fd=root, follow_symlinks=False)
+        if stat.S_ISDIR(metadata.st_mode):
+            child = _open_directory(leaf, root)
+            try:
+                if not _same_metadata(metadata, os.fstat(child)):
+                    raise ValueError(f'code directory changed during inventory: {name}')
+                names.update(_code_names(child, ignore, name + '/'))
+            finally:
+                os.close(child)
+        else:
+            names.add(name)
+    return names
 
 def _pending_link(item: dict[str, object], pending: dict[str, dict]) -> bool:
     expected = pending.get(item['path'])
@@ -223,23 +332,7 @@ def _controlled_inventory(root: Path, payload: dict[str, object]) -> dict[str, o
         _code_name(name)
         if _credential_name(name):
             raise ValueError('credential path cannot be controlled code')
-    root = root.resolve()
     names = set(expected)
-    if root.exists():
-        for directory, children, files in os.walk(root, followlinks=False):
-            relative = Path(directory).relative_to(root)
-            for name in children[:]:
-                path = Path(directory) / name
-                value = (relative / name).as_posix()
-                if _generated_name(value, tuple(ignore)):
-                    children.remove(name)
-                elif path.is_symlink():
-                    children.remove(name)
-                    names.add(value)
-            for name in files:
-                value = (relative / name).as_posix()
-                if not _generated_name(value, tuple(ignore)):
-                    names.add(value)
     pending_entries = payload.get('pending_entries', [])
     if not isinstance(pending_entries, list) or not all(
         isinstance(item, dict) for item in pending_entries
@@ -252,7 +345,15 @@ def _controlled_inventory(root: Path, payload: dict[str, object]) -> dict[str, o
         _code_name(name)
         if _credential_name(name):
             raise ValueError('credential path cannot be pending code')
-    entries = [_code_item(root, name) for name in sorted(names)]
+    try:
+        descriptor = _root_descriptor(root)
+    except FileNotFoundError:
+        return {'files': []}
+    try:
+        names.update(_code_names(descriptor, tuple(ignore)))
+        entries = [_code_item_from(descriptor, name) for name in sorted(names)]
+    finally:
+        os.close(descriptor)
     for item in entries:
         if item is not None and item['kind'] == 'unsafe_symlink' and _pending_link(item, pending):
             item['kind'] = 'symlink'
@@ -286,21 +387,43 @@ def _owned_remove(root: Path, payload: dict[str, object]) -> dict[str, object]:
             _code_name(name)
         if not set(names).issubset(previous_names - set(current)):
             raise ValueError('deletion is outside previous manifest minus current paths')
-    root = root.resolve()
-    for name in names:
-        _code_name(name)
-        if _credential_name(name) or (
-            classification == 'new' and _generated_name(name, tuple(payload.get('ignore', [])))
-        ):
-            raise ValueError(f'protected code deletion: {name}')
-        actual = _code_item(root, name)
-        if actual is not None:
-            if actual['kind'] == 'unsafe_symlink' and _pending_link(actual, previous_records):
-                actual['kind'] = 'symlink'
-            if actual['kind'] not in ('file', 'symlink') or actual != records[name]:
-                raise ValueError(f'deletion type or bytes changed: {name}')
-    for name in names:
-        (root / name).unlink(missing_ok=True)
+    descriptor = _root_descriptor(root)
+    try:
+        for name in names:
+            _code_name(name)
+            if _credential_name(name) or (
+                classification == 'new' and _generated_name(name, tuple(payload.get('ignore', [])))
+            ):
+                raise ValueError(f'protected code deletion: {name}')
+            try:
+                parent = _parent_descriptor(descriptor, name)
+            except FileNotFoundError:
+                continue
+            try:
+                leaf = name.split('/')[-1]
+                actual = _code_item_at(descriptor, parent, name)
+                if actual is None:
+                    continue
+                if actual['kind'] == 'unsafe_symlink' and _pending_link(actual, previous_records):
+                    actual['kind'] = 'symlink'
+                if actual['kind'] not in ('file', 'symlink') or actual != records[name]:
+                    raise ValueError(f'deletion type or bytes changed: {name}')
+                # Recheck this exact entry immediately before its anchored mutation.
+                before = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+                checked = _code_item_at(descriptor, parent, name)
+                if checked is not None and checked['kind'] == 'unsafe_symlink' and _pending_link(
+                    checked, previous_records
+                ):
+                    checked['kind'] = 'symlink'
+                if checked != actual or not _same_metadata(
+                    before, os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+                ):
+                    raise ValueError(f'deletion type or bytes changed: {name}')
+                os.unlink(leaf, dir_fd=parent)
+            finally:
+                os.close(parent)
+    finally:
+        os.close(descriptor)
     return {'removed': names}
 
 def _training_status(payload: dict[str, object]) -> dict[str, object]:

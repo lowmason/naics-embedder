@@ -85,15 +85,23 @@ def _system_probe_code(operation: str) -> str:
     from naics_embedder.remote.worker import (
         TMUX_SESSION,
         _code_item,
+        _code_item_at,
+        _code_item_from,
         _code_name,
+        _code_names,
         _controlled_inventory,
         _credential_name,
         _generated_name,
         _inside,
         _inventory,
+        _open_directory,
         _owned_remove,
+        _parent_descriptor,
         _pending_link,
         _remove_code,
+        _root_descriptor,
+        _safe_link,
+        _same_metadata,
         _training_status,
     )
     preamble = (
@@ -106,7 +114,9 @@ def _system_probe_code(operation: str) -> str:
         'training': [_training_status],
         'edits': [
             safe_files, _inside, _remove_code, _inventory, _code_name, _credential_name,
-            _generated_name, _code_item, _pending_link, _controlled_inventory, _owned_remove
+            _generated_name, _same_metadata, _open_directory, _root_descriptor, _parent_descriptor,
+            _safe_link, _code_item_at, _code_item_from, _code_item, _code_names, _pending_link,
+            _controlled_inventory, _owned_remove
         ]
     }[operation]
     code = preamble + '\n'.join(inspect.getsource(function) for function in functions)
@@ -217,7 +227,12 @@ class SshTransport:
                 raise RuntimeError('bootstrap must qualify CUDA native BF16 evidence')
             self.python = str(result['python'])
             return result
-        if self.python is None and operation in {'inventory', 'training', 'edits'}:
+        if operation == 'edits':
+            return self._ssh(
+                [self.python or 'python3', '-c',
+                 _system_probe_code(operation)], payload
+            )
+        if self.python is None and operation in {'inventory', 'training'}:
             if operation == 'training' and payload.get('action', 'status') != 'status':
                 raise RuntimeError('bootstrap required before training mutations')
             return self._ssh(['python3', '-c', _system_probe_code(operation)], payload)

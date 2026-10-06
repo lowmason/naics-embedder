@@ -589,20 +589,23 @@ def test_controlled_hash_ignores_access_time_update(tmp_path):
     assert (after.st_mtime_ns, after.st_ctime_ns) == (before.st_mtime_ns, before.st_ctime_ns)
 
 def test_controlled_hash_refuses_content_mutation(tmp_path, monkeypatch):
-    from pathlib import Path
 
     from naics_embedder.remote.worker import run_probe
     path = tmp_path / 'code.py'
     path.write_text('constant bytes')
-    original = Path.open
+    import os
+    original = os.read
+    changed = False
 
-    def mutate(candidate, *args, **kwargs):
-        if candidate == path and args and args[0] == 'rb':
-            with original(path, 'a') as stream:
+    def mutate(descriptor, count):
+        nonlocal changed
+        if not changed and os.fstat(descriptor).st_ino == path.stat().st_ino:
+            changed = True
+            with path.open('a') as stream:
                 stream.write(' changed')
-        return original(candidate, *args, **kwargs)
+        return original(descriptor, count)
 
-    monkeypatch.setattr(Path, 'open', mutate)
+    monkeypatch.setattr(os, 'read', mutate)
     with pytest.raises(ValueError, match='changed during inventory'):
         run_probe('edits', dict(controlled=True, expected=['code.py'], ignore=[]), tmp_path)
 
@@ -701,3 +704,138 @@ def test_generic_deletion_of_editable_metadata_is_protected():
     from naics_embedder.remote.transport import safe_files
     with pytest.raises(ValueError, match='protected'):
         safe_files(('src/naics_embedder.egg-info/PKG-INFO', ), code=True)
+
+def integrity_functions(rendered):
+    from naics_embedder.remote import worker
+    from naics_embedder.remote.transport import _system_probe_code
+    if not rendered:
+        return worker._controlled_inventory, worker._owned_remove
+    namespace = {}
+    exec(_system_probe_code('edits').split('\np=json.load(sys.stdin)')[0], namespace)
+    return namespace['_controlled_inventory'], namespace['_owned_remove']
+
+@pytest.mark.parametrize('rendered', [False, True])
+@pytest.mark.parametrize('ancestor', [False, True])
+def test_controlled_open_never_follows_swapped_link(tmp_path, monkeypatch, rendered, ancestor):
+    import io
+    import os
+    from pathlib import Path
+    scan, _ = integrity_functions(rendered)
+    root = tmp_path / 'repo'
+    (root / 'owned').mkdir(parents=True)
+    victim = root / 'owned/code.py'
+    victim.write_text('authorized')
+    external = tmp_path / 'external'
+    external.mkdir()
+    (external / '.env').write_text('fake credential bytes')
+    (external / 'code.py').symlink_to('.env')
+    original_open, original_io = os.open, io.open
+    swapped = False
+    external_reads = []
+
+    def swap():
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            if ancestor:
+                (root / 'owned').rename(root / 'detached')
+                (root / 'owned').symlink_to(external, target_is_directory=True)
+            else:
+                victim.unlink()
+                victim.symlink_to(external / '.env')
+
+    def opening(path, flags, *args, **kwargs):
+        if str(path).endswith('code.py'):
+            swap()
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if os.fstat(descriptor).st_ino == (external / 'code.py').stat().st_ino:
+            external_reads.append(str(path))
+        return descriptor
+
+    def io_open(path, *args, **kwargs):
+        if isinstance(path, (str, Path)) and str(path).endswith('code.py'):
+            swap()
+            if Path(path).resolve() == external / '.env':
+                external_reads.append(str(path))
+        return original_io(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', opening)
+    monkeypatch.setattr(io, 'open', io_open)
+    try:
+        scan(root, dict(expected=['owned/code.py'], ignore=[]))
+    except (ValueError, OSError):
+        pass
+    assert swapped
+    assert external_reads == []
+
+@pytest.mark.parametrize('rendered', [False, True])
+@pytest.mark.parametrize('change', ['ancestor', 'next_entry'])
+def test_owned_unlink_stays_anchored_and_rechecks_each_entry(
+    tmp_path, monkeypatch, rendered, change
+):
+    import os
+    scan, remove = integrity_functions(rendered)
+    root = tmp_path / 'repo'
+    (root / 'owned').mkdir(parents=True)
+    for name in ['a.py', 'b.py']:
+        (root / 'owned' / name).write_text('authorized')
+    external = tmp_path / 'external'
+    external.mkdir()
+    (external / 'a.py').write_text('external bytes')
+    records = scan(root, dict(expected=[], ignore=[]))['files']
+    original = os.unlink
+    changed = False
+
+    def unlink(path, *args, **kwargs):
+        nonlocal changed
+        if not changed:
+            changed = True
+            if change == 'ancestor':
+                (root / 'owned').rename(root / 'detached')
+                (root / 'owned').symlink_to(external, target_is_directory=True)
+            else:
+                (root / 'owned/b.py').write_text('unrelated edit')
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'unlink', unlink)
+    try:
+        remove(
+            root,
+            dict(
+                remove=['owned/a.py', 'owned/b.py'],
+                authorized=records,
+                classification='previous',
+                previous=records,
+                current_paths=[]
+            )
+        )
+    except (ValueError, OSError):
+        pass
+    assert changed
+    assert (external / 'a.py').read_text() == 'external bytes'
+    if change == 'next_entry':
+        assert (root / 'owned/b.py').read_text() == 'unrelated edit'
+
+@pytest.mark.parametrize('rendered', [False, True])
+def test_partial_namespace_pruned_but_previous_members_checked(tmp_path, rendered):
+    scan, _ = integrity_functions(rendered)
+    directory = tmp_path / 'src/.rsync-partial'
+    directory.mkdir(parents=True)
+    (directory / 'tiny.py').write_text('generated partial')
+    (directory / 'previous.py').write_text('previous code')
+    response = scan(tmp_path, dict(expected=['src/.rsync-partial/previous.py'], ignore=[]))
+    assert [entry['path'] for entry in response['files']] == ['src/.rsync-partial/previous.py']
+
+def test_hydrated_integrity_probe_uses_fixed_local_source(recorded_transport_runner):
+    runner = recorded_transport_runner
+    transport = SshTransport('ubuntu@192.0.2.1', '/repo', 'rsync', runner)
+    transport.python = '/repo/.venv/bin/python'
+    transport.probe('edits', dict(controlled=True, expected=[], ignore=[]))
+    command = shlex.split(runner.calls[-1].args[-1])
+    assert command[:2] == [transport.python, '-c']
+    assert 'naics_embedder.remote.worker' not in command
+
+@pytest.mark.parametrize('rendered', [False, True])
+def test_initial_controlled_scan_accepts_absent_repository(tmp_path, rendered):
+    scan, _ = integrity_functions(rendered)
+    assert scan(tmp_path / 'absent', dict(expected=[], ignore=[])) == {'files': []}
