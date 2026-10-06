@@ -9,8 +9,8 @@ An optional HGCN stage refines the parent–child graph with its own objective a
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
-Python 3.12. The source tree has **103 Python files**; tests have **83 unit** files and one
-integration file. File counts exclude generated and ignored artifacts.
+Python 3.12. The source tree has **117 Python files**; tests have **99 unit** files and two
+integration files. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
 
@@ -38,7 +38,8 @@ Paths below are relative to the repository; the tree shows the principal modules
 
 ```text
 src/naics_embedder/
-├── cli/commands/              # data, tools and training CLI commands
+├── cli/commands/              # data, tools, training and remote CLI adapters
+├── remote/                    # verified code/input transport, exact launch and coherent pulls
 ├── data/                      # preprocessing, redirections, bundle generation
 ├── supervision/
 │   ├── activity.py            # canonical activity-phrase parser
@@ -71,8 +72,8 @@ src/naics_embedder/
 └── utils/                     # config, training, input-window and geometry utilities
 
 tests/
-├── unit/                      # 83 unit test files
-├── integration/               # test_reference_training.py
+├── unit/                      # 99 unit test files
+├── integration/               # test_reference_training.py, test_remote_workflow.py
 ├── fixtures/                  # tiny models, bundles, panels and runs
 └── conftest.py
 
@@ -208,6 +209,33 @@ reading a panel. It verifies anchor-radius gradients, per-level SD > 1e-3, posit
 sector radii, manifold error and chunked distance precision, plus gradients for the three terms
 and both scales. A failed criterion writes the report and exits 1.
 
+### Remote Workflow and Phase 2 Boundary
+
+Five `remote` CLI adapters call `RemoteWorkflow`: up/train/sync/finish/status. Transport config
+is separate in `conf/remote.yaml`; later operations use the complete persisted session config.
+Help never bootstraps or reads state/config. Canonical inputs travel explicitly and are never
+rebuilt on an instance; committed `conf/config.yaml` keeps its manifest null. Every kept
+checkpoint, last and both histories travel together. Exact continuation only uses last under
+the same absolute checkpoint path/user, settings/seed and LoRA/active-MoE controls. Empty/new
+fresh directories pass; finished runs skip; budgets and checkpoints are never rewritten.
+
+Bootstrap and immediate launch require NTP and native BF16 on logical CUDA 0 using
+`including_emulation=False`, identical CUDA visibility and one device. No GPU whitelist, VRAM
+threshold, workload-fit inference or precision fallback. Status GPU evidence is observational.
+Only safe=true finish prints `Safe to terminate`; abandon records possible loss and stays unsafe.
+Mac tampering, pending promotions, active training and unhandled edits withhold readiness.
+
+See [remote workflow](docs/remote_workflow.md) and [remote API](docs/api/remote.md). The real
+Lambda/Mac qualification remains pending after merge on a new experiment, never `plan10_smoke`.
+Plan 10 Phase 1 evidence/counts remain historical, including its queued lint truth; Task 18 and
+Phase 2 are not executed by these fixtures. In a fresh post-merge session, use primary local
+main, replay only the two held private config commits locally, verify the actual diff and stop
+on conflicts/extra commits/retired keys. Never push them. Execute Task 18 onward in order,
+freeze uv.lock from first campaign launch through last decision, use ten seeds and δ = 3 SD
+before selection, and never repeat the four Phase 1 exit reads in the seven-record Mac log.
+Exports, QCEW, stores and decisions stay on the Mac; remote selection logs stay separate and
+sealed test/outer splits stay closed. Plan 10 retirement and Stage 7 completion wait for Phase 2.
+
 ## Development Setup
 
 ```bash
@@ -246,7 +274,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **2,315 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **3,001 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -419,7 +447,7 @@ evaluation currently uses curvature 1; a non-unit-curvature correction is a sepa
 
 ## Testing and Validation
 
-There are 83 unit files and one integration file. Important current seams include:
+There are 99 unit files and two integration files. Important current seams include:
 
 - `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
   and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and

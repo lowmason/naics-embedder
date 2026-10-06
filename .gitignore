@@ -99,3 +99,7 @@ Thumbs.db
 .pre-commit-setup.md
 scratch.ipynb
 .vscode/
+
+# Remote session state and pulled results
+.remote/
+outputs/remote/

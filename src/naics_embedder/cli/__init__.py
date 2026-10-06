@@ -8,6 +8,7 @@ This package organizes CLI commands into logical groups:
 - data: Data generation and preprocessing commands
 - tools: Utility tools for configuration, epoch health, panel reads, and decisions
 - training: Model training commands
+- remote: Verified single-instance training and result transport
 
 Importing this package configures the process for the CLI: it sets ``PYTORCH_ALLOC_CONF``
 before torch is loaded and applies the centralized warning filters from
@@ -24,7 +25,7 @@ import typer
 
 from naics_embedder.utils.warnings import configure_warnings
 
-from .commands import data, tools, training
+from .commands import data, remote, tools, training
 
 # Applied after the imports above: filterwarnings() prepends, and torch/Lightning register
 # filters of their own on import, so running last keeps these suppressions ahead of them.
@@ -43,8 +44,9 @@ app = typer.Typer(
 # Add sub-apps
 app.add_typer(data.app, name='data')
 app.add_typer(tools.app, name='tools')
+app.add_typer(remote.app, name='remote')
 
 # Register training commands directly on main app
 app.command('train')(training.train)
 
-__all__ = ['app', 'data', 'tools', 'training']
+__all__ = ['app', 'data', 'tools', 'training', 'remote']

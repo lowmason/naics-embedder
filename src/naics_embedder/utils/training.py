@@ -28,7 +28,7 @@ Functions:
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import pytorch_lightning as pyl
@@ -395,7 +395,7 @@ def refuse_a_fresh_start_into_a_used_directory(checkpoint_dir: Path) -> None:
         )
 
 def refuse_a_resume_from_another_directory(
-    checkpoint: Mapping[str, Any], checkpoint_dir: Path
+    checkpoint: Mapping[str, Any], checkpoint_dir: Path, *, resolved_dirpath: Optional[str] = None
 ) -> None:
     '''
     Refuse an exact resume from a checkpoint that ModelCheckpoint saved in another directory
@@ -406,6 +406,10 @@ def refuse_a_resume_from_another_directory(
     and ``last.ckpt`` would become ``last-v1.ckpt``. The directories compare as ModelCheckpoint
     stores them, as real paths, and the state is the one this run's callback reads.
 
+    The keyword-only resolved_dirpath is supplied only by a transport identity probe. It names
+    an absolute normalized instance directory and is compared literally, without resolving it
+    on this host; it is never an arbitrary unverified directory override.
+
     Raises:
         ValueError: If the checkpoint holds no state of this run's ModelCheckpoint, or holds one
             saved in another directory.
@@ -414,15 +418,24 @@ def refuse_a_resume_from_another_directory(
     callback = outcome_checkpoint(checkpoint_dir)
     state = (checkpoint.get('callbacks') or {}).get(callback.state_key) or {}
     saved = state.get('dirpath')
+    if resolved_dirpath is not None:
+        path = PurePosixPath(resolved_dirpath)
+        if (
+            not path.is_absolute() or '..' in path.parts or str(path) != resolved_dirpath or str(
+                path
+            ) == '/'
+        ):
+            raise ValueError('expected an absolute normalized instance checkpoint directory')
+    expected = callback.dirpath if resolved_dirpath is None else resolved_dirpath
     if saved is None:
         raise ValueError(
             f'the checkpoint holds no ModelCheckpoint state on {OUTCOME_MRR}, so an exact resume '
             'would restore no kept epoch: resume a checkpoint this training saved'
         )
-    if saved != callback.dirpath:
+    if saved != expected:
         raise ValueError(
             f"the checkpoint was saved in another checkpoint directory, {saved}, not this run's "
-            f'{callback.dirpath}: ModelCheckpoint would restore none of its kept epochs. Resume it '
+            f'{expected}: ModelCheckpoint would restore none of its kept epochs. Resume it '
             'from the directory it was saved in'
         )
 

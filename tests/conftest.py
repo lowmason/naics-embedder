@@ -21,6 +21,7 @@ pytest_plugins = (
     'tests.fixtures.shared_encoder',
     'tests.fixtures.supervision',
     'tests.fixtures.checkpoint_runs',
+    'tests.fixtures.remote',
 )
 
 # -------------------------------------------------------------------------------------------------

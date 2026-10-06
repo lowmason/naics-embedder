@@ -47,6 +47,8 @@ jobs:
       # .python-version pins local dev to 3.12. UV_PYTHON overrides it so each
       # leg tests its matrix version; without it, `uv run` rebuilds on 3.12.
       UV_PYTHON: ${{ matrix.python-version }}
+      REMOTE_REQUIRE_GNU_RSYNC: '1'
+      REMOTE_RSYNC: /usr/bin/rsync
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -61,6 +63,12 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked
+
+      - name: Install GNU rsync for transport qualification
+        run: sudo apt-get update && sudo apt-get install -y rsync
+
+      - name: Qualify real remote transport without skips
+        run: uv run --locked pytest tests/integration/test_remote_workflow.py tests/unit/test_remote_task18_contract.py -q
 
       - name: Run tests with coverage (generate coverage.xml)
         # We explicitly ask for xml:coverage.xml to guarantee the filename and location
@@ -91,3 +99,16 @@ jobs:
         env:
           # If your repository is private or your Codecov setup needs a token, set CODECOV_TOKEN in repo secrets
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN || '' }}
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install uv
+        run: pip install uv
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Build strict documentation
+        run: uv run --locked mkdocs build --strict

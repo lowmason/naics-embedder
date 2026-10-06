@@ -1,8 +1,8 @@
 # Lambda Remote Workflow
 
-**Status:** APPROVED (2026-09-23) — ready for an implementation plan
-
-**Next skill after approval:** `writing-plans` in a fresh session
+**Status:** APPROVED (2026-09-23); implementation plan approved 2026-10-05.
+Implementation is under review on its feature branch. Merge, final branch gates and the
+post-merge real-instance qualification are not claimed by this specification.
 
 ## 1. Purpose
 
@@ -34,7 +34,7 @@ invariant would break.
 - Five commands: `remote up`, `remote train`, `remote sync`, `remote finish`, `remote status`.
 - Pushing the Mac's working tree (tracked files plus untracked, non-ignored files).
 - Uploading the canonical parquet and supervision bundle, validated on the Mac and the instance.
-- Instance bootstrap: uv, `uv sync --locked`, a GPU check, tmux.
+- Instance bootstrap: uv, `uv sync --locked`, native-BF16 CUDA qualification, NTP, tmux.
 - Launching `naics-embedder train` in tmux, fresh or as an exact resume.
 - A background pull loop on the Mac and a verified final pull.
 - A code record for every push and a record for every training segment.
@@ -153,24 +153,30 @@ tracked files, including a TensorBoard event file from a Lambda host.
 Commands run from the checkout whose `data/` holds the canonical inputs (normally the main
 checkout) and use the host recorded in `.remote/state.json`.
 
-### 7.2 `remote up --host USER@IP [--force]`
+### 7.2 `remote up --host USER@IP [--force] [--config PATH] [OVERRIDES...]`
 
 1. Check tools: `rsync --version` must report GNU rsync 3.2 or newer.
-2. Bundle gate on the Mac (§8). Nothing is uploaded until it passes.
+2. Resolve the required repo-relative training YAML plus ordered overrides, then the bundle
+   gate on the Mac (§8). Nothing is uploaded until it passes. A missing config never falls back
+   to defaults. The group accepts `--remote-config PATH` before the command for transport YAML.
 3. Unfinished-session guard (§8). A new host, or a host whose session is finished, starts a new
    session.
 4. Check SSH: non-interactive, `StrictHostKeyChecking=accept-new`, short timeout.
-5. Push code (§7.3).
+5. Journal preparing state, qualify/install remote GNU rsync before the first upload, then
+   push code (§7.3). A prerequisite failure uploads no code.
 6. Bootstrap by running `src/naics_embedder/remote/bootstrap.sh` from the pushed tree: install uv
-   if missing, `uv sync --locked`, confirm `torch.cuda.is_available()`, and ensure tmux and rsync
-   are installed. Check that the instance clock is NTP-synchronized before training: monitor
+   if missing, `uv sync --locked`, require CUDA/native BF16 on logical device 0, and ensure
+   tmux and rsync are installed. Check that the instance clock is NTP-synchronized before training: monitor
    read timestamps participate in the margins-first guard.
 7. Upload the canonical inputs to the same repo-relative paths, then validate them on the
    instance with the checks from step 2.
 8. Record host, session, and push in `.remote/state.json`.
 
-Rerunning `remote up` on the same host is safe: it pushes only what changed, reruns the bootstrap
-(fast once synced), and re-verifies the inputs.
+Rerunning `remote up` on the same host after training stops reuses a ready session or repairs
+incomplete preparation, pushes changes, reruns bootstrap and re-verifies inputs. Active training
+refuses up/bootstrap/code/input replacement even with force. Ready state publishes only after
+all verification and the matching session marker. Pending pushes retain the prior successful
+baseline and journal; partial preparation cannot launch.
 
 ### 7.3 Code push
 
@@ -193,24 +199,32 @@ Rerunning `remote up` on the same host is safe: it pushes only what changed, rer
 2. Refuse if a training tmux session is already running on the instance.
 3. Without `--resume`: fresh-run collision guard (§8).
 4. With `--resume`: resume pre-check (§8); upload `last.ckpt`, `monitor_reads.jsonl` and
-   `epoch_summary.jsonl` from the same run's checkpoint directory; confirm each SHA-256 on the
-   instance before launch. Resume only from `last.ckpt`, never the selected checkpoint or an
+   `epoch_summary.jsonl` and every kept checkpoint/remaining run file from the same directory;
+   confirm every SHA-256 on the instance before launch. Resume only from `last.ckpt`, never the selected checkpoint or an
    earlier epoch. Skip finished runs before any automatic resume loop: runs ended by early
    stopping or by exhaustion of the saved epoch budget must never be relaunched. Preserve all
    saved run settings, including the epoch budget, and the supplementary saved constructor
    hyperparameters (LoRA always; expert/routing/balancing controls under active MoE).
 5. Write the segment record (§10.2) under `.remote/segments/<segment_id>/` on the instance, and
    copy the current push's code record next to it.
-6. Launch in tmux session `naics-train`, writing the exit code to
+6. Recheck NTP and native BF16 with the same CUDA visibility immediately before launch.
+   Launch in tmux session `naics-train`, writing the exit code to
    `.remote/segments/<segment_id>/exit_code` when training ends:
 
    ```bash
-   uv run naics-embedder train [--config PATH] \
+   <recorded-absolute-uv> run --locked naics-embedder train [--config PATH] \
      [--ckpt-path last --checkpoint-load-mode exact] \
      supervision.manifest_path=<repo-relative path> [OVERRIDES...] < /dev/null
    ```
 
-7. Start the sync loop on the Mac if it is not running.
+7. Start/restart the owned sync loop on the Mac if it is not running. A finished skip exits 0
+   with its named reason and does not start a loop or allocate/upload/launch a segment.
+
+`train` resolves its own current config and overrides; up overrides are not implicit train
+settings. The final argv appends verified canonical manifest/checkpoint paths, accelerator,
+effective precision and devices=1 after user tokens; conflicting reserved paths refuse.
+Newer/different instance run generations refuse restore and require sync first. There is no
+arbitrary-command, weights migration or checkpoint-path/load-mode switch on the remote CLI.
 
 ### 7.5 `remote sync [--once]`
 
@@ -227,35 +241,52 @@ Rerunning `remote up` on the same host is safe: it pushes only what changed, rer
 - Pulls add or update files; they never delete anything on the Mac.
 - rsync writes to a temporary file (`--partial-dir`) and replaces the Mac's copy only when the
   transfer completes.
-- Background passes skip files modified on the instance within the in-flight window.
+- Background passes defer the entire run if any checkpoint/history member is in flight or
+  incomplete. Staged hashes, all source inventories and checkpoint/history coherence are
+  rechecked before journaled atomic promotion. Failed transfers preserve the good generation.
+- Previous successful Mac hashes are checked before every pull/promotion. Changed or missing
+  synced bytes refuse before repair; pending promotions recover before ordinary hash checks and
+  block launch. Mac-only/older files remain; there is no pruning.
 - `logs/train.log` and TensorBoard `version_N/` folders have fixed names that restart on each
   fresh instance, which is why logs and outputs land in per-session folders. Checkpoints keep the
   standard layout because resume looks there; the newest `last.ckpt` replacing the older one is
   intended.
 - The loop runs detached under `caffeinate -i` at the sync interval, logging to
   `.remote/sync.log`. A failed pass is logged and retried at the next interval. The loop stops
-  when the session is finished.
+  on finished/abandoned/changed sessions and cooperative stop. Complete session-owned transport
+  config preserves GNU path/intervals; missing/foreign/incomplete snapshots refuse. Without
+  `--once`, sync ensures this loop and returns; once performs one public locking pass.
 
 ### 7.6 `remote finish [--stop-training] [--pull-edits] [--abandon]`
 
-1. If training is still running, stop. `--stop-training` interrupts it first; work since the last
-   checkpoint is lost.
-2. Final pull, without the in-flight exclusion.
-3. A checksum comparison (`rsync --dry-run --checksum --itemize-changes`) over every mapping in
-   §7.5 must report zero differences.
-4. Instance-edit check (§8). `--pull-edits` copies changed files to
-   `.remote/instance-edits/<session_id>/` for review; it never touches the working tree.
-5. Stop the sync loop, mark the session finished, and print **Safe to terminate** with the latest
-   checkpoint's SHA-256 on both sides.
+1. Quiesce only the owned Mac wrapper/utility and prove their exit before the final state lock.
+   Stale/reused PID ownership never authorizes unrelated signals. Timeout retains evidence.
+2. Recover pending promotions, then verify all previous successful Mac hashes before final pull.
+   Changed/missing Mac copies refuse rather than silently repairing evidence.
+3. Require training stopped. `--stop-training` sends the fixed interrupt to the owned segment
+   and polls bounded tmux/process observations; work after the last checkpoint is lost. No
+   forced training kill is permitted.
+4. Perform a final coherent pull without in-flight exclusion; pending files/promotions refuse.
+5. Check instance edits. `--pull-edits` rescues them under a new immutable
+   `.remote/instance-edits/<session_id>/<rescue-id>/`, with verified files, snapshot and deletion
+   tombstones. It never touches the working tree. Changed snapshots require a new rescue.
+6. Require zero content/type differences across all §7.5 checksum mappings, recheck edits,
+   Mac integrity and stopped training, then mark finished.
+7. Print exactly **Safe to terminate** only when safe=true, with the latest owned segment's
+   checkpoint and matching local/remote SHA-256. Null checkpoint/hash fields explicitly print
+   **no checkpoint**, including sessions that trained no completed epoch.
 
-If the instance is unreachable, `finish` never prints "safe". `--abandon` closes the session and
-records that anything after the last successful sync may be lost.
+Unreachable finish remains unfinished and never reports safe. `--abandon` stops the owned Mac
+worker, journals last good sync/time and possible data loss, closes the session and returns
+safe=false/abandoned=true without safe text. It cannot combine with stop-training/pull-edits.
+Force only belongs to up; no finish flag bypasses final verification.
 
 ### 7.7 `remote status`
 
-Shows the host and session, whether training is running (or its exit code), GPU utilization, the
-last successful sync, the number of files still pending (a dry run), and whether the sync loop is
-alive.
+Read-only JSON shows host/session, tmux/process observations and exit code, GPU utilization,
+last successful sync, pending dry-run paths, pending promotion, loop ownership/errors and
+unreachable history. It does not repair evidence. GPU observation cannot authorize a launch.
+Refusals/errors exit 1; help reads no config/state, installs nothing and bootstraps nothing.
 
 Only the within-run outcome validation monitor reads on the instance. QCEW slices, the artifact
 store, exports and decision-panel reads stay on the Mac. The instance's selection log returns
@@ -270,8 +301,8 @@ selection before δ.
 |---|---|---|---|
 | Tool check | `up` | `rsync --version` reports GNU rsync 3.2+ | Stops with `brew install rsync` |
 | Bundle gate | `up`, on the Mac and again on the instance | `supervision.manifest_path` is set; the bundle validates (`load_validated_bundle`); the parquet's SHA-256 equals the manifest's `description_fingerprint` | Stops. If unset: "run `uv run naics-embedder data supervision`, then set `supervision.manifest_path`". If mismatched: explains that the parquet changed and a new bundle requires a fresh run; older objectives are refused with nothing migrating (D2) |
-| Resume pre-check | `train --resume`, on the Mac | `validate_exact_resume` of the Mac's `last.ckpt` against the canonical bundle's runtime contract (bundle ID, codebook, objective, encoder record and summaries); no reads of the dropped `supervision_mode`, `structural_preference_loss_version` or `mining_contract_version` fields; saved run settings and supplementary LoRA/active-MoE constructor hyperparameters match the current config (missing required values are refused; the 21-key identity is unchanged); absolute checkpoint directory matches; the run is unfinished; both JSONL histories are present and all three uploaded SHA-256 values match | Stops before any GPU time is spent |
-| Fresh-run collision | `train` without `--resume` | Neither the Mac nor the instance has `checkpoints/<experiment>/` | Stops; choose a new `experiment_name` |
+| Resume pre-check | `train --resume`, on the Mac | `validate_exact_resume` of the Mac's `last.ckpt` against the canonical bundle's runtime contract (bundle ID, codebook, objective, encoder record and summaries); no reads of the dropped `supervision_mode`, `structural_preference_loss_version` or `mining_contract_version` fields; saved run settings and supplementary LoRA/active-MoE constructor hyperparameters match the current config (missing required values are refused; the 21-key identity is unchanged); absolute checkpoint directory matches; the run is unfinished; both JSONL histories and all kept checkpoints are present and all uploaded SHA-256 values match | Stops before any GPU time is spent |
+| Fresh-run collision | `train` without `--resume` | The Mac and instance `checkpoints/<experiment>/` are absent or actually empty | Stops; choose a new `experiment_name` |
 | Code record | Every push | Untracked files total at most the cap | Stops and names the files to commit or ignore |
 | Instance edits | Repeat pushes in a session, and `finish` | Instance files vs the last push's hash list (modified or deleted), plus new files outside the instance-scan ignore patterns | Stops and lists the files; `--pull-edits` rescues them, `--force` overwrites |
 | Unfinished session | `up` on a new host | The previous session was finished or abandoned | Warns with that session's last sync time; continues only with `--force` |
@@ -286,8 +317,9 @@ selection before δ.
 - **Reused IP.** A changed host key stops the command with the `ssh-keygen -R <IP>` instruction;
   the tool never edits known-host entries itself.
 - **Bootstrap failure.** Stops with the failing step's output; `remote up` is safe to rerun.
-- **Stale sync loop.** A PID file whose process is gone is reported by `status` and restarted by
-  `train`.
+- **Stale sync loop.** Status reports wrapper identity and stale/reused ownership. Train or sync
+  can restart an exited loop; only verified session/process start/command identities authorize
+  signals, and successful shutdown proves the wrapper and observed utility exited.
 - **Credentials.** None are copied to the instance; nothing there needs git push access.
 
 ## 10. Records
@@ -352,25 +384,38 @@ skipped when GNU rsync 3.2+ is not on `PATH`.
 - A clean `finish` finds zero differences; after a Mac copy is tampered with, `finish` reports it
   and withholds "safe to terminate".
 
-## 12. Real-instance smoke checklist (manual, before relying on the tool)
+## 12. Post-merge real-instance qualification (pending)
 
-1. On the Mac: `brew install rsync`, build the canonical bundle, set `supervision.manifest_path`.
-2. Launch instance A. `remote up --host ubuntu@<A>` passes the tool check, bundle gate, bootstrap,
-   and input validation.
-3. `remote train training.trainer.max_epochs=40`; `remote status` shows it running. After a
-   completed epoch, interrupt while the run is still unfinished. The segment record at
-   `outputs/remote/<session>/segments/<segment>/segment.json` records the `bundle_id`.
-4. `remote finish --stop-training` interrupts and pulls `last.ckpt` and both JSONL histories,
-   then prints "Safe to terminate". Terminate instance A.
-5. Launch instance B under the same user and absolute checkpoint directory. Run
-   `remote up --host ubuntu@<B>`, then `remote train --resume training.trainer.max_epochs=40`
-   with every other run setting unchanged. Training resumes from the next epoch after
-   `last.ckpt`; both histories continue without duplicated surviving epochs, and the segment
-   record's `resumed_from` SHA-256 matches the Mac's `last.ckpt`.
-6. `remote finish`; terminate instance B. The Mac holds both sessions' logs in separate folders
-   and the final checkpoint.
-7. Negative checks: an edit made on the instance stops the next push; with
-   `supervision.manifest_path` unset, `remote up` stops with the build instruction.
+Review/fixture verification does not certify the actual Lambda image or Mac process lifecycle.
+After merge and before relying on the tool, use a **new dedicated qualification experiment**;
+never relaunch the finished `plan10_smoke`, use a campaign seed, or extend a saved epoch budget.
+
+1. On the Mac qualify GNU rsync, existing noninteractive SSH and canonical bundle/parquet pins.
+   Pass the exact manifest explicitly; do not rebuild the bundle on an instance.
+2. User launches A. Up must pass prerequisites, locked bootstrap, NTP, native BF16 and code/input
+   verification. Confirm CUDA visibility, one device and recorded name/capability/VRAM without
+   interpreting VRAM as workload-fit proof.
+3. Train a new experiment with an unchanged larger epoch budget. Confirm tmux, DEVNULL, absolute
+   uv/cwd, GPU visibility and exit recording. Interrupt after a completed epoch while unfinished.
+4. Finish with stop-training, require all kept checkpoints, last and both histories, matching
+   SHA-256 and Safe to terminate. User terminates A.
+5. User launches B under the same user/resolved absolute checkpoint directory. Up then exact
+   resume uses the same config, seed, manifest, settings and constructor controls. Check the
+   entire restored run inventory, last SHA and next-epoch continuation with no duplicate
+   surviving history epochs. A newer/different B generation must refuse a stale Mac restore.
+6. Finish B, verify session-isolated logs/outputs/remote selection log, and user terminates B.
+   Also qualify Mac caffeinate, interrupted transfer recovery, edit rescue, tampering refusal,
+   unreachable/abandon boundaries and missing manifest/GPU/NTP fail-closed behavior.
+
+This manual gate remains unexecuted. Plan 10 Task 18 onward starts in a fresh GPT-6.1 Medium
+session after merge, inline from primary local main. Fetch current origin/main and replay only
+the two held private config/graph-config commits locally. Verify the actual diff, stop on
+conflicts/extra commits/retired keys, and never push them. Earlier Phase 1 replay/counts are
+historical; queued Phase 1 lint was not confirmed passed. Preserve smoke/evidence and the seven
+Mac selection-log records; do not append the four Phase 1 exit reads again. Freeze uv.lock from
+first campaign launch through last decision using these margins; ten reference seeds and
+δ = 3 SD precede configuration selection. No sealed reads. Plan 10 retirement and Stage 7
+completion wait for Phase 2's final gates.
 
 ## 13. Open items to confirm during implementation
 
@@ -383,3 +428,32 @@ skipped when GNU rsync 3.2+ is not on `PATH`.
   files.
 - The first training run downloads `sentence-transformers/all-MiniLM-L6-v2` on the instance;
   optionally prefetch it in the bootstrap so a network problem fails early.
+
+## 14. Approved implementation clarifications (2026-10-05)
+
+These twelve refinements were approved with Plan 11 and govern this live contract:
+
+1. Restore the complete kept-checkpoint/run inventory and both histories; last alone remains
+   the continuation source. This supersedes Plan 10 Task 19's older last-only upload wording.
+2. Fresh directories may be absent or actually empty; any existing file refuses on either host.
+3. Verify previous successful Mac hashes before pull/finish, preserving tampering evidence.
+4. Active training blocks same-host up, pushes, bootstrap/input replacement, even with force.
+5. Up accepts the same config/overrides as train so committed null manifest need not be edited.
+6. Resolve actual remote home/repo/checkpoint paths there, compare literally on the Mac, and
+   preserve the stable absolute callback directory. Never invent or rewrite a saved path.
+7. Provenance retains filesystem kinds, modes and safe relative existing in-repo symlinks,
+   including AGENTS.md -> CLAUDE.md. Refuse escaping/broken links and named credential paths.
+8. Second-resolution ID collisions refuse; one local state lock and an atomic instance launch
+   lock protect mutations. Sync ownership includes session, token, command and process start.
+9. Journal preparing before remote mutation and ready only after verification. Failed pushes
+   retain the last successful baseline and recoverable pending journal; no partial launch.
+10. Fixed validated transport operations only; metadata is JSON, training argv is rendered once
+    with shlex. User overrides never become arbitrary command fragments.
+11. Qualify/install remote GNU rsync before uploading bootstrap.sh, then run full uv/GPU/NTP
+    bootstrap from the pushed script. A prerequisite failure uploads no code.
+12. Require native BF16 via `torch.cuda.is_bf16_supported(including_emulation=False)` on logical
+    CUDA 0, the first visible device used by the one-device Trainer, at bootstrap and immediately
+    before launch. Use identical explicit CUDA_VISIBLE_DEVICES or preserve its unset state in
+    probe and wrapper. Record name, capability and total VRAM as metadata, not workload fit.
+    Refuse unsupported/uninspectable CUDA without precision fallback. No whitelist or invented
+    VRAM threshold; compatible replacement GPUs may differ without changing the 21-key identity.

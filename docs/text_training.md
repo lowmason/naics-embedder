@@ -268,3 +268,21 @@ the trained model; the three panels decide whether an arm is adopted.
   structural correlation is not the training control score.
 - Memory pressure: reduce `data_loader.queries_per_step` for a fresh run, or choose a smaller
   dimension. Changing settings during exact resume is refused.
+
+## Remote Training and Phase 2 Handoff
+
+Use the [remote workflow](remote_workflow.md) for Lambda preparation, fixed tmux launch,
+coherent checkpoint/history transport and exact continuation from `last.ckpt`. Fresh directories
+must be absent or empty on both hosts. Preserve the user and absolute checkpoint path across
+instances; finished runs skip, and a saved epoch budget cannot be extended. Bootstrap and every
+launch require NTP and native BF16 on logical CUDA device 0 with identical CUDA visibility and
+one training device. No precision fallback or workload-fit claim follows from GPU metadata.
+
+Real-instance qualification remains post-merge work on a new experiment, never the finished
+`plan10_smoke`. Plan 10 Task 18 onward runs in order in a fresh primary-checkout local-main
+session after merge. Replay only the two held config commits locally, verify the actual diff,
+and stop on conflicts or retired keys. Keep those commits private. Freeze `uv.lock` from first
+campaign launch through last decision, train ten reference seeds and fix δ = 3 SD before
+selection. Training/within-run monitoring run on Lambda; exports, QCEW/regressor reads, stores,
+margins and decisions run on the Mac. Remote selection logs stay separate; sealed splits stay
+closed. Plan 10 and Stage 7 remain open until Phase 2's final gates.

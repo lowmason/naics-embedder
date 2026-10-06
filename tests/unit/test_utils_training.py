@@ -739,3 +739,32 @@ def test_missing_active_constructor_controls_fail_closed(name):
     del saved['hyper_parameters'][name]
     with pytest.raises(ValueError, match=f'{name}: saved absent'):
         utils_training.refuse_other_constructor_settings(saved, cfg)
+
+def test_the_shared_guard_accepts_an_instance_resolved_path(tmp_path):
+    expected = '/home/ubuntu/naics-embedder/checkpoints/run'
+    key = utils_training.outcome_checkpoint(tmp_path).state_key
+    saved = {'callbacks': {key: {'dirpath': expected}}}
+    utils_training.refuse_a_resume_from_another_directory(
+        saved, tmp_path, resolved_dirpath=expected
+    )
+
+@pytest.mark.parametrize('path', ['relative/run', '/', '/a/../b', '/a//b', '/a/'])
+def test_instance_directory_must_be_absolute_and_normalized(tmp_path, path):
+    with pytest.raises(ValueError, match='absolute normalized'):
+        utils_training.refuse_a_resume_from_another_directory({}, tmp_path, resolved_dirpath=path)
+
+def test_instance_path_is_compared_independently_of_local_canonicalization(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    expected = '/home/ubuntu/naics-embedder/checkpoints/run'
+    original = utils_training.outcome_checkpoint(tmp_path)
+    monkeypatch.setattr(
+        utils_training, 'outcome_checkpoint', lambda path: SimpleNamespace(
+            state_key=original.state_key, dirpath='/mac/canonicalized/run'
+        )
+    )
+    saved = {'callbacks': {original.state_key: {'dirpath': expected}}}
+    utils_training.refuse_a_resume_from_another_directory(
+        saved, tmp_path, resolved_dirpath=expected
+    )
+    with pytest.raises(ValueError, match='another checkpoint directory'):
+        utils_training.refuse_a_resume_from_another_directory(saved, tmp_path)
