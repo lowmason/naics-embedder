@@ -16,6 +16,7 @@ from naics_embedder.remote.canonical import canonical_inputs
 from naics_embedder.remote.code_manifest import is_credential_path
 from naics_embedder.remote.config import effective_config
 from naics_embedder.remote.launch import LaunchResult
+from naics_embedder.remote.model_cache import stage_model_cache, verify_remote_model_cache
 from naics_embedder.remote.push import push_code, scan_code, upload_inputs
 from naics_embedder.remote.session import (
     FileEntry,
@@ -389,6 +390,23 @@ class RemoteWorkflow:
             transport.repo = info.repo
             transport.python = info.python
             write_state(self.root, state)
+            if info.accelerator == 'cuda':
+                cache = stage_model_cache(self.root, cfg)
+                existing = transport.probe('inventory', {'path': '.remote/model-cache/hub'})
+                if existing.get('exists') is True:
+                    verify_remote_model_cache(transport, cache)
+                elif existing.get('exists') is False:
+                    transport.push(self.root, info.repo, tuple(sorted(cache['hashes'])))
+                else:
+                    raise ValueError('remote offline model cache existence is unverified')
+                verify_remote_model_cache(transport, cache)
+                _atomic_record(
+                    self.root / '.remote/session-model-cache.json', {
+                        'session_id': state.session_id,
+                        'push_id': state.push_id,
+                        'cache': cache,
+                    }
+                )
             upload_inputs(inputs, transport)
             remote = transport.probe('canonical', {'config': cfg.model_dump(mode='json')})
             if remote.get('hashes') != inputs.hashes or set(remote.get('paths', [])) != set(

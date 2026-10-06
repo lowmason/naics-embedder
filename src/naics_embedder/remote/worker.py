@@ -80,6 +80,8 @@ def _inventory(root: Path, value: str) -> dict[str, object]:
     try:
         descriptor = _root_descriptor(root / path)
     except FileNotFoundError:
+        if path.as_posix() == '.remote/model-cache/hub':
+            return {'files': [], 'exists': False}
         return {'files': []}
     try:
         entries = []
@@ -95,6 +97,8 @@ def _inventory(root: Path, value: str) -> dict[str, object]:
                 entries.append(item)
             finally:
                 os.close(parent)
+        if path.as_posix() == '.remote/model-cache/hub':
+            return {'files': entries, 'exists': True}
         return {'files': entries}
     finally:
         os.close(descriptor)
@@ -776,6 +780,8 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
             if not _qualified_gpu(evidence) or json.loads(json.dumps(evidence)
                                                           ) != record['gpu_evidence']:
                 raise ValueError('launch native BF16 evidence or CUDA visibility changed')
+            from naics_embedder.remote.model_cache import verify_model_cache
+            verify_model_cache(root, record.get('model_cache'))
             from naics_embedder.remote.launch import _wrapper
             info = RemoteInfo(
                 str(root), str(root / 'checkpoints'), record['argv'][0], sys.executable, True,

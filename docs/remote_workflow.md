@@ -39,6 +39,24 @@ path it prints. Do not rebuild them on an instance. The descriptions parquet and
 validated bundle travel at identical repo-relative `data/` paths. Their fingerprints must match
 on both hosts. A changed parquet or bundle requires a fresh run.
 
+## Offline Model Cache
+
+Before a CUDA session becomes ready, `up` copies the Mac's cached model and tokenizer snapshots
+into `.remote/model-cache/hub` on both hosts. MiniLM must resolve to revision
+`1110a243fdf4706b3f48f1d95db1a4f5529b4d41`, matching the reference comparator. Cache files are
+materialized as regular files and their complete inventories and SHA-256 values are verified.
+Missing snapshots, changed refs, incomplete weights/tokenizers and altered copies refuse; the
+workflow downloads nothing and does not repair an existing cache.
+An existing instance cache is checked before any cache upload, including when it is empty.
+Staging requires complete single-file weights; snapshots with weight indexes are unsupported.
+
+Fresh and exact-resume wrappers explicitly set `HF_HUB_OFFLINE=1` and `HF_HUB_CACHE` to the
+verified instance cache. Legacy Transformers cache overrides are unset. Launch checks the cache
+on both hosts before continuation upload and again before tmux, and records revisions/hashes in
+the segment provenance. CUDA visibility, the 21-setting identity, constructor guards, budget,
+checkpoint paths and complete-restore contract are unchanged. Real-instance qualification must
+verify these cache and process gates; local tests do not certify an instance.
+
 ## Five Commands
 
 These are operator examples, not commands executed by implementation tests:

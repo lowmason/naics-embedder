@@ -9,6 +9,7 @@ import pytest
 from naics_embedder.remote.launch import training_argv
 from naics_embedder.remote.session import read_state
 from naics_embedder.supervision.artifacts import sha256_file
+from tests.fixtures.remote import write_offline_cache
 
 def fresh(env):
     shutil.rmtree(env.directory)
@@ -304,7 +305,8 @@ def test_worker_rechecks_qualification_and_wrapper_before_tmux(tmp_path, monkeyp
             {
                 'argv': list(argv),
                 'cuda_visible_devices': '2',
-                'gpu_evidence': asdict(evidence)
+                'gpu_evidence': asdict(evidence),
+                'model_cache': write_offline_cache(root),
             }
         )
     )
@@ -449,7 +451,8 @@ def test_worker_launch_uses_devnull_explicit_cwd_and_recorded_visibility(tmp_pat
             {
                 'argv': list(argv),
                 'cuda_visible_devices': '2',
-                'gpu_evidence': asdict(evidence)
+                'gpu_evidence': asdict(evidence),
+                'model_cache': write_offline_cache(root),
             }
         )
     )

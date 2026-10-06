@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from naics_embedder.remote.canonical import InputSet, ResumePlan, canonical_inputs, resume_plan
 from naics_embedder.remote.code_manifest import code_entries, git_bytes
 from naics_embedder.remote.config import relative_path
+from naics_embedder.remote.model_cache import verify_model_cache, verify_remote_model_cache
 from naics_embedder.remote.provenance import PushRecord
 from naics_embedder.remote.push import read_push_record, scan_code
 from naics_embedder.remote.session import RemoteInfo, RemoteState, RunRecord, new_id, write_state
@@ -235,6 +236,27 @@ def _restore(root: Path, transport: object, plan: ResumePlan) -> None:
     if _remote_hashes(transport, plan.remote_directory) != local:
         raise ValueError('restored continuation SHA inventory mismatch')
 
+def _launch_model_cache(
+    root: Path, state: RemoteState, transport: object, cfg: Config
+) -> dict | None:
+    path = root / '.remote/session-model-cache.json'
+    if not path.exists() and state.remote_info.accelerator == 'cpu':
+        return None  # Only injected CPU workflow fixtures have no Hub snapshot.
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('missing or unsafe offline model cache session record; rerun remote up')
+    envelope = json.loads(path.read_text())
+    if envelope.get('session_id') != state.session_id or envelope.get('push_id') != state.push_id:
+        raise ValueError('offline model cache belongs to another session or push')
+    cache = verify_model_cache(root, envelope.get('cache'))
+    names = {
+        cfg.model.base_model_name, cfg.data_loader.tokenization.tokenizer_name,
+        cfg.data_loader.streaming.tokenizer_name
+    }
+    if set(cache['revisions']) != names:
+        raise ValueError('offline model cache differs from training model/tokenizers; rerun up')
+    verify_remote_model_cache(transport, cache)
+    return cache
+
 def _wrapper(
     info: RemoteInfo, argv: tuple[str, ...], exit_path: str, visibility: str | None
 ) -> str:
@@ -243,8 +265,11 @@ def _wrapper(
         if visibility is None else 'export CUDA_VISIBLE_DEVICES=' + shlex.quote(visibility) + '\n'
     )
     return (
-        f'cd {shlex.quote(info.repo)} || exit 1\n' + environment + 'set +e\n'
-        + f'{shlex.join(argv)} < /dev/null\nstatus=$?\n'
+        f'cd {shlex.quote(info.repo)} || exit 1\n' + environment
+        + 'export HF_HUB_OFFLINE=1\n' + 'export HF_HUB_CACHE=' + shlex.quote(
+            info.repo + '/.remote/model-cache/hub'
+        ) + '\n' + 'unset TRANSFORMERS_CACHE PYTORCH_TRANSFORMERS_CACHE PYTORCH_PRETRAINED_BERT_CACHE\n'
+        + 'set +e\n' + f'{shlex.join(argv)} < /dev/null\nstatus=$?\n'
         + f'printf "%s\\n" "$status" > {shlex.quote(exit_path)}.tmp\n'
         + f'mv {shlex.quote(exit_path)}.tmp {shlex.quote(exit_path)}\nexit "$status"\n'
     )
@@ -285,6 +310,7 @@ def launch_training(
             raise ValueError('checkpoint training_run differs from verified persistent run')
     if plan is not None and plan.finished:
         return LaunchResult(None, True, plan.finish_reason)
+    cache = _launch_model_cache(root, state, transport, cfg)
     if not resume:
         local_directory = root / 'checkpoints' / cfg.experiment_name
         if local_directory.is_symlink() or local_directory.parent.is_symlink():
@@ -302,6 +328,8 @@ def launch_training(
         _identity(state, transport)
         if transport.probe('clock', {}).get('ntp') is not True:
             raise ValueError('NTP synchronization required immediately before launch')
+        if _launch_model_cache(root, state, transport, cfg) != cache:
+            raise ValueError('offline model cache changed before restoration')
         if resume:
             _restore(root, transport, plan)
             if resume_plan(root, cfg, inputs, remote_directory).hashes != plan.hashes:
@@ -351,6 +379,7 @@ def launch_training(
                 OutcomePanelConfig, root / 'conf/data/outcome_panel.yaml'
             ).model_dump(mode='json'),
             'gpu_evidence': evidence,
+            'model_cache': cache,
             'cuda_visible_devices': visibility,
         }
         _write_new(directory / 'segment.json', segment_record)
@@ -391,6 +420,8 @@ def launch_training(
                 'remote_directory': remote_directory
             }
         )
+        if _launch_model_cache(root, state, transport, cfg) != cache:
+            raise ValueError('offline model cache changed before launch')
         _stopped(transport)
         transport.launch(remote_segment + '/launch.sh', segment)
         state.active_segment_id = segment

@@ -439,8 +439,14 @@ completion wait for Phase 2's final gates.
   driver.
 - That the tmux command finds uv; call it by absolute path rather than relying on shell startup
   files.
-- The first training run downloads `sentence-transformers/all-MiniLM-L6-v2` on the instance;
-  optionally prefetch it in the bootstrap so a network problem fails early.
+- Approved Plan 10 pre-flight correction (2026-10-06): `up` transfers the Mac's cached model
+  and tokenizer snapshots into a repository-contained Hub cache and verifies their complete
+  inventories and SHA-256 values. MiniLM's ref must equal revision
+  `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`. Fresh/resume wrappers explicitly enforce
+  `HF_HUB_OFFLINE=1` and the verified cache path, without downloads or repair. Cache checks
+  precede continuation upload and tmux; segment provenance carries revisions/hashes. The lock,
+  run identity, constructors, budgets, CUDA visibility and checkpoint paths remain unchanged.
+  Local verification/review and real-instance qualification are separate gates.
 
 ## 14. Approved implementation clarifications (2026-10-05)
 

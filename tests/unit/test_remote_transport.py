@@ -307,6 +307,7 @@ def _owned_launch_files(root, segment):
 
     from naics_embedder.remote.launch import _wrapper
     from naics_embedder.remote.session import GpuEvidence, RemoteInfo
+    from tests.fixtures.remote import write_offline_cache
     directory = root / '.remote/segments' / segment
     directory.mkdir(parents=True)
     script = directory / 'launch.sh'
@@ -321,7 +322,8 @@ def _owned_launch_files(root, segment):
             {
                 'argv': list(argv),
                 'gpu_evidence': asdict(evidence),
-                'cuda_visible_devices': None
+                'cuda_visible_devices': None,
+                'model_cache': write_offline_cache(root)
             }
         )
     )
