@@ -431,3 +431,107 @@ def remote_launch_fixture(remote_workflow_fixture, remote_resume_fixture, monkey
         set_finished_budget=set_finished_budget,
         set_unfinished=set_unfinished
     )
+
+@pytest.fixture
+def remote_finish_fixture(remote_sync_fixture, monkeypatch):
+    import json
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+
+    import torch
+
+    from naics_embedder.remote.code_manifest import file_entry
+    from naics_embedder.remote.session import RunRecord, write_state
+    from naics_embedder.remote.sync import sync_once
+    from naics_embedder.remote.workflow import RemoteWorkflow
+    from naics_embedder.utils.training import outcome_checkpoint, read_checkpoint
+
+    env = remote_sync_fixture
+    env.running = False
+    env.interrupted = []
+    env.checks = []
+    env.stops = []
+    source = env.instance / 'src/tiny.py'
+    source.parent.mkdir()
+    source.write_text('VALUE = 1\n')
+    entry = file_entry(env.instance, 'src/tiny.py')
+    push = env.root / '.remote/pushes/push'
+    push.mkdir(parents=True)
+    (push / 'files.json').write_text(json.dumps([asdict(entry)]))
+    (push / 'provenance.json').write_text(json.dumps(dict(head_sha='a' * 40, dirty=False)))
+    env.state.push_id = 'push'
+    (env.instance / '.remote/pushes').mkdir(parents=True)
+    (env.instance / '.remote/pushes/session.json').write_text(
+        json.dumps(dict(session_id='session', push_id='push'))
+    )
+    env.state.active_segment_id = 'segment'
+    saved = read_checkpoint(env.run / 'last.ckpt')
+    saved['hyper_parameters']['run_settings'] = {}
+    saved['stage3_supervision'] = dict(bundle_id='bundle', codebook_fingerprint='codebook')
+    callback = outcome_checkpoint(env.root / 'checkpoints/run')
+    saved['callbacks'] = {callback.state_key: {'dirpath': str(env.run)}}
+    for path in env.run.glob('*.ckpt'):
+        torch.save(saved, path)
+    record = RunRecord(
+        experiment='run',
+        remote_directory=str(env.run),
+        bundle_id='bundle',
+        codebook_fingerprint='codebook',
+        description_fingerprint='description',
+        seed=1,
+        settings={},
+        constructor_controls={},
+        session_id='session',
+        segment_id='segment'
+    )
+    (env.root / '.remote/runs').mkdir()
+    (env.root / '.remote/runs/run.json').write_text(record.model_dump_json())
+    segment = dict(
+        session_id='session',
+        segment_id='segment',
+        experiment_name='run',
+        remote_directory=str(env.run)
+    )
+    (env.instance / '.remote/segments/segment/segment.json').write_text(json.dumps(segment))
+    write_state(env.root, env.state)
+    original = env.transport.probe
+
+    def probe(operation, payload):
+        env.transport.calls.append(('probe', operation, payload))
+        if operation == 'training':
+            return dict(
+                running=env.running,
+                sessions=['naics-train'] if env.running else [],
+                process_running=env.running,
+                exit_code=0 if not env.running else None
+            )
+        if operation == 'gpu':
+            return dict(utilization=12, memory_used=34)
+        return original(operation, payload)
+
+    def interrupt(segment):
+        env.interrupted.append(segment)
+        env.running = False
+
+    def checksum(mapping):
+        env.checks.append(mapping)
+        return env.transport.differences
+
+    monkeypatch.setattr(env.transport, 'probe', probe)
+    monkeypatch.setattr(env.transport, 'interrupt_training', interrupt)
+    monkeypatch.setattr(env.transport, 'checksum', checksum)
+    monkeypatch.setattr(
+        'naics_embedder.remote.loop.stop_loop', lambda *args: env.stops.append(args)
+    )
+    monkeypatch.setattr(
+        'naics_embedder.remote.loop.loop_status', lambda *args: dict(
+            alive=False, pid=None, session_id=None
+        )
+    )
+    env.workflow = RemoteWorkflow(
+        env.root, env.cfg, lambda host, cfg: env.transport, lambda: datetime.now(timezone.utc)
+    )
+    sync_once(env.root, env.state, env.transport, env.cfg, final=True)
+    env.last = env.root / 'checkpoints/run/last.ckpt'
+    env.transport.calls.clear()
+    return env

@@ -482,6 +482,116 @@ def _training_status(payload: dict[str, object]) -> dict[str, object]:
     sessions = [name for name in result.stdout.splitlines() if name == TMUX_SESSION]
     return {'running': bool(sessions), 'sessions': sessions}
 
+def _probe_text(root: Path, name: str) -> str | None:
+    descriptor = _root_descriptor(root)
+    parent = opened = None
+    try:
+        try:
+            parent = _parent_descriptor(descriptor, name)
+            opened = os.open(name.split('/')[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(os.fstat(opened).st_mode):
+            raise ValueError('unsafe probe evidence: ' + name)
+        with os.fdopen(opened, 'r') as stream:
+            opened = None
+            return stream.read(1024 * 1024)
+    finally:
+        for value in (opened, parent, descriptor):
+            if value is not None:
+                os.close(value)
+
+def _training_observation(root: Path, payload: dict[str, object]) -> dict[str, object]:
+    result = _training_status(payload)
+    processes = subprocess.run(
+        ['ps', '-ww', '-axo', 'pid=,command='],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10
+    )
+    pids = []
+    for row in processes.stdout.splitlines():
+        fields = row.strip().split(None, 1)
+        if len(fields) != 2:
+            continue
+        try:
+            command = shlex.split(fields[1])
+        except ValueError:
+            raise ValueError('unable to parse training process inspection')
+        # uv and its Python entry-point child can outlive a tmux server. Both must exit.
+        if any(
+            Path(item).name == 'naics-embedder' and index
+            + 1 < len(command) and command[index + 1] == 'train'
+            for index, item in enumerate(command)
+        ):
+            pids.append(int(fields[0]))
+    result.update(
+        process_running=bool(pids),
+        process_pids=pids,
+        running=result['running'] or bool(pids),
+        exit_code=None
+    )
+    segment = payload.get('segment_id')
+    if segment is not None:
+        if not isinstance(segment, str) or not segment or any(
+            char not in '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_'
+            for char in segment
+        ):
+            raise ValueError('invalid segment_id')
+        code = _probe_text(root, '.remote/segments/' + segment + '/exit_code')
+        if code is not None:
+            result['exit_code'] = int(code.strip())
+    return result
+
+def _interrupt_training(root: Path, payload: dict[str, object]) -> dict[str, object]:
+    segment = payload.get('segment_id')
+    if not isinstance(segment, str) or not segment or any(
+        char not in '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_'
+        for char in segment
+    ):
+        raise ValueError('invalid segment_id')
+    record = json.loads(_probe_text(root, '.remote/segments/' + segment + '/segment.json') or '{}')
+    marker = json.loads(_probe_text(root, '.remote/pushes/session.json') or '{}')
+    if (
+        record.get('segment_id') != segment or not record.get('session_id') or record['session_id']
+        != marker.get('session_id') or record.get('push_id') != marker.get('push_id')
+    ):
+        raise ValueError('interrupt requires the owned session segment')
+    panes = subprocess.run(
+        ['tmux', 'list-panes', '-t', TMUX_SESSION, '-F', '#{pane_start_command}'],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10
+    )
+    expected = 'bash ' + shlex.quote(str(root / '.remote/segments' / segment / 'launch.sh'))
+    if panes.stdout.strip() != expected + ' < /dev/null':
+        raise ValueError('training tmux is not the recorded owned wrapper')
+    subprocess.run(['tmux', 'send-keys', '-t', TMUX_SESSION, 'C-c'], check=True, timeout=10)
+    return {'interrupted': True}
+
+def _gpu_status() -> dict[str, object]:
+    result = subprocess.run(
+        [
+            'nvidia-smi', '--query-gpu=index,utilization.gpu,memory.used,memory.total',
+            '--format=csv,noheader,nounits'
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10
+    )
+    devices = []
+    for row in result.stdout.splitlines():
+        index, utilization, used, total = (int(value.strip()) for value in row.split(','))
+        devices.append(
+            dict(
+                index=index, utilization=utilization, memory_used_mib=used, memory_total_mib=total
+            )
+        )
+    return {'devices': devices}
+
 def _remove_code(root: Path, names: tuple[str, ...]) -> dict[str, object]:
     for name in names:
         path = _inside(root, name)
@@ -538,6 +648,8 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
             'push_id': push_id
         }
     if operation == 'gpu':
+        if payload.get('action') == 'status':
+            return _gpu_status()
         visibility = payload.get('cuda_visible_devices', os.environ.get('CUDA_VISIBLE_DEVICES'))
         previous = os.environ.get('CUDA_VISIBLE_DEVICES')
         try:
@@ -608,7 +720,7 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
     if operation == 'training':
         action = payload.get('action', 'status')
         if action == 'status':
-            return _training_status(payload)
+            return _training_observation(root, payload)
         if action == 'preflight':
             from naics_embedder.remote.canonical import canonical_inputs, resume_plan
             from naics_embedder.remote.launch import _mapped_path
@@ -684,8 +796,7 @@ def run_probe(operation: str, payload: dict[str, object], root: Path) -> dict[st
             )
             return {'running': True}
         if action == 'interrupt':
-            subprocess.run(['tmux', 'send-keys', '-t', session, 'C-c'], check=True, timeout=30)
-            return {'interrupted': True}
+            return _interrupt_training(root, payload)
         raise ValueError('unknown training operation')
     if operation == 'canonical':
         from naics_embedder.remote.canonical import canonical_inputs

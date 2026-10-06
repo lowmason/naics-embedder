@@ -118,22 +118,26 @@ def _system_probe_code(operation: str) -> str:
         _controlled_inventory,
         _credential_name,
         _generated_name,
+        _gpu_status,
         _inside,
+        _interrupt_training,
         _inventory,
         _open_directory,
         _owned_remove,
         _parent_descriptor,
         _pending_link,
+        _probe_text,
         _remove_code,
         _result_names,
         _root_descriptor,
         _safe_link,
         _same_metadata,
+        _training_observation,
         _training_status,
     )
     preamble = (
         'import fnmatch,hashlib,json,os,posixpath,stat,subprocess,sys\n'
-        'from pathlib import Path, PurePosixPath\n'
+        'from pathlib import Path, PurePosixPath\nimport shlex\n'
     )
     preamble += f'TMUX_SESSION = {TMUX_SESSION!r}\n'
     functions = {
@@ -141,7 +145,11 @@ def _system_probe_code(operation: str) -> str:
             _code_name, _credential_name, _same_metadata, _open_directory, _root_descriptor,
             _parent_descriptor, _safe_link, _code_item_at, _result_names, _inventory
         ],
-        'training': [_training_status],
+        'training': [
+            _training_status, _open_directory, _root_descriptor, _parent_descriptor, _probe_text,
+            _training_observation, _interrupt_training
+        ],
+        'gpu': [_gpu_status],
         'edits': [
             safe_files, _inside, _remove_code, _inventory, _code_name, _credential_name,
             _generated_name, _same_metadata, _open_directory, _root_descriptor, _parent_descriptor,
@@ -161,8 +169,13 @@ def _system_probe_code(operation: str) -> str:
         code += "  result=_remove_code(r,tuple(p['remove']))\n"
         code += "else: result=_controlled_inventory(r,p) if p.get('controlled') else _inventory(r,'.')\n"
         code += 'print(json.dumps(result))'
+    elif operation == 'gpu':
+        code += 'print(json.dumps(_gpu_status()))'
     else:
-        code += 'print(json.dumps(_training_status(p)))'
+        code += "r=Path(p['repo'])\n"
+        code += "if p.get('action') == 'interrupt': result=_interrupt_training(r,p)\n"
+        code += 'else: result=_training_observation(r,p)\n'
+        code += 'print(json.dumps(result))'
     return code
 
 def _qualified_gpu(value: object) -> bool:
@@ -257,7 +270,9 @@ class SshTransport:
                 raise RuntimeError('bootstrap must qualify CUDA native BF16 evidence')
             self.python = str(result['python'])
             return result
-        if operation in {'edits', 'inventory'}:
+        if operation in {'edits', 'inventory'} or (
+            operation == 'training' and payload.get('action', 'status') in {'status', 'interrupt'}
+        ) or (operation == 'gpu' and payload.get('action') == 'status'):
             return self._ssh(
                 [self.python or 'python3', '-c',
                  _system_probe_code(operation)], payload
