@@ -145,3 +145,48 @@ def test_status_invalid_state_remains_readonly(remote_finish_fixture):
     before = snapshot(env.root)
     assert env.workflow.status()['status'] == 'invalid state'
     assert snapshot(env.root) == before
+
+@pytest.mark.parametrize('rendered', [False, True])
+@pytest.mark.parametrize('include_training', [False, True])
+def test_raw_process_apostrophe_is_literal_and_training_stays_visible(
+    tmp_path, monkeypatch, rendered, include_training
+):
+    import io
+    import json
+    import subprocess
+    from contextlib import redirect_stdout
+
+    from naics_embedder.remote.transport import _system_probe_code
+    from naics_embedder.remote.worker import run_probe
+
+    output = "41 /usr/bin/python3 /tmp/worker.py --label O'Brien\n"
+    if include_training:
+        output += "42 /uv run --locked naics-embedder train --label O'Brien\n"
+        output += "43 /venv/python /tmp/O'Brien/naics-embedder train seed=1\n"
+    assert "O'Brien" in output and "O\\'Brien" not in output
+    calls = []
+
+    def runner(args, **kwargs):
+        calls.append(args)
+        if args[0] == 'tmux':
+            return subprocess.CompletedProcess(args, 1, '', 'no server running')
+        assert args == ['ps', '-ww', '-axo', 'pid=,command=']
+        return subprocess.CompletedProcess(args, 0, output, '')
+
+    monkeypatch.setattr('naics_embedder.remote.worker.subprocess.run', runner)
+    before = snapshot(tmp_path)
+    if rendered:
+        stream = io.StringIO()
+        payload = dict(repo=str(tmp_path), action='status')
+        monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(payload)))
+        with redirect_stdout(stream):
+            exec(_system_probe_code('training'), {})
+        result = json.loads(stream.getvalue())
+    else:
+        result = run_probe('training', {'action': 'status'}, tmp_path)
+    assert result['running'] is include_training
+    assert result['process_running'] is include_training
+    assert result['process_pids'] == ([42, 43] if include_training else [])
+    assert result['sessions'] == []
+    assert snapshot(tmp_path) == before
+    assert len(calls) == 2

@@ -515,10 +515,9 @@ def _training_observation(root: Path, payload: dict[str, object]) -> dict[str, o
         fields = row.strip().split(None, 1)
         if len(fields) != 2:
             continue
-        try:
-            command = shlex.split(fields[1])
-        except ValueError:
-            raise ValueError('unable to parse training process inspection')
+        # ps flattens argv without shell escaping; quotes in arguments remain literal.
+        # Whitespace matching conservatively retains possible training processes.
+        command = fields[1].split()
         # uv and its Python entry-point child can outlive a tmux server. Both must exit.
         if any(
             Path(item).name == 'naics-embedder' and index
