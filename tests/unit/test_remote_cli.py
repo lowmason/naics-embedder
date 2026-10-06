@@ -224,8 +224,9 @@ def test_workflow_sync_fails_closed_without_default_config(
         workflow.sync(once)
 
 @pytest.mark.parametrize('command', ['up', 'train'])
+@pytest.mark.parametrize('terminal_width', [None, 24])
 def test_missing_training_config_has_no_transport_operations(
-    cli_runner, remote_workflow_fixture, monkeypatch, command
+    cli_runner, remote_workflow_fixture, monkeypatch, command, terminal_width
 ):
     from naics_embedder.cli.commands import remote
     env = remote_workflow_fixture
@@ -234,12 +235,21 @@ def test_missing_training_config_has_no_transport_operations(
         env.transport.calls.clear()
     monkeypatch.chdir(env.root)
     monkeypatch.setattr(remote, '_transport', lambda *args: env.transport)
-    args = ['remote', command, '--config', 'conf/missing.yaml']
+    missing_name = 'missing.yaml'
+    if terminal_width is not None:
+        monkeypatch.setenv('COLUMNS', str(terminal_width))
+        missing_name = 'missing_' + 'x' * (terminal_width * 2) + '.yaml'
+    args = ['remote', command, '--config', f'conf/{missing_name}']
     if command == 'up':
         args += ['--host', 'fixture']
     result = cli_runner.invoke(app, args)
     assert result.exit_code == 1
-    assert 'missing.yaml' in words(result.output)
+    if terminal_width is not None:
+        assert missing_name not in result.output, result.output
+    assert 'Remote refused: Config file not found:' in words(result.output)
+    # Rich folds long paths inside a filename; those newlines are display layout.
+    displayed_path = result.output.replace('\n', '').replace('\r', '')
+    assert str(env.root / 'conf' / missing_name) in displayed_path
     assert env.transport.calls == []
 
 @pytest.mark.parametrize(

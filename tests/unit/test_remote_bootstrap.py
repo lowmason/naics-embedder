@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
@@ -62,7 +63,7 @@ def test_missing_api_and_property_exception_refuse():
         gpu_evidence(SimpleNamespace(cuda=cuda))
 
 @pytest.fixture
-def fake_bootstrap(tmp_path):
+def fake_bootstrap(tmp_path, monkeypatch):
     repo = tmp_path / 'repo'
     repo.mkdir()
     (repo / 'uv.lock').write_text('locked')
@@ -87,8 +88,34 @@ def fake_bootstrap(tmp_path):
         '\\"accelerator\\":\\"cuda\\",\\"gpu_evidence\\":{\\"native_bf16\\":true}}"'
     )
     executable('curl', 'echo download >> "$FAKE_LOG"; exit 9')
-    env = dict(os.environ, PATH=f'{bin_dir}:/usr/bin:/bin', HOME=str(tmp_path), FAKE_LOG=str(log))
+    # Populate the inherited lookup with safe sentinels: removed fakes must stay absent.
+    host_bin = tmp_path / 'host-bin'
+    host_bin.mkdir()
+    for name in ('tmux', 'timedatectl', 'uv', 'curl', 'sudo', 'apt-get'):
+        sentinel = host_bin / name
+        sentinel.write_text('#!/bin/bash\necho host-tool-leak >> "$FAKE_LOG"\nexit 91\n')
+        sentinel.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{host_bin}:{os.environ["PATH"]}')
+    # Only shell utilities are real; bootstrap tools can never fall through to the host.
+    for name in (
+        'bash', 'sh', 'sed', 'head', 'dirname', 'basename', 'cut', 'mktemp', 'rm', 'mkdir', 'cat',
+        'chmod', 'cp'
+    ):
+        utility = shutil.which(name)
+        assert utility is not None, f'required shell utility missing: {name}'
+        (bin_dir / name).symlink_to(utility)
+    env = dict(os.environ, PATH=str(bin_dir), HOME=str(tmp_path), FAKE_LOG=str(log))
     return repo, bin_dir, env, log
+
+@pytest.mark.parametrize('tool', ['tmux', 'timedatectl', 'uv'])
+def test_bootstrap_lookup_excludes_populated_host_tools(fake_bootstrap, tool):
+    _, bin_dir, env, _ = fake_bootstrap
+    assert Path(shutil.which(tool)).parent == bin_dir.parent / 'host-bin'
+    (bin_dir / tool).unlink()
+    result = subprocess.run(
+        ['/bin/bash', '-c', 'command -v "$1"', 'lookup', tool], env=env, capture_output=True
+    )
+    assert result.returncode != 0 and result.stdout == b''
 
 def test_prepared_bootstrap_json_and_locked_sync(fake_bootstrap):
     repo, _, env, log = fake_bootstrap
@@ -97,6 +124,8 @@ def test_prepared_bootstrap_json_and_locked_sync(fake_bootstrap):
     assert json.loads(result.stdout)['accelerator'] == 'cuda'
     assert 'sync --locked' in log.read_text() and 'apt-get' not in log.read_text()
     assert b'sync' in result.stderr
+    assert str(repo.parent / 'bin/uv').encode() in result.stderr
+    assert 'host-tool-leak' not in log.read_text()
 
 @pytest.mark.parametrize('setting', [{'FAKE_SYNC_EXIT': '7'}, {'FAKE_NTP': 'no'}])
 def test_bootstrap_refuses_failed_sync_or_ntp(fake_bootstrap, setting):
@@ -115,7 +144,9 @@ def test_missing_tmux_reports_apt_failure(fake_bootstrap, sudo_exit):
         env=dict(env, FAKE_SUDO_EXIT=sudo_exit),
         capture_output=True
     )
-    assert result.returncode != 0 and 'apt-get' in log.read_text()
+    assert result.returncode == int(sudo_exit) and 'apt-get' in log.read_text()
+    assert b'install missing tmux/rsync' in result.stderr
+    assert 'host-tool-leak' not in log.read_text()
 
 def test_missing_uv_installer_failure_retains_step_output(fake_bootstrap):
     repo, bin_dir, env, log = fake_bootstrap
@@ -162,6 +193,8 @@ def test_bootstrap_late_refusals(fake_bootstrap, failure):
         checksum.write_text('#!/bin/bash\n/usr/bin/shasum -a 256 "$1"\n')
     result = subprocess.run(['bash', str(BOOTSTRAP), str(repo)], env=env, capture_output=True)
     assert result.returncode != 0 and result.stderr
+    if failure == 'ntp-unavailable':
+        assert b'NTP synchronization required' in result.stderr
 
 class TwoDeviceCuda(FakeCuda):
 
