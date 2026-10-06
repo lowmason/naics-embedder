@@ -336,7 +336,8 @@ def test_rescued_symlink_preserves_link_without_source_writes(remote_finish_fixt
 
     monkeypatch.setattr(env.transport, 'pull', pull)
     assert env.workflow.finish(pull_edits=True).safe
-    rescued = next((env.root / '.remote/instance-edits/session').glob('*/files/src/link.py'))
+    rescue_directory = next((env.root / '.remote/instance-edits/session').iterdir())
+    rescued = rescue_directory / 'files/src/link.py'
     assert rescued.is_symlink() and str(rescued.readlink()) == 'tiny.py'
     assert not (env.root / 'src').exists()
 
