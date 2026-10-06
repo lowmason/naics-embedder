@@ -16,7 +16,8 @@ real selection campaign. Hugging Face fixture dependencies are resolved locally.
 tests/
 ├── unit/                         # 99 unit test files
 ├── integration/
-│   └── test_reference_training.py # tiny-backbone Trainer workflows
+│   ├── test_reference_training.py # tiny-backbone Trainer workflows
+│   └── test_remote_workflow.py    # GNU-rsync workflow qualification
 ├── fixtures/                     # shared encoder, supervision, panels and run records
 └── conftest.py                   # common fixtures
 ```
