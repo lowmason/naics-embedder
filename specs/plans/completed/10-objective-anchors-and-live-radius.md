@@ -45523,7 +45523,7 @@ git commit -m "docs(roadmap): complete Stage 7, the reference configuration"
 If only one shared file changed, use the first command with the unchanged path omitted. Add
 only paths `git status --short` showed as edited by these steps.
 
-- [ ] **Step 8: Retire the plan and the spec**
+- [x] **Step 8: Retire the plan and the spec**
 
 No other plan implements `specs/objective-anchors-and-live-radius.md`, so the spec retires with the
 plan. Neither file has relative links to re-point.
@@ -45569,7 +45569,7 @@ git add specs/plans/completed/10-objective-anchors-and-live-radius.md specs/comp
 git commit -m "chore(specs): retire plan 10"
 ```
 
-- [ ] **Step 9: Hand off**
+- [x] **Step 9: Hand off**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected: the finding (Task 22), Step 7's and Step 8's commits; no `config` or `graph config`.
