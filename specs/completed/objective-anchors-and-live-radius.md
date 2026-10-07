@@ -1,6 +1,8 @@
 # Objective, anchors and live radius — Design Spec
 
-**Status:** APPROVED (2026-10-04) — ready for an implementation plan
+**Status:** COMPLETE (2026-10-07) — implemented by
+`specs/plans/completed/10-objective-anchors-and-live-radius.md`; deferred items in
+`specs/deferred_items.md`
 
 **Roadmap:** `specs/naics-embedding-roadmap.md`, Stage 7 (ROUTING: brainstorming), the reference
 configuration. Source spec `specs/naics-embedding.md` at d9126ce. Evidence read at origin/main

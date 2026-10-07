@@ -727,7 +727,7 @@ differs from its own.
       Stage 6b: COMPLETE (2026-10-04) — implemented by plan 9
       (specs/plans/completed/9-window-fitting-summaries.md). Next: resume the roadmap.
 
-- [ ] Stage 7: Objective, anchors and live radius (the reference configuration)
+- [x] Stage 7: Objective, anchors and live radius (the reference configuration)
       Objective: Replace the six-term objective and its sampling machinery with Req 11's three
       terms over all codes on a live radius, wire selection to the validation splits, and fix
       δ per panel from the reference configuration's seeds.
@@ -797,6 +797,25 @@ differs from its own.
       validation splits read; a decision record fixes δ for each of D8's three panels from at
       least 5 seeds; the text stage's validation computes no structural statistic.
       ROUTING: brainstorming
+      Rollout note: the switch happened at Phase 1's merge. Main trains only Req 11's three terms
+      over every code on a live radius, selected on the validation query split's MRR (D6). Exact
+      resume, export, the outcome read and the HGCN feeder refuse every checkpoint saved before it,
+      plans 8 and 9's included (its contract's `objective` is not `req11-v1`), and nothing migrates
+      (D2). The tokenization cache is unchanged.
+      Realized: the reference configuration (MiniLM, the shared encoder, `masked_mean`, hyperbolic
+      at dimension 16, R7's stated defaults) trained 10 seeds on Lambda at `bf16-mixed`, with every
+      decision read on the Mac (R9). Its arm record and margin record are
+      `~/naics-artifacts/records/stage7/reference.json` and `margins.json` (sha256 `c885b9c5…` and
+      `e619b3b3…`). δ at 3 SD over the 10 seeds (R8): outcome MRR `0.11869213794566072`, regressor
+      seen `0.0332953724957747`, regressor held-out `0.03675486585786976`. Every seed passed
+      "Radius" and "No inert terms"; every campaign log record is a validation read. `uv.lock` is
+      frozen at sha256 `4167042e…` through the last decision that uses these margins. The finding is
+      `specs/findings/reference-configuration.md`.
+      Source boundary: real-instance qualification and training used private local source `b94ecf3`;
+      Mac reads used `2d1f045` (only the QCEW directory changed). The finding branch excludes all
+      private commits and does not claim the unchanged public base has identical native readiness.
+      Stage 7: COMPLETE (2026-10-07) — implemented by plan 10
+      (specs/plans/completed/10-objective-anchors-and-live-radius.md). Next: resume the roadmap.
 
 - [ ] Stage 8: Geometry × dimension
       Objective: Implement the Euclidean and spherical arms and run the crossed nine-cell

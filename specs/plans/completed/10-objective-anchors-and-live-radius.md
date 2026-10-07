@@ -1,5 +1,8 @@
 # Objective, Anchors and Live Radius Implementation Plan
 
+**Status: COMPLETE (2026-10-07)** — executed via executing-plans; deferred items in
+`specs/deferred_items.md`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -1199,7 +1202,9 @@ content change and requires no separate edit. The map counts both paths.
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
+
+> Deviation: Phase 1 used the native managed worktree and platform codex/ branch prefix.
 
 Run: `git status --short --branch`
 Expected: `## claude/plan-10-reference-configuration` and nothing else. If the line ends in
@@ -1222,7 +1227,7 @@ Expected: no output.
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number.
@@ -1235,7 +1240,7 @@ uv run python -c "import peft, polars, pydantic, pytorch_lightning, torch, trans
 Expected: `0.17.1 1.35.1 2.12.4 2.5.5 2.9.1 4.57.1`. If they differ, stop and ask: the
 Lightning facts in **This plan's decisions** were measured on 2.5.5.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1939 passed, 2 skipped`, measured at f32c812 on 2026-10-04. One skip needs CUDA; the
@@ -1272,7 +1277,7 @@ the two skips are plan 9's local-only test and the CUDA test):
 Without MPS, as on CI, the tests that need it skip too: from Task 8 on, seven tests that ran here
 skip there (CI showed 1933 passed, 8 skipped at f32c812).
 
-- [ ] **Step 4: Check the real inputs, read-only**
+- [x] **Step 4: Check the real inputs, read-only**
 
 Task 17 is the only Phase 1 reader of these files. Check them now so a missing input fails early.
 
@@ -1310,7 +1315,9 @@ The counts Task 17 checks on bundle 301cce28, measured at plan time on the real 
 | Validation queries | 4,042 |
 | Phrase-check mismatches over the 4,618 non-withheld rows | 0 |
 
-- [ ] **Step 5: Route the tasks**
+- [x] **Step 5: Route the tasks**
+
+> Deviation: User selected GPT-6.1 Medium execution and Ultra review, overriding Claude routing.
 
 Under executing-plans, run every task inline, in order.
 
@@ -1374,7 +1381,7 @@ queries (P10) read only phrases this check has passed, and later tests import `a
     <expected!r>`. At load the message is prefixed with `redirections (<bundle_id>): `.
     `REQUIRED_VALIDATION_RESULTS` is unchanged.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The loader tests rewrite the five-code bundle's redirections member through `_rewrite_member`,
 which re-hashes it, so only the new check can refuse it. Row 0's text gives `'Growing peanuts'`,
@@ -1546,7 +1553,7 @@ def test_the_phrase_rule_imports_no_data_module_and_no_torch():
 def test_named_codes_are_other_codebook_codes_in_order_of_first_appearance():
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -1565,7 +1572,7 @@ Expected: `5 failed, 2 passed, 77 deselected`:
   subprocess exits 1 on the same `ModuleNotFoundError`.
 - Both cases of `test_the_fixture_bundles_carry_the_phrases_their_texts_give` pass, by design.
 
-- [ ] **Step 3: Move the rule into a leaf module and recompute each phrase in the validator**
+- [x] **Step 3: Move the rule into a leaf module and recompute each phrase in the validator**
 
 Create `src/naics_embedder/supervision/activity.py`:
 
@@ -1745,7 +1752,7 @@ with:
 def validate_redirection_exclusions(redirections: pl.DataFrame, pair_facts: pl.DataFrame) -> None:
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -1763,12 +1770,12 @@ Run: `git grep --untracked -n -w _REDIRECTION -- src`
 Expected: two lines, `src/naics_embedder/supervision/activity.py:20` (the definition) and `:29`
 (its one use).
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1946 passed, 2 skipped`.
 
-- [ ] **Step 6: Format and lint**
+- [x] **Step 6: Format and lint**
 
 Run:
 
@@ -1787,7 +1794,7 @@ Task 16 gives `supervision.activity` its own API page.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/activity.py src/naics_embedder/data/redirections.py src/naics_embedder/supervision/artifacts.py tests/unit/test_redirections.py tests/unit/test_supervision_artifacts.py
@@ -1890,7 +1897,7 @@ describe the deleted features stay until Task 16.
     `_legacy_containment_training_step` and `_load_ground_truth_distances` are gone.
   - `ValidationMixin` reads no `supervision_policy`.
 
-- [ ] **Step 1: Write the failing tests, and delete the tests of deleted code**
+- [x] **Step 1: Write the failing tests, and delete the tests of deleted code**
 
 The new tests pin what D2 removes. One parametrized test, with 17 cases, pins D2's named
 deletions: a module, functions, a class, constants, two model methods and an enum member.
@@ -4172,7 +4179,7 @@ with:
 MINING = {'enable_hard_negative_mining': True, 'enable_router_guided_sampling': True}
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -4215,7 +4222,9 @@ fail: the four that read it with `FileNotFoundError`, and
 longer sets, the evaluation logs the `AttributeError`, and no file is written. Step 4 removes the
 read.
 
-- [ ] **Step 3: `train`, the HGCN feeder and the export stop reading the mode**
+- [x] **Step 3: `train`, the HGCN feeder and the export stop reading the mode**
+
+> Deviation: Final review added approved CPU checkpoint loading in the HGCN feeder.
 
 This step changes the CLI alone, and every call it leaves works against the code Steps 4 and 5
 change: the model's, the datamodule's and `contract_for_bundle`'s mode already default to
@@ -4823,7 +4832,7 @@ with:
 def export_table(
 ```
 
-- [ ] **Step 4: The model, its validation step and the datamodule drop containment**
+- [x] **Step 4: The model, its validation step and the datamodule drop containment**
 
 In the model, `polars` (the legacy distance matrix's reader), the policy and the containment
 contract leave the imports. `HierarchyIntegrityError`, which only the legacy relations path
@@ -6202,7 +6211,7 @@ with:
         bundle, index = self._supervision()
 ```
 
-- [ ] **Step 5: Delete the mode, the containment contract and the weights-only migration**
+- [x] **Step 5: Delete the mode, the containment contract and the weights-only migration**
 
 Nothing imports the policy module now.
 
@@ -7035,7 +7044,7 @@ with:
             'Repaired Stage-3 training requires supervision.manifest_path',
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run:
 
@@ -7055,12 +7064,12 @@ Run: `git grep -n -w supervision_mode -- src conf`
 Expected: two lines, `src/naics_embedder/supervision/checkpoints.py:90` (the contract's field,
 which Task 11 replaces) and `:118` (`contract_for_bundle`'s stamp).
 
-- [ ] **Step 7: Run the full suite**
+- [x] **Step 7: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1938 passed, 2 skipped`.
 
-- [ ] **Step 8: Format and lint**
+- [x] **Step 8: Format and lint**
 
 Run:
 
@@ -7078,7 +7087,7 @@ The API pages render the docstrings of `cli.commands.training`, `cli.commands.to
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add conf/config.yaml src/naics_embedder/cli/commands/tools.py src/naics_embedder/cli/commands/training.py src/naics_embedder/supervision/checkpoints.py src/naics_embedder/text_model/dataloader/datamodule.py src/naics_embedder/text_model/mixins/validation.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/utils/config.py src/naics_embedder/utils/validation.py tests/fixtures/epoch_datasets.py tests/integration/test_stage3_training_step.py tests/unit/test_checkpoint_contract.py tests/unit/test_cli_commands.py tests/unit/test_cli_training.py tests/unit/test_config.py tests/unit/test_datamodule.py tests/unit/test_naics_model.py tests/unit/test_text_validation_metrics.py tests/unit/test_utils_validation.py
@@ -7160,7 +7169,7 @@ still show `16-mixed` or multi-GPU training wait for Task 16.
     `lambda log_info=False, cuda_precision=None: hardware`; `_stub_cuda(monkeypatch)` in
     `tests/unit/test_utils_backend.py`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 No test needs a GPU: the device tests stub the host. On CUDA, `get_device` and `detect_hardware`
 return the precision they are given, and off CUDA they return `32-true`.
@@ -7694,7 +7703,7 @@ def test_stdin_is_a_terminal_only_when_it_is_one(request, monkeypatch, make_stdi
 def test_training_passes_curriculum_horizon_to_datamodule(training_env):
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -7741,7 +7750,7 @@ uv run pytest -q tests/unit/test_utils_backend.py tests/unit/test_utils_training
 ```
 Expected: `21 failed, 127 passed`. No other test fails: the fixture's stub takes the new keyword.
 
-- [ ] **Step 3: Honor the configured precision, run on one device, ask only on a terminal**
+- [x] **Step 3: Honor the configured precision, run on one device, ask only on a terminal**
 
 `get_device` takes the precision as a keyword after `log_info`. Its other callers, in `metrics/`,
 discard the precision and stay as they are. It also gains a docstring.
@@ -8191,7 +8200,7 @@ with:
         if generate_embeddings:
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -8210,12 +8219,12 @@ Expected: `148 passed`.
 Run: `git grep -n -w DDPStrategy -- src`
 Expected: no output, since both DDP branches are gone.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1963 passed, 2 skipped`.
 
-- [ ] **Step 6: Format and lint**
+- [x] **Step 6: Format and lint**
 
 Run:
 
@@ -8233,7 +8242,7 @@ The API pages render the docstrings of `utils.backend`, `utils.training`, `utils
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add conf/config.yaml src/naics_embedder/cli/commands/training.py src/naics_embedder/utils/backend.py src/naics_embedder/utils/config.py src/naics_embedder/utils/training.py tests/unit/test_cli_training.py tests/unit/test_config.py tests/unit/test_utils_backend.py tests/unit/test_utils_training.py
@@ -8335,7 +8344,7 @@ take the distances `polar_distance` gives, Task 8's code cache holds the encoder
     points; `_points_up_to_the_bound() -> torch.Tensor`, 68 float64 points in dimension 16 at radii
     in [0, R], four of them at R; and `_off_diagonal(size: int) -> torch.Tensor`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 No test needs a GPU: precision is checked under CPU bf16 autocast. The head's tests change most.
 The other files change where a test read the cap, the encoder's curvature or the output's two
@@ -9149,7 +9158,7 @@ def test_the_model_takes_the_configured_radius_bound(training_env, overrides, bo
 def test_the_model_and_its_contract_record_the_tokenizers_summaries(training_env):
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -9217,7 +9226,7 @@ uv run pytest -q tests/unit/test_hyperbolic.py tests/unit/test_encoder.py tests/
 Expected: `46 failed, 305 passed`. No other test fails: the encoder still defaults its curvature,
 so the fixture that stops passing it builds as before.
 
-- [ ] **Step 3: Bound the radius in the head, add the polar distance, and run the head in float32**
+- [x] **Step 3: Bound the radius in the head, add the polar distance, and run the head in float32**
 
 `hyperbolic.py` imports `math`, for the bound's check, and `NamedTuple`, for `HeadPoints`.
 
@@ -9634,7 +9643,7 @@ with:
             - gate_probs, top_k_indices: The experts' gates, under ``moe`` fusion only
 ```
 
-- [ ] **Step 4: Configure the bound, and name the bounded tangent in the export**
+- [x] **Step 4: Configure the bound, and name the bounded tangent in the export**
 
 `ModelConfig.radius_bound` defaults to 8.0. `gt=0` refuses a bound at or below 0 (§5, "Config"),
 and `allow_inf_nan=False` refuses an infinite or NaN one, which the head would refuse when the
@@ -9764,7 +9773,7 @@ with:
     order. The provenance is ``<stem>_provenance.json``.
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run:
 
@@ -9787,12 +9796,12 @@ Run: `git grep -n -w _exp_map_zero_compiled -- src`
 Expected: one line, the definition at `src/naics_embedder/text_model/hyperbolic.py:53`. The head
 was its last caller.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `1992 passed, 2 skipped`.
 
-- [ ] **Step 7: Format and lint**
+- [x] **Step 7: Format and lint**
 
 Run:
 
@@ -9811,7 +9820,7 @@ The API pages render the docstrings this task changes: `docs/api/hyperbolic.md` 
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add conf/config.yaml src/naics_embedder/cli/commands/training.py src/naics_embedder/text_model/export.py src/naics_embedder/text_model/hyperbolic.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/text_model/shared_encoder.py src/naics_embedder/utils/config.py tests/unit/test_arm_encoder.py tests/unit/test_cli_training.py tests/unit/test_config.py tests/unit/test_encoder.py tests/unit/test_export.py tests/unit/test_hyperbolic.py tests/unit/test_naics_model.py
@@ -9909,7 +9918,7 @@ what `LogitScale` refuses (P22). Task 14's `term_gradients` reads the terms' gra
     `_reference_code_code_loss`, which take the terms' parameters; and
     `_mean_target_entropy(structural, keep, temperature) -> float`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The new tests reach the terms through the module, as `terms.task_loss` and so on, and never import
 them by name. So the file still collects before the terms exist, each new test fails on its own,
@@ -10592,7 +10601,7 @@ def test_the_terms_and_the_scale_stay_float32_under_cpu_bf16_autocast():
     assert dtypes == dict.fromkeys(values, torch.float32)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -10614,7 +10623,7 @@ Expected: `56 failed, 30 deselected`. Nothing passes yet:
 Run: `uv run pytest -q tests/unit/test_loss.py`
 Expected: `56 failed, 30 passed`. The file still collects, and the 30 old tests pass.
 
-- [ ] **Step 3: Add the three terms and the logit scale**
+- [x] **Step 3: Add the three terms and the logit scale**
 
 `loss.py` imports `math`, for the settings' checks and the scale's logarithms.
 
@@ -10942,7 +10951,7 @@ class LogitScale(nn.Module):
         return self.log_scale.clamp(math.log(self.low), math.log(self.high)).exp()
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -10954,12 +10963,12 @@ Expected: `56 passed, 30 deselected`.
 Run: `uv run pytest -q tests/unit/test_loss.py`
 Expected: `86 passed`.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2048 passed, 2 skipped`.
 
-- [ ] **Step 6: Format and lint**
+- [x] **Step 6: Format and lint**
 
 Run: `./scripts/format_code.sh src/naics_embedder/text_model/loss.py tests/unit/test_loss.py`
 Expected: no file changed.
@@ -10971,7 +10980,7 @@ No API page renders the new terms. `docs/api/contrastive_loss.md`,
 `hierarchy_preservation_loss.md` and `structural_preference_loss.md` render the old members by
 name, so the docs build is not run here. Task 16 gives the terms a page.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/text_model/loss.py tests/unit/test_loss.py
@@ -11079,7 +11088,7 @@ bundle, and Task 17 checks the builder's counts on bundle 301cce28 (4.1: 11,039 
       `tmp_path / 'reference'`, and `reference_bundle(reference_manifest) ->
       ValidatedSupervisionBundle`. The reference bundle gives 11 task queries over 17 codes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The reference bundle comes first, because both test files build on it. Its comment block lists
 what its rows give. `build_reference_bundle` writes the three inputs `generate_supervision_bundle`
@@ -11770,7 +11779,7 @@ def test_the_targets_read_only_the_four_pair_fact_columns(reference_bundle, monk
     assert [columns for name, columns in reads if name == pair_facts] == [list(PAIR_FACT_COLUMNS)]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -11786,7 +11795,7 @@ file fails to import its new module:
 
 No test runs, so the fixture guard first runs in Step 4.
 
-- [ ] **Step 3: Build the code targets and the task queries**
+- [x] **Step 3: Build the code targets and the task queries**
 
 `CodeTargets` reads the codebook and `PAIR_FACT_COLUMNS` alone. It is a frozen dataclass with
 `eq=False` and its own `__eq__`: the generated one would compare the arrays as booleans, which
@@ -12096,7 +12105,7 @@ def build_task_queries(bundle: ValidatedSupervisionBundle) -> List[TaskQuery]:
     return queries
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -12106,12 +12115,12 @@ uv run pytest -q tests/unit/test_supervision_queries.py tests/unit/test_supervis
 Expected: `24 passed`: 11 query tests and 13 code-target tests, four of them the cases of
 `test_anchor_ids_that_are_not_code_ids_are_refused`.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2072 passed, 2 skipped`.
 
-- [ ] **Step 6: Format and lint**
+- [x] **Step 6: Format and lint**
 
 Run:
 
@@ -12126,7 +12135,7 @@ Expected: `All checks passed!`
 No API page renders the two new modules or the fixture file, so the docs build does not change.
 Task 16 gives `supervision.queries` and `supervision.code_targets` their pages.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/code_targets.py src/naics_embedder/supervision/queries.py tests/fixtures/supervision.py tests/unit/test_supervision_code_targets.py tests/unit/test_supervision_queries.py
@@ -12256,7 +12265,7 @@ bundle 301cce28.
     `REFERENCE_WINDOW = 128`, the fixtures `minilm_tokenizer` and `reference_code_rows`, and
     `_code_ids(bundle) -> Dict[str, int]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The new tests reach the new names through the module, as `two_stream.StepDataset` and so on, and
 never import them by name. So the file still collects before the names exist, each new test fails
@@ -13022,7 +13031,7 @@ def test_one_epoch_of_the_reference_bundle_reads_each_code_and_each_task_query_o
         assert sorted(read, key=lambda query: (query.level, query.text)) == queries
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -13074,7 +13083,7 @@ expects:
 Run: `uv run pytest -q tests/unit/test_datamodule.py`
 Expected: `54 failed, 57 passed`. The file still collects, and its 57 old tests pass.
 
-- [ ] **Step 3: Add the two-stream epochs**
+- [x] **Step 3: Add the two-stream epochs**
 
 The new section sits after `_EpochSyncedDataset`, before the datamodule, and `datamodule.py` still
 imports neither `text_model.export` nor `naics_model` (P12). It needs `hashlib` and `operator` for
@@ -13557,7 +13566,7 @@ class StepDataset(Dataset):
         }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -13569,12 +13578,12 @@ Expected: `54 passed, 57 deselected`.
 Run: `uv run pytest -q tests/unit/test_datamodule.py`
 Expected: `111 passed`.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2126 passed, 2 skipped`.
 
-- [ ] **Step 6: Format and lint**
+- [x] **Step 6: Format and lint**
 
 Run:
 
@@ -13592,7 +13601,7 @@ that page.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/text_model/dataloader/datamodule.py tests/unit/test_datamodule.py
@@ -13775,7 +13784,7 @@ its records, which `check_arm` checks (P24, P25). Task 16 gives the module its A
   - In `tests/unit/test_selection_log_guard.py`: the conftest alias `suite`, `REPOSITORY` (the
     repository root, from the test's own path) and the helper `_log(tmp_path, content) -> Path`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The tests added to the three existing test files reach the new names through their modules or
 objects, as `panel.score_logged`, `encoding.encode_query_texts` and
@@ -14818,7 +14827,7 @@ def test_the_live_read_is_the_read_of_the_export_of_its_cache(
     assert exported.per_query.get_column('rank').max() > 1
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 The `-k` term `test_selection_log_guard` selects that whole module by name, and
 `--continue-on-collection-errors` runs the other files although `test_monitor.py` cannot be
@@ -14861,7 +14870,7 @@ uv run pytest -q --continue-on-collection-errors tests/unit/test_monitor.py test
 ```
 Expected: `16 failed, 62 passed, 1 error`. The old tests of the three existing files pass.
 
-- [ ] **Step 3: Return the logged record, and share one query path and one batch size**
+- [x] **Step 3: Return the logged record, and share one query path and one batch size**
 
 `SelectionLog.append` already returns the record it appended, so `_read` passes it on with the
 split's queries, and the two split readers keep only the queries. `score_logged` takes `score`'s
@@ -15326,7 +15335,7 @@ with:
         return exp_map_origin(tangent)
 ```
 
-- [ ] **Step 4: Add the monitor**
+- [x] **Step 4: Add the monitor**
 
 The module has four parts:
 - The training flags. `preserve_training_flags` records each submodule's flag and puts it back
@@ -15843,7 +15852,7 @@ def _record_epoch(record: Mapping[str, Any]) -> int:
     return record['read']['detail']['epoch']
 ```
 
-- [ ] **Step 5: Guard the repository's selection log**
+- [x] **Step 5: Guard the repository's selection log**
 
 The guard resolves the log from the conftest's own path: the repository root's
 `logs/selection_log.jsonl`, which is the file the shipped configs' `./logs/selection_log.jsonl`
@@ -15936,7 +15945,7 @@ def guard_the_repository_selection_log() -> Iterator[Path]:
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run:
 
@@ -15955,14 +15964,14 @@ Expected: `129 passed`. Without an MPS device,
 `test_on_mps_the_points_stay_on_the_device_and_the_tangents_come_to_the_cpu` skips, and the run
 gives `128 passed, 1 skipped`.
 
-- [ ] **Step 7: Run the full suite**
+- [x] **Step 7: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2193 passed, 2 skipped`. On a host without MPS, as on CI, the seven tests that need an
 MPS device skip as well (this task's in `test_monitor.py` and six earlier ones), so the run shows
 `2186 passed, 9 skipped`.
 
-- [ ] **Step 8: Format and lint**
+- [x] **Step 8: Format and lint**
 
 Run:
 
@@ -15982,7 +15991,7 @@ of `encode_token_rows`. `docs/api/outcome_panel.md` renders `panels.outcome`, wh
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/naics_embedder/panels/outcome.py src/naics_embedder/text_model/arm_encoder.py src/naics_embedder/text_model/export.py src/naics_embedder/text_model/monitor.py tests/conftest.py tests/unit/test_arm_encoder.py tests/unit/test_export.py tests/unit/test_monitor.py tests/unit/test_outcome_panel.py tests/unit/test_selection_log_guard.py
@@ -16440,7 +16449,7 @@ statistic (spec 4.4, Req 6). Nothing is left red: the CLI tests drive `train` wi
 the real `train` runs once milestone (b) gives the datamodule its code rows and two streams and
 milestone (c) passes the new settings and the monitor.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The new tests run on the reference arm: a d = 16 model of Task 6's reference bundle on the tiny
 backbone, and one epoch of its two-stream steps. They reach the model's new names through the
@@ -18620,7 +18629,7 @@ def test_old_parallel_arrays_misalign_but_checked_selection_does_not(candidate_b
     assert checked_pairs == [(3.0, 103), (1.0, 101), (2.0, 102)]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -18700,7 +18709,9 @@ The 58 that pass are the 24 unchanged tests of `test_naics_model.py`, its rewrit
 which the old model passes too, the 31 other tests of `test_cli_training.py`, and the integration
 file's one test.
 
-- [ ] **Step 3: Cut the mixins down to what the model reads**
+- [x] **Step 3: Cut the mixins down to what the model reads**
+
+> Deviation: Final review added saved LoRA/active-MoE guards beside the fixed 21-key settings.
 
 `LossMixin` keeps only the experts' load-balancing term, its utilization logs and
 `_collect_gate_outputs`, unchanged. Req 11's three terms are Task 5's functions in
@@ -19396,7 +19407,7 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 4: Switch the model**
+- [x] **Step 4: Switch the model**
 
 `naics_model.py` is rewritten to P15:
 - `StepLosses` is a step's losses. `anchor_radius` holds the anchors' live radii, through which
@@ -19989,7 +20000,7 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         self._resumed_epoch = checkpoint.get('epoch')
 ```
 
-- [ ] **Step 5: Build the model from the config**
+- [x] **Step 5: Build the model from the config**
 
 `build_model_from_config` passes only the model's arguments, with the seed, which every monitor
 read names. A setting the config has no key for yet takes the model's default, which is the
@@ -20083,7 +20094,7 @@ with:
         summaries=summaries_identity(cfg.data_loader.tokenization.tokenizer_name),
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run:
 
@@ -20092,14 +20103,14 @@ uv run pytest -q tests/unit/test_naics_model.py tests/unit/test_cli_training.py 
 ```
 Expected: `115 passed`: the model's 80 tests, the CLI's 34 and the integration file's one.
 
-- [ ] **Step 7: Run the full suite**
+- [x] **Step 7: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2202 passed, 2 skipped`. On a host without MPS, as on CI, the seven tests that need an
 MPS device skip as well (Task 8's in `test_monitor.py` and six earlier ones), so the run shows
 `2195 passed, 9 skipped`.
 
-- [ ] **Step 8: Format and lint**
+- [x] **Step 8: Format and lint**
 
 Run:
 
@@ -20117,7 +20128,7 @@ Expected: `All checks passed!`
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/naics_embedder/cli/commands/training.py src/naics_embedder/text_model/mixins/__init__.py src/naics_embedder/text_model/mixins/logging.py src/naics_embedder/text_model/mixins/loss.py src/naics_embedder/text_model/mixins/optimizer.py src/naics_embedder/text_model/mixins/validation.py src/naics_embedder/text_model/naics_model.py tests/fixtures/shared_encoder.py tests/integration/test_stage3_training_step.py tests/unit/test_cli_training.py tests/unit/test_naics_model.py
@@ -20138,7 +20149,7 @@ arguments. Its code rows and steps equal the fixtures that the model's tests enc
 the datamodule and the model meet by equality here, and under a Trainer in milestone (d). Nothing
 is left red.
 
-- [ ] **Step 10: Write the failing tests**
+- [x] **Step 10: Write the failing tests**
 
 The datamodule's test file is rewritten. A new last section, "The datamodule (spec 4.3)", runs on
 Task 6's reference bundle at 4 queries a step, so an epoch has three steps, with MiniLM's tokenizer
@@ -21403,7 +21414,7 @@ with:
     assert training._stdin_is_terminal() is expected
 ```
 
-- [ ] **Step 11: Run the tests to verify they fail**
+- [x] **Step 11: Run the tests to verify they fail**
 
 Run: `uv run pytest -q tests/unit/test_datamodule.py tests/unit/test_cli_training.py`
 Expected: `18 failed, 89 passed, 6 errors`. The datamodule file's 22 new and rewritten tests and the
@@ -21445,7 +21456,7 @@ which pydantic refuses; its `**kwargs` would have swallowed a `token_config=` ke
 The 89 that pass are Task 7's 54 two-stream tests, the three `stack_text_inputs` tests, the
 repaired-rows test and the CLI file's 31 other tests.
 
-- [ ] **Step 12: Replace the datamodule**
+- [x] **Step 12: Replace the datamodule**
 
 `datamodule.py` is rewritten:
 - A module docstring names the two streams, the datamodule, its one loader and the epoch callback.
@@ -22183,7 +22194,7 @@ class TrainDatasetEpochCallback(pyl.Callback):
             datamodule.set_train_epoch(trainer.current_epoch)
 ```
 
-- [ ] **Step 13: Build the datamodule from the config**
+- [x] **Step 13: Build the datamodule from the config**
 
 `build_datamodule_from_config` builds the datamodule beside the model's builder, every argument by
 keyword, and `train` calls it. It comes here, not at milestone (c), as the model's builder came at
@@ -22298,7 +22309,7 @@ def code_token_config(cfg: Config) -> TokenizationConfig:
     The tokenization cache training reads: ``train`` hands it to ``NAICSDataModule``.
 ```
 
-- [ ] **Step 14: Update the tests' README**
+- [x] **Step 14: Update the tests' README**
 
 `tests/README.md` names the deleted collate and map-dataset tests. Its file-tree line and the
 datamodule's coverage item now name what the file tests.
@@ -22339,14 +22350,14 @@ with:
     - The one train loader, no validation loader, and the epoch set at each epoch start
 ```
 
-- [ ] **Step 15: Run the tests to verify they pass**
+- [x] **Step 15: Run the tests to verify they pass**
 
 Run: `uv run pytest -q tests/unit/test_datamodule.py tests/unit/test_cli_training.py`
 Expected: `113 passed`: the datamodule's 80 tests and the CLI's 33. Lightning warns twice in the
 real-Trainer test, and both warnings are expected: that the train loader does not have many
 workers (P12's `num_workers=0`), and, on a host with a GPU or MPS, that the GPU is not used.
 
-- [ ] **Step 16: Run the full suite**
+- [x] **Step 16: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2170 passed, 2 skipped`. Milestone (a)'s 2202 lose the 55 deleted tests, 52 of the
@@ -22354,7 +22365,7 @@ datamodule's file and 3 of the CLI's, and gain the 23 new ones. On a host withou
 seven tests that need an MPS device skip as well (Task 8's in `test_monitor.py` and six earlier
 ones), so the run shows `2163 passed, 9 skipped`.
 
-- [ ] **Step 17: Format and lint**
+- [x] **Step 17: Format and lint**
 
 Run:
 
@@ -22374,7 +22385,7 @@ rewrites, so the deleted classes leave the page. `docs/api/cli.md` renders
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 18: Commit**
+- [x] **Step 18: Commit**
 
 The `git rm` of Step 10 staged the fixture's deletion, so the amended commit takes it too.
 
@@ -22401,7 +22412,7 @@ or under another seed. `collect_training_result` goes, with its test (P17). Noth
 the full suite passes at the milestone's end. Milestone (d) adds the Trainer-driven tests, each
 through `create_trainer` with a monitor (P30).
 
-- [ ] **Step 19: Write the failing tests**
+- [x] **Step 19: Write the failing tests**
 
 The config tests come first. `tests/unit/test_config.py` gains a last section before the HGCN
 tests, "The objective's added and changed keys", on spec 4.5 and section 5 (P5, P22):
@@ -23856,7 +23867,7 @@ def test_a_config_at_the_edge_of_every_added_key_builds_the_model(
     assert model.hparams['lr_plateau_patience'] == 0
 ```
 
-- [ ] **Step 20: Run the tests to verify they fail**
+- [x] **Step 20: Run the tests to verify they fail**
 
 Run:
 
@@ -23977,7 +23988,7 @@ right, and the `training.weight_decay` and `training.trainer.precision` defaults
 already the spec's. With them pass `tests/unit/test_utils_training.py`'s 10 kept tests and the
 four cases of `test_stdin_is_a_terminal_only_when_it_is_one`.
 
-- [ ] **Step 21: Add the configuration keys**
+- [x] **Step 21: Add the configuration keys**
 
 `utils/config.py` declares spec 4.5's added keys and takes its changed defaults (P5). `math`
 checks the logit-scale range's ends, and `ast` moves to the top of the module, since the override
@@ -24443,7 +24454,7 @@ training:
     log_every_n_steps: 10
 ```
 
-- [ ] **Step 22: Add the precision rule, the run settings, the guards and the trainer**
+- [x] **Step 22: Add the precision rule, the run settings, the guards and the trainer**
 
 `utils/training.py` holds what `train` shares with `tools sweep` and the checkpoint runner, which
 Task 13 builds. Its module docstring lists each new function on a line of its own: griffe warns on
@@ -25087,7 +25098,7 @@ with:
         - save_training_summary
 ```
 
-- [ ] **Step 23: Wire the monitor, the settings, the guards and the trainer into `train`**
+- [x] **Step 23: Wire the monitor, the settings, the guards and the trainer into `train`**
 
 The CLI module's docstring now says what `train` trains and what the monitor's MRR drives (spec
 4.4). The module imports the monitor, the outcome panel and its config, the tokenizer and the new
@@ -25908,7 +25919,7 @@ with:
         )
 ```
 
-- [ ] **Step 24: Run the tests to verify they pass**
+- [x] **Step 24: Run the tests to verify they pass**
 
 Run:
 
@@ -25919,7 +25930,7 @@ Expected: `273 passed`: the config file's 185 tests, the training utilities' 40 
 On a host with a GPU or MPS, Lightning warns four times that the GPU is not used, once from each
 `create_trainer` test that builds a real trainer on the CPU.
 
-- [ ] **Step 25: Run the full suite**
+- [x] **Step 25: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2297 passed, 2 skipped`. Milestone (b)'s 2170 lose `test_collect_training_result` and
@@ -25927,7 +25938,7 @@ gain the 128 new tests. On a host without MPS, as on CI, the seven tests that ne
 skip as well (Task 8's in `test_monitor.py` and six earlier ones), so the run shows
 `2290 passed, 9 skipped`.
 
-- [ ] **Step 26: Format and lint**
+- [x] **Step 26: Format and lint**
 
 Run:
 
@@ -25946,7 +25957,7 @@ parser gain docstrings, and `docs/api/cli.md` renders `cli.commands.training`.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 27: Commit**
+- [x] **Step 27: Commit**
 
 ```bash
 git add conf/config.yaml docs/api/training_utils.md src/naics_embedder/cli/commands/training.py src/naics_embedder/utils/config.py src/naics_embedder/utils/training.py tests/unit/test_cli_training.py tests/unit/test_config.py tests/unit/test_utils_training.py
@@ -25973,7 +25984,7 @@ and reads nothing and writes no record or checkpoint. P21's run settings gain
 steps, so another accumulation would stretch it mid-run, and another clipping would change every
 later step. Nothing is left red: the full suite passes at the milestone's end.
 
-- [ ] **Step 28: Write the Trainer-driven tests**
+- [x] **Step 28: Write the Trainer-driven tests**
 
 The new file is marked `integration` and runs on the CPU and the tiny backbone. The reference
 bundle has 17 codes and 11 task queries, so at 4 queries a step an epoch has 3 steps. The harness
@@ -27016,7 +27027,7 @@ with:
 | **Target Coverage** | >70% |
 ```
 
-- [ ] **Step 29: Run the Trainer-driven tests**
+- [x] **Step 29: Run the Trainer-driven tests**
 
 Run: `uv run pytest -q tests/integration/test_reference_training.py`
 Expected: `15 passed`. They pass at once: milestones (a) to (c) wrote the model, the datamodule,
@@ -27026,7 +27037,7 @@ not empty at each resume, that the model summary cannot size `bf16-mixed`, and t
 checkpoint ended before its epoch did. On a host with a GPU or MPS, it also warns that the GPU is
 not used.
 
-- [ ] **Step 30: Write the failing tests of the stopped-run guard and the two trainer settings**
+- [x] **Step 30: Write the failing tests of the stopped-run guard and the two trainer settings**
 
 The guard reads the saved state of `outcome_early_stopping`'s callback, so every checkpoint the
 guard tests build now holds that state beside ModelCheckpoint's (P19). In the training utilities'
@@ -27727,7 +27738,7 @@ def test_a_resume_of_a_run_early_stopping_ended_is_refused_leaving_its_files_as_
     assert not resumed_log.exists()
 ```
 
-- [ ] **Step 31: Run the tests to verify they fail**
+- [x] **Step 31: Run the tests to verify they fail**
 
 `--continue-on-collection-errors` runs the two unit files although the integration file cannot be
 collected.
@@ -27781,7 +27792,7 @@ The 68 that pass are the two unit files' other kept tests. Both cases of
 `monitor_reads.jsonl`) pass with their new assertion, by design: the fresh-start guard already
 runs before the datamodule is built, and the assertion pins that.
 
-- [ ] **Step 32: Add the early-stopping helper and the stopped-run guard**
+- [x] **Step 32: Add the early-stopping helper and the stopped-run guard**
 
 `utils/training` gains `outcome_early_stopping(patience)`, the EarlyStopping the monitor's MRR
 drives, with exactly the arguments `create_trainer` passed, and `create_trainer` now builds its
@@ -28107,7 +28118,7 @@ with:
         - create_trainer
 ```
 
-- [ ] **Step 33: Run the tests: only the two trainer settings are left**
+- [x] **Step 33: Run the tests: only the two trainer settings are left**
 
 Run:
 
@@ -28122,7 +28133,7 @@ two trainer settings are not run settings yet:
   (`accumulate_grad_batches`, `gradient_clip_val`) fail with
   `Failed: DID NOT RAISE <class 'ValueError'>`, since the saved settings equal this run's.
 
-- [ ] **Step 34: Record the accumulation and the clipping in the run settings**
+- [x] **Step 34: Record the accumulation and the clipping in the run settings**
 
 `run_settings` gains `accumulate_grad_batches` and `gradient_clip_val` after `queries_per_step`,
 in P21's order, so an exact resume under another value of either is refused as under any other
@@ -28193,7 +28204,7 @@ with:
         'precision': precision,
 ```
 
-- [ ] **Step 35: Run the tests to verify they pass**
+- [x] **Step 35: Run the tests to verify they pass**
 
 Run:
 
@@ -28204,7 +28215,7 @@ Expected: `116 passed`: the training utilities' 50 tests, the CLI's 50 and the 1
 tests. Lightning warns as in Step 29, and on a host with a GPU or MPS it also warns once from
 each `create_trainer` test that builds a real trainer on the CPU.
 
-- [ ] **Step 36: Run the full suite**
+- [x] **Step 36: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2325 passed, 2 skipped`. Milestone (c)'s 2297 gain the 15 Trainer-driven tests and the
@@ -28212,7 +28223,7 @@ Expected: `2325 passed, 2 skipped`. Milestone (c)'s 2297 gain the 15 Trainer-dri
 that need an MPS device skip as well (Task 8's in `test_monitor.py` and six earlier ones), so the
 run shows `2318 passed, 9 skipped`.
 
-- [ ] **Step 37: Format and lint**
+- [x] **Step 37: Format and lint**
 
 Run:
 
@@ -28231,7 +28242,7 @@ docstring.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 38: Commit**
+- [x] **Step 38: Commit**
 
 ```bash
 git add docs/api/training_utils.md src/naics_embedder/cli/commands/training.py src/naics_embedder/utils/training.py tests/README.md tests/integration/test_reference_training.py tests/unit/test_cli_training.py tests/unit/test_utils_training.py
@@ -28417,7 +28428,7 @@ modules.
     scan, `_training_path() -> List[Path]` and `_margin_reads(path: Path) -> Iterator[str]`. In
     `tests/unit/test_config.py`: `REMOVED_KEYS`, each removed dotted key with its old default.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The pins come first, in a new file of three tests (spec 4.5, §6 "Contracts and CLI"; D5).
 `test_the_old_objective_and_its_machinery_are_deleted` runs over `DELETIONS`: spec 4.5's table, the
@@ -31112,7 +31123,7 @@ Run:
 git rm tests/integration/test_distributed_supervision.py tests/integration/test_stage3_training_step.py tests/unit/test_candidate_contract.py tests/unit/test_curriculum.py tests/unit/test_difficulty_sampler.py tests/unit/test_false_negative_strategy.py tests/unit/test_hard_negative_mining.py tests/unit/test_hyperbolic_clustering.py tests/unit/test_investigate_hierarchy_tool.py tests/unit/test_negative_selection.py tests/unit/test_streaming_dataset.py tests/unit/test_streaming_sampling.py tests/unit/test_structural_margins.py tests/unit/test_supervision_index.py tests/unit/test_text_validation_metrics.py
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -31171,7 +31182,9 @@ refuses that key, and `test_the_margin_columns_are_those_the_bundle_build_writes
 the window test's three other classes, the load and YAML edge-case tests of `test_config_tools.py`,
 and every test of kept code that this step only cleans.
 
-- [ ] **Step 3: Retire `tools investigate`, and validate what `tools config` shows**
+- [x] **Step 3: Retire `tools investigate`, and validate what `tools config` shows**
+
+> Deviation: Approved review fix catches malformed YAML as well as config validation errors.
 
 `tools investigate` goes, with `investigate_hierarchy`, `HAS_INVESTIGATE` and
 `tools/_investigate_hierarchy.py`, so Req 6's statistics come only from `tools diagnostics` (spec
@@ -31638,7 +31651,7 @@ def load_config(config_path: str = './conf/config.yaml'):
         return yaml.safe_load(f)
 ```
 
-- [ ] **Step 4: Delete the old objective's machinery**
+- [x] **Step 4: Delete the old objective's machinery**
 
 The machinery goes by spec 4.5's table. The curriculum, mining, the clustering and the
 false-negative strategies go, with the three mixins the model no longer has:
@@ -32534,7 +32547,7 @@ with:
                   - Streaming DataSet: api/hgcn_streaming_dataset.md
 ```
 
-- [ ] **Step 5: Remove the old objective's configuration keys**
+- [x] **Step 5: Remove the old objective's configuration keys**
 
 In `src/naics_embedder/utils/config.py`, the keys spec 4.5 removes and P22's two go with their
 models, so each model's `extra='forbid'` refuses them. `data_loader.streaming` becomes
@@ -33433,7 +33446,7 @@ with:
     }
 ```
 
-- [ ] **Step 6: Update the tests' README**
+- [x] **Step 6: Update the tests' README**
 
 `tests/README.md` changes only where the deletions made it false: the integration file count, the
 status line, the file tree, the notes on `hyperbolic.py`, `loss.py`, the model and the deleted
@@ -33727,7 +33740,7 @@ with:
 ### Critical Missing Tests
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run:
 
@@ -33736,7 +33749,7 @@ uv run pytest -q tests/unit/test_removed_objective.py tests/unit/test_config.py 
 ```
 Expected: `793 passed`: the 95 that failed in Step 2 and the 698 that already passed.
 
-- [ ] **Step 8: Run the full suite**
+- [x] **Step 8: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2163 passed, 2 skipped`. Task 9's 2327 tests lose the 256 tests of what this task deletes
@@ -33744,7 +33757,7 @@ or replaces and gain its 94 new ones, and 7 tests move under new IDs, so 2165 ar
 host without MPS, as on CI, the seven tests that need an MPS device skip as well, so the run shows
 `2156 passed, 9 skipped`.
 
-- [ ] **Step 9: Format and lint**
+- [x] **Step 9: Format and lint**
 
 Run:
 
@@ -33763,7 +33776,7 @@ this task changes, and `docs/.nav.yml` loses four pages.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 The `git rm` runs of Steps 1, 3 and 4 staged the deletions, so the commit takes them too.
 
@@ -33845,7 +33858,7 @@ Task 16 updates the user documentation's curvature and contract passages.
     refusal regex) and `forbid_model_loads(monkeypatch) -> None`. The source contract's
     `PRE_STAGE_7_FIELDS` is a tuple of field names; the fixture's dict is an independent oracle.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The historical fixture carries the last eight-field contract, no objective, and the old head's
 `curvature` hyperparameter in place of `radius_bound`. The tiny backbone trains nothing. Call
@@ -35061,7 +35074,7 @@ with:
     'naics_embedder.utils.config:AnnealConfig',
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -35099,7 +35112,7 @@ Expected: FAIL, `22 failed, 38 passed, 200 deselected, 30 errors`:
 - The three added deletion cases fail with `AssertionError: assert not True`: both version
   constants and `require_unit_curvature` still exist.
 
-- [ ] **Step 3: Record and check the objective**
+- [x] **Step 3: Record and check the objective**
 
 Name the objective and its legacy marker in the schema. The bundle's contract version is unchanged,
 so existing supervision bundles remain valid.
@@ -35395,7 +35408,7 @@ def validate_supervision_contract(
     return saved
 ```
 
-- [ ] **Step 4: Remove the curvature guard and document the refusal at each load**
+- [x] **Step 4: Remove the curvature guard and document the refusal at each load**
 
 Delete `require_unit_curvature` and its call in `load_arm_model`. The supervision-contract check
 already runs before `load_from_checkpoint`; the objective now refuses the historical weights. Update
@@ -35622,7 +35635,7 @@ with:
         checkpoint_path: Filesystem path to the PyTorch Lightning checkpoint
 ```
 
-- [ ] **Step 5: Run the task tests to verify they pass**
+- [x] **Step 5: Run the task tests to verify they pass**
 
 Run:
 
@@ -35641,12 +35654,12 @@ HF_HUB_OFFLINE=1 uv run pytest -n auto -q -p no:cacheprovider tests/unit/test_ch
 Expected: `399 passed`. The integration tests exercise exact resume on Trainer-written
 `last.ckpt` files, as well as the monitor and selection path.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `HF_HUB_OFFLINE=1 uv run pytest -n auto -q`
 Expected: `2185 passed, 2 skipped`.
 
-- [ ] **Step 7: Format, lint and build the API documentation**
+- [x] **Step 7: Format, lint and build the API documentation**
 
 Run:
 
@@ -35664,7 +35677,7 @@ Run: `uv run mkdocs build --strict`
 Expected: the documentation builds without warnings. The export API page renders the objective
 refusal and contains no `require_unit_curvature` entry.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/naics_embedder/supervision/schema.py src/naics_embedder/supervision/checkpoints.py src/naics_embedder/text_model/export.py src/naics_embedder/text_model/arm_encoder.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/cli/commands/training.py tests/fixtures/shared_encoder.py tests/unit/test_arm_encoder.py tests/unit/test_checkpoint_contract.py tests/unit/test_cli_training.py tests/unit/test_export.py tests/unit/test_naics_model.py tests/unit/test_removed_objective.py
@@ -35738,7 +35751,7 @@ written before the three fields existed. Task 13's runner supplies `training_run
     Optional[Path] = None, monitor_mrrs: Optional[Sequence[float]] = None) -> ArmRecord` builds
     trained runs when `monitor_mrrs` is given and keeps synthetic runs otherwise.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The fixture builds records with the monitor's shape and per-epoch MRRs. It gives each seed a
 training id distinct from its sweep id, and a cache fingerprint distinct from its stored table.
@@ -36425,7 +36438,7 @@ def test_the_artifacts_outlive_the_runners_files(
     tmp_path, regressor_rows, panels, store, text_only
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -36447,7 +36460,7 @@ The first errors of the four failing tests are:
 - `test_each_trained_seeds_monitor_reads_pass_through_to_its_run`:
   `TypeError: SeedArtifacts.__init__() got an unexpected keyword argument 'training_run'`.
 
-- [ ] **Step 3: Carry the reads and enforce the record checks**
+- [x] **Step 3: Carry the reads and enforce the record checks**
 
 Add the defaulted fields to `SeedRun`, with a non-empty training id and a non-negative checkpoint
 epoch when given. Its docstring states which reads belong to a trained seed. The defaults keep
@@ -36905,7 +36918,7 @@ with:
                     f'{arm.spec.name} seed {run.seed} read at {first.isoformat()}, before the '
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -36915,14 +36928,14 @@ uv run pytest -p no:randomly -p no:cacheprovider tests/unit/test_decision.py tes
 
 Expected: `81 passed`. All 32 added test cases pass, and the 49 existing cases still pass.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2217 passed, 2 skipped`. The suite gains 32 cases from Task 11's 2185 passed and keeps
 its two skips. On a host without MPS, as on CI, seven more tests skip, giving
 `2210 passed, 9 skipped`.
 
-- [ ] **Step 6: Format and lint**
+- [x] **Step 6: Format and lint**
 
 Run:
 
@@ -36941,7 +36954,7 @@ fields on both `SeedRun` and `SeedArtifacts`.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/decision/records.py src/naics_embedder/decision/sweep.py src/naics_embedder/decision/decide.py tests/fixtures/decision.py tests/unit/test_decision.py tests/unit/test_decision_sweep.py
@@ -37034,7 +37047,7 @@ record before fixing the margins.
     The session-scoped `trained_seeds(tmp_path_factory, minilm_tokenizer) -> TrainedSeeds` trains
     those seeds for three epochs under the temporary root, with a real monitor and private logs.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Train the five tiny seeds once, on the reference fixture bundle. The token cache, checkpoints,
 monitor files, training logs, comparator and all outputs live under `tmp_path_factory`; no test
@@ -37597,7 +37610,7 @@ with:
     assert type(swept['logit_scale_range']) is list
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -37624,7 +37637,7 @@ HF_HUB_OFFLINE=1 uv run pytest -p no:randomly -p no:cacheprovider tests/unit/tes
 Expected: FAIL, `1 failed`, with `AttributeError`: `cli.commands.tools` has no `_sweep_spec`.
 The fixture-training warning is Lightning's expected warning about `num_workers=0` (P12).
 
-- [ ] **Step 3: Add the checkpoint runner**
+- [x] **Step 3: Add the checkpoint runner**
 
 Check the durable records and `last.ckpt` first, then derive the earliest tied best epoch and
 check that epoch's saved file. Both checkpoints must name the arm's contract, seed and settings.
@@ -37832,7 +37845,7 @@ class CheckpointRunner:
         )
 ```
 
-- [ ] **Step 4: Add the sweep command and its arm spec**
+- [x] **Step 4: Add the sweep command and its arm spec**
 
 Use the cached-backbone helper for the resolved revision, and the same settings and precision
 helpers as training. Check every seed before `run_seed_sweep` starts. The shared monitor guard
@@ -38094,7 +38107,7 @@ def export_table(
     checkpoint: Annotated[
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run:
 
@@ -38106,13 +38119,13 @@ Expected: `87 passed, 1 warning`. The 36 runner and sweep cases pass, alongside 
 CLI tests. The P31 test uses the actual spec builder, the end-to-end arm passes `check_arm`, and
 both the later-seed and wrong-comparator guards stop before any seed table is exported.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `HF_HUB_OFFLINE=1 uv run pytest -n auto -q`
 Expected: `2253 passed, 2 skipped` on the Mac with MPS. The skips need CUDA or real `data/`.
 CI without MPS gives `2246 passed, 9 skipped`.
 
-- [ ] **Step 7: Format and lint**
+- [x] **Step 7: Format and lint**
 
 Run:
 
@@ -38131,7 +38144,7 @@ checkpoint runner's API page and the usage instructions.
 Run: `HF_HUB_OFFLINE=1 uv run mkdocs build --strict`
 Expected: the build succeeds, with no warning.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/naics_embedder/text_model/checkpoint_runner.py src/naics_embedder/cli/commands/tools.py tests/conftest.py tests/fixtures/checkpoint_runs.py tests/unit/test_checkpoint_runner.py tests/unit/test_cli_training.py
@@ -38179,7 +38192,7 @@ the saved seed's first batch without a panel read. Tasks 17 and 21 use its JSON 
   `term_gradients`, `inert_terms` and `passed`. It exits 1 for a failed measured check and
   still writes its JSON. A refusal before a measurement prints its error and exits 1.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Fixture tables check the population SD boundary, positive distinct sector radii, the manifold
 residual at the largest radius, every ordered pair in 32-row chunks, and an error injected into
@@ -38603,14 +38616,14 @@ def test_cli_refuses_a_table_from_another_checkpoint(cli_arm, tmp_path):
     assert not (tmp_path / 'report.json').exists()
 ```
 
-- [ ] **Step 2: Run the tests to see the missing report and command**
+- [x] **Step 2: Run the tests to see the missing report and command**
 
 Run: `HF_HUB_OFFLINE=1 uv run pytest -q tests/unit/test_radius_report.py`
 Expected: FAIL, `23 failed`. The 19 library and gradient cases first raise
 `ModuleNotFoundError: No module named 'naics_embedder.text_model.radius_report'`. The four CLI
 cases fail their exit-code assertions because `radius-report` is not a command (exit 2).
 
-- [ ] **Step 3: Implement the radius and gradient checks**
+- [x] **Step 3: Implement the radius and gradient checks**
 
 Use the same float64 points and Lorentz distance as the panel reads. Count all ordered pairs,
 including self and coincident rows, while bounding the polar difference tensor to 32 rows.
@@ -38884,7 +38897,7 @@ def term_gradients(model: torch.nn.Module, batch: Mapping[str, Any]) -> Dict[str
     return result
 ```
 
-- [ ] **Step 4: Add the command**
+- [x] **Step 4: Add the command**
 
 Check the checkpoint/table export identities before loading the batch. Use the saved seed and
 saved `queries_per_step`, epoch 0 and step 0, with the configured preprocessing. Load on CPU,
@@ -39061,18 +39074,18 @@ def export_table(
     checkpoint: Annotated[
 ```
 
-- [ ] **Step 5: Run the task's tests**
+- [x] **Step 5: Run the task's tests**
 
 Run: `HF_HUB_OFFLINE=1 uv run pytest -q tests/unit/test_radius_report.py`
 Expected: PASS, `23 passed`.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `HF_HUB_OFFLINE=1 uv run pytest -n auto -q`
 Expected: `2276 passed, 2 skipped` on this Mac; without MPS, `2269 passed, 9 skipped`.
 The skips are the same ones as in Pre-flight. No test was removed.
 
-- [ ] **Step 7: Format, lint and build the API docs**
+- [x] **Step 7: Format, lint and build the API docs**
 
 Run:
 
@@ -39088,7 +39101,7 @@ Run: `uv run mkdocs build --strict`
 Expected: the build succeeds without a warning. The command's docstring renders through the CLI
 API page; Task 16 adds the dedicated radius-report page and usage text.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/naics_embedder/text_model/radius_report.py src/naics_embedder/cli/commands/tools.py tests/unit/test_radius_report.py
@@ -39154,7 +39167,7 @@ files with the checkpoints.
   `summary.parent / 'visualizations'`. `tools visualize --summary PATH [--output-dir DIR]` exposes
   it; `--stage`, `--log-file`, `parse_log_file`, and `print_analysis` are retired.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The new fixture holds flat rows with finite P20 fields. Summary tests check exact values, fresh-file
 refusal, exact-line preservation through every restored boundary, invalid epochs and values, refusal
@@ -39773,7 +39786,7 @@ def test_an_exact_resume_prunes_the_interrupted_epochs_summary_and_continues(ref
     assert resumed.hooks.epoch_ends == [2, 3]
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -39837,7 +39850,7 @@ expected `epoch_summary.jsonl` is absent:
 
 The retained `TestEdgeCases.test_has_flags_are_booleans` case passes by design.
 
-- [ ] **Step 3: Add the durable summary and model hooks**
+- [x] **Step 3: Add the durable summary and model hooks**
 
 Validate finite flat rows before a file changes. Fresh fit refuses an existing summary. Resume
 requires its previous file, preserves the exact nonblank lines through the restored epoch, stages
@@ -40168,7 +40181,9 @@ with:
         '''
 ```
 
-- [ ] **Step 4: Plot the durable fields and expose the summary option**
+- [x] **Step 4: Plot the durable fields and expose the summary option**
+
+> Deviation: Approved review fix explicitly matches each radius SD band to its mean color.
 
 Replace log parsing and heuristic recommendations with four panels: monitor MRR, every present loss
 term, both logit scales, and every level's radius mean with its SD band. Missing samples are
@@ -40477,7 +40492,7 @@ def visualize(
 # Outcome panel: lexical baseline
 ```
 
-- [ ] **Step 5: Run the task tests**
+- [x] **Step 5: Run the task tests**
 
 Run:
 
@@ -40489,7 +40504,7 @@ Expected: PASS, `177 passed`. The summary matches the float64 health dictionary 
 interrupted-file resume test preserves the earlier lines and records later completed epochs once.
 The CLI writes a nonempty `epoch_metrics.png` and exits 1 for an absent summary.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 
@@ -40497,7 +40512,7 @@ Expected: `2280 passed, 2 skipped` on the local MPS host; the CI simulation give
 skipped`. Collection has 2,282 nodes: 25 added and 21 retired parser/analysis nodes. Retained
 plotting, wrapper and CLI tests keep their node names. No test for retained behavior is deleted.
 
-- [ ] **Step 7: Format, lint and build the documentation**
+- [x] **Step 7: Format, lint and build the documentation**
 
 Run:
 
@@ -40511,7 +40526,7 @@ Expected: no file changed, then `All checks passed!`; the strict documentation b
 the touched files are formatted. The changed command and module docstrings are rendered by the
 existing API pages.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/naics_embedder/text_model/epoch_summary.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/tools/_visualize_metrics.py src/naics_embedder/tools/metrics_tools.py src/naics_embedder/cli/commands/tools.py tests/fixtures/epoch_summary.py tests/unit/test_epoch_summary.py tests/unit/test_visualize_metrics.py tests/unit/test_metrics_tools_api.py tests/unit/test_cli_commands.py tests/integration/test_reference_training.py
@@ -40638,7 +40653,7 @@ intact. Stage only `CLAUDE.md`, whose bytes change, rather than changing the sym
   and 2,282 collected test nodes. LOCAL has 2280 passed, 2 skipped; without MPS there are
   2273 passed, 9 skipped. Counts are not coverage percentages.
 
-- [ ] **Step 1: Write the failing documentation acceptance check**
+- [x] **Step 1: Write the failing documentation acceptance check**
 
 This documentation task adds no pytest node. The executable check below covers the current
 objective, epoch, monitor/resume, campaign, CLI examples, inventory and API navigation before
@@ -40678,7 +40693,7 @@ sys.exit(bool(result['failed']))
 PY
 ```
 
-- [ ] **Step 2: Run the acceptance check**
+- [x] **Step 2: Run the acceptance check**
 
 Run: `uv run python /tmp/naics-reference-docs-check.py .`
 
@@ -40690,7 +40705,9 @@ files/navigation, HGCN API target, config keys and the old checkpoint examples. 
 reported documentation requirement failure, not a Python exception or a production pytest
 failure.
 
-- [ ] **Step 3: Rewrite the architecture and operator guides**
+- [x] **Step 3: Rewrite the architecture and operator guides**
+
+> Deviation: Approved review fix uses the durable artifact store in operator examples.
 
 Describe the actual task/code-code/radial objective, nonlineal phrase destinations, dense
 candidate sets and live cache replacements. Show the CUDA backbone precision boundary and
@@ -43222,7 +43239,7 @@ lightweight batch metrics such as triplet accuracy.
 ## 9. Diagnostics and the Keep-or-Drop Decision
 ```
 
-- [ ] **Step 4: Render the current public modules and fix API navigation**
+- [x] **Step 4: Render the current public modules and fix API navigation**
 
 Add the seven new-module pages plus current loss and model/mixins pages. The graph page must
 render the graph module. Config, encoder, export and training-utils prose must describe the
@@ -43596,7 +43613,7 @@ nav:
           - Warnings: api/warnings.md
 ```
 
-- [ ] **Step 5: Update the rendered source docstrings**
+- [x] **Step 5: Update the rendered source docstrings**
 
 Remove the obsolete GPU utility description from the CLI package, use reference-selected
 checkpoint examples, and document each public epoch-summary argument. These edits change
@@ -43787,7 +43804,7 @@ with:
         '''
 ```
 
-- [ ] **Step 6: Run the documentation and help checks**
+- [x] **Step 6: Run the documentation and help checks**
 
 Run: `uv run python /tmp/naics-reference-docs-check.py .`
 
@@ -43879,7 +43896,7 @@ Expected: PASS, with all local links and fragments resolving, including the five
 operator anchors. The rendered site checks 1844 local links and 513 anchors across 20 changed
 pages. These include navigation and generated API anchors.
 
-- [ ] **Step 7: Run the full fixture suite**
+- [x] **Step 7: Run the full fixture suite**
 
 Run: `uv run pytest -n auto -q`
 
@@ -43887,7 +43904,7 @@ Expected: `2280 passed, 2 skipped` on LOCAL with MPS. The same suite without MPS
 `2273 passed, 9 skipped`; all 2282 nodes remain, and seven additional MPS cases skip. Tests
 use fixtures only; this gate does not run the real training or selection campaign.
 
-- [ ] **Step 8: Format, lint and build strictly**
+- [x] **Step 8: Format, lint and build strictly**
 
 Run:
 
@@ -43905,7 +43922,7 @@ style gate prints `Clean: no lint issues and no formatting changes.` Strict MkDo
 successfully without warnings. Remove the temporary check and rendered site after verifying
 anchors. The lockfile and all test Python files remain unchanged.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 Stage the explicit changed paths, including all nine new API pages. Keep `AGENTS.md` as its
 existing symlink to `CLAUDE.md`; only the canonical document is staged for that pair.
@@ -43963,7 +43980,7 @@ git commit -m "docs: Stage 7's objective, cache, monitor and campaign"
 Every step runs inline in the controller session, from this worktree's root. Record each command's
 output in the ledger.
 
-- [ ] **Step 1: Check the working directory**
+- [x] **Step 1: Check the working directory**
 
 Run: `pwd`
 Expected: this worktree's root, not `/Users/lowell/Projects/naics-embedder`.
@@ -43976,7 +43993,7 @@ Expected: "No such file or directory" for all three. If any exists, stop and ask
 `data/` themselves may exist: some tests write `logs/train.log` and `data/streaming_cache/` in the
 working directory, which is pre-existing behavior.
 
-- [ ] **Step 2: Clone the bundle and the descriptions**
+- [x] **Step 2: Clone the bundle and the descriptions**
 
 Run: `mkdir -p data/supervision/stage3-supervision-v2`
 
@@ -44001,7 +44018,7 @@ Expected: no output: `data/` is gitignored.
 The manifest names its members by paths relative to its directory, so the clone loads as the
 original does. Every later command names the clone by the same relative path.
 
-- [ ] **Step 3: The phrase check accepts the bundle (plan 7's Done-when)**
+- [x] **Step 3: The phrase check accepts the bundle (plan 7's Done-when)**
 
 Run:
 
@@ -44011,7 +44028,7 @@ uv run python -c "from naics_embedder.supervision.artifacts import load_validate
 Expected: `301cce28-539c-42ea-8781-496bbdcf511c fe8c54e3`. The load recomputes the phrase of every
 non-withheld redirection row (Task 1). If it refuses a row, stop and ask.
 
-- [ ] **Step 4: The counts, through the plan's code**
+- [x] **Step 4: The counts, through the plan's code**
 
 The table in **Pre-flight** Step 4 was measured at plan time from the bundle's members. This
 script measures it again, through `build_task_queries`, `CodeTargets` and the epoch split
@@ -44098,7 +44115,9 @@ code chunks {24: 50, 25: 37}
 
 If any line differs, stop and ask.
 
-- [ ] **Step 5: The smoke run: 3 epochs on MPS at the defaults**
+- [x] **Step 5: The smoke run: 3 epochs on MPS at the defaults**
+
+> Deviation: User accepted saved MPS/32-true metadata because the INFO banner is suppressed.
 
 Off CUDA, `train` runs at `32-true` (P4), so on the Mac the defaults train at `32-true` without
 an override. Only the epoch budget and the experiment name change.
@@ -44175,7 +44194,7 @@ uv run python -c "import json; s = json.load(open('checkpoints/plan10_smoke/trai
 Expected: `True False <best MRR> mps 32-true`, then the selected checkpoint's path and the
 run's `last.ckpt` path. Step 6 checks that the MRR and epoch match the surviving monitor reads.
 
-- [ ] **Step 6: The monitor reads are logged and kept**
+- [x] **Step 6: The monitor reads are logged and kept**
 
 Run: `ls checkpoints/plan10_smoke`
 Expected: `epoch=<k>.ckpt` for the selected epoch `<k>` (three digits), `last.ckpt`,
@@ -44246,7 +44265,9 @@ and the monitor read. Record both values, and the first epoch's time from the la
 first read. If a read or summary row is missing, or the kept reads differ from the logged ones,
 stop and ask.
 
-- [ ] **Step 7: Export the selected checkpoint**
+- [x] **Step 7: Export the selected checkpoint**
+
+> Deviation: Approved CPU deserialization fix preceded one export retry; run artifacts stayed intact.
 
 With `<k>` the selected epoch, in three digits:
 
@@ -44258,7 +44279,7 @@ HF_HUB_OFFLINE=1 uv run naics-embedder tools export-table --checkpoint 'checkpoi
 Expected: the table's path and its provenance's path. These are the names `CheckpointRunner`
 gives a seed's export (Task 13).
 
-- [ ] **Step 8: The agreement with `read_outcome_validation` (spec 4.4)**
+- [x] **Step 8: The agreement with `read_outcome_validation` (spec 4.4)**
 
 Run:
 
@@ -44277,7 +44298,7 @@ Expected: the two MRRs and their difference, at most 10⁻³. If it is larger, s
 On CPU the two agree exactly (Task 9's agreement test). On MPS the training forward and the
 export run on the device, so they differ only by float32 rounding.
 
-- [ ] **Step 9: "No inert terms" on a real batch, and the radius report**
+- [x] **Step 9: "No inert terms" on a real batch, and the radius report**
 
 Run:
 
@@ -44310,7 +44331,7 @@ saved seed's first batch on CPU, using the saved query chunk size. It scores no 
 panel and appends no selection-log read. A measured failure still writes the JSON before exit
 1, so preserve it when reporting the failed check.
 
-- [ ] **Step 10: Record the numbers, and leave the outputs uncommitted**
+- [x] **Step 10: Record the numbers, and leave the outputs uncommitted**
 
 Record in the ledger, for the PR description:
 - the launch and end times, and the epoch times (Step 6);
@@ -44330,7 +44351,9 @@ Run: `rm /tmp/plan10_counts.py /tmp/plan10_smoke_reads.py`
 
 Run every check before the final review, and paste each output into the ledger.
 
-- [ ] **Step 1: The suite on both CI versions**
+- [x] **Step 1: The suite on both CI versions**
+
+> Deviation: Approved regressions increased the final suite to 2314 passed and one local skip.
 
 Run: `uv run pytest -n auto -q`
 Expected: `2281 passed, 1 skipped`. Task 17 cloned `data/naics_descriptions.parquet`, so plan 9's
@@ -44345,7 +44368,7 @@ Expected:
 
 Run: `rm -rf /tmp/naics-py310`
 
-- [ ] **Step 2: Lint, format and docs**
+- [x] **Step 2: Lint, format and docs**
 
 Run: `uv run ruff check src/ tests/`
 Expected: `All checks passed!`
@@ -44356,7 +44379,7 @@ Expected: exit 0, with no file listed.
 Run: `uv run mkdocs build --strict`
 Expected: the build succeeds with no warning.
 
-- [ ] **Step 3: Nothing of the old objective is left**
+- [x] **Step 3: Nothing of the old objective is left**
 
 The deleted modules are gone (spec 4.5, "Deleted with the old objective"; D2):
 
@@ -44416,7 +44439,7 @@ uv run naics-embedder tools --help | grep -c investigate
 ```
 Expected: `0`.
 
-- [ ] **Step 4: Spec §6's items, test by test**
+- [x] **Step 4: Spec §6's items, test by test**
 
 Each item of spec §6 maps to tests the plan wrote (the table below). Step 1 ran them all. This
 step checks that every one still exists under its name.
@@ -44521,7 +44544,7 @@ selection against the collection, including its parameter suffixes.
 
 Bundle 301cce28's acceptance is Task 17 Step 3, outside CI. Fixture rejection is above.
 
-- [ ] **Step 5: The branch carries only this plan**
+- [x] **Step 5: The branch carries only this plan**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected:
@@ -44542,7 +44565,9 @@ measured three-way replay against the completed configuration exits 0: it change
 against that result; stop and ask if it conflicts. Never commit the local manifest path to this
 branch or push the held commits.
 
-- [ ] **Step 6: The final review**
+- [x] **Step 6: The final review**
+
+> Deviation: Independent Ultra review and scoped fixes passed; same-family CLI review was skipped.
 
 Dispatch the code-reviewer agent, which is pinned to Opus, on the whole branch, with:
 - `git diff origin/main...HEAD -- src tests conf docs CLAUDE.md README.md`;
@@ -44560,7 +44585,7 @@ Then, for each finding:
 
 Phase 1 ends here (spec §7, step 4). No Lambda time is spent until this PR has merged.
 
-- [ ] **Step 1: Keep the smoke run's reads**
+- [x] **Step 1: Keep the smoke run's reads**
 
 The smoke run's monitor reads and Task 17's `read_outcome_validation` read went to this worktree's
 log. The main checkout's log keeps every read across worktrees, and it is append-only.
@@ -44578,7 +44603,7 @@ cat logs/selection_log.jsonl >> /Users/lowell/Projects/naics-embedder/logs/selec
 Run: `wc -l /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl`
 Expected: the two counts above, summed.
 
-- [ ] **Step 2: Open the PR, with the user's go-ahead**
+- [x] **Step 2: Open the PR, with the user's go-ahead**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected: Final verification Step 5's list, and no "config" or "graph config".
@@ -44597,7 +44622,7 @@ description carries:
 
 End the description with the session's PR attribution line.
 
-- [ ] **Step 3: Wait for review and merge**
+- [x] **Step 3: Wait for review and merge**
 
 The PR's review and merge are the hard checkpoint. GitHub auto-merge is off, and main has no
 required checks:
@@ -44615,7 +44640,7 @@ required checks:
 Before pushing a follow-up fix, check that the PR is still open (`gh pr view <number> --json
 state`). If the user merged meanwhile, land the follow-up as a new PR from `origin/main`.
 
-- [ ] **Step 4: Keep the worktree's outputs, then finish the branch**
+- [x] **Step 4: Keep the worktree's outputs, then finish the branch**
 
 Finishing removes this worktree, and with it every ignored file. Keep the smoke run's outputs and
 the execution ledger first. Skip this in the main checkout.
@@ -44679,7 +44704,9 @@ supervision.manifest_path=data/supervision/stage3-supervision-v2/301cce28-539c-4
   commands.
 - Produces: a checked main checkout, and the lock's recorded hash.
 
-- [ ] **Step 1: Confirm that both plans have landed**
+- [x] **Step 1: Confirm that both plans have landed**
+
+> Deviation: User approved three local-only source corrections after the exact two-config replay.
 
 Run:
 
@@ -44703,7 +44730,9 @@ Expected: exactly the two held commits, `config` and `graph config`, and nothing
 Run: `git status --short`
 Expected: no output.
 
-- [ ] **Step 2: Check the remote plan supplies spec 4.6's six items**
+- [x] **Step 2: Check the remote plan supplies spec 4.6's six items**
+
+> Deviation: New A/B qualification passed on corrected private source before any reference seed.
 
 Read the merged `src/naics_embedder/remote/` and `src/naics_embedder/cli/commands/remote.py`, and
 check each item against the code, citing file and line in the ledger:
@@ -44738,7 +44767,7 @@ And one consequence of the contract's objective (P23):
 
 If any item is missing or does something else, stop and ask.
 
-- [ ] **Step 3: Record the frozen lock and the logs**
+- [x] **Step 3: Record the frozen lock and the logs**
 
 Run: `shasum -a 256 uv.lock`
 Run:
@@ -44760,7 +44789,7 @@ ls ~/naics-artifacts/records/stage7 checkpoints | grep -E 'stage7-reference|refe
 ```
 Expected: no output. The campaign writes none of these yet. If any exists, stop and ask.
 
-- [ ] **Step 4: Check the bundle and the text-only table**
+- [x] **Step 4: Check the bundle and the text-only table**
 
 Run:
 
@@ -44791,7 +44820,7 @@ The remote workflow runs one training session per instance at a time, so the see
 another. A seed's run may span instances; its exact resume keeps its training run id and continues
 its two files (spec 4.4, 4.6).
 
-- [ ] **Step 1: Bring up the instance**
+- [x] **Step 1: Bring up the instance**
 
 Ask the user to launch a Lambda instance and give its address. Then:
 
@@ -44799,7 +44828,7 @@ Run: `uv run naics-embedder remote up --host ubuntu@<IP>`
 Expected: the tool check, the bundle gate on the Mac, the bootstrap (with the clock check), and the
 inputs validated on the instance. Stop and ask on any failure.
 
-- [ ] **Step 2: Seed 1, checked after its first epoch**
+- [x] **Step 2: Seed 1, checked after its first epoch**
 
 Phase 1 never ran `bf16-mixed` on CUDA, so seed 1's first epoch is checked before anything else
 launches.
@@ -44856,7 +44885,9 @@ Run: `rm /tmp/plan10_seed1.py`
 
 If any check fails, stop training (`remote finish --stop-training`) and ask.
 
-- [ ] **Step 3: Let seed 1 finish, then seeds 2–10**
+- [x] **Step 3: Let seed 1 finish, then seeds 2–10**
+
+> Deviation: One persisted session per seed used the same instance C; seeds remained sequential.
 
 Wait for seed 1 to end: `remote status` reports its exit code. Expected: exit code 0, after early
 stopping or 40 epochs.
@@ -44883,13 +44914,13 @@ Record for each seed, for the finding: the instance and GPU (`remote status`), t
 segment ids, the epochs trained and the selected epoch (the last line and the best line of its
 `monitor_reads.jsonl`), the start and end times, and the duration.
 
-- [ ] **Step 4: Finish the session**
+- [x] **Step 4: Finish the session**
 
 Run: `uv run naics-embedder remote finish`
 Expected: the final pull, zero checksum differences, no instance edits, then "Safe to terminate"
 with the latest checkpoint's SHA-256 on both sides. Tell the user the instance can be terminated.
 
-- [ ] **Step 5: Check the runs on the Mac**
+- [x] **Step 5: Check the runs on the Mac**
 
 Write this script to `/tmp/plan10_check_runs.py` with the Write tool:
 
@@ -44939,7 +44970,9 @@ decision reads appended to `logs/selection_log.jsonl`.
   text-only table.
 - Produces: the reference arm record and the margin record that fixes δ for D8's three panels.
 
-- [ ] **Step 1: Run the sweep**
+- [x] **Step 1: Run the sweep**
+
+> Deviation: QCEW access refusal logged no new reads; exact-pin relocation enabled one approved retry.
 
 Run: `mkdir -p ~/naics-artifacts/records/stage7`
 
@@ -44962,7 +44995,7 @@ Stop and ask if the command refuses a seed, or if the line count is not plus 30.
 the first read logs nothing; a later failure leaves logged reads with no record, and the log keeps
 them.
 
-- [ ] **Step 2: Fix the margins**
+- [x] **Step 2: Fix the margins**
 
 Run:
 
@@ -45012,7 +45045,7 @@ Expected: ten seed lines, three margin lines with δ = 3 × SD, and `multiple 3.
   of Tasks 19–20.
 - Produces: each seed's "Radius" and "No inert terms" numbers and its diagnostics, for the finding.
 
-- [ ] **Step 1: "Radius" and "No inert terms", seed by seed**
+- [x] **Step 1: "Radius" and "No inert terms", seed by seed**
 
 For each seed s from 1 to 10, with `<k>` the seed's selected epoch (Task 20 Step 2):
 
@@ -45035,7 +45068,7 @@ about sinh(r) · 6 · 10⁻⁸, from the rounding of the unit directions, so nea
 within about 10⁻² of each other can miss 10⁻³ relative error (measured at plan time). The report
 records the maximum relative error and failed criterion; the user rules on the check.
 
-- [ ] **Step 2: Every campaign record is a validation read**
+- [x] **Step 2: Every campaign record is a validation read**
 
 Write this script to `/tmp/plan10_check_logs.py` with the Write tool:
 
@@ -45061,7 +45094,7 @@ Run: `uv run python /tmp/plan10_check_logs.py`
 Expected: no assertion error, then the two counts. The log count is the Mac log's lines plus the
 instance logs' lines; the monitor count is the sum of the seeds' epochs.
 
-- [ ] **Step 3: Diagnostics, for the record only (Req 6)**
+- [x] **Step 3: Diagnostics, for the record only (Req 6)**
 
 For each seed s, with `<k>` its selected epoch:
 
@@ -45083,13 +45116,15 @@ Run: `rm /tmp/plan10_check_runs.py /tmp/plan10_margins.py /tmp/plan10_check_logs
 - Consumes: the outputs of Tasks 18–21.
 - Produces: the finding, which Plan completion's roadmap stamp cites.
 
-- [ ] **Step 1: Branch for the second PR**
+- [x] **Step 1: Branch for the second PR**
 
 Run: `git checkout --no-track -b claude/stage-7-campaign origin/main`
 Expected: a clean switch. The held commits stay on `main`; this branch carries only the finding
 and the completion markup.
 
-- [ ] **Step 2: Write the finding**
+- [x] **Step 2: Write the finding**
+
+> Deviation: The reviewed finding distinguishes tested private source from the public-base branch.
 
 Create `specs/findings/reference-configuration.md` in the format of
 `specs/findings/shared-encoder-first-reading.md`: prose wrapped at 100 columns, every value copied
@@ -45144,7 +45179,7 @@ print(long_lines)
 Run: `python3 /tmp/plan10_check_lines.py`
 Expected: `[]`.
 
-- [ ] **Step 3: Commit the finding**
+- [x] **Step 3: Commit the finding**
 
 Run: `git status --short`
 Expected: `?? specs/findings/reference-configuration.md`, and nothing else that is tracked or
@@ -45159,7 +45194,7 @@ Run: `rm /tmp/plan10_check_lines.py`
 
 ## Final verification, Phase 2 (controller, inline)
 
-- [ ] **Step 1: The exit criteria (spec §7)**
+- [x] **Step 1: The exit criteria (spec §7)**
 
 Check each, citing the output that shows it:
 - the margin record holds a δ for each of D8's three panels, at 3 SD over 10 seeds (Task 20
@@ -45169,13 +45204,15 @@ Check each, citing the output that shows it:
 - the text stage's validation computes no structural statistic (Final verification, Phase 1,
   Step 3).
 
-- [ ] **Step 2: The lock**
+- [x] **Step 2: The lock**
 
 Run: `shasum -a 256 uv.lock`
 Expected: Task 18's hash. The lock stays frozen until the last decision that uses these margins
 (Stages 8–10).
 
-- [ ] **Step 3: Review the finding**
+- [x] **Step 3: Review the finding**
+
+> Deviation: Ultra review fixes passed re-review; the unavailable named role used a read-only agent.
 
 Dispatch the code-reviewer agent on `git diff origin/main...HEAD` with this plan and the spec.
 Fix each finding in the finding, or triage it as deferred for Plan completion's gate.
@@ -45188,7 +45225,7 @@ plan's edits written out. It runs on `claude/stage-7-campaign` (Task 22 Step 1).
 text below occurs exactly once in its file at this plan's base, f32c812, and after the edits above
 it. Under a step that changed a name, adjust the text to what shipped.
 
-- [ ] **Step 1: Check for parallel sessions**
+- [x] **Step 1: Check for parallel sessions**
 
 `specs/naics-embedding-roadmap.md` and `specs/deferred_items.md` are shared by every session.
 
@@ -45197,7 +45234,7 @@ Run: `git worktree list`
 - If another worktree belongs to a running session, or the user has mentioned one, hold the
   shared edits (Steps 4 and 5) and give the user the exact text of each.
 
-- [ ] **Step 2: The resolve-before-defer gate**
+- [x] **Step 2: The resolve-before-defer gate**
 
 Collect the leftovers of both phases:
 - plan steps skipped or descoped during execution;
@@ -45243,7 +45280,7 @@ Partition them:
 
 Unanswered questions block Steps 3–7.
 
-- [ ] **Step 3: Mark up the plan**
+- [x] **Step 3: Mark up the plan**
 
 In `specs/plans/10-objective-anchors-and-live-radius.md`:
 - Tick every completed step of both phases (`- [x]`), from the two ledgers: Phase 1's, copied to
@@ -45258,7 +45295,7 @@ In `specs/plans/10-objective-anchors-and-live-radius.md`:
 **Status: COMPLETE (YYYY-MM-DD)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md
 ```
 
-- [ ] **Step 4: The roadmap: tick Stage 7 and stamp it**
+- [x] **Step 4: The roadmap: tick Stage 7 and stamp it**
 
 The spec's Rollout note (§10) fixes the stamp line. Its routing notes for later stages go to the
 next roadmap resume (Step 9), so this step edits only Stage 7's entry.
@@ -45316,7 +45353,7 @@ Expected: `[]`. Rewrap any long line the values made.
 Run: `git grep -n -E '^- \[x\] Stage 7|Stage 7: COMPLETE' -- specs/naics-embedding-roadmap.md`
 Expected: two lines.
 
-- [ ] **Step 5: Deferred items**
+- [x] **Step 5: Deferred items**
 
 In `specs/deferred_items.md`, the items spec §10 names, each by its own wording:
 
@@ -45450,7 +45487,9 @@ python3 -c "lines = open('specs/deferred_items.md').read().split('\n'); print([i
 ```
 Expected: `[]`.
 
-- [ ] **Step 6: Backlog triage**
+- [x] **Step 6: Backlog triage**
+
+> Deviation: Used the installed skill path under ~/.agents/skills, rather than historical ~/.claude.
 
 Run:
 
@@ -45463,7 +45502,7 @@ At 20 or more open items, or with any aged tail, present the read-only triage pr
 of the Triage rubric in `references/deferred-backlog.md`. Say that `/deferred` acts on the user's
 selection. Do not apply a disposition here.
 
-- [ ] **Step 7: Commit the completion markup**
+- [x] **Step 7: Commit the completion markup**
 
 Run: `git status --short`
 Expected: the plan, the roadmap and `specs/deferred_items.md` modified (fewer if Step 1 held the
@@ -45484,7 +45523,7 @@ git commit -m "docs(roadmap): complete Stage 7, the reference configuration"
 If only one shared file changed, use the first command with the unchanged path omitted. Add
 only paths `git status --short` showed as edited by these steps.
 
-- [ ] **Step 8: Retire the plan and the spec**
+- [x] **Step 8: Retire the plan and the spec**
 
 No other plan implements `specs/objective-anchors-and-live-radius.md`, so the spec retires with the
 plan. Neither file has relative links to re-point.
@@ -45530,7 +45569,7 @@ git add specs/plans/completed/10-objective-anchors-and-live-radius.md specs/comp
 git commit -m "chore(specs): retire plan 10"
 ```
 
-- [ ] **Step 9: Hand off**
+- [x] **Step 9: Hand off**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected: the finding (Task 22), Step 7's and Step 8's commits; no `config` or `graph config`.

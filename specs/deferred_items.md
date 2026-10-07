@@ -9,7 +9,7 @@
       Size: quick-fix. Done when: `uv run ruff check src tests` prints "All checks passed!".
       → retired 2026-09-23 during plan 2: already fixed before execution; initial and final
       repository-wide Ruff checks passed, as did the final full-repository YAPF check.
-- [ ] Review I4: distributed selection cost. `NegativeSelectionCoordinator.select`
+- [x] Review I4: distributed selection cost. `NegativeSelectionCoordinator.select`
       (src/naics_embedder/supervision/selection.py) walks every global-pool entry per anchor in
       Python: about 105 ms/step at world size 8 (pool 12,288, batch 32), 21 ms at world 2, and
       under 1 ms single-GPU (the shipped `devices: 1`). The behavioural half of the finding
@@ -17,6 +17,8 @@
       vectorized coordinator (reusing `canonical_occurrence_mask`), checked by a randomized
       equivalence test against the current coordinator, brings world-8 selection under 20 ms.
       Revisit if: multi-GPU training with mining is run.
+      → retired in plan 10 (Task 10): mooted; the module it names is deleted with the old objective.
+
 - [x] Review M6: in repaired mode, explicitly set legacy
       `data_loader.streaming.{distances,distance_matrix,relations,triplets}_parquet` values are
       ignored rather than rejected (spec §12). Full enforcement needs `Config.override`
@@ -34,14 +36,18 @@
       the notice and exit without building).
       → done in plan 7 (Task 12: each prints the migration notice and exits with status 1
       without building).
-- [ ] Review M9 (pre-existing): `_update_pseudo_labels`
+- [x] Review M9 (pre-existing): `_update_pseudo_labels`
       (src/naics_embedder/text_model/mixins/curriculum.py) wraps clustering in a broad
       `except Exception` that logs and continues with stale pseudo-labels. Size: quick-fix.
       Revisit if: pseudo-label clustering errors appear in training logs.
-- [ ] Review M10: the distributed path relabels every gathered candidate's provenance as
+      → retired in plan 10 (Task 10): mooted; the module it names is deleted with the old objective.
+
+- [x] Review M10: the distributed path relabels every gathered candidate's provenance as
       DISTRIBUTED_POOL, dropping GENERATED/BACKFILL provenance
       (src/naics_embedder/text_model/mixins/curriculum.py). Size: quick-fix. Revisit if:
       candidate provenance feeds a loss, sampler, or diagnostic.
+      → retired in plan 10 (Task 10): mooted; the module it names is deleted with the old objective.
+
 - [x] Pre-existing: `NAICSDataModule.on_train_epoch_start`
       (src/naics_embedder/text_model/dataloader/datamodule.py) is not a Lightning datamodule
       hook, so `set_epoch` never runs; on-the-fly training pools and the Phase 1 difficulty mix
@@ -247,6 +253,8 @@
       fixes the text stage's curvature at 1 with no parameter. Fix: acosh(clamp(−c⟨u,v⟩, 1))/√c,
       with a test at c ≠ 1. Size: quick-fix. Revisit if: any run sets curvature ≠ 1, or HGCN's
       layer curvature starts receiving gradient (Stages 10–11).
+      → plan 10: the text stage has no curvature (Tasks 4, 9 and 11), so its half cannot fire; the
+      HGCN half stays open behind `LorentzOps.lorentz_distance`.
 
 ## 7-supervision-target-and-text — 2026-09-26
 - [ ] Review Minor: the bundle build loads its tokenizer last. `generate_supervision_bundle`
@@ -272,13 +280,15 @@
       backbone is Stage 9's question, since Stage 9 trains several backbones. Size: design. Done
       when: Stage 9's plan decides whether training refuses a backbone other than the bundle's,
       and lands the check it chooses, verified against bundle 301cce28.
-- [ ] Review Minor: the loader checks where each activity phrase sits, not its value.
+- [x] Review Minor: the loader checks where each activity phrase sits, not its value.
       `validate_redirection_table` (src/naics_embedder/supervision/artifacts.py:439) would accept
       a rehashed table with a wrong phrase. Deferred from plan 7's final review. Fix: move
       `activity_phrase` (src/naics_embedder/data/redirections.py:62) to a torch-free module, since
       `supervision/` must not import `data/`, and recompute each row's phrase, skipping withheld
       rows. Size: quick-fix. Done when: the loader refuses a table whose phrase differs from its
       text's, verified against bundle 301cce28, before Stage 7 trains on the phrases as queries.
+      → done in plan 10 (Task 1; bundle 301cce28 accepted in Task 17): `activity_phrase` lives in
+      src/naics_embedder/supervision/activity.py, and `validate_redirection_table` recomputes it.
 - [ ] Review Minor: a forced redraw of the role table skips the activity phrases.
       src/naics_embedder/data/index_role_table.py:103 calls `verify_role_leakage` without
       `extra_texts`, so `data roles --force` checks less than preprocess does. Nothing leaks:
@@ -293,7 +303,7 @@
       rebuilds the bundle or bumps its contract.
 
 ## 8-shared-encoder-and-projection — 2026-10-03
-- [ ] Stage 7: one training epoch reads every pre-sampled epoch.
+- [x] Stage 7: one training epoch reads every pre-sampled epoch.
       `NAICSDataModule` pre-samples `data_loader.n_epochs` epochs (default 100,
       src/naics_embedder/utils/config.py:853), and `RepairedMapDataset`
       (src/naics_embedder/text_model/dataloader/datamodule.py:656) serves all of them in one
@@ -303,6 +313,8 @@
       at plan 8's gate, as its final review recommended: Stage 7 owns the Lambda workflow and its
       training schedule. Size: design. Done when: Stage 7's spec fixes what one training epoch
       reads, and its Lambda config sets `data_loader.n_epochs` to match.
+      → done in plan 10 (Tasks 7, 9, 10): one epoch reads every code once as an anchor and every
+      task query once, in 87 steps, and `data_loader.n_epochs` is deleted, so no key remains to set.
 - [ ] Review Minor: the export and the arm encoder's reads have untested branches.
       In src/naics_embedder/text_model/export.py: the `batch_size < 1` refusal (:95), an absent
       curvature reading as 1 (:131), the claim that a refused table is never written (the
@@ -316,6 +328,9 @@
       removing it fails nothing. Deferred from plan 8's final review as coverage gaps, not
       defects. Size: plan. Done when: each branch has a test, or a recorded ruling that it needs
       none.
+      → partly mooted by plan 10: the curvature branches left with `require_unit_curvature`
+      (Task 11), and the cap check is a check that the table holds the head's bounded tangent
+      (Task 4). The other branches stay open.
 - [ ] Review Minor: the export and the outcome read handle a few failures untidily.
       src/naics_embedder/text_model/export.py writes the table (:246) before it hashes the
       checkpoint and descriptions and writes the provenance (:273), so a failure between them
@@ -388,6 +403,9 @@
       → partly done in plan 9: the cache's load messages name each sidecar entry that differs
       (Task 1), and docs/text_training.md describes the summaries where the R15 note would have gone
       and lists format, markers and summaries under Cache Regeneration (Task 9). The rest stays
+      open.
+      → partly mooted by plan 10: no curvature is configurable, so the five c = 1 statements are
+      exact (Tasks 9–11), and the weights-only heading left with D2 (Tasks 2 and 16). The rest stays
       open.
 
 ## 9-window-fitting-summaries — 2026-10-04
@@ -468,3 +486,72 @@
       null with null. Deferred at plan 9's gate, keeping the code as built: no backbone the roadmap
       runs has a tokenizer of another name. Size: plan. Revisit if: Stage 9 admits a backbone whose
       tokenizer name differs from its own.
+
+## 10-objective-anchors-and-live-radius — 2026-10-07
+- [ ] HGCN feeder precision (completion gate candidate): `generate_embeddings_from_checkpoint` in
+      src/naics_embedder/cli/commands/training.py still writes float32 head Lorentz points. The text
+      campaign uses bounded tangent export and CPU float64 reconstruction, so this did not affect
+      its panels. Stage 11 owns the feeder. Size: plan. Done when: the feeder writes the float64
+      origin map of the bounded tangent and fixture tests check manifold residuals at large observed
+      radii, without changing the text objective.
+- [ ] Large-radius overflow watch (completion gate candidate): `polar_distance` in
+      src/naics_embedder/text_model/hyperbolic.py multiplies float32 sinh terms, while
+      `model.radius_bound` in src/naics_embedder/utils/config.py accepts any finite positive value.
+      Overflow becomes possible around R = 44; this campaign used R = 8 and every all-pairs report
+      passed. Size: quick-fix. Revisit if: an arm proposes a bound near or above that range; then
+      restrict the supported bound or add a numerically stable form and a meaningful boundary test
+      before that arm trains.
+- [ ] Older-kept-checkpoint continuation (completion gate candidate): CLI exact resume can accept a
+      kept epoch older than `last.ckpt` through src/naics_embedder/utils/training.py and
+      cli/commands/training.py, rewinding monitor and summary histories. The approved operator path
+      resumes only last, and no campaign run used this rewind. Size: plan. Done when: exact
+      continuation refuses a checkpoint below the experiment last epoch before pruning or model/data
+      construction, with tests for unchanged last continuation and preserved histories on refusal.
+- [ ] Monitor/cache test coverage (Task 8, completion gate candidate): tests/conftest.py
+      selection-log guard wiring lacks a pytester-level test; tests/unit/test_monitor.py does not
+      exercise a non-default `batch_size` in `refresh_code_cache` or `LiveEncoder`, and
+      device-placement assertions need MPS. Deferred as fixture coverage, not an observed campaign
+      defect. Size: plan. Done when: subprocess/session guard tests prove unauthorized reads fail
+      and allowed reads pass, non-default batch chunks are checked, and a CPU placement test runs in
+      CI.
+- [ ] HGCN metric mutation coverage (Task 10, completion gate candidate): pre-existing mutants of
+      `LorentzOps.lorentz_distance` in src/naics_embedder/text_model/hyperbolic.py, taxonomy code
+      slicing in data/positive_sampling.py and metrics/core.py statistics survived the suite in
+      Phase 1. The new text training path uses polar distances and does not select on these
+      statistics. Stage 11 owns graph verification. Size: plan. Done when: independently worked
+      geometry/taxonomy/metric examples fail the recorded mutants, or each mutant has a recorded
+      no-action ruling.
+- [ ] Imported monitor-record strictness (Task 12, completion gate candidate): decision/records.py
+      permits boolean `checkpoint_epoch` and whitespace-only `training_run`; decision/decide.py
+      compares `detail.seed` by value, and the `SeedRun.monitor_records` docstring says oldest first
+      rather than file order. Producer records in all ten audited runs are well formed. Size: plan.
+      Done when: src/naics_embedder/decision/records.py and decide.py reject these malformed
+      imported identities before panel reads, retain valid producer records, and document file
+      order, with focused refusal tests.
+- [ ] Margin-timing error shape (completion gate candidate): `check_margins_first` in
+      src/naics_embedder/decision/decide.py fails closed with KeyError for a missing read time and
+      TypeError for a naive time. No campaign record has either shape. Deferred as imported-record
+      error handling. Size: quick-fix. Done when: it validates presence and timezone awareness and
+      raises a named ValueError before comparison, with tests covering both decision and monitor
+      reads and valid aware times.
+- [ ] Fixture warning cleanup (Phase 1 Task 16 review): preserved suite output includes
+      benchmark/xdist plugin notices, platform/worker warnings and graph integer-log/tensor-scalar
+      warnings. The final finding-branch suite passed 3000 tests with one skip and 171 warnings;
+      nothing was suppressed. Deferred to keep unrelated fixture changes out of the evidence branch.
+      Size: plan. Done when: warning sources in tests/conftest.py and graph fixtures are classified,
+      actionable fixture warnings are corrected with targeted tests, and remaining intentional
+      warnings are documented without broad suppression.
+- [ ] Remote stop-target race (private lifecycle correction review):
+      src/naics_embedder/remote/worker.py inspects the owned tmux session and later sends C-c by
+      session/current-window target. A retarget between those operations remains a pre-existing
+      limitation; the private PID/exec and wrapper fixes did not widen it. Size: plan. Revisit if:
+      the remote stop lifecycle is hardened or this race is reproduced; pin the verified pane ID and
+      recheck ownership at the send boundary with refusal tests before claiming race-free shutdown.
+- [ ] Public native-qualification reconciliation (Phase 2 source boundary): the actual campaign
+      source b94ecf3 and Mac-read source 2d1f045 include approved local-only corrections to
+      remote/model_cache.py, canonical.py, loop.py, worker.py, launch.py and workflow.py. Public
+      base a3e82f1 lacks them. The finding explicitly qualifies only the recorded private source.
+      Held configuration, these private commits and their descendants must never be pushed. Size:
+      plan. Revisit if: native readiness is claimed for a public release or later campaign; use a
+      separately authorized fresh public-base change and review/qualification, preserving the
+      private configuration and campaign artifacts.
