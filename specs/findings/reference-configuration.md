@@ -269,7 +269,7 @@ float64 form was below 10⁻³. Coincident pairs were checked separately for zer
 training-form error and no nonzero-distance pair read as zero. Every reported gradient norm for the
 three terms and both learned scales was finite and positive.
 
-| Seed | Least |∂L/∂r| | Minimum level SD | Least sector gap | Largest radius | Manifold residual | Max relative error | Task norm | Code-code norm | Radial norm | Task-scale norm | Code-scale norm |
+| Seed | Least absolute anchor gradient | Minimum level SD | Least sector gap | Largest radius | Manifold residual | Max relative error | Task norm | Code-code norm | Radial norm | Task-scale norm | Code-scale norm |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 0.0005554857198148966 | 0.1767981547375595 | 0.0071217319250198585 | 5.564433953879321 | 3.637978807091713e-12 | 2.0275132994977523e-06 | 15.713854933674163 | 4.583101919462729 | 6.107683084069041 | 1.4744542837142944 | 0.6117522120475769 |
 | 2 | 0.0009514465928077698 | 0.2079086215844606 | 0.009017916815884597 | 5.164210753795459 | 0.0 | 2.36052978337558e-06 | 11.983823202884299 | 3.3354695546499324 | 3.7339801309360903 | 1.274495005607605 | 0.5089486241340637 |
@@ -1687,10 +1687,11 @@ regressor-seen δ = 0.0332953724957747 and regressor-held-out δ = 0.03675486585
 last decision. These margins do not authorize candidate selection before its required validation
 reads.
 
-Stage 9 reads R7’s term-weight decision: start with code-code and radial weights equal to 1, jointly
-with the task objective and independent learned positive logit scales. Training-pairs generation is
-a separate R10 throughput concern; the text two-stream loader does not consume the training-pairs
-member. HGCN’s graph objective remains separate.
+Stage 9 makes R7’s term-weight decision through one-factor ablations from the selected cell under
+Req 5. The reference starts with code-code and radial weights equal to 1, jointly with the task
+objective and independent learned positive logit scales. R10 keeps the training-pairs member in
+contract v2, unread by text training. That member and D5’s margin axis in its generation leave at
+the next contract bump. HGCN’s graph objective remains separate.
 
 Stage 12 consumes the within-run monitor history through `SeedRun.monitor_records`, retaining
 training-run ID, seed, epoch, matrix fingerprint and read purpose. The checkpoint is selected by
@@ -1735,4 +1736,3 @@ Then run radius reports and descriptive diagnostics using each selected epoch fo
 digits. The line counts and every saved hash must agree before closeout. CUDA training is not
 bitwise reproducible: a rerun’s checkpoints, selected epochs and δ can differ, even with the same
 locked inputs and settings.
-
