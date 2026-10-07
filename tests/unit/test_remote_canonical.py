@@ -1,10 +1,15 @@
 '''Canonical input and continuation gates over real tiny trained checkpoints.'''
 
 import json
+import os
+import subprocess
+import sys
+from dataclasses import asdict
 
 import pytest
 import torch
 
+from naics_embedder.panels import window_summaries
 from naics_embedder.remote.canonical import canonical_inputs, finished_run, resume_plan
 from naics_embedder.utils.config import Config
 from naics_embedder.utils.training import constructor_settings, read_checkpoint, run_settings
@@ -25,6 +30,69 @@ def test_canonical_inputs_include_every_member(remote_repo):
         for path in inputs.bundle.member_paths(name):
             assert path.relative_to(remote_repo.root).as_posix() in inputs.paths
     assert set(inputs.paths) == set(inputs.hashes)
+
+def test_standalone_worker_validates_canonical_inputs(remote_repo):
+    expected = canonical_inputs(remote_repo.root, remote_repo.config)
+    result = subprocess.run(
+        [
+            sys.executable, '-m', 'naics_embedder.remote.worker', 'canonical', '--root',
+            str(remote_repo.root)
+        ],
+        input=json.dumps({'config': remote_repo.config.model_dump(mode='json')}),
+        text=True,
+        capture_output=True,
+        env=dict(os.environ, HF_HUB_OFFLINE='1'),
+        timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {'paths': list(expected.paths), 'hashes': expected.hashes}
+
+def test_standalone_exact_resume_keeps_contract_and_complete_inventory(remote_resume_fixture):
+    env = remote_resume_fixture
+    expected = plan(env)
+    script = """
+import json
+import sys
+from pathlib import Path
+from naics_embedder.remote.canonical import canonical_inputs, resume_plan
+from naics_embedder.panels import window_summaries
+from naics_embedder.utils.config import Config
+payload = json.load(sys.stdin)
+root = Path(payload['root'])
+cfg = Config.model_validate(payload['config'])
+# Carry the parent test's dummy summary pin into this fresh interpreter.
+window_summaries.WINDOW_SUMMARIES[cfg.data_loader.tokenization.tokenizer_name] = (
+    window_summaries.SummariesPin(**payload['summaries_pin'])
+)
+result = resume_plan(root, cfg, canonical_inputs(root, cfg), payload['remote_directory'])
+print(json.dumps({'epoch': result.epoch, 'training_run': result.training_run,
+                  'hashes': result.hashes, 'finished': result.finished}))
+"""
+    result = subprocess.run(
+        [sys.executable, '-c', script],
+        input=json.dumps(
+            {
+                'root': str(env.root),
+                'config': env.cfg.model_dump(mode='json'),
+                'remote_directory': env.remote_directory,
+                'summaries_pin': asdict(
+                    window_summaries.WINDOW_SUMMARIES[
+                        env.cfg.data_loader.tokenization.tokenizer_name]
+                )
+            }
+        ),
+        text=True,
+        capture_output=True,
+        env=dict(os.environ, HF_HUB_OFFLINE='1'),
+        timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        'epoch': expected.epoch,
+        'training_run': expected.training_run,
+        'hashes': expected.hashes,
+        'finished': expected.finished
+    }
 
 def test_missing_manifest_has_build_instruction(remote_repo):
     cfg = remote_repo.config.override({'supervision.manifest_path': None})

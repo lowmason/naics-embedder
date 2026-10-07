@@ -11,7 +11,6 @@ from typing import Any, Mapping
 import torch
 import yaml
 
-from naics_embedder.cli.commands.training import runtime_contract_for
 from naics_embedder.remote.config import relative_path
 from naics_embedder.supervision.artifacts import (
     ValidatedSupervisionBundle,
@@ -319,6 +318,7 @@ def validate_continuation_set(
 
 def resume_plan(root: Path, cfg: Config, inputs: InputSet, remote_directory: str) -> ResumePlan:
     '''Resume only last.ckpt and retain all original continuation bytes for exact restoration.'''
+    from naics_embedder.cli.commands.training import runtime_contract_for
     root = root.resolve()
     base = cfg.dirs.checkpoint_dir
     if Path(base).is_absolute():
