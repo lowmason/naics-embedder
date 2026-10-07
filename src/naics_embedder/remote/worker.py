@@ -569,7 +569,16 @@ def _interrupt_training(root: Path, payload: dict[str, object]) -> dict[str, obj
         timeout=10
     )
     expected = 'bash ' + shlex.quote(str(root / '.remote/segments' / segment / 'launch.sh'))
-    if panes.stdout.strip() != expected + ' < /dev/null':
+    expected += ' < /dev/null'
+    rows = panes.stdout.splitlines()
+    if len(rows) != 1:
+        raise ValueError('training tmux is not the recorded owned wrapper')
+    actual = rows[0]
+    try:
+        owned = actual == expected or shlex.split(actual) == [expected]
+    except ValueError:
+        owned = False
+    if not owned:
         raise ValueError('training tmux is not the recorded owned wrapper')
     subprocess.run(['tmux', 'send-keys', '-t', TMUX_SESSION, 'C-c'], check=True, timeout=10)
     return {'interrupted': True}

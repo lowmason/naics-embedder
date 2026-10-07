@@ -64,16 +64,17 @@ def _owned(root: Path, session_id: str, record: dict | None) -> bool:
     if not record or record.get('session_id') != session_id:
         return False
     identity = _process_identity(record.get('pid'))
-    if identity is None or identity != record.get('identity'):
+    previous = record.get('identity')
+    if identity is None or not isinstance(previous, dict) or set(previous) != {'start', 'command'}:
         return False
     expected = record.get('argv')
-    return isinstance(expected, list) and identity['command'] == ' '.join(expected) and all(
+    return isinstance(expected, list) and all(
         value in expected for value in [
             'sync-loop', '--root',
             str(root), '--session-id', session_id, '--token',
             record.get('token')
         ]
-    )
+    ) and _allowed_process_identity(record['pid'], previous, identity, record)
 
 def loop_status(root: Path, session_id: str) -> dict[str, object]:
     record = _record(root)
@@ -168,11 +169,11 @@ def _allowed_process_identity(pid: int, previous: dict, current: dict, record: d
         return False
     if previous == current:
         return True
-    # Exec preserves PID/start. Only a child may advance from the exact wrapper command
-    # to its recorded Python utility; a changed start or any other command grants no signal.
+    # macOS caffeinate execs the utility in its original PID; its child holds the assertion.
+    # Only the exact wrapper-to-utility transition with the same start grants ownership.
     return (
-        pid != record['pid'] and previous['start'] == current['start'] and previous['command']
-        == ' '.join(record['argv']) and current['command'] == ' '.join(record['argv'][2:])
+        previous['start'] == current['start'] and previous['command'] == ' '.join(record['argv'])
+        and current['command'] == ' '.join(record['argv'][2:])
     )
 
 def _save_observed_workers(root: Path, record: dict, observed: dict) -> None:
