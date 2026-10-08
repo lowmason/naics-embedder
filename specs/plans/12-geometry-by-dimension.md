@@ -637,8 +637,9 @@ where each lands.
   - The backbone and tokenizer:
     `~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2` (revision
     1110a243).
-- **Outputs (Task 9):** under `/tmp` only, deleted at the task's end: `/tmp/plan12_rr_s1.json`,
-  `/tmp/plan12_s1.parquet` and its provenance, and the task's scripts.
+- **Outputs (Task 9):** under `/tmp` only, deleted at the task's end:
+  `/tmp/naics_plan12_rr_s1.json`, `/tmp/naics_plan12_s1.parquet` and its provenance, and the
+  task's scripts.
 - **Phase 2** runs in the main checkout, on local `main` (Phase 2's rules).
 - **Working directory.** The Bash tool can reset its working directory to the main checkout
   between calls. Run `pwd` before every commit. If it is not this worktree, `cd` back first, or
