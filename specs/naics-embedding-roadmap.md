@@ -4,10 +4,11 @@
 > reconcile step; route each unticked stage per its ROUTING line; never plan
 > this document wholesale.
 
-**Status: APPROVED (2026-09-23); resumed three times on 2026-09-24, once on 2026-10-03 and twice
-on 2026-10-04.** Derived in a session that could not ask questions, then the six open questions
-were answered interactively and the eleven-stage partition approved at the human checkpoint
-(decisions D1–D6 below). Stages 1–6 and 6b are complete. The first resume re-validated Stages 2–11
+**Status: APPROVED (2026-09-23); resumed three times on 2026-09-24, once on 2026-10-03, twice
+on 2026-10-04 and once on 2026-10-07.** Derived in a session that could not ask questions, then
+the six open questions were answered interactively and the eleven-stage partition approved at
+the human checkpoint
+(decisions D1–D6 below). Stages 1–7 and 6b are complete. The first resume re-validated Stages 2–11
 against Stage 1 and recorded D7 and D8; the second re-validated Stages 3–11 against Stage 2,
 recorded D9 and added Stage 12 (below); the third re-validated Stages 4–12 against Stage 3 and
 recorded D10 and D11, which settle the former Open questions. Stage 4's completion commit
@@ -17,7 +18,8 @@ Stages 6–12 against both (below). Stage 6b was added on 2026-10-03 during Stag
 (below). Stage 6's completion commit (08e0fdc, 2026-10-03) re-validated Stages 6b–10, and the
 fifth resume re-validated Stages 11 and 12 and the Gap analysis (below). Stage 6b's completion
 commit (1d2240c, 2026-10-04) re-validated Stages 7–12, and the sixth resume re-read the Gap
-analysis and routed plan 9's deferred entries (below). Stage 7 is next, per its ROUTING line.
+analysis and routed plan 9's deferred entries (below). The seventh resume reconciled Stages 8–12
+with completed Plan 10 and the post-merge handoffs (below). Stage 8 is next, via writing-plans.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
@@ -186,6 +188,44 @@ Every verdict stands. Req 9's input-window bullet asks only that inputs fit the 
 needs no deviation note. Stage 6b's spec calls Stage 7's panels the real test of its centrality
 selection; under that ruling no stage compares summaries with truncation, so Stage 7's reads are
 the first panel numbers on the summaries, not a test of them. No gap surfaced.
+
+**Resume after Stage 7 (2026-10-07).** Stage 7's completion stamp is authoritative: Plan 10
+Phase 2 is complete, published by PR #128 at public main `7687dfc`. Live GitHub checks now show
+all four jobs passed on both the PR and the public merge: lint, Python 3.10 tests, Python 3.12
+tests and strict docs. The merge's separate docs deployment also passed. This supersedes the
+pending-CI snapshot in `logs/plan10_campaign_evidence/stage7-postmerge-handoff.md` without
+rewriting that receipt or `phase2-completion-handoff.md`.
+
+Local main remains `aa7ac39`, seven commits ahead of public main: all six original private
+commits plus their merge descendant. Its two parents are private tip `2d1f045` and public merge
+`7687dfc`. All six private IDs remain reachable locally and absent from public main; the five
+published documents match the public merge. Source, configuration, the private Lambda spec and
+the lock are unchanged from the private tip. Never push local main, any private commit or its
+descendant. Public native readiness remains a separately authorized follow-up in
+`specs/deferred_items.md`; public CI does not expand the qualification boundary of training
+source `b94ecf3` and Mac-read source `2d1f045`.
+
+The reference and margin files still match the Stage 7 handoff's full hashes (`c885b9c5…` and
+`e619b3b3…`). `uv.lock` still has SHA-256
+`4167042e8a5a8caa9af62973151f681fffb50afaa1a7f6d1f801bd9e58bdac21`; keep it frozen through
+the last Stages 8–10 decision using these margins. Stages 8–10 train on Lambda at `bf16-mixed`
+and read on the Mac, through `tools sweep` and `CheckpointRunner`. All seeds preflight before
+any export or decision read. Preserve exact settings, seed, contract, LoRA and active-MoE
+controls; continue only from last at the same absolute checkpoint path and user, restoring all
+kept checkpoints and both histories together. Finished runs stay finished. Every hyperbolic arm
+through Stage 10 passes `tools radius-report`; stop on failure without changing tolerances.
+
+Stages 8–12 were re-validated against shipped interfaces and Plan 10 section 10. Stage 8 still
+needs Euclidean and spherical heads, training distances, export and query maps, plus the two
+decision identity guards; text curvature and its guard have already been removed. Stage 9 owns
+R7's term-weight decision from the selected cell. R10 overrides Stage 5's historical removal
+timing: contract v2 retains training pairs, unread by text training, and D5's margin axis remains
+only in their generation until the next contract bump, alongside the tokenizer-revision watch.
+Stages 10 and 11 retain their graph-specific work and decision dependency; no graph repair is
+pulled into Stage 8. Stage 12 consumes `SeedRun.monitor_records`, `training_run` and
+`checkpoint_epoch`, and keeps every sealed set closed until its final evaluation. No campaign,
+export, panel read or sealed opening ran during this resume. Stage 8 routes to writing-plans;
+the next plan number is 12.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -825,9 +865,9 @@ differs from its own.
       Gap closed: Req 12 (geometry arms and the decision).
       Consumes: Stage 7's reference configuration and δ; Stage 4's tooling and seed-sweep
       driver; Stage 6's configurable dimension, and its head's `distance` attribute, which
-      `ArmEncoder.distance` reads (`HyperbolicHead.distance` is `lorentz`; export and reads
-      refuse c ≠ 1, spec R8). Only that name follows the head: `ArmEncoder` maps queries and
-      codes through the hyperbolic exp map at the origin whatever the head
+      `ArmEncoder.distance` reads (`HyperbolicHead.distance` is `lorentz`; Plan 10 removed
+      text curvature and the export/read guard). Only that name follows the head: `ArmEncoder`
+      maps queries and codes through the hyperbolic exp map at the origin whatever the head
       (`text_model/arm_encoder.py`), so the Euclidean and spherical arms need their own maps
       there. Stage 2's scorer, whose registered distances are
       `euclidean`, `cosine` and `lorentz` at curvature −1 (`panels/decoding.py`).
@@ -846,15 +886,15 @@ differs from its own.
 
 - [ ] Stage 9: Backbone and one-factor ablations
       Objective: Choose the backbone and settle the one-factor ablations (mixture of experts,
-      channel-presence indicator, information-content target) from the selected cell under
-      Req 5, and resolve the input-window item for each candidate.
+      channel-presence indicator, information-content target and term weights) from the
+      selected cell under Req 5, and resolve the input-window item for each candidate.
       Spec: Req 14 (backbone: the current checkpoint, at least two current general-purpose
       embedding models, a frozen-encoder control; MoE ablation); Req 9 (channel-presence
       ablation; input window); Req 7 (IC ablation); Req 6 (IC-graded relevance only if IC is
       adopted); Verification "Backbone input window"; D9 (the text-only comparator follows each
       arm's backbone).
       Gap closed: Req 14 (backbone half); Req 9 (channel-presence ablation, window); Req 7 (IC
-      ablation).
+      ablation); Plan 10 R7's term-weight decision (completed spec section 10).
       Consumes: Stage 8's selected cell; Stage 6's fusion options (`model.fusion`: `masked_mean`,
       `attention`, `moe`) and its one backbone loader (`load_base_model`,
       `text_model/shared_encoder.py`), whose LoRA adapter (`all-linear`) also wraps the pooler's
@@ -949,8 +989,9 @@ differs from its own.
       Gap closed: Req 4 (the opening); Req 1 (the sealed estimates).
       Consumes: The final configuration and its 2,125-code table (Stage 11's, or Stage 10's if
       the graph stage was dropped); the decision records of Stages 7–11 with the selection-log
-      records and artifact references they carry (Stage 4's schema); by those references, the
-      per-seed encoder checkpoints and 2,125-code tables of the final configuration and of every
+      records and artifact references they carry (Stage 4's schema), plus each `SeedRun`'s
+      `monitor_records`, `training_run` and `checkpoint_epoch` (Plan 10 P24); by those references,
+      the per-seed encoder checkpoints and 2,125-code tables of the final configuration and of every
       arm in its recorded comparisons, since sealed queries were never embedded, and each arm's
       text-only table with its provenance, without which the regressor panel reads no arm (it names
       the summaries' sha256, which `decide` compares with the arm's, D9). Stage 6's query path,
