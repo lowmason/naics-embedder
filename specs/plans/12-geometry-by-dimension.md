@@ -727,10 +727,11 @@ own.
 Run: `git fetch origin`, then:
 
 ```bash
-git log --oneline -1 origin/main -- specs/plans/12-geometry-by-dimension.md
+git log --oneline --reverse origin/main -- specs/plans/12-geometry-by-dimension.md
 ```
-Expected: this plan's commit, `docs(plans): add plan 12, geometry × dimension`. If there is no
-output, this plan has not merged: stop and ask.
+Expected: this plan's commits, oldest first: `docs(plans): add plan 12, geometry × dimension`,
+then its review follow-ups (`docs(plans): …`). If there is no output, this plan has not merged:
+stop and ask.
 
 Run: `git checkout --no-track -B claude/stage-8-geometry-arms origin/main`
 Expected: `Switched to a new branch 'claude/stage-8-geometry-arms'` (or `Reset branch`).
@@ -740,7 +741,7 @@ Expected: `## claude/stage-8-geometry-arms` and nothing else, then no output. No
 private commits is on this branch.
 
 Run: `git log --oneline 699a5d2..origin/main -- src tests conf docs specs CLAUDE.md README.md`
-Expected: this plan's commit, and possibly its merge commit; no other commit.
+Expected: this plan's commits, and possibly PR #130's merge commit; no other commit.
 - If anything else landed, read it.
 - If it touches a file in **File structure**, the roadmap or `specs/deferred_items.md`, stop and
   ask.
