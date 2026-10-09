@@ -62,6 +62,12 @@ DISTANCES: Dict[str, DistanceFn] = {
     'cosine': cosine_distances,
     'lorentz': lorentz_distances,
 }
+# Each of Req 12's geometry arms decodes by its own distance: the name its head and its reads use
+GEOMETRY_DISTANCES: Dict[str, str] = {
+    'euclidean': 'euclidean',
+    'spherical': 'cosine',
+    'hyperbolic': 'lorentz',
+}
 
 def resolve_distance(distance: Union[str, DistanceFn]) -> Tuple[str, DistanceFn]:
     '''A registered distance by name, or a callable with its ``__name__``.'''

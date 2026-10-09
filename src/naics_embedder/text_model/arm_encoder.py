@@ -38,30 +38,8 @@ from naics_embedder.text_model.export import (
     encode_query_texts,
     load_arm_model,
 )
+from naics_embedder.text_model.hyperbolic import exp_map_origin
 from naics_embedder.utils.config import TokenizationConfig
-
-# -------------------------------------------------------------------------------------------------
-# The exp map at the origin
-# -------------------------------------------------------------------------------------------------
-
-def exp_map_origin(tangent: torch.Tensor) -> torch.Tensor:
-    '''
-    The exponential map at the origin of the curvature -1 hyperboloid (c = 1), in float64.
-
-    It is ``HyperbolicHead``'s map, computed in float64 on the CPU whatever the tangent's device
-    and dtype.
-
-    Args:
-        tangent: Tangent vectors at the origin (N, d).
-
-    Returns:
-        (time, space) rows (N, d + 1), float64 on the CPU.
-    '''
-
-    # .cpu() before the cast: casting an MPS tensor to float64 raises
-    tangent = tangent.cpu().to(torch.float64)
-    norm = torch.linalg.vector_norm(tangent, dim=1, keepdim=True).clamp(min=1e-8)
-    return torch.cat([torch.cosh(norm), torch.sinh(norm) / norm * tangent], dim=1)
 
 # -------------------------------------------------------------------------------------------------
 # The table's provenance

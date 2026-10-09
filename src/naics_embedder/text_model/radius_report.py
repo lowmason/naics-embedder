@@ -10,8 +10,7 @@ import torch
 
 from naics_embedder.panels.decoding import lorentz_distances
 from naics_embedder.panels.regressor import coordinate_matrix
-from naics_embedder.text_model.arm_encoder import exp_map_origin
-from naics_embedder.text_model.hyperbolic import polar_distance
+from naics_embedder.text_model.hyperbolic import exp_map_origin, polar_distance
 
 # polar_distance materializes (rows, codes, dimension), so bound the first axis (spec 4.2).
 PAIR_CHUNK_ROWS = 32

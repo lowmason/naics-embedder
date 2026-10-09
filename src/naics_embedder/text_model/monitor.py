@@ -33,12 +33,12 @@ import torch
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.text_only import matrix_fingerprint
 from naics_embedder.supervision.schema import IndexRole
-from naics_embedder.text_model.arm_encoder import exp_map_origin
 from naics_embedder.text_model.export import (
     ENCODE_BATCH_SIZE,
     encode_query_texts,
     encode_token_rows,
 )
+from naics_embedder.text_model.hyperbolic import exp_map_origin
 
 logger = logging.getLogger(__name__)
 

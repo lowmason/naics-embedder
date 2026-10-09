@@ -25,11 +25,7 @@ from naics_embedder.panels.text_only import matrix_fingerprint, provenance_path
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.text_model import monitor
-from naics_embedder.text_model.arm_encoder import (
-    ArmEncoder,
-    exp_map_origin,
-    read_outcome_validation,
-)
+from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.export import (
@@ -38,6 +34,7 @@ from naics_embedder.text_model.export import (
     encode_token_rows,
     export_code_table,
 )
+from naics_embedder.text_model.hyperbolic import exp_map_origin
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import TokenizationConfig
 from tests.fixtures.shared_encoder import (

@@ -17,15 +17,11 @@ from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
-from naics_embedder.text_model.arm_encoder import (
-    ArmEncoder,
-    exp_map_origin,
-    read_outcome_validation,
-)
+from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.export import encode_token_rows
 from naics_embedder.text_model.fields import QUERY, tokenize_field
-from naics_embedder.text_model.hyperbolic import HyperbolicHead
+from naics_embedder.text_model.hyperbolic import HyperbolicHead, exp_map_origin
 from tests.fixtures.shared_encoder import (
     ARM_DIMENSION,
     FIVE_CODES,
