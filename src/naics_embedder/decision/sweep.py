@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Union
 
 import polars as pl
 
-from naics_embedder.decision.decide import check_seed_table, check_text_only
+from naics_embedder.decision.decide import check_seed_distance, check_seed_table, check_text_only
 from naics_embedder.decision.records import ArmRecord, ArmSpec, PanelSet, SeedRun
 from naics_embedder.decision.scores import DECISION_STATISTIC, PANELS, panel_statistic, seed_scores
 from naics_embedder.decision.store import ArtifactStore, provenance_fields
@@ -135,7 +135,8 @@ def run_seed_sweep(
     Raises:
         ValueError: If a seed repeats; if the text-only table, or a seed's table by its export
             provenance, was not built from the arm's backbone, revision, descriptions, summaries
-            and window (D9); or if a seed's table width is not the arm spec's dimension.
+            and window (D9); if a seed's encoder does not decode by the distance of the arm's
+            geometry (Req 12); or if a seed's table width is not the arm spec's dimension.
     '''
 
     if len(set(seeds)) != len(seeds):
@@ -148,8 +149,9 @@ def run_seed_sweep(
     runs: List[SeedRun] = []
     for seed in seeds:
         artifacts = runner.run(spec, seed)
-        # What the seed read, before anything is stored or any panel is read
+        # What the seed read and how it decodes, before anything is stored or any panel is read
         check_seed_table(spec, seed, _seed_table_fields(Path(artifacts.table)))
+        check_seed_distance(spec, seed, artifacts.distance)
         run_id = f'{spec.name}/seed-{seed}/{uuid.uuid4().hex}'
         checkpoint = store.put(artifacts.checkpoint)
         table = store.put_table(artifacts.table)

@@ -8,10 +8,12 @@ Before any number is computed, every arm is checked:
 - its text-only table's stored provenance matches the arm's backbone, revision, descriptions,
   summaries and window (D9);
 - each run's log records are validation reads that name the run, its table and its text-only
-  table by the fingerprints the store recorded;
+  table by the fingerprints the store recorded; its outcome read decodes by the distance of the
+  arm's geometry, and its regressor reads name the arm's dimension (Req 12);
 - a trained run's monitor records are its training run's reads of the outcome panel's validation
-  split, no epoch twice, and its checkpoint is from the earliest epoch with the highest MRR (spec
-  4.4); a run with no training run has neither monitor records nor a checkpoint epoch;
+  split, under the distance of the arm's geometry, no epoch twice, and its checkpoint is from the
+  earliest epoch with the highest MRR (spec 4.4); a run with no training run has neither monitor
+  records nor a checkpoint epoch;
 - all arms read the same panels, with the same data on them and the same fit settings, so Δ
   pairs item for item.
 
@@ -75,6 +77,7 @@ from naics_embedder.decision.scores import (
     statistic_values,
 )
 from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.panels.decoding import GEOMETRY_DISTANCES
 from naics_embedder.panels.outcome import OUTCOME_PANEL
 from naics_embedder.panels.regressor import VALIDATION
 
@@ -137,6 +140,26 @@ def check_seed_table(spec: ArmSpec, seed: int, fields: Mapping[str, Any]) -> Non
             f'{reads} (D9)'
         )
 
+def check_seed_distance(spec: ArmSpec, seed: int, distance: str) -> None:
+    '''
+    Require a seed's encoder to decode by the distance of the arm's geometry (Req 12).
+
+    Args:
+        spec: The arm.
+        seed: The seed, which names the refusal.
+        distance: The distance the seed's encoder decodes by.
+
+    Raises:
+        ValueError: If it is another distance.
+    '''
+
+    expected = GEOMETRY_DISTANCES[spec.geometry]
+    if distance != expected:
+        raise ValueError(
+            f'{spec.name} seed {seed}: the encoder decodes by {distance!r}, but a '
+            f'{spec.geometry} arm decodes by {expected!r} (Req 12)'
+        )
+
 def check_arm(arm: ArmRecord, store: ArtifactStore, min_seeds: int) -> None:
     '''
     Require an arm record to be complete, intact and read as the decision reads it.
@@ -185,15 +208,24 @@ def _check_log_records(arm: ArmRecord, run: SeedRun) -> None:
         if detail.get('run') != run.run_id:
             raise ValueError(f'{name}: a log record names another run')
         if record['panel'] == OUTCOME_PANEL:
-            named = {'fingerprint': arm.panels.outcome, 'table': run.table.matrix_fingerprint}
-            logged = {'fingerprint': record['fingerprint'], 'table': detail.get('table')}
+            named = {
+                'fingerprint': arm.panels.outcome,
+                'table': run.table.matrix_fingerprint,
+                'distance': GEOMETRY_DISTANCES[arm.spec.geometry],
+            }
+            logged = {
+                'fingerprint': record['fingerprint'],
+                'table': detail.get('table'),
+                'distance': detail.get('distance'),
+            }
         else:
             named = {
                 'fingerprint': arm.panels.regressor,
                 'arm': run.table.matrix_fingerprint,
                 'text_only': arm.text_only.table.matrix_fingerprint,
+                'dimension': arm.spec.dimension,
             }
-            logged = {key: detail.get(key) for key in ('arm', 'text_only')}
+            logged = {key: detail.get(key) for key in ('arm', 'text_only', 'dimension')}
             logged['fingerprint'] = record['fingerprint']
         wrong = sorted(key for key in named if logged[key] != named[key])
         if wrong:
@@ -217,9 +249,10 @@ def _monitor_record_problem(record: Any) -> Optional[str]:
 def _check_monitor_records(arm: ArmRecord, run: SeedRun) -> None:
     '''
     Require a trained run's monitor records to be the reads that selected its checkpoint (spec
-    4.4): its training run's reads of the outcome panel's validation split, no epoch twice, with
-    the checkpoint from the earliest epoch with the highest MRR. A run with no training run has
-    neither monitor records nor a checkpoint epoch.
+    4.4): its training run's reads of the outcome panel's validation split, under the distance of
+    the arm's geometry (Req 12), no epoch twice, with the checkpoint from the earliest epoch with
+    the highest MRR. A run with no training run has neither monitor records nor a checkpoint
+    epoch.
 
     That the records cover every epoch through the run's last checkpoint is the runner's check
     (spec §5): a record holds no last checkpoint to count the epochs against.
@@ -242,7 +275,12 @@ def _check_monitor_records(arm: ArmRecord, run: SeedRun) -> None:
         )
     # A read's table is not named: it is its epoch's code cache, which equals the table exported
     # from that epoch's checkpoint only when both were encoded on the CPU (spec 4.4)
-    named = {'fingerprint': arm.panels.outcome, 'training_run': run.training_run, 'seed': run.seed}
+    named = {
+        'fingerprint': arm.panels.outcome,
+        'training_run': run.training_run,
+        'seed': run.seed,
+        'distance': GEOMETRY_DISTANCES[arm.spec.geometry],
+    }
     epochs: List[int] = []
     for record in run.monitor_records:
         problem = _monitor_record_problem(record)
@@ -259,6 +297,7 @@ def _check_monitor_records(arm: ArmRecord, run: SeedRun) -> None:
             'fingerprint': read.get('fingerprint'),
             'training_run': detail.get('training_run'),
             'seed': detail.get('seed'),
+            'distance': detail.get('distance'),
         }
         wrong = sorted(key for key in named if logged[key] != named[key])
         if wrong:

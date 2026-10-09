@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from naics_embedder.decision.decide import check_arm, decide, fix_margins
+from naics_embedder.decision.decide import check_arm, check_seed_distance, decide, fix_margins
 from naics_embedder.decision.records import (
     ArmRecord,
     DecisionRecord,
@@ -294,6 +294,10 @@ def _first_read(data):
         (lambda data: _first_read(data).update(event='open'), 'validation splits only'),
         (lambda data: _first_read(data)['detail'].update(run='other'), 'another run'),
         (lambda data: _first_read(data)['detail'].update(table='other'), "another \\['table'\\]"),
+        (
+            lambda data: _first_read(data)['detail'].update(distance='cosine'),
+            "another \\['distance'\\]",
+        ),
         (lambda data: _first_read(data).update(fingerprint='other'), 'another'),
         (lambda data: data['runs'][0]['log_records'].pop(), 'not each of'),
     ],
@@ -311,9 +315,10 @@ def test_a_runs_log_records_must_be_its_own_validation_reads(
     [
         (lambda read: read['detail'].update(text_only='other'), 'text_only'),
         (lambda read: read['detail'].update(arm='other'), 'arm'),
+        (lambda read: read['detail'].update(dimension=16), 'dimension'),
         (lambda read: read.update(fingerprint='other'), 'fingerprint'),
     ],
-    ids=['text_only', 'arm', 'fingerprint'],
+    ids=['text_only', 'arm', 'dimension', 'fingerprint'],
 )
 def test_a_regressor_read_must_name_the_runs_tables_and_its_panel(
     store, tmp_path, reference, margins, edit, key
@@ -325,6 +330,24 @@ def test_a_regressor_read_must_name_the_runs_tables_and_its_panel(
 
     with pytest.raises(ValueError, match=f"another \\['{key}'\\]"):
         _decide([arm, reference], margins, store)
+
+@pytest.mark.parametrize(
+    'geometry, distance',
+    [('euclidean', 'euclidean'), ('spherical', 'cosine'), ('hyperbolic', 'lorentz')],
+)
+def test_a_seed_decodes_by_the_distance_of_its_arms_geometry(geometry, distance):
+    '''Req 12: each arm decodes by its own distance, and no other.'''
+
+    arm_spec = spec('arm', geometry=geometry)
+
+    check_seed_distance(arm_spec, 3, distance)
+    for other in sorted({'euclidean', 'cosine', 'lorentz'} - {distance}):
+        message = (
+            f"^arm seed 3: the encoder decodes by '{other}', but a {geometry} arm decodes by "
+            f"'{distance}' \\(Req 12\\)$"
+        )
+        with pytest.raises(ValueError, match=message):
+            check_seed_distance(arm_spec, 3, other)
 
 def test_a_decision_compares_at_least_two_arms(store, reference, margins):
     with pytest.raises(ValueError, match='at least two arms'):
@@ -578,6 +601,10 @@ NOT_A_MONITOR_READ = "; the monitor reads the outcome panel's validation split \
             lambda data: _monitor_read(data).update(fingerprint='other-roles'),
             "a monitor read names another \\['fingerprint'\\]",
         ),
+        (
+            lambda data: _monitor_read(data)['detail'].update(distance='cosine'),
+            "a monitor read names another \\['distance'\\]",
+        ),
         (_repeat_an_epoch, 'the monitor records repeat the epochs \\[1\\]'),
     ],
     ids=[
@@ -599,6 +626,7 @@ NOT_A_MONITOR_READ = "; the monitor reads the outcome panel's validation split \
         'another-training-run',
         'another-seed',
         'another-fingerprint',
+        'another-distance',
         'a-repeated-epoch',
     ],
 )
@@ -611,6 +639,22 @@ def test_a_runs_monitor_records_must_be_its_own_outcome_validation_reads(
 
     with pytest.raises(ValueError, match=f'^trained seed 3: {message}'):
         check_arm(arm, store, min_seeds=5)
+
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_a_flat_arms_reads_are_checked_against_its_own_distance(store, tmp_path, geometry):
+    '''Req 12: a flat arm's outcome and monitor reads decode by its distance, not the Lorentz.'''
+
+    flat = synthetic_arm(
+        store, tmp_path, spec('flat', geometry=geometry), {}, monitor_mrrs=MONITOR_MRRS
+    )
+
+    check_arm(flat, store, min_seeds=5)
+    for edit in (
+        lambda data: _first_read(data)['detail'].update(distance='lorentz'),
+        lambda data: _monitor_read(data)['detail'].update(distance='lorentz'),
+    ):
+        with pytest.raises(ValueError, match="another \\['distance'\\]"):
+            check_arm(_edited(flat, edit), store, min_seeds=5)
 
 @pytest.mark.parametrize('epoch', [None, 0, 2, 3], ids=['none', 'earlier', 'a-later-tie', 'later'])
 def test_a_checkpoint_from_any_other_epoch_than_the_earliest_best_is_refused(store, trained, epoch):

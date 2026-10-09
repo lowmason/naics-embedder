@@ -86,6 +86,7 @@ def fixture_run(tmp_path, shared_model, validated_bundle):
                 'split': 'validation',
                 'fingerprint': 'fixture',
                 'detail': {
+                    'distance': 'lorentz',
                     'epoch': epoch,
                     'seed': 7,
                     'training_run': 'training-7',
@@ -219,6 +220,20 @@ def test_check_refuses_a_seed_of_another_geometry(fixture_run):
     with pytest.raises(ValueError, match='seed 7: the checkpoint encoder contract differs'):
         _runner(fixture_run).check(spec, 7)
 
+def test_check_refuses_monitor_reads_under_another_distance_than_the_arms(fixture_run):
+    '''Req 12: an arm's monitor reads decode by its own distance, or they selected no checkpoint.'''
+
+    records = fixture_run.records
+    records[1]['read']['detail']['distance'] = 'cosine'
+    _write_records(fixture_run.directory, records)
+    message = (
+        "seed 7: a monitor record reads by 'cosine', but a hyperbolic arm decodes by 'lorentz' "
+        '\\(Req 12\\)'
+    )
+
+    with pytest.raises(ValueError, match=message):
+        _runner(fixture_run).check(fixture_run.spec, 7)
+
 def test_check_reads_a_seed_saved_before_stage_8_as_hyperbolic(fixture_run):
     '''P7: Stage 7's checkpoints name no geometry, and the reference arm reads them unchanged.'''
 
@@ -313,13 +328,15 @@ def test_tools_sweep_reads_five_trained_seeds_and_writes_a_checked_arm(sweep_env
     check_arm(arm, ArtifactStore(sweep_env.output.parent / 'store'), min_seeds=5)
 
 @pytest.mark.parametrize(
-    'problem', ['missing-epoch', 'fingerprint', 'seed', 'split', 'training_run']
+    'problem', ['missing-epoch', 'fingerprint', 'seed', 'split', 'training_run', 'distance']
 )
 def test_tools_sweep_checks_a_later_seed_before_the_first_decision_read(sweep_env, problem):
     directory = sweep_env.root / 'seed-5'
     records = read_monitor_records(directory / MONITOR_RECORDS)
     if problem == 'missing-epoch':
         records = records[1:]
+    elif problem == 'distance':
+        records[0]['read']['detail']['distance'] = 'cosine'
     elif problem in ('seed', 'training_run'):
         records[0]['read']['detail'][problem] = 999 if problem == 'seed' else 'other-training'
     else:
