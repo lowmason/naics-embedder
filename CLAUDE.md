@@ -477,9 +477,12 @@ with pytest-cov when needed; test counts alone do not establish it.
 
 ## CI/CD and Documentation
 
-`.github/workflows/tests.yml` runs Ruff and YAPF in a Python-3.12 lint job, plus pytest/coverage
-on Python 3.10 and 3.12 with locked dependencies. The docs workflow deploys on main/master;
-PR CI does not build documentation, so run strict MkDocs locally for rendered documentation.
+`.github/workflows/tests.yml` runs on pull requests and pushes to main/master. With locked
+dependencies, it runs Ruff and YAPF in a Python-3.12 `lint` job, pytest/coverage in a `test` job
+on Python 3.10 and 3.12, and `mkdocs build --strict` in a Python-3.12 `docs` job, so PR CI builds
+the docs strictly. The GitHub Pages deploy, `.github/workflows/docs.yml`, runs only on pushes to
+main/master or a manual dispatch, so PR CI never exercises a `docs.yml` edit until it merges. Run
+these checks, including the strict docs build, locally before pushing:
 
 ```bash
 uv run ruff check src/ tests/
