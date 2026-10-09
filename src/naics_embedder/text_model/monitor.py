@@ -5,9 +5,10 @@ Training holds a cache of every code's point, refreshed at fit start and after e
 step (spec 4.3). After the end-of-epoch refresh the monitor scores the validation split through
 ``OutcomePanel.score_logged``, the path every read takes, so the selection log records the read.
 Its ``LiveEncoder`` encodes queries through the live model and decodes codes from the cache, and
-both go through the float64 exp map ``ArmEncoder`` uses. The cache is encoded as the export
-encodes the code table, in the same batches and order, so on the CPU a read of the live model and
-a read of the table exported from its checkpoint agree exactly.
+both go through the head's float64 read map, as ``ArmEncoder``'s do, under the head's distance
+(Req 12). The cache is encoded as the export encodes the code table, in the same batches and
+order, so on the CPU a read of the live model and a read of the table exported from its
+checkpoint agree exactly.
 
 Each read's record, as logged, goes with its MRR to ``monitor_reads.jsonl`` in the run's checkpoint
 directory: the durable carrier that takes a run's validation reads into its decision records
@@ -38,7 +39,7 @@ from naics_embedder.text_model.export import (
     encode_query_texts,
     encode_token_rows,
 )
-from naics_embedder.text_model.hyperbolic import exp_map_origin
+from naics_embedder.text_model.heads import head_of
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,9 @@ class CodeCache:
         codes: The codes, in codebook order.
         radius: Each code's radius r, (N,) float32 on the model's device.
         direction: Each code's direction û, (N, d) float32 on the model's device.
-        tangent: Each code's bounded tangent vector r · û, (N, d) float64 on the CPU: what the
-            monitor decodes against, and what the export writes.
+        tangent: Each code's coordinates in its arm's export form, the head's ``tangent``, (N, d)
+            float64 on the CPU: r · û in the hyperbolic arm, v in the Euclidean and û in the
+            spherical (Req 12). It is what the monitor decodes against and what the export writes.
     '''
 
     codes: Tuple[str, ...]
@@ -192,7 +194,7 @@ def refresh_code_cache(
 class LiveEncoder:
     '''
     ``QueryCodeEncoder`` for the live model (spec 4.4): queries through the model, codes from the
-    code cache, and both through ``exp_map_origin``.
+    code cache, and both through the head's read map (``read_points``).
 
     A query is encoded as ``ArmEncoder`` encodes one (``encode_query_texts``), in eval mode and
     in float32 with autocast off, and the model's training flags are put back afterwards. A code
@@ -206,11 +208,10 @@ class LiveEncoder:
         batch_size: Queries per forward pass.
 
     Attributes:
-        distance: ``'lorentz'``: every point is the exp map of a tangent at the origin of the
-            c = 1 hyperboloid.
+        head: The model's geometry head.
+        distance: The head's decoding distance, as ``ArmEncoder``'s: ``'lorentz'`` in the
+            hyperbolic arm, ``'euclidean'`` or ``'cosine'`` in the flat arms (Req 12).
     '''
-
-    distance = 'lorentz'
 
     def __init__(
         self,
@@ -225,20 +226,22 @@ class LiveEncoder:
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.batch_size = batch_size
+        self.head = head_of(model)
+        self.distance = self.head.distance
         self._rows = {code: row for row, code in enumerate(cache.codes)}
 
     def encode_queries(self, texts: Sequence[str]) -> torch.Tensor:
-        '''Marked ``query:`` texts through the live model, then the exp map: (Q, d + 1), float64.'''
+        '''Marked ``query:`` texts through the live model, then the head's read map: float64.'''
 
         with _live_encode(self.model):
             tangent = encode_query_texts(
                 self.model, self.tokenizer, texts, self.max_length, batch_size=self.batch_size
             )
-        return exp_map_origin(tangent)
+        return self.head.read_points(tangent)
 
     def encode_codes(self, codes: Sequence[str]) -> torch.Tensor:
         '''
-        The codes' cached tangents through the exp map: (C, d + 1), float64.
+        The codes' cached coordinates through the head's read map: float64.
 
         Raises:
             ValueError: If a code has no row in the cache.
@@ -247,7 +250,7 @@ class LiveEncoder:
         unknown = sorted(set(codes) - set(self._rows))
         if unknown:
             raise ValueError(f'the code cache has no row for {unknown[:5]} ({len(unknown)} codes)')
-        return exp_map_origin(self.cache.tangent[[self._rows[code] for code in codes]])
+        return self.head.read_points(self.cache.tangent[[self._rows[code] for code in codes]])
 
 # -------------------------------------------------------------------------------------------------
 # The monitor

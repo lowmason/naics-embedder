@@ -7,8 +7,10 @@ training monitor all encode through it, so a code or a query embeds the same way
 read. The last three default to batches of ``ENCODE_BATCH_SIZE``.
 
 ``export_code_table`` writes Req 2's form of an arm: ``code``, ``index``, ``level`` and
-``e0 … e{d-1}``, each code's bounded tangent vector at the origin (R6, Req 13), in the bundle's
-codebook order. Its provenance ties the table to its checkpoint.
+``e0 … e{d-1}``, in the bundle's codebook order. They are each code's coordinates in its geometry
+arm's form (``COORDINATES``): the bounded tangent vector at the origin in the hyperbolic arm (R6,
+Req 13), v in the Euclidean arm and û in the spherical arm (Req 12). Its provenance ties the table
+to its checkpoint and names its geometry.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -37,16 +39,23 @@ from naics_embedder.supervision.checkpoints import (
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.fields import CHANNELS, QUERY, tokenize_field
+from naics_embedder.text_model.heads import head_of
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import Config, TokenizationConfig
 
 logger = logging.getLogger(__name__)
 
 TABLE_PREFIX = 'e'
-COORDINATES = (
-    'the bounded tangent vector at the origin, r * u with r = R * tanh(|v| / R) (Req 13); '
-    'no time coordinate'
-)
+# What each geometry arm's e0 … e{d-1} are (Req 2, Req 12), as the provenance names them. The
+# hyperbolic arm's are named as Stage 7's tables name them
+COORDINATES = {
+    'euclidean': 'the point v itself, the projection of the fused text (Req 12)',
+    'spherical': 'the unit direction u = v / |v| on the sphere (Req 12)',
+    'hyperbolic': (
+        'the bounded tangent vector at the origin, r * u with r = R * tanh(|v| / R) (Req 13); '
+        'no time coordinate'
+    ),
+}
 # Rows per forward pass wherever an arm is encoded: the export, the reads, the training cache and
 # the monitor. A chunk is trimmed to its longest text, so the batches set the backbone's shapes,
 # and one size makes a live read and a read of the export agree bit for bit on the CPU (spec 4.4)
@@ -93,8 +102,8 @@ def encode_token_rows(
         batch_size: Rows per forward pass.
 
     Returns:
-        ``tangent`` (N, d), ``embedding`` (N, d + 1), ``radius`` (N,) and ``direction`` (N, d),
-        float64 on the CPU, in row order.
+        ``tangent`` (N, d), ``embedding`` (N, d + 1) in the hyperbolic arm and (N, d) in the flat
+        arms, ``radius`` (N,) and ``direction`` (N, d), float64 on the CPU, in row order.
 
     Raises:
         ValueError: If there are no rows, or ``batch_size`` is not positive.
@@ -149,7 +158,8 @@ def encode_query_texts(
         batch_size: Queries per forward pass.
 
     Returns:
-        The queries' bounded tangent vectors at the origin (Q, d), float64 on the CPU.
+        The queries' coordinates in the arm's export form (the head's ``tangent``), (Q, d),
+        float64 on the CPU.
 
     Raises:
         ValueError: As ``encode_token_rows``, if there are no texts.
@@ -172,8 +182,8 @@ def load_arm_model(
     '''
     Load an arm's checkpoint for export or a read, refusing it before any weight loads.
 
-    The checkpoint's own hyperparameters rebuild its fusion and dimension, so its encoder record
-    is never compared with a config (spec 4.4). It must have been trained under Req 11's
+    The checkpoint's own hyperparameters rebuild its fusion, dimension and geometry, so its
+    encoder record is never compared with a config (spec 4.4). It must have been trained under Req 11's
     objective, its supervision fields must match ``bundle``, and its summaries ``summaries``.
     Curvature is fixed at 1 with no parameter (spec 4.2), so there is none to check.
 
@@ -228,8 +238,9 @@ def export_code_table(
 
     Every code goes through the checkpoint's model in eval mode, without gradient. The table
     holds ``code``, then ``index`` and ``level`` from the descriptions (Int64), then ``e0 …
-    e{d-1}`` (float64): each code's bounded tangent vector at the origin, in the bundle's codebook
-    order. The provenance is ``<stem>_provenance.json``.
+    e{d-1}`` (float64): each code's coordinates in its arm's form (``COORDINATES``), in the
+    bundle's codebook order. The provenance is ``<stem>_provenance.json``; it names the arm's
+    geometry and coordinates.
 
     Args:
         checkpoint_path: The arm's Lightning checkpoint.
@@ -286,6 +297,7 @@ def export_code_table(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     table.write_parquet(output_path)
     checkpoint_path = Path(checkpoint_path)
+    geometry = head_of(model).geometry
     provenance: Dict[str, Any] = {
         'checkpoint': {
             'path': str(checkpoint_path),
@@ -304,7 +316,8 @@ def export_code_table(
         'tokenizer': token_config.tokenizer_name,
         'codes': table.height,
         'dimension': tangent.shape[1],
-        'coordinates': COORDINATES,
+        'geometry': geometry,
+        'coordinates': COORDINATES[geometry],
         'table_sha256': sha256_file(output_path),
         'matrix_fingerprint': fingerprint,
         'library_versions': {

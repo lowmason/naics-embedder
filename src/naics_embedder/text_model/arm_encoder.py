@@ -8,8 +8,10 @@ An arm as the outcome panel reads it: queries through its checkpoint, codes from
   query path the training monitor's live encoder shares).
 - A code's vector is decoded from the table ``tools export-table`` wrote from the checkpoint.
 
-Both pass through one float64 exp map at the origin. The code vectors a read decodes against are
-therefore a fixed function of the table, and the ``matrix_fingerprint`` the read logs names them.
+Both pass through the head's float64 read map (``read_points``): the exp map at the origin in the
+hyperbolic arm, and the coordinates as they are in the flat arms (Req 12). The code points a read
+decodes against are therefore a fixed function of the table, and the ``matrix_fingerprint`` the
+read logs names them.
 Checkpoint, table, encoder and distance are the pieces of Stage 4's ``SeedArtifacts``
 (``decision/sweep.py``).
 '''
@@ -38,7 +40,7 @@ from naics_embedder.text_model.export import (
     encode_query_texts,
     load_arm_model,
 )
-from naics_embedder.text_model.hyperbolic import exp_map_origin
+from naics_embedder.text_model.heads import head_of
 from naics_embedder.utils.config import TokenizationConfig
 
 # -------------------------------------------------------------------------------------------------
@@ -81,7 +83,10 @@ class ArmEncoder:
         batch_size: Queries per forward pass.
 
     Attributes:
-        distance: The head's distance, ``'lorentz'`` for the hyperbolic head.
+        head: The model's geometry head: its read map takes the queries' and the codes'
+            coordinates to the points its distance reads.
+        distance: The head's decoding distance: ``'lorentz'``, ``'euclidean'`` or ``'cosine'``
+            for the hyperbolic, Euclidean and spherical arms (Req 12).
         table_fingerprint: The table's ``matrix_fingerprint``, which a read logs as ``table``.
         checkpoint_sha256: The checkpoint's SHA-256, which a read logs as ``checkpoint``.
     '''
@@ -101,7 +106,8 @@ class ArmEncoder:
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.batch_size = batch_size
-        self.distance = model.encoder.head.distance
+        self.head = head_of(model)
+        self.distance = self.head.distance
         self.table_fingerprint = matrix_fingerprint(codes, matrix)
         self.checkpoint_sha256 = checkpoint_sha256
         self._rows = {code: row for row, code in enumerate(codes)}
@@ -196,16 +202,20 @@ class ArmEncoder:
         )
 
     def encode_queries(self, texts: Sequence[str]) -> torch.Tensor:
-        '''Marked ``query:`` texts through the model, then the exp map: (Q, d + 1), float64.'''
+        '''
+        Marked ``query:`` texts through the model, then the head's read map: float64, (Q, d + 1)
+        in the hyperbolic arm and (Q, d) in the flat arms.
+        '''
 
         tangent = encode_query_texts(
             self.model, self.tokenizer, texts, self.max_length, batch_size=self.batch_size
         )
-        return exp_map_origin(tangent)
+        return self.head.read_points(tangent)
 
     def encode_codes(self, codes: Sequence[str]) -> torch.Tensor:
         '''
-        The codes' table rows through the exp map: (C, d + 1), float64.
+        The codes' table rows through the head's read map: float64, (C, d + 1) in the hyperbolic
+        arm and (C, d) in the flat arms.
 
         Raises:
             ValueError: If a code has no row in the table.
@@ -214,7 +224,7 @@ class ArmEncoder:
         unknown = sorted(set(codes) - set(self._rows))
         if unknown:
             raise ValueError(f'the table has no row for {unknown[:5]} ({len(unknown)} codes)')
-        return exp_map_origin(self._tangent[[self._rows[code] for code in codes]])
+        return self.head.read_points(self._tangent[[self._rows[code] for code in codes]])
 
 # -------------------------------------------------------------------------------------------------
 # The outcome read

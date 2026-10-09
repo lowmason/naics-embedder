@@ -713,6 +713,20 @@ def test_train_asks_the_hgcn_question_on_a_terminal(training_env, monkeypatch):
     assert questions == [(HGCN_QUESTION, False)]
 
 @pytest.mark.unit
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_train_never_asks_a_flat_arm_the_hgcn_question(training_env, monkeypatch, geometry):
+    '''HGCN refines Lorentz points, and a flat arm has none (Req 12): no question on a terminal.'''
+
+    questions = []
+    monkeypatch.setattr(training.typer, 'confirm', lambda *args, **_: questions.append(args))
+    monkeypatch.setattr(training, '_stdin_is_terminal', lambda: True)
+
+    training.train(skip_validation=True, overrides=[f'model.geometry={geometry}'])
+
+    assert training_env.trainer.fit_calls
+    assert questions == []
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ('make_stdin', 'expected'),
     [

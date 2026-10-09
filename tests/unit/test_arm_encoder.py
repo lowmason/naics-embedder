@@ -11,7 +11,7 @@ import pytest
 import torch
 
 import naics_embedder.text_model.arm_encoder as arm_encoder_module
-from naics_embedder.panels.decoding import lorentz_distances
+from naics_embedder.panels.decoding import GEOMETRY_DISTANCES, lorentz_distances
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.selection_log import SelectionLog
@@ -19,7 +19,11 @@ from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
-from naics_embedder.text_model.export import encode_token_rows
+from naics_embedder.text_model.export import (
+    encode_query_texts,
+    encode_token_rows,
+    export_code_table,
+)
 from naics_embedder.text_model.fields import QUERY, tokenize_field
 from naics_embedder.text_model.hyperbolic import HyperbolicHead, exp_map_origin
 from tests.fixtures.shared_encoder import (
@@ -148,6 +152,30 @@ def test_an_unknown_code_is_refused(arm):
 
 def test_the_distance_is_the_heads(arm):
     assert arm.distance == arm.model.encoder.head.distance == 'lorentz'
+
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_a_flat_arm_reads_its_exported_points_as_they_are_under_its_own_distance(
+    tmp_path, geometry_checkpoint, validated_bundle, five_code_token_config, geometry
+):
+    '''Req 12: each arm decodes by its own distance, and a flat arm's read map is the identity.'''
+
+    checkpoint = geometry_checkpoint(geometry)
+    table = export_code_table(
+        checkpoint, validated_bundle, five_code_token_config, tmp_path / f'{geometry}.parquet'
+    )
+    flat = ArmEncoder.from_files(checkpoint, table, validated_bundle, five_code_token_config)
+    log_path = tmp_path / 'selection_log.jsonl'
+
+    read_outcome_validation(
+        flat, OutcomePanel.from_bundle(validated_bundle, log_path), 'plan 12 fixture read'
+    )
+
+    assert flat.distance == GEOMETRY_DISTANCES[geometry]
+    assert torch.equal(flat.encode_codes(['222222', '111111']), _table_tangent(table)[[3, 0]])
+    queries = encode_query_texts(flat.model, flat.tokenizer, QUERIES, flat.max_length)
+    assert torch.equal(flat.encode_queries(QUERIES), queries)
+    [record] = SelectionLog(log_path).records()
+    assert record['detail']['distance'] == GEOMETRY_DISTANCES[geometry]
 
 def test_the_logged_names_are_the_tables_and_the_checkpoints(
     arm, exported_table, shared_checkpoint
