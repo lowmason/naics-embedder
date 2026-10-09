@@ -100,6 +100,7 @@ def build_model_from_config(
         lora_dropout=cfg.model.lora.dropout,
         fusion=cfg.model.fusion,
         dimension=cfg.model.dimension,
+        geometry=cfg.model.geometry,
         num_experts=cfg.model.moe.num_experts,
         top_k=cfg.model.moe.top_k,
         moe_hidden_dim=cfg.model.moe.hidden_dim,
@@ -194,6 +195,7 @@ def encoder_architecture_for(cfg: Config) -> EncoderArchitecture:
         fusion=cfg.model.fusion,
         dimension=cfg.model.dimension,
         backbone=cfg.model.base_model_name,
+        geometry=cfg.model.geometry,
     )
 
 def runtime_contract_for(cfg: Config, bundle: ValidatedSupervisionBundle) -> CheckpointContract:
@@ -506,6 +508,7 @@ def train(
             f'  • Base: {cfg.model.base_model_name.split("/")[-1]}',
             f'  • LoRA rank: {cfg.model.lora.r}',
             f'  • Fusion: {cfg.model.fusion}',
+            f'  • Geometry: {cfg.model.geometry}',
             f'  • Dimension: {cfg.model.dimension}\n',
             '[cyan]Training:[/cyan]',
             f'  • Learning rate: {cfg.training.learning_rate}',

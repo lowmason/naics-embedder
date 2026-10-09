@@ -9,7 +9,9 @@ MiniLM.
 The arm fixtures train nothing. ``shared_model`` is a d = 16 model of the five-code supervision
 bundle (``tests/fixtures/supervision.py``) on the tiny backbone, and ``shared_checkpoint`` saves it
 as Lightning would. ``truncated_checkpoint`` and ``pre_stage7_checkpoint`` save it as checkpoints
-trained before Stage 6b and before Stage 7, which every load refuses. ``text_only_comparator_table``
+trained before Stage 6b and before Stage 7, which every load refuses. ``pre_stage8_checkpoint``
+saves it as Stage 7 did, naming no geometry, which every load reads as hyperbolic (P7).
+``text_only_comparator_table``
 is a table a read can be pointed at by mistake: the text-only comparator's, written by its own
 builder.
 
@@ -187,6 +189,20 @@ def pre_stage7_checkpoint(tmp_path, shared_model) -> Path:
     checkpoint['hyper_parameters']['curvature'] = 1.0
     del checkpoint['hyper_parameters']['radius_bound']
     path = tmp_path / 'pre_stage7.ckpt'
+    torch.save(checkpoint, path)
+    return path
+
+@pytest.fixture
+def pre_stage8_checkpoint(tmp_path, shared_model) -> Path:
+    '''
+    ``shared_model`` saved as Stage 7 saved its checkpoints (P7): neither its encoder record nor
+    its hyperparameters name a geometry, so every load reads it as hyperbolic.
+    '''
+
+    checkpoint = lightning_checkpoint(shared_model)
+    del checkpoint['stage3_supervision']['encoder']['geometry']
+    del checkpoint['hyper_parameters']['geometry']
+    path = tmp_path / 'pre_stage8.ckpt'
     torch.save(checkpoint, path)
     return path
 

@@ -6,7 +6,8 @@ The text stage's Lightning module: the shared encoder, trained on Req 11's three
 live code cache and selected on the outcome panel's validation MRR (spec 4.1-4.4; D6).
 
 - SharedEncoder: one LoRA-tuned backbone over field-marked channels, masked fusion, one affine map
-  to dimension d and the bounded head, which gives each text its radius r and direction û.
+  to dimension d and the geometry head (Req 12), which gives each text its point, its radius r and
+  its direction û.
 - A step reads two streams (spec 4.3): a chunk of the codes, as anchors, and a chunk of the task
   queries. Every candidate comes from the code cache, each code's (r, û) at its last refresh, with
   the step's anchors replaced by their live points.
@@ -43,6 +44,7 @@ from naics_embedder.supervision.code_targets import NO_PARTNER, CodeTargets
 from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.text_model.epoch_summary import EPOCH_SUMMARY, EpochSummary
 from naics_embedder.text_model.fusion import FUSIONS
+from naics_embedder.text_model.heads import GEOMETRIES
 from naics_embedder.text_model.hyperbolic import polar_distance
 from naics_embedder.text_model.loss import LogitScale, code_code_loss, radial_loss, task_loss
 from naics_embedder.text_model.mixins import OUTCOME_MRR, LoggingMixin, LossMixin, OptimizerMixin
@@ -143,10 +145,13 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
             load-balancing term exists only under ``moe`` (R11)
         dimension: Embedding dimension, one of 8, 16 or 32: the width of the one
             ``Linear(hidden → d)`` before the geometry head
+        geometry: The geometry arm (Req 12): ``euclidean``, ``spherical`` or ``hyperbolic``
+            (the default), which picks the head; the radial term applies under hyperbolic only
         num_experts: Number of MoE experts (``moe`` only)
         top_k: Number of experts each row is routed to (``moe`` only)
         moe_hidden_dim: Hidden dimension of the experts (``moe`` only)
-        radius_bound: R, the head's bound on every radius: r = R · tanh(‖v‖ / R) (spec 4.2)
+        radius_bound: R, the hyperbolic head's bound on every radius: r = R · tanh(‖v‖ / R)
+            (spec 4.2); the flat heads do not read it
         code_code_weight: w_c, the code-code term's weight in the total (spec 4.1)
         radial_weight: w_r, the radial term's weight in the total
         target_temperature: τ_t, the temperature of the code-code target softmax(−D* / τ_t)
@@ -176,9 +181,9 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
     hyperparameters.
 
     Raises:
-        ValueError: If the fusion or dimension is unknown, a setting is out of its range, the
-            manifest is missing, a pre-validated bundle is not the configured one, or the runtime
-            contract is not the bundle's.
+        ValueError: If the fusion, dimension or geometry is unknown, a setting is out of its range,
+            the manifest is missing, a pre-validated bundle is not the configured one, or the
+            runtime contract is not the bundle's.
     '''
 
     def __init__(
@@ -189,6 +194,7 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         lora_dropout: float = 0.1,
         fusion: str = 'masked_mean',
         dimension: int = 16,
+        geometry: str = 'hyperbolic',
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
@@ -220,6 +226,8 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
             raise ValueError(f'unknown fusion {fusion!r}; expected one of {list(FUSIONS)}')
         if dimension not in DIMENSIONS:
             raise ValueError(f'unknown dimension {dimension!r}; expected one of {list(DIMENSIONS)}')
+        if geometry not in GEOMETRIES:
+            raise ValueError(f'unknown geometry {geometry!r}; expected one of {list(GEOMETRIES)}')
         _refuse_settings(
             code_code_weight=code_code_weight,
             radial_weight=radial_weight,
@@ -246,7 +254,7 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         # The architecture this model's weights belong to; a checkpoint of any other is refused
         # (spec 4.4, roadmap D2)
         encoder_record = shared_encoder_architecture(
-            fusion=fusion, dimension=dimension, backbone=base_model_name
+            fusion=fusion, dimension=dimension, backbone=base_model_name, geometry=geometry
         )
 
         # Load the validated supervision bundle before any model construction: the single
@@ -309,6 +317,7 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
             lora_dropout=lora_dropout,
             fusion=fusion,
             dimension=dimension,
+            geometry=geometry,
             num_experts=num_experts,
             top_k=top_k,
             moe_hidden_dim=moe_hidden_dim,
@@ -336,8 +345,8 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
 
         Returns:
             Dictionary containing:
-            - embedding: Lorentz points (batch_size, dimension + 1)
-            - tangent: Bounded tangent vectors at the origin (batch_size, dimension)
+            - embedding: The arm's points, Lorentz (batch_size, dimension + 1) under hyperbolic
+            - tangent: The coordinates the export writes (batch_size, dimension)
             - radius, direction: Each point's r (batch_size,) and û (batch_size, dimension)
             - gate_probs, top_k_indices: The experts' gates, under ``moe`` fusion only
         '''

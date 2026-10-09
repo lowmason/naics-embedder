@@ -750,14 +750,14 @@ def _run_bundle(cfg: Config) -> ValidatedSupervisionBundle:
     return require_valid_supervision_bundle(cfg)
 
 def _sweep_spec(cfg: Config, *, name: str, accelerator: str) -> ArmSpec:
-    '''The arm's settings and text identities, from its config and cached backbone (P21, P32).'''
+    '''The arm's geometry, settings and text identities, from its config and cached backbone.'''
 
     _, _, revision = load_backbone(cfg.model.base_model_name)
     return ArmSpec(
         name=name,
         components=1,
         dimension=cfg.model.dimension,
-        geometry='hyperbolic',
+        geometry=cfg.model.geometry,
         backbone=cfg.model.base_model_name,
         backbone_revision=revision,
         descriptions_sha256=sha256_file(cfg.data_loader.streaming.descriptions_parquet),

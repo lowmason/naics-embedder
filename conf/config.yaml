@@ -57,7 +57,8 @@ model:
   base_model_name: sentence-transformers/all-MiniLM-L6-v2
   fusion: masked_mean  # masked_mean, attention, or moe (an ablation only)
   dimension: 16  # 8, 16 or 32: the one Linear(384 -> d) before the geometry head
-  radius_bound: 8.0  # R: the head gives a vector of norm v the radius R*tanh(v/R) (Req 13)
+  geometry: hyperbolic  # euclidean, spherical or hyperbolic (Req 12): the head and its distance
+  radius_bound: 8.0  # R, read only under hyperbolic: the radius R*tanh(v/R) of norm v (Req 13)
 
   lora:
     r: 8
@@ -73,9 +74,9 @@ model:
 # Loss configuration
 loss:
   code_code_weight: 1  # w_c
-  radial_weight: 1  # w_r
+  radial_weight: 1  # w_r, read only under hyperbolic (Req 12)
   target_temperature: 1  # τ_t, of the code-code target softmax(-D* / τ_t)
-  radial_step: 1  # ρ: level λ's target radius is ρ * (λ - 1)
+  radial_step: 1  # ρ: level λ's target radius is ρ * (λ - 1), under hyperbolic only
   logit_scale_init: 1  # Both learned logit scales start here
   logit_scale_range: [0.01, 100]  # And are clamped to this range
 

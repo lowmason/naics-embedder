@@ -36,7 +36,7 @@ from transformers import AutoModel, PreTrainedModel
 
 from naics_embedder.text_model.fields import FIELDS
 from naics_embedder.text_model.fusion import FUSIONS, build_fusion
-from naics_embedder.text_model.hyperbolic import HyperbolicHead
+from naics_embedder.text_model.heads import GEOMETRIES, build_head
 
 logger = logging.getLogger(__name__)
 
@@ -108,18 +108,21 @@ class SharedEncoder(nn.Module):
         lora_dropout: LoRA dropout rate.
         fusion: One of ``FUSIONS``: ``masked_mean`` (the default), ``attention`` or ``moe``.
         dimension: The embedding dimension, one of ``DIMENSIONS``.
+        geometry: The geometry arm, one of ``GEOMETRIES`` (``text_model/heads.py``), which picks
+            the head (Req 12).
         num_experts: The number of experts, under ``moe`` only.
         top_k: The experts each code is routed to, under ``moe`` only.
         moe_hidden_dim: The experts' hidden width, under ``moe`` only.
-        radius_bound: R, the head's bound on every radius (``model.radius_bound``).
+        radius_bound: R, the hyperbolic head's bound on every radius (``model.radius_bound``);
+            the flat heads do not read it.
         use_gradient_checkpointing: Recompute the backbone's activations in the backward pass.
         max_texts_per_call: The most texts one backbone call carries. It bounds a call's memory.
             With dropout off it leaves every output unchanged up to float noise; with dropout on it
             changes which random draws each text gets.
 
     Raises:
-        ValueError: If the fusion or the dimension is outside its set, or ``max_texts_per_call``
-            is below 1.
+        ValueError: If the fusion, the dimension or the geometry is outside its set, or
+            ``max_texts_per_call`` is below 1.
     '''
 
     def __init__(
@@ -130,6 +133,7 @@ class SharedEncoder(nn.Module):
         lora_dropout: float = 0.1,
         fusion: str = 'masked_mean',
         dimension: int = 16,
+        geometry: str = 'hyperbolic',
         num_experts: int = 4,
         top_k: int = 2,
         moe_hidden_dim: int = 1024,
@@ -143,6 +147,8 @@ class SharedEncoder(nn.Module):
             raise ValueError(f'unknown fusion {fusion!r}; expected one of {list(FUSIONS)}')
         if dimension not in DIMENSIONS:
             raise ValueError(f'unknown dimension {dimension!r}; expected one of {list(DIMENSIONS)}')
+        if geometry not in GEOMETRIES:
+            raise ValueError(f'unknown geometry {geometry!r}; expected one of {list(GEOMETRIES)}')
         if max_texts_per_call < 1:
             raise ValueError(f'max_texts_per_call must be at least 1, got {max_texts_per_call!r}')
 
@@ -181,7 +187,7 @@ class SharedEncoder(nn.Module):
             moe_hidden_dim=moe_hidden_dim,
         )
         self.projection = nn.Linear(self.hidden_size, dimension)
-        self.head = HyperbolicHead(radius_bound=radius_bound)
+        self.head = build_head(geometry, radius_bound=radius_bound)
         self.dimension = dimension
         self.max_texts_per_call = max_texts_per_call
 
@@ -190,7 +196,7 @@ class SharedEncoder(nn.Module):
         logger.info(
             'Shared encoder initialized:\n'
             f'  • backbone: {base_model_name} (hidden size {self.hidden_size})\n'
-            f'  • fusion: {fusion}; dimension: {dimension}\n'
+            f'  • fusion: {fusion}; dimension: {dimension}; geometry: {geometry}\n'
             f'  • trainable params: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)\n'
         )
 
@@ -204,10 +210,11 @@ class SharedEncoder(nn.Module):
                 ``present`` (B,), as ``stack_text_inputs`` builds them.
 
         Returns:
-            ``embedding`` (B, d + 1), the Lorentz point; ``tangent`` (B, d), the bounded tangent
-            vector at the origin; ``radius`` (B,) and ``direction`` (B, d), its r and û; and
-            ``gate_probs`` and ``top_k_indices`` under ``moe`` only. Every float output is float32
-            under autocast too.
+            ``embedding``, the point the arm's distance reads: (B, d + 1) on the hyperboloid under
+            hyperbolic, (B, d) otherwise; ``tangent`` (B, d), the coordinates the export writes;
+            ``radius`` (B,) and ``direction`` (B, d), the point's polar parts; and ``gate_probs``
+            and ``top_k_indices`` under ``moe`` only. Every float output is float32 under
+            autocast too.
 
         Raises:
             ValueError: If the batch has no field, a field outside the marker set, or a field

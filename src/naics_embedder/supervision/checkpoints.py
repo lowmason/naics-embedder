@@ -9,7 +9,7 @@ checkpoint under any other contract: there is no weights-only migration (roadmap
 A checkpoint saved before Stage 7 names no objective and reads as ``pre-req11``. Exact resume,
 the export, the reads and the HGCN feeder refuse it before any other check, and nothing migrates
 it (D2). A checkpoint saved before Stage 6 has no encoder record either, and reads as the legacy
-four-copy layout.
+four-copy layout; one saved before Stage 8 names no geometry, and reads as hyperbolic (P7).
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -45,9 +45,10 @@ class EncoderArchitecture(BaseModel):
     '''
     The encoder architecture a checkpoint's weights belong to (spec 4.4).
 
-    ``shared`` is Stage 6's one backbone, and names its fusion, dimension and backbone.
-    ``four-copy`` is the legacy layout of every checkpoint saved before Stage 6, and names nothing
-    else. A field added later defaults to the value every earlier checkpoint had.
+    ``shared`` is Stage 6's one backbone, and names its fusion, dimension and backbone, and its
+    geometry head (Req 12). ``four-copy`` is the legacy layout of every checkpoint saved before
+    Stage 6, and names nothing else. A field added later defaults to the value every earlier
+    checkpoint had: every record saved before Stage 8 is hyperbolic.
     '''
 
     model_config = ConfigDict(frozen=True, extra='forbid')
@@ -56,16 +57,23 @@ class EncoderArchitecture(BaseModel):
     fusion: Optional[str] = None
     dimension: Optional[int] = None
     backbone: Optional[str] = None
+    # Absent from every record saved before Stage 8, each of which is hyperbolic (P7)
+    geometry: Literal['euclidean', 'spherical', 'hyperbolic'] = 'hyperbolic'
 
     @model_validator(mode='after')
     def check_fields_match_the_layout(self) -> 'EncoderArchitecture':
-        '''A shared record names its fusion, dimension and backbone; a four-copy one, none.'''
+        '''
+        A shared record names its fusion, dimension and backbone; a four-copy one names none of
+        them, and is hyperbolic.
+        '''
 
         recorded = (self.fusion, self.dimension, self.backbone)
         if self.layout == 'shared' and None in recorded:
             raise ValueError('a shared encoder record names its fusion, dimension and backbone')
         if self.layout == 'four-copy' and recorded != (None, None, None):
             raise ValueError('a four-copy encoder record names no fusion, dimension or backbone')
+        if self.layout == 'four-copy' and self.geometry != 'hyperbolic':
+            raise ValueError('a four-copy encoder record is hyperbolic: it names no other geometry')
         return self
 
 LEGACY_ENCODER = EncoderArchitecture(layout='four-copy')
@@ -75,16 +83,18 @@ def shared_encoder_architecture(
     fusion: str,
     dimension: int,
     backbone: str,
+    geometry: str,
 ) -> EncoderArchitecture:
     '''
-    The record of a Stage-6 shared encoder.
+    The record of a Stage-6 shared encoder and its geometry head (Req 12).
 
     The model builds its record here from its hyperparameters, and training builds the config's
-    here too, so the two cannot drift apart.
+    here too, so the two cannot drift apart. ``geometry`` has no default, so no caller leaves an
+    arm's geometry out of the record it compares (P7).
     '''
 
     return EncoderArchitecture(
-        layout='shared', fusion=fusion, dimension=dimension, backbone=backbone
+        layout='shared', fusion=fusion, dimension=dimension, backbone=backbone, geometry=geometry
     )
 
 class CheckpointContract(BaseModel):

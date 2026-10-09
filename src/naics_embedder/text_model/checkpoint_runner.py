@@ -83,7 +83,8 @@ class CheckpointRunner:
         expected = shared_encoder_architecture(
             fusion=spec.settings.get('fusion', self.cfg.model.fusion),
             dimension=spec.dimension,
-            backbone=spec.backbone
+            backbone=spec.backbone,
+            geometry=spec.geometry
         )
         if contract.encoder != expected:
             raise ValueError('the checkpoint encoder contract differs from the arm (D2)')

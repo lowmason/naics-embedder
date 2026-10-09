@@ -24,7 +24,9 @@ from tests.fixtures.shared_encoder import (
 )
 
 MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
-SHARED = shared_encoder_architecture(fusion='masked_mean', dimension=16, backbone=MINILM)
+SHARED = shared_encoder_architecture(
+    fusion='masked_mean', dimension=16, backbone=MINILM, geometry='hyperbolic'
+)
 # Every field of a contract saved since Stage 7 (spec 4.5)
 CONTRACT_FIELDS = {
     'contract_version',
@@ -326,6 +328,17 @@ def test_an_absent_encoder_record_reads_as_the_legacy_four_copy_layout(runtime_c
             'backbone': MINILM,
             'x': 1
         },
+        {
+            'layout': 'shared',
+            'fusion': 'masked_mean',
+            'dimension': 16,
+            'backbone': MINILM,
+            'geometry': 'poincare'
+        },
+        {
+            'layout': 'four-copy',
+            'geometry': 'spherical'
+        },
     ],
 )
 def test_a_malformed_encoder_record_is_refused(record):
@@ -342,16 +355,45 @@ def test_the_encoder_record_survives_a_save_round_trip(tmp_path, runtime_contrac
         'fusion': 'masked_mean',
         'dimension': 16,
         'backbone': MINILM,
+        'geometry': 'hyperbolic',
     }
     assert CheckpointContract.model_validate(saved) == runtime_contract
+
+def test_an_encoder_record_saved_before_stage_8_reads_as_hyperbolic(tmp_path, runtime_contract):
+    '''P7: no record saved before Stage 8 names a geometry, and each of them is hyperbolic.'''
+
+    saved = runtime_contract.model_dump()
+    del saved['encoder']['geometry']
+    path = tmp_path / 'pre-stage-8.ckpt'
+    torch.save({'stage3_supervision': saved}, path)
+
+    assert CheckpointContract.model_validate(saved).encoder == SHARED
+    validate_exact_resume(path, runtime_contract)
+
+def test_a_shared_encoder_record_cannot_leave_out_its_geometry():
+    assert SHARED.geometry == 'hyperbolic'
+    with pytest.raises(TypeError, match='geometry'):
+        shared_encoder_architecture(fusion='masked_mean', dimension=16, backbone=MINILM)
 
 @pytest.mark.parametrize(
     'encoder',
     [
         LEGACY_ENCODER,
-        shared_encoder_architecture(fusion='masked_mean', dimension=8, backbone=MINILM),
-        shared_encoder_architecture(fusion='moe', dimension=16, backbone=MINILM),
-        shared_encoder_architecture(fusion='masked_mean', dimension=16, backbone='other/model'),
+        shared_encoder_architecture(
+            fusion='masked_mean', dimension=8, backbone=MINILM, geometry='hyperbolic'
+        ),
+        shared_encoder_architecture(
+            fusion='moe', dimension=16, backbone=MINILM, geometry='hyperbolic'
+        ),
+        shared_encoder_architecture(
+            fusion='masked_mean', dimension=16, backbone='other/model', geometry='hyperbolic'
+        ),
+        shared_encoder_architecture(
+            fusion='masked_mean', dimension=16, backbone=MINILM, geometry='euclidean'
+        ),
+        shared_encoder_architecture(
+            fusion='masked_mean', dimension=16, backbone=MINILM, geometry='spherical'
+        ),
     ],
 )
 def test_another_encoder_architecture_cannot_exact_resume(tmp_path, runtime_contract, encoder):
@@ -389,7 +431,9 @@ def test_the_supervision_check_takes_the_encoder_record_from_the_checkpoint(
     validated_bundle, summaries
 ):
     manifest = validated_bundle.manifest
-    other = shared_encoder_architecture(fusion='attention', dimension=8, backbone=MINILM)
+    other = shared_encoder_architecture(
+        fusion='attention', dimension=8, backbone=MINILM, geometry='spherical'
+    )
     saved = contract_for_bundle(manifest, encoder=other, summaries=summaries)
 
     assert validate_supervision_contract(saved.model_dump(), manifest, summaries=summaries) == saved

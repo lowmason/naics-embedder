@@ -35,6 +35,7 @@ from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.text_model import naics_model as model_module
 from naics_embedder.text_model.export import encode_token_rows
 from naics_embedder.text_model.fields import CHANNELS, QUERY
+from naics_embedder.text_model.heads import GEOMETRIES
 from naics_embedder.text_model.loss import LogitScale
 from naics_embedder.text_model.monitor import (
     MONITOR_RECORDS,
@@ -270,6 +271,7 @@ class TestModelInitialization:
             ('lora_dropout', 0.1),
             ('fusion', 'masked_mean'),
             ('dimension', 16),
+            ('geometry', 'hyperbolic'),
             ('num_experts', 4),
             ('top_k', 2),
             ('moe_hidden_dim', 1024),
@@ -404,6 +406,20 @@ class TestModelInitialization:
     def test_an_unknown_dimension_is_refused(self, model_config):
         with pytest.raises(ValueError, match='unknown dimension'):
             NAICSContrastiveModel(**model_config, dimension=12)
+
+    @pytest.mark.parametrize('geometry', GEOMETRIES)
+    def test_the_geometry_picks_the_head_and_enters_the_contract(self, reference_model, geometry):
+        '''Req 12: the geometry is a saved hyperparameter, and the encoder record names it (P7).'''
+
+        model = reference_model(geometry=geometry)
+
+        assert model.hparams['geometry'] == geometry
+        assert model.encoder.head.geometry == geometry
+        assert model.checkpoint_contract.encoder.geometry == geometry
+
+    def test_an_unknown_geometry_is_refused(self, model_config):
+        with pytest.raises(ValueError, match="unknown geometry 'poincare'"):
+            NAICSContrastiveModel(**model_config, geometry='poincare')
 
     def test_the_code_targets_are_buffers_that_checkpoints_leave_out(
         self, reference_arm_model, code_targets
@@ -1533,14 +1549,20 @@ class TestCheckpointContract:
         assert contract.bundle_id == validated_bundle.manifest.bundle_id
         assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
         assert contract.encoder == shared_encoder_architecture(
-            fusion='masked_mean', dimension=16, backbone='sentence-transformers/all-MiniLM-L6-v2'
+            fusion='masked_mean',
+            dimension=16,
+            backbone='sentence-transformers/all-MiniLM-L6-v2',
+            geometry='hyperbolic'
         )
 
     def test_a_runtime_contract_of_another_encoder_is_refused(self, model_config, validated_bundle):
         other = contract_for_bundle(
             validated_bundle.manifest,
             encoder=shared_encoder_architecture(
-                fusion='masked_mean', dimension=8, backbone=model_config['base_model_name']
+                fusion='masked_mean',
+                dimension=8,
+                backbone=model_config['base_model_name'],
+                geometry='hyperbolic'
             ),
             summaries=None,
         )
@@ -1669,6 +1691,23 @@ class TestCheckpointContract:
 
         with pytest.raises(ValueError, match='D2'):
             NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu', dimension=8)
+
+    def test_load_from_checkpoint_refuses_another_geometry(self, shared_checkpoint):
+        '''P7: the geometry is in the encoder record, so another arm's head never loads.'''
+
+        with pytest.raises(ValueError, match="geometry='euclidean'"):
+            NAICSContrastiveModel.load_from_checkpoint(
+                shared_checkpoint, map_location='cpu', geometry='euclidean'
+            )
+
+    def test_a_checkpoint_saved_before_stage_8_loads_as_hyperbolic(self, pre_stage8_checkpoint):
+        restored = NAICSContrastiveModel.load_from_checkpoint(
+            pre_stage8_checkpoint, map_location='cpu'
+        )
+
+        assert restored.hparams['geometry'] == 'hyperbolic'
+        assert restored.encoder.head.geometry == 'hyperbolic'
+        assert restored.checkpoint_contract.encoder.geometry == 'hyperbolic'
 
     def test_load_from_checkpoint_refuses_a_pre_stage_7_checkpoint(self, pre_stage7_checkpoint):
         '''

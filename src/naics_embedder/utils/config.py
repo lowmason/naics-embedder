@@ -898,13 +898,20 @@ class ModelConfig(BaseModel):
     dimension: Literal[8, 16, 32] = Field(
         default=16, description='Embedding dimension: the one Linear(hidden -> d) before the head'
     )
+    geometry: Literal['euclidean', 'spherical', 'hyperbolic'] = Field(
+        default='hyperbolic',
+        description=(
+            'The geometry arm (Req 12): the head, its training and decoding distance and the '
+            'export form; the radial term applies under hyperbolic only'
+        ),
+    )
     radius_bound: float = Field(
         default=8.0,
         gt=0,
         allow_inf_nan=False,
         description=(
-            'R, the bound on every radius: the head gives a vector of norm v the radius '
-            'R * tanh(v / R), which passes gradient at any length (Req 13)'
+            'R, the bound on every radius, read only under hyperbolic: the head gives a vector of '
+            'norm v the radius R * tanh(v / R), which passes gradient at any length (Req 13)'
         ),
     )
     lora: LoRAConfig = Field(default_factory=LoRAConfig, description='LoRA configuration')
@@ -938,7 +945,7 @@ class LossConfig(BaseModel):
         default=1.0,
         ge=0,
         allow_inf_nan=False,
-        description="w_r, the radial term's weight in the total",
+        description="w_r, the radial term's weight in the total, read only under hyperbolic",
     )
     target_temperature: float = Field(
         default=1.0,
@@ -950,7 +957,10 @@ class LossConfig(BaseModel):
         default=1.0,
         gt=0,
         allow_inf_nan=False,
-        description="ρ, the radius from one level to the next: level λ's target is ρ · (λ - 1)",
+        description=(
+            "ρ, the radius from one level to the next, read only under hyperbolic: level λ's "
+            'target is ρ · (λ - 1)'
+        ),
     )
     logit_scale_init: float = Field(
         default=1.0,

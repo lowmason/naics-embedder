@@ -17,6 +17,7 @@ from naics_embedder.panels.decoding import (
     cosine_distances,
     euclidean_distances,
 )
+from naics_embedder.supervision.checkpoints import EncoderArchitecture
 from naics_embedder.text_model.heads import (
     GEOMETRIES,
     EuclideanHead,
@@ -27,6 +28,7 @@ from naics_embedder.text_model.heads import (
     head_of,
 )
 from naics_embedder.text_model.hyperbolic import HyperbolicHead, exp_map_origin, polar_distance
+from naics_embedder.utils.config import ModelConfig
 
 pytestmark = pytest.mark.unit
 
@@ -45,6 +47,8 @@ def test_every_layer_names_the_same_three_geometries():
     assert tuple(GEOMETRY_DISTANCES) == GEOMETRIES
     assert get_args(records.Geometry) == GEOMETRIES
     assert diagnostics.GEOMETRIES == GEOMETRIES
+    assert get_args(ModelConfig.model_fields['geometry'].annotation) == GEOMETRIES
+    assert get_args(EncoderArchitecture.model_fields['geometry'].annotation) == GEOMETRIES
     assert set(GEOMETRY_DISTANCES.values()) == set(DISTANCES)
 
 @pytest.mark.parametrize('geometry', GEOMETRIES)

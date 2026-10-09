@@ -343,7 +343,7 @@ def test_the_provenance_names_the_table_and_the_checkpoint(
     expected = contract_for_bundle(
         validated_bundle.manifest,
         encoder=shared_encoder_architecture(
-            fusion='masked_mean', dimension=ARM_DIMENSION, backbone=MINILM
+            fusion='masked_mean', dimension=ARM_DIMENSION, backbone=MINILM, geometry='hyperbolic'
         ),
         summaries=summaries_identity(MINILM),
     )
