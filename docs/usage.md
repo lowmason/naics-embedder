@@ -233,16 +233,18 @@ uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
 
 ### `tools export-table`
 
-Export a checkpoint's 2,125-code table as `code`, `index`, `level`, then float64 bounded tangent
-coordinates `e0` through `e{d-1}`, in codebook order. Each code goes through the checkpoint's
-model in eval mode. The current text objective uses unit curvature and
-`r = R * tanh(norm(v) / R)`, rather than a cap at 2.
+Export a checkpoint's 2,125-code table as `code`, `index`, `level`, then float64 coordinates
+`e0` through `e{d-1}`, in codebook order. Each code goes through the checkpoint's model in eval
+mode. A hyperbolic arm writes bounded tangents, with unit curvature and
+`r = R * tanh(norm(v) / R)` rather than a cap at 2; a Euclidean arm writes v and a spherical arm
+u = v / norm(v) ([geometry arms](text_training.md#geometry-arms)).
 
 The supervision contract must match the configured bundle. The checkpoint's encoder record is
 its own, so a dimension-8 checkpoint can export under a dimension-16 config. Pre-`req11-v1`
 checkpoints are refused before model loading. Different window summaries or tokenizer pins are
 refused. Export writes `<stem>_provenance.json`, with checkpoint and contract identities,
-backbone revision, tokenizer/window/summaries identities, descriptions hash and table fingerprint.
+backbone revision, tokenizer/window/summaries identities, descriptions hash, geometry and its
+coordinates, and table fingerprint.
 
 Use the monitor's selected checkpoint; epoch 1 is an example here:
 
@@ -275,12 +277,14 @@ uv run naics-embedder tools outcome-panel --checkpoint checkpoints/reference/epo
 Keep the store and JSON records under `~/naics-artifacts`, outside every worktree.
 Build one arm record from complete trained seed directories. Before the first export or decision
 read, the runner checks every seed's epoch coverage, panel fingerprint, training-run id, seed,
-21 settings, earliest best checkpoint and exact saved best score. Both last and selected
-checkpoints must also match the current config in their saved LoRA rank/alpha/dropout and active
-MoE expert count/top-k/hidden dimension/load-balancing coefficient. Missing required values are
-refused; the arm retains its 21-key settings identity. A selected epoch with a
-versioned sibling is ambiguous and refused. The arm's backbone revision is resolved independently
-from its cached backbone; it cannot be copied from the text-only comparator.
+monitor distance, 21 settings, earliest best checkpoint and exact saved best score. The arm's
+geometry comes from `model.geometry`; each checkpoint's encoder record must name it. Both last
+and selected checkpoints must also match the current config in their saved LoRA
+rank/alpha/dropout and active MoE expert count/top-k/hidden dimension/load-balancing
+coefficient. Missing required values are refused; the arm retains its 21-key settings identity.
+A selected epoch with a versioned sibling is ambiguous and refused. The arm's backbone revision
+is resolved independently from its cached backbone; it cannot be copied from the text-only
+comparator.
 
 ```bash
 mkdir -p ~/naics-artifacts/records/stage7
@@ -313,7 +317,9 @@ Read a checkpoint and its exported table on the CPU, without reading an evaluati
 report checks live anchor-radius gradients, per-level SD > 1e-3, positive distinct sector radii
 and their least gap, manifold error at the largest radius, and chunked all-pairs float32/float64
 distance agreement. It reports nonzero gradient norms for all three weighted terms and both
-scales on the saved seed's epoch-zero, step-zero batch.
+scales on the saved seed's epoch-zero, step-zero batch. The radius checks are the hyperbolic
+arm's: a flat arm's report names its geometry, records `radius` as null and checks the task and
+code-to-code terms and both scales.
 
 ```bash
 uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json

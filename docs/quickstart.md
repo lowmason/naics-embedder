@@ -80,9 +80,10 @@ uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoc
 uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-Export writes bounded tangent coordinates and their provenance. The radius report checks live
-radius gradients, per-level spread, sector radii, manifold validity, distance precision and the
-three terms' gradients. A failed criterion produces a report and exits 1.
+Export writes the arm's coordinates, bounded tangents for the default hyperbolic arm, and their
+provenance. The radius report checks live radius gradients, per-level spread, sector radii,
+manifold validity, distance precision and the three terms' gradients; for a flat arm, only the
+terms' and scales' gradients. A failed criterion produces a report and exits 1.
 
 ## Compare Configurations
 

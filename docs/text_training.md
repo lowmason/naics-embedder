@@ -30,11 +30,37 @@ The default fusion is masked mean. Attention pooling is an option. MoE is an abl
 the masked mean through top-2 experts, with a load-balancing term under `model.fusion=moe` only.
 It adds no mining, router-guided sampling or phase transitions.
 
-The parameter-free head splits projection v into radius and direction. With a = norm(v),
-`r = R * tanh(a / R)`, where `R = model.radius_bound`; the resulting Lorentz point is
-`(cosh(r), sinh(r) u)`. Zero v maps to the origin. Text curvature is fixed at 1, without a
-curvature setting. The radius remains live in every term; it is not normalized away or capped
-at a fixed norm of 2.
+A parameter-free head follows the projection: the arm's geometry head (`model.geometry`, see
+[Geometry Arms](#geometry-arms)). The default, the hyperbolic head, splits projection v into
+radius and direction. With a = norm(v), `r = R * tanh(a / R)`, where `R = model.radius_bound`;
+the resulting Lorentz point is `(cosh(r), sinh(r) u)`. Zero v maps to the origin. Text curvature
+is fixed at 1, without a curvature setting. The radius remains live in every term; it is not
+normalized away or capped at a fixed norm of 2.
+
+## Geometry Arms
+
+`model.geometry` names one of Req 12's three arms: `hyperbolic` (the default and the Stage 7
+reference), `euclidean` or `spherical`. Every arm shares the backbone, fusion, projection, task
+term and code-to-code term. Only the head, its distances and its export form differ, and the
+radial term exists only in the hyperbolic arm.
+
+| Arm | Point | Training distance | Decoding distance | Export |
+| --- | --- | --- | --- | --- |
+| `hyperbolic` | `(cosh(r), sinh(r) u)` | stable polar form | `lorentz` | bounded tangent `r u` |
+| `euclidean` | v | `norm(v_a - v_b)`, in polar form | `euclidean` | v |
+| `spherical` | `u = v / norm(v)` | chord form `norm(u_a - u_b)**2 / 2` | `cosine` | u |
+
+The flat heads have no bound, so `model.radius_bound`, `loss.radial_weight` and
+`loss.radial_step` are read under `hyperbolic` only. The spherical arm exports u, not v: the
+cosine distance gives v's norm no training signal. Each read maps exported coordinates to
+points with its head's own map, the exponential map at the origin in the hyperbolic arm and
+the identity in the flat arms, and decodes by its arm's distance.
+
+The geometry is part of the checkpoint's encoder record, not of the 21 run settings. Exact
+resume, campaign preflight and every load therefore refuse a checkpoint of another arm. A
+checkpoint saved before Stage 8 names no geometry and reads as hyperbolic. The HGCN feeder
+refines Lorentz points, so it refuses a flat arm, and `train` asks its HGCN question only of a
+hyperbolic run.
 
 ## The Three Terms
 
@@ -70,14 +96,15 @@ same keep mask; no negative miner or false-negative clustering participates.
 `radial_loss` is the mean squared error between the live anchor radii and
 `loss.radial_step * (level - 1)`. Default step 1 gives target radii 1, 2, 3, 4 and 5 at levels
 2 through 6. This is a soft target, not a fixed radius: each anchor's derivative through radius
-remains live, and codes at the same level can have different radii.
+remains live, and codes at the same level can have different radii. The term exists only in
+the hyperbolic arm; a flat arm's `StepLosses.radial` is None.
 
 ### Total and Defaults
 
 ```text
 loss = task_loss
      + code_code_weight * code_code_loss
-     + radial_weight * radial_loss
+     + radial_weight * radial_loss                    (only under geometry=hyperbolic)
      + moe.load_balancing_coef * load_balancing_loss  (only under fusion=moe)
 ```
 
@@ -188,9 +215,11 @@ Trainer; there is no validation loader. Monitoring occurs once at each training 
 ## Export, Diagnostics and Radius Verification
 
 Use the earliest highest-MRR epoch from the monitor records. Export encodes every code through
-that checkpoint in eval mode and writes bounded tangent coordinates `e0` through `e{d-1}` plus
-checkpoint/table provenance. Panel reads reconstruct unit-curvature Lorentz points on the CPU
-in float64. A table exported from another checkpoint or preprocessing pin is refused.
+that checkpoint in eval mode and writes its arm's coordinates `e0` through `e{d-1}` plus
+checkpoint/table provenance, which names the geometry. The coordinates are bounded tangents in
+the hyperbolic arm, v in the Euclidean arm and u in the spherical arm. Panel reads map them to
+points on the CPU in float64, unit-curvature Lorentz points in the hyperbolic arm. A table
+exported from another checkpoint or preprocessing pin is refused.
 
 ```bash
 uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
@@ -202,7 +231,9 @@ read of the checkpoint, table and saved step-zero seed. It does not read an eval
 It checks nonzero gradients through each anchor radius, per-level SD > 1e-3, positive distinct
 sector radii and their least gap, largest-radius manifold error, and float32/float64 distance
 agreement over all ordered pairs in row chunks. It also reports nonzero gradient norms of all
-three weighted terms and both scales. Failed criteria write the report and exit 1.
+three weighted terms and both scales. Failed criteria write the report and exit 1. The radius
+checks are the hyperbolic arm's: a flat arm's report names its geometry, records `radius` as
+null and checks its two terms' and both scales' gradients.
 
 The distance comparison requires relative error at most 1e-3 on noncoincident pairs. Exact
 coincident tangents must have zero float32 training distance; their float64 read residual is

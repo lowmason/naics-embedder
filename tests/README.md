@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **99 unit** test files and **2 integration** files, with **3,001 collected
+The suite contains **100 unit** test files and **2 integration** files, with **3,092 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -14,7 +14,7 @@ real selection campaign. Hugging Face fixture dependencies are resolved locally.
 
 ```text
 tests/
-├── unit/                         # 99 unit test files
+├── unit/                         # 100 unit test files
 ├── integration/
 │   ├── test_reference_training.py # tiny-backbone Trainer workflows
 │   └── test_remote_workflow.py    # GNU-rsync workflow qualification
@@ -29,6 +29,7 @@ tests/
 | Query facts and dense targets | `test_supervision_queries.py`, `test_supervision_code_targets.py`: eligible role/phrase queries, target and referring identities, levels, lineal/unary masks |
 | Shared encoder and fusion | `test_encoder.py`, `test_fusion.py`, `test_moe.py`: shared adapters, markers, absent-channel masking and fusion |
 | Objective and radius | `test_loss.py`, `test_hyperbolic.py`, `test_naics_model.py`: task/code-code/radial terms, scales, bounded live radius and polar distance |
+| Geometry arms | `test_heads.py`: the Euclidean, spherical and hyperbolic heads, their flat or polar training distances, read maps and the one list of geometries (Req 12) |
 | Epoch loader | `test_datamodule.py`, `test_tokenization_cache.py`: seed/epoch permutations, exact coverage, code chunks, query tokens and cache identities |
 | Cache and outcome monitor | `test_monitor.py`: eval/no-grad refresh, detached candidates, live-anchor replacement, validation reads and durable records |
 | Selection-log guard | `test_selection_log_guard.py`: fail-closed refusals before appending reads or openings |

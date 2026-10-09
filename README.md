@@ -30,11 +30,14 @@ Marked fields/queries -> shared LoRA backbone -> masked fusion -> Linear(384, d)
 
 ## Live Radius and the Objective
 
-For projection v with norm a and direction u, the parameter-free head computes
+For projection v with norm a and direction u, the default parameter-free head computes
 `r = R * tanh(a / R)` with `R = model.radius_bound` (default 8), then maps r u to the
 unit-curvature Lorentz hyperboloid. Zero v maps to the origin. Text curvature is fixed at 1,
 with no curvature setting. Training distances use the stable polar form in float32; panel
 reads reconstruct Lorentz points and compute distances on the CPU in float64.
+`model.geometry` also offers Euclidean and spherical heads, which share the encoder and the
+task and code-to-code terms but have no radial term
+([geometry arms](docs/text_training.md#geometry-arms)).
 
 `task_loss` decodes each training query to its named code targets. Its candidates are every
 code at the query's level plus every explicit referring code. `code_code_loss` matches a
@@ -102,8 +105,9 @@ uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoc
 uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
 ```
 
-The table has `code`, `index`, `level`, and bounded tangent coordinates `e0` through `e{d-1}`
-in codebook order. Provenance binds it to the checkpoint and preprocessing identities.
+The table has `code`, `index`, `level`, and the arm's coordinates `e0` through `e{d-1}` (bounded
+tangents in the hyperbolic arm) in codebook order. Provenance binds it to the checkpoint and
+preprocessing identities.
 The radius report checks live gradients, per-level spread, sector radii, manifold validity,
 distance precision and nonzero gradients for the three terms and both scales. A failed
 criterion writes the report and exits 1; the report does not read an evaluation panel.

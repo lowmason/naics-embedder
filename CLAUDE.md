@@ -9,7 +9,7 @@ An optional HGCN stage refines the parent–child graph with its own objective a
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
-Python 3.12. The source tree has **117 Python files**; tests have **99 unit** files and two
+Python 3.12. The source tree has **118 Python files**; tests have **100 unit** files and two
 integration files. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
@@ -21,6 +21,9 @@ integration files. File counts exclude generated and ignored artifacts.
 3. **Live radius and objective** (`text_model/hyperbolic.py`, `loss.py`, `naics_model.py`):
    `r = R * tanh(norm(v) / R)` with default R = 8, and the projection's direction, form the
    unit-curvature Lorentz point. Task, code-code and radial terms all retain radius gradients.
+   `model.geometry` (Req 12) can instead select a Euclidean or spherical head
+   (`text_model/heads.py`). These share the encoder and the task and code-code terms, decode by
+   their own distance and have no radial term. Hyperbolic is the default.
 4. **Graph refinement** (`graph_model/hgcn.py`): HGCN uses the graph, triplet/radial objectives
    and its four-phase graph curriculum. Its curvature utilities remain separate from text.
 
@@ -29,7 +32,9 @@ router-guided sampler, text phase curriculum, distributed cache or in-sample val
 The HGCN stage retains its graph-specific samplers and curriculum.
 
 `tools export-table` writes each code's bounded tangent coordinates at the origin, `e0` through
-`e{d-1}`, in Req 2's form. Panel reads reconstruct Lorentz points on the CPU in float64.
+`e{d-1}`, in Req 2's form; a flat arm writes v (Euclidean) or its direction (spherical), and
+the provenance names the geometry. Panel reads reconstruct Lorentz points on the CPU in float64,
+or read a flat arm's coordinates as they are.
 The selected text checkpoint is the earliest epoch with the highest outcome validation MRR.
 
 ## Directory Structure
@@ -53,6 +58,7 @@ src/naics_embedder/
 │   ├── shared_encoder.py      # one backbone, fusion and projection
 │   ├── fusion.py              # masked mean, attention, MoE
 │   ├── hyperbolic.py           # live-radius head, stable polar distance, Lorentz ops
+│   ├── heads.py               # Euclidean and spherical heads, flat distances, build_head
 │   ├── loss.py                # task_loss, code_code_loss, radial_loss, LogitScale
 │   ├── naics_model.py         # two-stream training, cache and monitor orchestration
 │   ├── monitor.py             # CodeCache, LiveEncoder, OutcomeMonitor
@@ -72,7 +78,7 @@ src/naics_embedder/
 └── utils/                     # config, training, input-window and geometry utilities
 
 tests/
-├── unit/                      # 99 unit test files
+├── unit/                      # 100 unit test files
 ├── integration/               # test_reference_training.py, test_remote_workflow.py
 ├── fixtures/                  # tiny models, bundles, panels and runs
 └── conftest.py
@@ -274,7 +280,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **3,001 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **3,092 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -447,11 +453,11 @@ evaluation currently uses curvature 1; a non-unit-curvature correction is a sepa
 
 ## Testing and Validation
 
-There are 99 unit files and two integration files. Important current seams include:
+There are 100 unit files and two integration files. Important current seams include:
 
 - `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
   and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and
-  stable polar distance.
+  stable polar distance. `test_heads.py`: the geometry arms' heads, distances and read maps.
 - `test_datamodule.py`, `test_monitor.py`, `test_selection_log_guard.py`: two-stream epochs,
   candidate cache, monitor reads and fail-closed selection-log guards.
 - `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`:
