@@ -550,7 +550,8 @@ def test_a_flat_arm_trains_without_the_radial_term_and_reads_by_its_own_distance
     assert all('radial' not in terms for terms in run.hooks.terms)
     summary = read_epoch_summary(run.checkpoint_dir / EPOCH_SUMMARY)
     assert [row['epoch'] for row in summary] == [0, 1]
-    assert all('loss/task' in row and 'loss/radial' not in row for row in summary)
+    assert all('loss/task' in row and 'loss/code_code' in row for row in summary)
+    assert all('loss/radial' not in row for row in summary)
     records = read_monitor_records(run.checkpoint_dir / MONITOR_RECORDS)
     distance = GEOMETRY_DISTANCES[geometry]
     assert [record['read']['detail']['distance'] for record in records] == [distance] * 2

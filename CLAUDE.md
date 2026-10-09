@@ -116,7 +116,8 @@ non-withheld phrases supply queries; held-out query text does not enter training
 
 `code_code_loss` matches the softmax of `-D* / target_temperature` over all codebook codes except
 the anchor and its unary partner. It never reads exclusion data. `radial_loss` is mean squared
-error from live radius to `radial_step * (level - 1)`. Both term weights and radial step default
+error from live radius to `radial_step * (level - 1)`; it exists only in the hyperbolic arm, and
+a flat arm trains on the other two terms (Req 12). Both term weights and radial step default
 to 1. Task and code-code logits use independent learned positive scales, clamped to [0.01, 100]
 without weight decay. The total adds MoE balancing only under that fusion.
 
@@ -124,7 +125,8 @@ without weight decay. The total adds MoE balancing only under that fusion.
 
 The head computes `r = R * tanh(a / R)`, with a = norm(v), then maps the bounded tangent r u to
 `(cosh(r), sinh(r) u)`. Its origin guard handles zero v. Text curvature is fixed at 1 with no
-setting or learned parameter. Radius r is the radial quantity in text losses, health and reports.
+setting or learned parameter. In the hyperbolic arm, radius r is the radial quantity in text
+losses, health and reports.
 
 Float32 stable polar distances avoid cancellation when two large-radius points are nearby.
 CUDA uses `bf16-mixed` only in the backbone. Fusion, projection, head, distances and losses
@@ -163,8 +165,9 @@ scheduler and drives early stopping. It records training-run id, seed, epoch and
 fingerprint in the selection log and durable `monitor_reads.jsonl`. Test splits stay sealed.
 
 `epoch_summary.jsonl` records the same MRR plus loss/task, code_code, radial and total, both
-logit scales, and radius mean/SD at levels 2–6. MoE includes load-balancing loss. Health values
-come from `_log_health()`'s Python floats, not rounded Lightning callback metrics.
+logit scales, and radius mean/SD at levels 2–6. `loss/radial` appears only for the hyperbolic
+arm. MoE includes load-balancing loss. Health values come from `_log_health()`'s Python floats,
+not rounded Lightning callback metrics.
 `tools visualize --summary PATH` writes one `epoch_metrics.png` figure with four panels.
 
 Structural metrics are no longer text validation or scheduler controls. `tools diagnostics`

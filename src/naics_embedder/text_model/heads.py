@@ -59,6 +59,9 @@ def flat_distance(
     differences, as in ``polar_distance``. The square root is guarded at zero, where an anchor
     meets its own live row: the distance is 0, and the value and its gradient stay finite.
 
+    At v = 0 exactly, or where the float32 norm underflows, the polar form gives the point no
+    gradient, as ``polar_distance`` does for the hyperbolic head (P4).
+
     Args:
         radius_a: The first set's radii, (A,).
         direction_a: Its directions, (A, d): unit vectors, or 0 at the origin.

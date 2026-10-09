@@ -32,12 +32,15 @@ except ImportError:
 
 class HeadPoints(NamedTuple):
     '''
-    The head's points for a batch of B vectors in dimension d.
+    The points of any geometry head (Req 12) for a batch of B vectors in dimension d.
 
     Attributes:
-        tangent: The bounded tangent vector at the origin, r · û (B, d), which the export writes.
-        embedding: The Lorentz point exp_o(r · û) = (cosh r, sinh r · û) at c = 1 (B, d + 1).
-        radius: r, the point's geodesic distance from the origin (B,).
+        tangent: The coordinates the export writes (B, d): the bounded tangent vector at the
+            origin, r · û, under hyperbolic; v under Euclidean; û under spherical.
+        embedding: The arm's point: the Lorentz point exp_o(r · û) = (cosh r, sinh r · û) at c = 1
+            (B, d + 1) under hyperbolic; ``tangent`` itself (B, d) otherwise.
+        radius: The polar radius (B,): r, the point's geodesic distance from the origin, under
+            hyperbolic; ‖v‖ under Euclidean; 1 under spherical, or 0 where v is 0.
         direction: û, the unit direction of the head's input (B, d); zero where the input is zero.
     '''
 

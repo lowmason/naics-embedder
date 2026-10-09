@@ -619,6 +619,32 @@ def decide_command(
 # Diagnostics (Req 6)
 # -------------------------------------------------------------------------------------------------
 
+def _require_table_geometry(table: str, geometry: str) -> None:
+    '''
+    Refuse a table whose export provenance names another geometry than ``geometry``.
+
+    The export records its arm's geometry (P9), and Req 6's statistics for a flat table read under
+    another arm's distance are plausible numbers, not an error. A table with no provenance, or one
+    that names no geometry (a text-only or HGCN table, a Stage 7 export), is not checked.
+
+    Raises:
+        ValueError: If the provenance names another geometry, or cannot be read as JSON.
+        OSError: If the provenance cannot be opened.
+    '''
+
+    path = provenance_path(Path(table))
+    if not path.is_file():
+        return
+    try:
+        provenance = json.loads(path.read_text(encoding='utf-8'))
+    except ValueError as exc:
+        raise ValueError(f'{path} cannot be read as JSON: {exc}') from exc
+    named = provenance.get('geometry', geometry) if isinstance(provenance, dict) else geometry
+    if named != geometry:
+        raise ValueError(
+            f'--geometry {geometry} does not match the table: its export provenance names {named}'
+        )
+
 @app.command('diagnostics')
 def diagnostics_command(
     table: Annotated[
@@ -653,6 +679,10 @@ def diagnostics_command(
     correlation of distance with D*, and parent retrieval@1/5 without the 522 unary pairs. The
     report describes an arm: nothing selects on it, and no statistic in it has a threshold.
 
+    ``--geometry`` must be the table's own arm: a table whose export provenance names another
+    geometry is refused. A table with no provenance, or none that names a geometry, is read as
+    given.
+
     Example:
         Report on a hyperbolic arm's export::
 
@@ -666,6 +696,8 @@ def diagnostics_command(
         console.print(f'[bold red]--geometry must be one of {list(GEOMETRIES)}[/bold red]')
         raise typer.Exit(code=1)
     try:
+        # Before the table is read: its export names the arm it came from (P9)
+        _require_table_geometry(table, geometry)
         codes = pl.read_parquet(codebook).get_column('code').to_list()
         report = diagnostics_report(
             pl.read_parquet(table), geometry, codebook_codes=codes, curvature=curvature

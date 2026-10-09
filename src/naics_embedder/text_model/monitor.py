@@ -364,11 +364,13 @@ class OutcomeMonitor:
         epoch: int,
     ) -> MonitorRead:
         '''
-        Score the validation split on the live model under ``'lorentz'``, logging the read.
+        Score the validation split on the live model under the encoder's distance, logging the read.
 
-        Every refusal comes before the read is logged. The read's detail names the training run,
-        the seed, the epoch and the epoch's code table: the ``matrix_fingerprint`` of the cache's
-        tangents, the name a read of the exported table logs it by.
+        The distance is the decoding distance of the arm's geometry (Req 12): ``'lorentz'``,
+        ``'euclidean'`` or ``'cosine'``. Every refusal comes before the read is logged. The read's
+        detail names the training run, the seed, the epoch and the epoch's code table: the
+        ``matrix_fingerprint`` of the cache's tangents, the name a read of the exported table logs
+        it by.
 
         Args:
             model: The live model, just after its end-of-epoch refresh.

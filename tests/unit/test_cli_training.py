@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -714,17 +715,20 @@ def test_train_asks_the_hgcn_question_on_a_terminal(training_env, monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
-def test_train_never_asks_a_flat_arm_the_hgcn_question(training_env, monkeypatch, geometry):
-    '''HGCN refines Lorentz points, and a flat arm has none (Req 12): no question on a terminal.'''
+def test_train_never_asks_a_flat_arm_the_hgcn_question(training_env, monkeypatch, caplog, geometry):
+    '''HGCN refines Lorentz points, and a flat arm has none (Req 12): no question on a terminal,
+    and the log says why (P10).'''
 
     questions = []
     monkeypatch.setattr(training.typer, 'confirm', lambda *args, **_: questions.append(args))
     monkeypatch.setattr(training, '_stdin_is_terminal', lambda: True)
 
-    training.train(skip_validation=True, overrides=[f'model.geometry={geometry}'])
+    with caplog.at_level(logging.INFO, logger=training.__name__):
+        training.train(skip_validation=True, overrides=[f'model.geometry={geometry}'])
 
     assert training_env.trainer.fit_calls
     assert questions == []
+    assert f'a {geometry} arm has no Lorentz points: no HGCN embeddings question' in caplog.messages
 
 @pytest.mark.unit
 @pytest.mark.parametrize(

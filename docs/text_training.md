@@ -64,10 +64,11 @@ hyperbolic run.
 
 ## The Three Terms
 
-`NAICSContrastiveModel.compute_losses` returns `StepLosses`. Distances use the stable polar
-form in float32. The task and code-to-code logits have separate learned positive scales;
-they start at `loss.logit_scale_init` and are clamped to `loss.logit_scale_range` after each
-optimizer step, with no weight decay.
+`NAICSContrastiveModel.compute_losses` returns `StepLosses`. Distances are the head's training
+distance in float32: the stable polar form in the hyperbolic arm, `flat_distance` in the
+Euclidean arm and `chord_distance` in the spherical arm. The task and code-to-code logits
+have separate learned positive scales; they start at `loss.logit_scale_init` and are clamped
+to `loss.logit_scale_range` after each optimizer step, with no weight decay.
 
 ### Task Query Cross-Entropy
 
@@ -88,8 +89,8 @@ training pairs. The target and candidate identities come from `build_task_querie
 `code_code_loss` uses each live code anchor against all codebook codes. The anchor itself and
 its unary partner are removed. The remaining targets are the row-wise softmax of
 `-D* / loss.target_temperature`, where D* is the committed taxonomy tree metric. Independent
-scaled negative polar distances supply model logits. All target probability stays within the
-same keep mask; no negative miner or false-negative clustering participates.
+scaled negative training distances of the head supply model logits. All target probability
+stays within the same keep mask; no negative miner or false-negative clustering participates.
 
 ### Radial Error
 
