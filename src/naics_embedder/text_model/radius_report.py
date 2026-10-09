@@ -1,4 +1,9 @@
-'''Radius and gradient checks for a selected hyperbolic arm (spec 4.2, Verification Radius).'''
+'''
+Radius and gradient checks for a selected arm (spec 4.2, Verification Radius, No inert terms).
+
+The radius checks are the hyperbolic arm's, the one arm with the radial term and the live-radius
+head (Req 12, 13). Every arm's terms and scales are checked for gradient.
+'''
 
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -219,11 +224,13 @@ def _gradient_norm(term: torch.Tensor, parameters: Tuple[torch.Tensor, ...]) -> 
 
 def term_gradients(model: torch.nn.Module, batch: Mapping[str, Any]) -> Dict[str, float]:
     '''
-    Measure No inert terms and signed dL/dr_a on one two-stream batch (spec 6, P26).
+    Measure No inert terms and, in the hyperbolic arm, signed dL/dr_a on one two-stream batch
+    (spec 6, P26).
 
     Each term's norm is taken over the trainable encoder parameters, with its contribution's
     weight. The two scale gradients come from the total, so a zero-weight code-code term also
-    leaves its scale inert. ``anchor_radius/<row>`` names each signed total-loss radius gradient.
+    leaves its scale inert. The radial term and ``anchor_radius/<row>``, each signed total-loss
+    radius gradient, are the hyperbolic arm's alone (Req 12): a flat arm reports neither.
     Existing parameter gradients and training flags are preserved. MoE utilization logging is
     suppressed for this computation only, so no Trainer, log warning or histogram is produced.
     '''
@@ -236,8 +243,9 @@ def term_gradients(model: torch.nn.Module, batch: Mapping[str, Any]) -> Dict[str
         terms = {
             'task': losses.task,
             'code_code': model.hparams.code_code_weight * losses.code_code,
-            'radial': model.hparams.radial_weight * losses.radial
         }
+        if losses.radial is not None:
+            terms['radial'] = model.hparams.radial_weight * losses.radial
         if losses.load_balancing is not None:
             terms['load_balancing'] = model.hparams.load_balancing_coef * losses.load_balancing
         result = {name: _gradient_norm(term, parameters) for name, term in terms.items()}
@@ -247,13 +255,14 @@ def term_gradients(model: torch.nn.Module, batch: Mapping[str, Any]) -> Dict[str
             )
         ):
             result[name] = _gradient_norm(losses.total, (scale.log_scale, ))
-        gradient = torch.autograd.grad(losses.total, losses.anchor_radius, allow_unused=True)[0]
-        if gradient is None:
-            gradient = torch.zeros_like(losses.anchor_radius)
-        result.update(
-            {
-                f'{ANCHOR_GRADIENT_PREFIX}{row}': float(value)
-                for row, value in enumerate(gradient.detach().cpu())
-            }
-        )
+        if model.encoder.head.radial:
+            gradient = torch.autograd.grad(losses.total, losses.anchor_radius, allow_unused=True)[0]
+            if gradient is None:
+                gradient = torch.zeros_like(losses.anchor_radius)
+            result.update(
+                {
+                    f'{ANCHOR_GRADIENT_PREFIX}{row}': float(value)
+                    for row, value in enumerate(gradient.detach().cpu())
+                }
+            )
     return result

@@ -878,8 +878,11 @@ def radius_report_command(
     Check radius variation, geometry and loss gradients for one selected checkpoint.
 
     Gradients use epoch 0, step 0 of the saved seed and saved query chunk size. The checkpoint
-    and its table must share an export provenance. The report is written even when a measured
-    criterion fails; a failure exits 1. No evaluation split is scored.
+    and its table must share an export provenance. The radius checks are the hyperbolic arm's: a
+    flat arm (Req 12) has no radial term or live-radius head, so its report checks its terms and
+    scales alone and records ``radius`` as null. The report names the arm's geometry and is
+    written even when a measured criterion fails; a failure exits 1. No evaluation split is
+    scored.
     '''
 
     configure_logging('tools_radius_report.log')
@@ -906,28 +909,33 @@ def radius_report_command(
         batch = data.train_dataset[0]
         model.refresh_code_cache(data.code_rows)
         gradients = term_gradients(model, batch)
-        anchors = [
-            gradients.pop(f'{ANCHOR_GRADIENT_PREFIX}{row}')
-            for row in range(len(batch['codes']['ids']))
-        ]
-        radius = radius_report(pl.read_parquet(table), anchor_radius_gradient=np.array(anchors))
+        head = model.encoder.head
+        # Verification "Radius" checks the radial arm, the hyperbolic (Req 12, 13)
+        radius = None
+        if head.radial:
+            anchors = [
+                gradients.pop(f'{ANCHOR_GRADIENT_PREFIX}{row}')
+                for row in range(len(batch['codes']['ids']))
+            ]
+            radius = radius_report(pl.read_parquet(table), anchor_radius_gradient=np.array(anchors))
         inert = [
             name for name, value in gradients.items() if not (np.isfinite(value) and value > 0)
         ]
         report = {
             'checkpoint': str(Path(checkpoint).resolve()),
             'table': str(Path(table).resolve()),
+            'geometry': head.geometry,
             'seed': int(model.hparams.seed),
             'epoch': 0,
             'step': 0,
             'anchor_ids': batch['codes']['ids'].tolist(),
-            'radius': asdict(radius),
+            'radius': None if radius is None else asdict(radius),
             'term_gradients': {
                 name: value if np.isfinite(value) else None
                 for name, value in gradients.items()
             },
             'inert_terms': inert,
-            'passed': radius.passed and not inert
+            'passed': (radius is None or radius.passed) and not inert
         }
         rendered = json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + '\n'
         if output:
