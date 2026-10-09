@@ -64,10 +64,10 @@ UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto -q
 ## Coverage and Limits
 
 Measure coverage with pytest-cov rather than inferring it from inventory or pass counts.
-The integration file trains the reference fixture through the real Trainer, but no test runs
-the whole production pipeline from raw-data generation through text, HGCN and a real decision.
-HGCN's one-batch fit tests its structural logging; it does not establish a complete graph
-training campaign. Historical analysis and model runs are separate evidence.
+`integration/test_reference_training.py` trains the reference fixture through the real Trainer,
+but no test runs the whole production pipeline from raw-data generation through text, HGCN and
+a real decision. HGCN's one-batch fit tests its structural logging; it does not establish a
+complete graph training campaign. Historical analysis and model runs are separate evidence.
 
 When a test asserts a refusal, ensure its fixture violates only the intended condition and
 assert that no export/read occurred first. A broad `raises(ValueError)` can pass after the
