@@ -412,7 +412,8 @@ uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperboli
 - `--table PATH` - The arm's code table in the export form (tangent coordinates at the origin
   for a hyperbolic arm; Lorentz points are refused)
 - `--geometry euclidean|spherical|hyperbolic` - The arm's distance: Euclidean, cosine, or the
-  geodesic distance after the exponential map at the origin
+  geodesic distance after the exponential map at the origin; a table whose export provenance
+  names another geometry is refused (P9)
 - `--codebook PATH` - A supervision bundle's `naics_codebook.parquet`; the table must hold
   exactly its codes
 - `--curvature FLOAT` - A hyperbolic arm's curvature magnitude (default: 1.0)
