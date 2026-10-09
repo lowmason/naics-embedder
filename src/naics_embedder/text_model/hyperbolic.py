@@ -32,12 +32,15 @@ except ImportError:
 
 class HeadPoints(NamedTuple):
     '''
-    The head's points for a batch of B vectors in dimension d.
+    The points of any geometry head (Req 12) for a batch of B vectors in dimension d.
 
     Attributes:
-        tangent: The bounded tangent vector at the origin, r · û (B, d), which the export writes.
-        embedding: The Lorentz point exp_o(r · û) = (cosh r, sinh r · û) at c = 1 (B, d + 1).
-        radius: r, the point's geodesic distance from the origin (B,).
+        tangent: The coordinates the export writes (B, d): the bounded tangent vector at the
+            origin, r · û, under hyperbolic; v under Euclidean; û under spherical.
+        embedding: The arm's point: the Lorentz point exp_o(r · û) = (cosh r, sinh r · û) at c = 1
+            (B, d + 1) under hyperbolic; ``tangent`` itself (B, d) otherwise.
+        radius: The polar radius (B,): r, the point's geodesic distance from the origin, under
+            hyperbolic; ‖v‖ under Euclidean; 1 under spherical, or 0 where v is 0.
         direction: û, the unit direction of the head's input (B, d); zero where the input is zero.
     '''
 
@@ -61,8 +64,12 @@ class HyperbolicHead(nn.Module):
     (Req 13): dr/dν = sech²(ν / R) is positive, about 0.61 at a six-digit code's target r = 5 under
     R = 8. The interim cap at norm 2 passed about 1e-7 at its saturated points. In float32 the
     derivative rounds to 0 only from ν ≈ 8.7R, where tanh rounds to 1. At v = 0 the direction and
-    the radius are 0, so the point is the origin, and every gradient there is finite. ``distance``
-    names the decoding distance for its points.
+    the radius are 0, so the point is the origin, and every gradient there is finite.
+
+    It is Req 12's hyperbolic arm, the one arm with the radial term. ``geometry`` names the arm,
+    ``distance`` the decoding distance for its points and ``radial`` whether the radial term
+    applies; ``pair_distance`` is its training distance, and ``read_points`` maps exported tangents
+    to the points its distance reads. The flat arms' heads are in ``text_model/heads.py``.
 
     Args:
         radius_bound: R, the bound on every radius (``model.radius_bound``).
@@ -71,7 +78,10 @@ class HyperbolicHead(nn.Module):
         ValueError: If ``radius_bound`` is not a positive finite number.
     '''
 
+    geometry = 'hyperbolic'
     distance = 'lorentz'
+    # The radial term exists only in the hyperbolic arm (Req 12)
+    radial = True
 
     def __init__(self, radius_bound: float = 8.0):
         super().__init__()
@@ -102,8 +112,25 @@ class HyperbolicHead(nn.Module):
         embedding = torch.cat([torch.cosh(radius), torch.sinh(radius) * direction], dim=1)
         return HeadPoints(tangent, embedding, radius.squeeze(1), direction)
 
-def _refuse_unpaired_shapes(*tensors: torch.Tensor) -> None:
-    '''Refuse anything but radii (A,) and (B,) with directions (A, d) and (B, d).'''
+    @staticmethod
+    def pair_distance(
+        radius_a: torch.Tensor,
+        direction_a: torch.Tensor,
+        radius_b: torch.Tensor,
+        direction_b: torch.Tensor,
+    ) -> torch.Tensor:
+        '''The training distance between two sets of the head's points: ``polar_distance``.'''
+
+        return polar_distance(radius_a, direction_a, radius_b, direction_b)
+
+    @staticmethod
+    def read_points(tangent: torch.Tensor) -> torch.Tensor:
+        '''Exported bounded tangents as Lorentz points, float64 on the CPU: ``exp_map_origin``.'''
+
+        return exp_map_origin(tangent)
+
+def _refuse_unpaired_shapes(*tensors: torch.Tensor, name: str = 'polar_distance') -> None:
+    '''Refuse anything but radii (A,) and (B,) with directions (A, d) and (B, d), for ``name``.'''
 
     shapes = [tuple(tensor.shape) for tensor in tensors]
     paired = [len(shape) for shape in shapes] == [1, 2, 1, 2]
@@ -111,9 +138,9 @@ def _refuse_unpaired_shapes(*tensors: torch.Tensor) -> None:
         (count_a, ), (rows_a, width_a), (count_b, ), (rows_b, width_b) = shapes
         paired = (rows_a, rows_b, width_a) == (count_a, count_b, width_b)
     if not paired:
+        got = ', '.join(str(shape) for shape in shapes)
         raise ValueError(
-            'polar_distance takes radii (A,) and (B,) with directions (A, d) and (B, d); got '
-            + ', '.join(str(shape) for shape in shapes)
+            f'{name} takes radii (A,) and (B,) with directions (A, d) and (B, d); got {got}'
         )
 
 def polar_distance(
@@ -160,6 +187,25 @@ def polar_distance(
         separated, torch.sqrt(_where_positive(squared, separated)), torch.zeros_like(squared)
     )
     return 2 * torch.asinh(root)
+
+def exp_map_origin(tangent: torch.Tensor) -> torch.Tensor:
+    '''
+    The exponential map at the origin of the curvature -1 hyperboloid (c = 1), in float64.
+
+    It is ``HyperbolicHead``'s map, computed in float64 on the CPU whatever the tangent's device
+    and dtype: the hyperbolic arm's read map (``HyperbolicHead.read_points``).
+
+    Args:
+        tangent: Tangent vectors at the origin (N, d).
+
+    Returns:
+        (time, space) rows (N, d + 1), float64 on the CPU.
+    '''
+
+    # .cpu() before the cast: casting an MPS tensor to float64 raises
+    tangent = tangent.cpu().to(torch.float64)
+    norm = torch.linalg.vector_norm(tangent, dim=1, keepdim=True).clamp(min=1e-8)
+    return torch.cat([torch.cosh(norm), torch.sinh(norm) / norm * tangent], dim=1)
 
 # -------------------------------------------------------------------------------------------------
 # Hyperbolic Manifold Validation and Diagnostics

@@ -24,6 +24,7 @@ from transformers.modeling_layers import GradientCheckpointingLayer
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.fields import CHANNELS, QUERY
 from naics_embedder.text_model.fusion import FUSIONS
+from naics_embedder.text_model.heads import GEOMETRIES
 from naics_embedder.text_model.hyperbolic import HyperbolicHead, check_lorentz_manifold_validity
 from naics_embedder.text_model.shared_encoder import (
     DIMENSIONS,
@@ -257,6 +258,30 @@ def test_the_encoder_takes_no_curvature(make_encoder):
 def test_the_radius_bound_reaches_the_head(make_encoder):
     assert make_encoder(radius_bound=5.0).head.radius_bound == 5.0
     assert make_encoder().head.radius_bound == 8.0
+
+@pytest.mark.parametrize('geometry', GEOMETRIES)
+def test_the_geometry_picks_the_head_and_the_width_of_the_point(make_encoder, geometry):
+    '''Req 12: every arm shares the encoder; the head and the point's width follow the geometry.'''
+
+    encoder = make_encoder(geometry=geometry).eval()
+
+    with torch.no_grad():
+        output = encoder(stack_text_inputs(CODES))
+
+    assert encoder.head.geometry == geometry
+    assert [name for name, _ in encoder.named_children()][-1] == 'head'
+    assert output['tangent'].shape == (2, 8)
+    assert output['embedding'].shape == (2, 9 if geometry == 'hyperbolic' else 8)
+
+def test_an_unknown_geometry_is_refused_before_the_backbone_loads(make_encoder, monkeypatch):
+
+    def never(_name):
+        raise AssertionError('the backbone loaded before the geometry was refused')
+
+    monkeypatch.setattr('naics_embedder.text_model.shared_encoder.load_base_model', never)
+
+    with pytest.raises(ValueError, match="unknown geometry 'poincare'"):
+        make_encoder(geometry='poincare')
 
 def test_an_unknown_fusion_or_dimension_is_refused(make_encoder):
     assert DIMENSIONS == (8, 16, 32)
@@ -518,6 +543,16 @@ def test_under_bf16_autocast_only_the_backbone_runs_in_reduced_precision(make_en
     floating = {name for name, value in output.items() if value.is_floating_point()}
     assert floating >= {'embedding', 'tangent', 'radius', 'direction'}
     assert {output[name].dtype for name in floating} == {torch.float32}
+
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_under_bf16_autocast_a_flat_head_gives_float32_points(make_encoder, geometry):
+    encoder = make_encoder(geometry=geometry).eval()
+
+    with torch.no_grad(), torch.autocast('cpu', dtype=torch.bfloat16):
+        output = encoder(stack_text_inputs(CODES))
+
+    names = ('embedding', 'tangent', 'radius', 'direction')
+    assert {output[name].dtype for name in names} == {torch.float32}
 
 def test_a_malformed_batch_is_refused(make_encoder):
     encoder = make_encoder()

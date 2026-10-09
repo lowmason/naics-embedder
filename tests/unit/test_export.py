@@ -27,6 +27,7 @@ from naics_embedder.text_model.export import (
     load_arm_model,
 )
 from naics_embedder.text_model.fields import QUERY, tokenize_field
+from naics_embedder.text_model.heads import GEOMETRIES
 from naics_embedder.utils.config import Config
 from tests.fixtures.shared_encoder import (
     ARM_DIMENSION,
@@ -189,6 +190,27 @@ def test_the_hgcn_feeder_writes_d_plus_one_lorentz_columns(
     # Each row lies on the hyperboloid: -x0^2 + |x|^2 = -1
     assert np.allclose(-points[:, 0]**2 + (points[:, 1:]**2).sum(axis=1), -1.0, atol=1e-4)
 
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_the_hgcn_feeder_refuses_a_flat_arm_before_anything_is_read(
+    monkeypatch, tmp_path, geometry_checkpoint, geometry
+):
+    '''HGCN refines Lorentz points, which only the hyperbolic arm has (Req 12, P10).'''
+
+    checkpoint = geometry_checkpoint(geometry)
+
+    def never(_cfg):
+        raise AssertionError('the bundle was read before the flat arm was refused')
+
+    monkeypatch.setattr(training_cli, 'require_valid_supervision_bundle', never)
+    forbid_model_loads(monkeypatch)
+    cfg = Config()
+    cfg.model.geometry = geometry
+    output = tmp_path / 'encodings.parquet'
+
+    with pytest.raises(ValueError, match=f'a {geometry} arm has none'):
+        training_cli.generate_embeddings_from_checkpoint(str(checkpoint), cfg, str(output))
+    assert not output.exists()
+
 def test_the_hgcn_feeder_refuses_a_checkpoint_trained_on_truncated_text(
     monkeypatch, tmp_path, truncated_checkpoint, validated_bundle, five_code_descriptions_parquet
 ):
@@ -277,8 +299,44 @@ def test_the_table_holds_each_codes_bounded_tangent(
     assert bound == 8.0
     assert (np.linalg.norm(tangent.numpy(), axis=1) <= bound).all()
     provenance = json.loads(provenance_path(exported_table).read_text())
-    assert provenance['coordinates'] == COORDINATES
-    assert COORDINATES.startswith('the bounded tangent vector at the origin')
+    assert provenance['geometry'] == 'hyperbolic'
+    assert provenance['coordinates'] == COORDINATES['hyperbolic']
+
+def test_the_hyperbolic_coordinates_are_named_as_stage_7_named_them():
+    '''A Stage 7 table's provenance and a Stage 8 hyperbolic export's name one form (Req 12).'''
+
+    assert tuple(COORDINATES) == GEOMETRIES
+    assert COORDINATES['hyperbolic'] == (
+        'the bounded tangent vector at the origin, r * u with r = R * tanh(|v| / R) (Req 13); '
+        'no time coordinate'
+    )
+
+@pytest.mark.parametrize('geometry', GEOMETRIES)
+def test_each_geometry_arm_exports_its_own_coordinates_and_names_them(
+    tmp_path, geometry_checkpoint, validated_bundle, five_code_token_config, geometry
+):
+    '''Req 2's form of each arm (Req 12): the head's tangent, with the geometry it is read in.'''
+
+    checkpoint = geometry_checkpoint(geometry)
+
+    exported = export_code_table(
+        checkpoint, validated_bundle, five_code_token_config, tmp_path / f'{geometry}.parquet'
+    )
+
+    model, _ = load_arm_model(checkpoint, validated_bundle, summaries=summaries_identity(MINILM))
+    assert model.encoder.head.geometry == geometry
+    rows = five_code_token_rows(five_code_token_config, validated_bundle)
+    tangent = encode_token_rows(model, rows)['tangent'].numpy()
+    matrix = pl.read_parquet(exported).select(COORDINATE_COLUMNS).to_numpy()
+    assert np.array_equal(matrix, tangent)
+    if geometry == 'spherical':
+        # û, not v: the sphere's points are unit vectors
+        assert np.allclose(np.linalg.norm(matrix, axis=1), 1.0, rtol=0.0, atol=1e-6)
+    provenance = json.loads(provenance_path(exported).read_text())
+    assert provenance['geometry'] == geometry
+    assert provenance['coordinates'] == COORDINATES[geometry]
+    assert provenance['contract']['encoder']['geometry'] == geometry
+    assert provenance['dimension'] == ARM_DIMENSION
 
 def test_a_read_rebuilds_the_head_at_the_checkpoints_radius_bound(
     tmp_path, shared_model, validated_bundle
@@ -343,7 +401,7 @@ def test_the_provenance_names_the_table_and_the_checkpoint(
     expected = contract_for_bundle(
         validated_bundle.manifest,
         encoder=shared_encoder_architecture(
-            fusion='masked_mean', dimension=ARM_DIMENSION, backbone=MINILM
+            fusion='masked_mean', dimension=ARM_DIMENSION, backbone=MINILM, geometry='hyperbolic'
         ),
         summaries=summaries_identity(MINILM),
     )

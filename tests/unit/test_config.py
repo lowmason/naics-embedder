@@ -664,6 +664,23 @@ def test_a_fusion_or_dimension_outside_its_set_is_refused(key, value):
     # A Literal refusal: before the keys are declared, the same override fails as extra_forbidden
     assert _error_locs_and_types(excinfo) == [(('model', key.split('.')[1]), 'literal_error')]
 
+def test_the_geometry_is_hyperbolic_by_default_and_as_shipped(valid_config_dict):
+    '''Req 5's reference configuration is hyperbolic, and the YAML states the key itself.'''
+
+    assert Config().model.geometry == 'hyperbolic'
+    assert valid_config_dict['model']['geometry'] == 'hyperbolic'
+    assert Config.model_validate(valid_config_dict).model.geometry == 'hyperbolic'
+
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical', 'hyperbolic'])
+def test_every_geometry_arm_is_accepted(geometry):
+    assert Config().override({'model.geometry': geometry}).model.geometry == geometry
+
+def test_a_geometry_outside_the_three_arms_is_refused():
+    with pytest.raises(ValidationError) as excinfo:
+        Config().override({'model.geometry': 'poincare'})
+
+    assert _error_locs_and_types(excinfo) == [(('model', 'geometry'), 'literal_error')]
+
 def test_the_radius_bound_is_8_by_default_and_as_shipped(valid_config_dict):
     # Spec 4.2 and 4.5: R = 8, so a six-digit code at its target r = 5 keeps dr/dν ≈ 0.61
     assert Config().model.radius_bound == 8.0

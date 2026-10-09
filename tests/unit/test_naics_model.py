@@ -35,6 +35,7 @@ from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.text_model import naics_model as model_module
 from naics_embedder.text_model.export import encode_token_rows
 from naics_embedder.text_model.fields import CHANNELS, QUERY
+from naics_embedder.text_model.heads import GEOMETRIES
 from naics_embedder.text_model.loss import LogitScale
 from naics_embedder.text_model.monitor import (
     MONITOR_RECORDS,
@@ -270,6 +271,7 @@ class TestModelInitialization:
             ('lora_dropout', 0.1),
             ('fusion', 'masked_mean'),
             ('dimension', 16),
+            ('geometry', 'hyperbolic'),
             ('num_experts', 4),
             ('top_k', 2),
             ('moe_hidden_dim', 1024),
@@ -404,6 +406,20 @@ class TestModelInitialization:
     def test_an_unknown_dimension_is_refused(self, model_config):
         with pytest.raises(ValueError, match='unknown dimension'):
             NAICSContrastiveModel(**model_config, dimension=12)
+
+    @pytest.mark.parametrize('geometry', GEOMETRIES)
+    def test_the_geometry_picks_the_head_and_enters_the_contract(self, reference_model, geometry):
+        '''Req 12: the geometry is a saved hyperparameter, and the encoder record names it (P7).'''
+
+        model = reference_model(geometry=geometry)
+
+        assert model.hparams['geometry'] == geometry
+        assert model.encoder.head.geometry == geometry
+        assert model.checkpoint_contract.encoder.geometry == geometry
+
+    def test_an_unknown_geometry_is_refused(self, model_config):
+        with pytest.raises(ValueError, match="unknown geometry 'poincare'"):
+            NAICSContrastiveModel(**model_config, geometry='poincare')
 
     def test_the_code_targets_are_buffers_that_checkpoints_leave_out(
         self, reference_arm_model, code_targets
@@ -548,21 +564,28 @@ class TestComputeLosses:
         with pytest.raises(RuntimeError, match='cache'):
             reference_arm_model.compute_losses(epoch_steps[0])
 
+    @pytest.mark.parametrize('geometry', GEOMETRIES)
     def test_every_term_and_both_scales_get_gradient(
-        self, reference_arm_model, reference_arm_code_rows, epoch_steps
+        self, reference_model, reference_arm_code_rows, epoch_steps, geometry
     ):
-        '''Spec 6, No inert terms; and dL/dr_a is nonzero for every anchor (Verification
-        "Radius").'''
+        '''Spec 6, No inert terms, in every geometry arm; the radial term is the hyperbolic arm's
+        alone (Req 12). dL/dr_a is nonzero for every anchor wherever the radius is live
+        (Verification "Radius").'''
 
-        model = reference_arm_model
+        model = reference_model(geometry=geometry)
         model.refresh_code_cache(reference_arm_code_rows)
 
         losses = model.compute_losses(epoch_steps[0])
 
         assert isinstance(losses, model_module.StepLosses)
         assert losses.load_balancing is None
+        terms = ['task', 'code_code']
+        if geometry == 'hyperbolic':
+            terms.append('radial')
+        else:
+            assert losses.radial is None
         weight = model.encoder.projection.weight
-        for name in ('task', 'code_code', 'radial'):
+        for name in terms:
             (gradient, ) = torch.autograd.grad(getattr(losses, name), weight, retain_graph=True)
             assert gradient.abs().sum() > 0, name
         task_scale = model.logit_scale_task.log_scale
@@ -579,9 +602,13 @@ class TestComputeLosses:
             assert gradients[pair] is not None and gradients[pair].item() != 0, pair
         assert gradients['task', 'code'] is None
         assert gradients['code_code', 'task'] is None
-        (radius_gradient, ) = torch.autograd.grad(losses.total, losses.anchor_radius)
         assert losses.anchor_radius.shape == epoch_steps[0]['codes']['ids'].shape
-        assert (radius_gradient != 0).all()
+        if geometry == 'spherical':
+            # Every point of the sphere is at radius 1: no term trains it
+            assert not losses.anchor_radius.requires_grad
+        else:
+            (radius_gradient, ) = torch.autograd.grad(losses.total, losses.anchor_radius)
+            assert (radius_gradient != 0).all()
 
     def test_the_total_weights_the_terms_and_the_settings_reach_them(
         self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch
@@ -609,8 +636,34 @@ class TestComputeLosses:
         losses = model.compute_losses(epoch_steps[0])
 
         assert settings == {'target_temperature': 0.5, 'radial_step': 0.75}
-        expected = losses.task + 0.25 * losses.code_code + 2.0 * losses.radial
-        torch.testing.assert_close(losses.total, expected, rtol=1e-6, atol=0.0)
+        # Summed in Stage 7's order, so the hyperbolic arm's total is Stage 7's bit for bit (P6)
+        assert torch.equal(
+            losses.total, losses.task + 0.25 * losses.code_code + 2.0 * losses.radial
+        )
+
+    @pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+    def test_a_flat_arm_has_no_radial_term_and_its_total_leaves_it_out(
+        self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch, geometry
+    ):
+        '''The radial term exists only in the hyperbolic arm (Req 12): a flat arm never computes
+        it, and its total is L_task + w_c L_cc whatever w_r is.'''
+
+        model = reference_model(geometry=geometry, code_code_weight=0.25, radial_weight=2.0)
+        model.refresh_code_cache(reference_arm_code_rows)
+        calls = []
+        radial = model_module.radial_loss
+
+        def radial_spy(radius, levels, radial_step):
+            calls.append(radial_step)
+            return radial(radius, levels, radial_step)
+
+        monkeypatch.setattr(model_module, 'radial_loss', radial_spy)
+
+        losses = model.compute_losses(epoch_steps[0])
+
+        assert calls == []
+        assert losses.radial is None
+        assert torch.equal(losses.total, losses.task + 0.25 * losses.code_code)
 
     def test_load_balancing_reads_both_streams_gets_gradient_and_enters_the_total_under_moe(
         self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch
@@ -713,13 +766,22 @@ class TestComputeLosses:
         # 'Dealing in new cars' (level 5): the five-digit codes, and its referencing code
         assert by_query[5, frozenset({'44111'})] == {'31111', '31121', '32111', '44111', '311111'}
 
-    @pytest.mark.parametrize('fusion', ['masked_mean', 'moe'])
+    @pytest.mark.parametrize(
+        ('fusion', 'geometry'),
+        [
+            ('masked_mean', 'hyperbolic'),
+            ('moe', 'hyperbolic'),
+            ('masked_mean', 'euclidean'),
+            ('masked_mean', 'spherical'),
+        ],
+    )
     def test_the_distances_and_terms_run_in_float32_with_autocast_off(
-        self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch, fusion
+        self, reference_model, reference_arm_code_rows, epoch_steps, monkeypatch, fusion, geometry
     ):
-        '''Spec 6, Precision: under CPU bf16 autocast, every distance and term is float32.'''
+        '''Spec 6, Precision: under CPU bf16 autocast, every distance and term is float32, in
+        every geometry arm.'''
 
-        model = reference_model(fusion=fusion, moe_hidden_dim=16)
+        model = reference_model(fusion=fusion, moe_hidden_dim=16, geometry=geometry)
         model.log = Mock()
         model.refresh_code_cache(reference_arm_code_rows)
         seen = []
@@ -743,8 +805,10 @@ class TestComputeLosses:
 
             return wrapped
 
-        for name in ('polar_distance', 'task_loss', 'code_code_loss', 'radial_loss'):
+        for name in ('task_loss', 'code_code_loss', 'radial_loss'):
             monkeypatch.setattr(model_module, name, spy(name, getattr(model_module, name)))
+        head = model.encoder.head
+        monkeypatch.setattr(head, 'pair_distance', spy('pair_distance', head.pair_distance))
         if fusion == 'moe':
             monkeypatch.setattr(
                 model,
@@ -756,9 +820,11 @@ class TestComputeLosses:
             losses = model.compute_losses(epoch_steps[0])
 
         names = [entry[0] for entry in seen]
-        expected = [
-            'polar_distance', 'polar_distance', 'task_loss', 'code_code_loss', 'radial_loss'
-        ]
+        expected = ['pair_distance', 'pair_distance', 'task_loss', 'code_code_loss']
+        terms = ['total', 'task', 'code_code', 'anchor_radius']
+        if geometry == 'hyperbolic':
+            expected.append('radial_loss')
+            terms.append('radial')
         if fusion == 'moe':
             expected.append('load_balancing')
         assert sorted(names) == sorted(expected)
@@ -766,7 +832,7 @@ class TestComputeLosses:
             assert not autocast, name
             assert inputs == {torch.float32}, name
             assert output == torch.float32, name
-        for name in ('total', 'task', 'code_code', 'radial', 'anchor_radius'):
+        for name in terms:
             assert getattr(losses, name).dtype == torch.float32, name
 
     def test_the_candidates_are_the_cache_with_the_anchors_live(
@@ -797,13 +863,13 @@ class TestComputeLosses:
 
         monkeypatch.setattr(model.encoder, 'forward', forward_spy)
         candidates = []
-        distance = model_module.polar_distance
+        distance = model.encoder.head.pair_distance
 
         def distance_spy(radius_a, direction_a, radius_b, direction_b):
             candidates.append((radius_b, direction_b))
             return distance(radius_a, direction_a, radius_b, direction_b)
 
-        monkeypatch.setattr(model_module, 'polar_distance', distance_spy)
+        monkeypatch.setattr(model.encoder.head, 'pair_distance', distance_spy)
 
         model.compute_losses(step)
 
@@ -1533,14 +1599,20 @@ class TestCheckpointContract:
         assert contract.bundle_id == validated_bundle.manifest.bundle_id
         assert contract.codebook_fingerprint == validated_bundle.manifest.codebook_fingerprint
         assert contract.encoder == shared_encoder_architecture(
-            fusion='masked_mean', dimension=16, backbone='sentence-transformers/all-MiniLM-L6-v2'
+            fusion='masked_mean',
+            dimension=16,
+            backbone='sentence-transformers/all-MiniLM-L6-v2',
+            geometry='hyperbolic'
         )
 
     def test_a_runtime_contract_of_another_encoder_is_refused(self, model_config, validated_bundle):
         other = contract_for_bundle(
             validated_bundle.manifest,
             encoder=shared_encoder_architecture(
-                fusion='masked_mean', dimension=8, backbone=model_config['base_model_name']
+                fusion='masked_mean',
+                dimension=8,
+                backbone=model_config['base_model_name'],
+                geometry='hyperbolic'
             ),
             summaries=None,
         )
@@ -1669,6 +1741,23 @@ class TestCheckpointContract:
 
         with pytest.raises(ValueError, match='D2'):
             NAICSContrastiveModel.load_from_checkpoint(path, map_location='cpu', dimension=8)
+
+    def test_load_from_checkpoint_refuses_another_geometry(self, shared_checkpoint):
+        '''P7: the geometry is in the encoder record, so another arm's head never loads.'''
+
+        with pytest.raises(ValueError, match="geometry='euclidean'"):
+            NAICSContrastiveModel.load_from_checkpoint(
+                shared_checkpoint, map_location='cpu', geometry='euclidean'
+            )
+
+    def test_a_checkpoint_saved_before_stage_8_loads_as_hyperbolic(self, pre_stage8_checkpoint):
+        restored = NAICSContrastiveModel.load_from_checkpoint(
+            pre_stage8_checkpoint, map_location='cpu'
+        )
+
+        assert restored.hparams['geometry'] == 'hyperbolic'
+        assert restored.encoder.head.geometry == 'hyperbolic'
+        assert restored.checkpoint_contract.encoder.geometry == 'hyperbolic'
 
     def test_load_from_checkpoint_refuses_a_pre_stage_7_checkpoint(self, pre_stage7_checkpoint):
         '''

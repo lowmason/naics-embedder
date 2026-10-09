@@ -17,6 +17,7 @@ import torch
 from naics_embedder.decision.decide import _monitor_record_problem
 from naics_embedder.decision.records import ArmSpec
 from naics_embedder.decision.sweep import SeedArtifacts
+from naics_embedder.panels.decoding import GEOMETRY_DISTANCES
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.supervision.checkpoints import (
@@ -83,7 +84,8 @@ class CheckpointRunner:
         expected = shared_encoder_architecture(
             fusion=spec.settings.get('fusion', self.cfg.model.fusion),
             dimension=spec.dimension,
-            backbone=spec.backbone
+            backbone=spec.backbone,
+            geometry=spec.geometry
         )
         if contract.encoder != expected:
             raise ValueError('the checkpoint encoder contract differs from the arm (D2)')
@@ -94,9 +96,10 @@ class CheckpointRunner:
         '''
         Check one seed without exporting or reading a decision panel (P25, spec 5).
 
-        Records must cover every epoch through ``last.ckpt`` exactly once and name its training
-        run. The earliest epoch with the highest MRR must have one unambiguous checkpoint,
-        whose identity, contract, settings and saved best score agree exactly.
+        Records must cover every epoch through ``last.ckpt`` exactly once, name its training run
+        and read under the distance of the arm's geometry (Req 12). The earliest epoch with the
+        highest MRR must have one unambiguous checkpoint, whose identity, contract, settings and
+        saved best score agree exactly.
 
         Raises:
             ValueError: Naming the seed and its first missing or inconsistent artifact.
@@ -124,6 +127,7 @@ class CheckpointRunner:
         training_run = last.get(TRAINING_RUN_KEY)
         if not isinstance(training_run, str) or not training_run.strip():
             raise ValueError('last.ckpt names no training run')
+        distance = GEOMETRY_DISTANCES[spec.geometry]
         epochs = []
         for record in records:
             problem = _monitor_record_problem(record)
@@ -132,6 +136,11 @@ class CheckpointRunner:
             detail = record['read']['detail']
             if detail.get('training_run') != training_run:
                 raise ValueError('a monitor record names another training run than last.ckpt')
+            if detail.get('distance') != distance:
+                raise ValueError(
+                    f"a monitor record reads by {detail.get('distance')!r}, but a "
+                    f'{spec.geometry} arm decodes by {distance!r} (Req 12)'
+                )
             epochs.append(detail['epoch'])
         repeated = sorted(epoch for epoch, count in Counter(epochs).items() if count > 1)
         missing = sorted(set(range(last_epoch + 1)) - set(epochs))

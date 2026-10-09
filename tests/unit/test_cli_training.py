@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -38,7 +39,7 @@ MINILM = 'sentence-transformers/all-MiniLM-L6-v2'
 OUTCOME_MRR = 'val/outcome_mrr'
 # The record the default config builds
 CONFIGURED_ENCODER = shared_encoder_architecture(
-    fusion='masked_mean', dimension=16, backbone=MINILM
+    fusion='masked_mean', dimension=16, backbone=MINILM, geometry='hyperbolic'
 )
 HGCN_QUESTION = 'Generate embeddings parquet file from this checkpoint?'
 
@@ -340,9 +341,53 @@ def test_the_runtime_contract_records_the_configured_encoder(training_env):
 
     model_kwargs = training_env.trainer.fit_calls[0]['model'].kwargs
     assert model_kwargs['checkpoint_contract'].encoder == shared_encoder_architecture(
-        fusion='attention', dimension=8, backbone=MINILM
+        fusion='attention', dimension=8, backbone=MINILM, geometry='hyperbolic'
     )
     assert (model_kwargs['fusion'], model_kwargs['dimension']) == ('attention', 8)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_the_model_and_its_contract_follow_the_configured_geometry(training_env, geometry):
+    '''Req 12, P7: the geometry reaches the model and the encoder record exact resume compares.'''
+
+    training.train(skip_validation=True, overrides=[f'model.geometry={geometry}'])
+
+    model_kwargs = training_env.trainer.fit_calls[0]['model'].kwargs
+    assert model_kwargs['geometry'] == geometry
+    assert model_kwargs['checkpoint_contract'].encoder == shared_encoder_architecture(
+        fusion='masked_mean', dimension=16, backbone=MINILM, geometry=geometry
+    )
+
+@pytest.mark.unit
+def test_the_train_banner_names_the_geometry(cli_runner, training_env):
+    result = cli_runner.invoke(
+        cli_app, ['train', 'model.geometry=spherical'], catch_exceptions=False
+    )
+
+    assert result.exit_code == 0
+    assert 'Geometry: spherical' in result.output.replace('\n', '')
+
+@pytest.mark.unit
+def test_the_sweep_spec_names_the_configured_geometry_outside_the_run_settings(
+    training_env, monkeypatch
+):
+    '''P7: the arm's geometry is its spec's, and the 21 run settings keep their keys.'''
+
+    monkeypatch.setattr(
+        tools_cli, 'load_backbone', lambda name: (None, None, 'resolved'), raising=False
+    )
+    cfg = training.Config.from_yaml('config.yaml').override(
+        {
+            'model.geometry': 'euclidean',
+            'model.dimension': 8
+        }
+    )
+
+    spec = tools_cli._sweep_spec(cfg, name='euclidean-d8', accelerator='cuda')
+
+    assert (spec.geometry, spec.dimension) == ('euclidean', 8)
+    assert len(spec.settings) == 21
+    assert 'geometry' not in spec.settings
 
 @pytest.mark.unit
 @pytest.mark.parametrize(('overrides', 'bound'), [([], 8.0), (['model.radius_bound=5.0'], 5.0)])
@@ -667,6 +712,23 @@ def test_train_asks_the_hgcn_question_on_a_terminal(training_env, monkeypatch):
     training.train(skip_validation=True)
 
     assert questions == [(HGCN_QUESTION, False)]
+
+@pytest.mark.unit
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_train_never_asks_a_flat_arm_the_hgcn_question(training_env, monkeypatch, caplog, geometry):
+    '''HGCN refines Lorentz points, and a flat arm has none (Req 12): no question on a terminal,
+    and the log says why (P10).'''
+
+    questions = []
+    monkeypatch.setattr(training.typer, 'confirm', lambda *args, **_: questions.append(args))
+    monkeypatch.setattr(training, '_stdin_is_terminal', lambda: True)
+
+    with caplog.at_level(logging.INFO, logger=training.__name__):
+        training.train(skip_validation=True, overrides=[f'model.geometry={geometry}'])
+
+    assert training_env.trainer.fit_calls
+    assert questions == []
+    assert f'a {geometry} arm has no Lorentz points: no HGCN embeddings question' in caplog.messages
 
 @pytest.mark.unit
 @pytest.mark.parametrize(

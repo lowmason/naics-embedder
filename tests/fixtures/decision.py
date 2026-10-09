@@ -32,6 +32,7 @@ from naics_embedder.decision.scores import (
     panel_statistic,
 )
 from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.panels.decoding import GEOMETRY_DISTANCES
 from naics_embedder.panels.outcome import OUTCOME_PANEL
 from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path, text_only_fingerprint
@@ -212,15 +213,20 @@ def _table(directory: Path, name: str, seed: int, dimension: int) -> Path:
     table.write_parquet(path)
     return path
 
-def _read(panel: str, run_id: str, table: str, text_only: str, time: str) -> Dict:
-    '''A log record shaped as the panel writes it.'''
+def _read(
+    panel: str, run_id: str, table: str, text_only: str, time: str, arm_spec: ArmSpec
+) -> Dict:
+    '''A log record shaped as the panel writes it, of a read of ``arm_spec``'s seed.'''
 
     detail = {'run': run_id, 'arm_name': run_id.split('/')[0], 'seed': int(run_id.split('-')[-1])}
     if panel == OUTCOME_PANEL:
-        detail.update(encoder='SyntheticEncoder', distance='cosine', table=table)
+        distance = GEOMETRY_DISTANCES[arm_spec.geometry]
+        detail.update(encoder='SyntheticEncoder', distance=distance, table=table)
         fingerprint = PANEL_SET.outcome
     else:
-        detail.update(level=6, comparators=[], arm=table, text_only=text_only, dimension=16)
+        detail.update(
+            level=6, comparators=[], arm=table, text_only=text_only, dimension=arm_spec.dimension
+        )
         fingerprint = PANEL_SET.regressor
     return {
         'time': time,
@@ -240,14 +246,15 @@ def monitor_records(
     *,
     time: str,
     fingerprint: str = PANEL_SET.outcome,
+    distance: str = 'lorentz',
 ) -> List[Dict]:
     '''
     A training run's monitor records, one per epoch from 0, as ``monitor_reads.jsonl`` holds them:
     the epoch's MRR, and its read of the outcome panel's validation split as the selection log
     appended it.
 
-    Each read names the training run, the seed, the epoch and that epoch's code cache, whose
-    fingerprint is never a stored table's.
+    Each read names its distance (the hyperbolic arm's by default), the training run, the seed,
+    the epoch and that epoch's code cache, whose fingerprint is never a stored table's.
     '''
 
     return [
@@ -263,7 +270,7 @@ def monitor_records(
                 'n_queries': 0,
                 'detail': {
                     'encoder': 'LiveEncoder',
-                    'distance': 'lorentz',
+                    'distance': distance,
                     'training_run': training_run,
                     'seed': seed,
                     'epoch': epoch,
@@ -309,7 +316,13 @@ def synthetic_arm(
                 'training_run': training_run,
                 # argmax returns the first of tied maxima: the earliest best epoch
                 'checkpoint_epoch': int(np.argmax(monitor_mrrs)),
-                'monitor_records': monitor_records(training_run, seed, monitor_mrrs, time=time),
+                'monitor_records': monitor_records(
+                    training_run,
+                    seed,
+                    monitor_mrrs,
+                    time=time,
+                    distance=GEOMETRY_DISTANCES[arm_spec.geometry],
+                ),
             }
         runs.append(
             SeedRun(
@@ -329,7 +342,7 @@ def synthetic_arm(
                 log_records=[
                     _read(
                         panel, run_id, table.matrix_fingerprint, text_only.table.matrix_fingerprint,
-                        time
+                        time, arm_spec
                     ) for panel in PANELS
                 ],
                 **trained,

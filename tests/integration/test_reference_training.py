@@ -33,6 +33,7 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import Logger
 
 from naics_embedder.cli.commands import training
+from naics_embedder.panels.decoding import GEOMETRY_DISTANCES
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import matrix_fingerprint
@@ -41,6 +42,7 @@ from naics_embedder.supervision.checkpoints import CheckpointContract, validate_
 from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
 from naics_embedder.text_model.dataloader import datamodule as two_stream
 from naics_embedder.text_model.dataloader.datamodule import NAICSDataModule
+from naics_embedder.text_model.epoch_summary import EPOCH_SUMMARY, read_epoch_summary
 from naics_embedder.text_model.export import code_token_config, export_code_table
 from naics_embedder.text_model.mixins import OUTCOME_MRR
 from naics_embedder.text_model.monitor import (
@@ -176,8 +178,9 @@ class _StepRecorder(pyl.Callback):
 
 class _ModuleHooks:
     '''
-    The module's hooks as they ran: each step's terms, each epoch whose end ran with the logit
-    scales at that end, and each code-cache refresh with the hook and epoch it ran in.
+    The module's hooks as they ran: each step's terms (a flat arm's steps have no radial term),
+    each epoch whose end ran with the logit scales at that end, and each code-cache refresh with
+    the hook and epoch it ran in.
     '''
 
     def __init__(self, model: NAICSContrastiveModel):
@@ -192,7 +195,10 @@ class _ModuleHooks:
 
         def recorded_losses(batch):
             losses = compute_losses(batch)
-            terms = {term: getattr(losses, term).item() for term in TERMS}
+            terms = {
+                term: getattr(losses, term).item()
+                for term in TERMS if getattr(losses, term) is not None
+            }
             self.terms.append({'epoch': model.current_epoch, **terms})
             return losses
 
@@ -511,6 +517,57 @@ def test_an_epochs_monitor_mrr_is_the_read_of_that_epochs_exported_checkpoint(
         )
         arm = ArmEncoder.from_files(checkpoint, table, reference_bundle, token_config)
         exported = read_outcome_validation(arm, panel, 'the monitor read of the exported epoch')
+        assert exported.summary['mrr'] == record['mrr'], epoch
+        assert arm.table_fingerprint == record['read']['detail']['table'], epoch
+
+@pytest.mark.parametrize('precision', ['32-true', 'bf16-mixed'])
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_a_flat_arm_trains_without_the_radial_term_and_reads_by_its_own_distance(
+    reference_runs, reference_bundle, tmp_path, geometry, precision
+):
+    '''
+    Req 12 through the Trainer: a flat arm trains without the radial term, records no
+    ``loss/radial``, and each epoch's monitor read decodes by its own distance. As in the
+    hyperbolic arm, that read's MRR is the read of the table exported from the epoch's checkpoint,
+    exactly, on the CPU (spec 4.4).
+    '''
+
+    cfg = reference_runs.config(
+        'run', {
+            'training.trainer.max_epochs': 2,
+            'model.geometry': geometry
+        }
+    )
+    monitor = reference_runs.monitor(cfg, tmp_path / 'logs' / 'monitor_log.jsonl')
+    every_epoch = tmp_path / 'every_epoch'
+
+    run = reference_runs.build(
+        cfg, monitor, callbacks=[_every_epoch(every_epoch)], precision=precision
+    ).fit()
+
+    assert run.model.encoder.head.geometry == geometry
+    assert len(run.hooks.terms) == 2 * STEPS
+    assert all('radial' not in terms for terms in run.hooks.terms)
+    summary = read_epoch_summary(run.checkpoint_dir / EPOCH_SUMMARY)
+    assert [row['epoch'] for row in summary] == [0, 1]
+    assert all('loss/task' in row and 'loss/code_code' in row for row in summary)
+    assert all('loss/radial' not in row for row in summary)
+    records = read_monitor_records(run.checkpoint_dir / MONITOR_RECORDS)
+    distance = GEOMETRY_DISTANCES[geometry]
+    assert [record['read']['detail']['distance'] for record in records] == [distance] * 2
+    panel = OutcomePanel.from_bundle(reference_bundle, tmp_path / 'logs' / 'arm_log.jsonl')
+    token_config = run.datamodule.token_config
+    for epoch, record in enumerate(records):
+        checkpoint = every_epoch / f'epoch={epoch:03d}.ckpt'
+        table = export_code_table(
+            checkpoint,
+            reference_bundle,
+            token_config,
+            tmp_path / 'tables' / f'epoch={epoch:03d}.parquet',
+        )
+        arm = ArmEncoder.from_files(checkpoint, table, reference_bundle, token_config)
+        exported = read_outcome_validation(arm, panel, 'the monitor read of the exported epoch')
+        assert arm.distance == distance
         assert exported.summary['mrr'] == record['mrr'], epoch
         assert arm.table_fingerprint == record['read']['detail']['table'], epoch
 

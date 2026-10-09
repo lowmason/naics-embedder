@@ -277,6 +277,22 @@ def test_terms_scales_and_every_anchor_radius_have_nonzero_gradient(
         if name in before:
             assert torch.equal(parameter.grad, before[name])
 
+@pytest.mark.parametrize('geometry', ['euclidean', 'spherical'])
+def test_a_flat_arms_terms_and_scales_get_gradient_and_it_reports_no_radius_gradient(
+    geometry, tiny_backbone, reference_manifest, reference_bundle, reference_arm_code_rows,
+    reference_arm_steps
+):
+    '''Req 12: the radial term and dL/dr_a are the hyperbolic arm's alone.'''
+
+    model = build_reference_model(reference_manifest, reference_bundle, geometry=geometry).eval()
+    model.refresh_code_cache(reference_arm_code_rows)
+
+    result = _module().term_gradients(model, reference_arm_steps[0])
+
+    expected = {'task', 'code_code', 'logit_scale_task', 'logit_scale_code'}
+    assert set(result) == expected
+    assert all(np.isfinite(result[name]) and result[name] > 0 for name in expected)
+
 def test_disabled_terms_are_reported_as_inert(
     reference_arm_model, reference_arm_code_rows, reference_arm_steps
 ):
@@ -294,12 +310,9 @@ def cli_arm(
     tmp_path, monkeypatch, request, tiny_backbone, reference_manifest, reference_bundle,
     reference_arm_token_config, reference_arm_code_rows
 ):
-    model = build_reference_model(
-        reference_manifest,
-        reference_bundle,
-        fusion=getattr(request, 'param', 'masked_mean'),
-        moe_hidden_dim=16
-    ).eval()
+    # An indirect parameter overrides the arm's constructor arguments: its fusion or geometry
+    arguments = {'fusion': 'masked_mean', 'moe_hidden_dim': 16, **getattr(request, 'param', {})}
+    model = build_reference_model(reference_manifest, reference_bundle, **arguments).eval()
     with torch.no_grad():
         model.encoder.projection.weight.mul_(3)
     model.hparams.seed = 7
@@ -339,7 +352,12 @@ def _cli_args(arm, output):
         str(output), 'data_loader.queries_per_step=128', 'seed=0'
     ]
 
-@pytest.mark.parametrize('cli_arm', ['masked_mean', 'moe'], indirect=True)
+@pytest.mark.parametrize(
+    'cli_arm',
+    [pytest.param({}, id='masked_mean'),
+     pytest.param({'fusion': 'moe'}, id='moe')],
+    indirect=True,
+)
 def test_cli_runs_the_saved_seeds_first_batch_without_reading_a_panel(
     cli_arm, tmp_path, minilm_tokenizer, monkeypatch
 ):
@@ -351,6 +369,7 @@ def test_cli_runs_the_saved_seeds_first_batch_without_reading_a_panel(
     assert result.exit_code == 0, result.output + str(result.exception)
     report = json.loads(output.read_text())
     assert report['passed'] is True
+    assert report['geometry'] == 'hyperbolic'
     assert report['seed'] == 7
     assert report['epoch'] == report['step'] == 0
     dataset = reference_step_dataset(cli_arm.bundle, cli_arm.rows, minilm_tokenizer, seed=7)
@@ -378,6 +397,48 @@ def test_cli_runs_the_saved_seeds_first_batch_without_reading_a_panel(
     assert failed_report['passed'] is False
     assert failed_report['inert_terms'] == ['radial']
     assert failed_report['radius']['failures'] == []
+    assert not list(tmp_path.rglob('*selection_log*'))
+
+@pytest.mark.parametrize(
+    'cli_arm',
+    [
+        pytest.param({'geometry': 'euclidean'}, id='euclidean'),
+        pytest.param({'geometry': 'spherical'}, id='spherical'),
+    ],
+    indirect=True,
+)
+def test_cli_checks_a_flat_arms_terms_and_scales_alone(cli_arm, tmp_path, monkeypatch):
+    '''Req 12: a flat arm has no radial term or live-radius head, so no radius check runs.'''
+
+    monkeypatch.setattr(
+        tools.OutcomePanel, 'score', lambda *args, **kwargs: pytest.fail('panel read')
+    )
+    monkeypatch.setattr(tools, 'radius_report', lambda *args, **kwargs: pytest.fail('radius'))
+    output = tmp_path / 'report.json'
+
+    result = CliRunner().invoke(tools.app, _cli_args(cli_arm, output))
+
+    assert result.exit_code == 0, result.output + str(result.exception)
+    report = json.loads(output.read_text())
+    assert report['geometry'] == cli_arm.model.encoder.head.geometry
+    assert report['radius'] is None
+    assert (report['passed'], report['inert_terms']) == (True, [])
+    expected = {'task', 'code_code', 'logit_scale_task', 'logit_scale_code'}
+    assert set(report['term_gradients']) == expected
+
+    original = tools.term_gradients
+
+    def inert_code_code(*args):
+        gradients = original(*args)
+        gradients['code_code'] = 0.0
+        return gradients
+
+    monkeypatch.setattr(tools, 'term_gradients', inert_code_code)
+    failed_output = tmp_path / 'inert.json'
+    failed = CliRunner().invoke(tools.app, _cli_args(cli_arm, failed_output))
+    assert failed.exit_code == 1, failed.output
+    failed_report = json.loads(failed_output.read_text())
+    assert (failed_report['passed'], failed_report['inert_terms']) == (False, ['code_code'])
     assert not list(tmp_path.rglob('*selection_log*'))
 
 def test_cli_writes_a_failed_capped_report_and_exits_one(cli_arm, tmp_path):

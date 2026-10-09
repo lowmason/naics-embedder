@@ -619,6 +619,32 @@ def decide_command(
 # Diagnostics (Req 6)
 # -------------------------------------------------------------------------------------------------
 
+def _require_table_geometry(table: str, geometry: str) -> None:
+    '''
+    Refuse a table whose export provenance names another geometry than ``geometry``.
+
+    The export records its arm's geometry (P9), and Req 6's statistics for a flat table read under
+    another arm's distance are plausible numbers, not an error. A table with no provenance, or one
+    that names no geometry (a text-only or HGCN table, a Stage 7 export), is not checked.
+
+    Raises:
+        ValueError: If the provenance names another geometry, or cannot be read as JSON.
+        OSError: If the provenance cannot be opened.
+    '''
+
+    path = provenance_path(Path(table))
+    if not path.is_file():
+        return
+    try:
+        provenance = json.loads(path.read_text(encoding='utf-8'))
+    except ValueError as exc:
+        raise ValueError(f'{path} cannot be read as JSON: {exc}') from exc
+    named = provenance.get('geometry', geometry) if isinstance(provenance, dict) else geometry
+    if named != geometry:
+        raise ValueError(
+            f'--geometry {geometry} does not match the table: its export provenance names {named}'
+        )
+
 @app.command('diagnostics')
 def diagnostics_command(
     table: Annotated[
@@ -653,6 +679,10 @@ def diagnostics_command(
     correlation of distance with D*, and parent retrieval@1/5 without the 522 unary pairs. The
     report describes an arm: nothing selects on it, and no statistic in it has a threshold.
 
+    ``--geometry`` must be the table's own arm: a table whose export provenance names another
+    geometry is refused, and so is one whose provenance file exists but cannot be read as JSON.
+    A table with no provenance file, or whose provenance names no geometry, is read as given.
+
     Example:
         Report on a hyperbolic arm's export::
 
@@ -666,6 +696,8 @@ def diagnostics_command(
         console.print(f'[bold red]--geometry must be one of {list(GEOMETRIES)}[/bold red]')
         raise typer.Exit(code=1)
     try:
+        # Before the table is read: its export names the arm it came from (P9)
+        _require_table_geometry(table, geometry)
         codes = pl.read_parquet(codebook).get_column('code').to_list()
         report = diagnostics_report(
             pl.read_parquet(table), geometry, codebook_codes=codes, curvature=curvature
@@ -750,14 +782,14 @@ def _run_bundle(cfg: Config) -> ValidatedSupervisionBundle:
     return require_valid_supervision_bundle(cfg)
 
 def _sweep_spec(cfg: Config, *, name: str, accelerator: str) -> ArmSpec:
-    '''The arm's settings and text identities, from its config and cached backbone (P21, P32).'''
+    '''The arm's geometry, settings and text identities, from its config and cached backbone.'''
 
     _, _, revision = load_backbone(cfg.model.base_model_name)
     return ArmSpec(
         name=name,
         components=1,
         dimension=cfg.model.dimension,
-        geometry='hyperbolic',
+        geometry=cfg.model.geometry,
         backbone=cfg.model.base_model_name,
         backbone_revision=revision,
         descriptions_sha256=sha256_file(cfg.data_loader.streaming.descriptions_parquet),
@@ -878,8 +910,11 @@ def radius_report_command(
     Check radius variation, geometry and loss gradients for one selected checkpoint.
 
     Gradients use epoch 0, step 0 of the saved seed and saved query chunk size. The checkpoint
-    and its table must share an export provenance. The report is written even when a measured
-    criterion fails; a failure exits 1. No evaluation split is scored.
+    and its table must share an export provenance. The radius checks are the hyperbolic arm's: a
+    flat arm (Req 12) has no radial term or live-radius head, so its report checks its terms and
+    scales alone and records ``radius`` as null. The report names the arm's geometry and is
+    written even when a measured criterion fails; a failure exits 1. No evaluation split is
+    scored.
     '''
 
     configure_logging('tools_radius_report.log')
@@ -906,28 +941,33 @@ def radius_report_command(
         batch = data.train_dataset[0]
         model.refresh_code_cache(data.code_rows)
         gradients = term_gradients(model, batch)
-        anchors = [
-            gradients.pop(f'{ANCHOR_GRADIENT_PREFIX}{row}')
-            for row in range(len(batch['codes']['ids']))
-        ]
-        radius = radius_report(pl.read_parquet(table), anchor_radius_gradient=np.array(anchors))
+        head = model.encoder.head
+        # Verification "Radius" checks the radial arm, the hyperbolic (Req 12, 13)
+        radius = None
+        if head.radial:
+            anchors = [
+                gradients.pop(f'{ANCHOR_GRADIENT_PREFIX}{row}')
+                for row in range(len(batch['codes']['ids']))
+            ]
+            radius = radius_report(pl.read_parquet(table), anchor_radius_gradient=np.array(anchors))
         inert = [
             name for name, value in gradients.items() if not (np.isfinite(value) and value > 0)
         ]
         report = {
             'checkpoint': str(Path(checkpoint).resolve()),
             'table': str(Path(table).resolve()),
+            'geometry': head.geometry,
             'seed': int(model.hparams.seed),
             'epoch': 0,
             'step': 0,
             'anchor_ids': batch['codes']['ids'].tolist(),
-            'radius': asdict(radius),
+            'radius': None if radius is None else asdict(radius),
             'term_gradients': {
                 name: value if np.isfinite(value) else None
                 for name, value in gradients.items()
             },
             'inert_terms': inert,
-            'passed': radius.passed and not inert
+            'passed': (radius is None or radius.passed) and not inert
         }
         rendered = json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + '\n'
         if output:

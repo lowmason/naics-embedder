@@ -43,7 +43,10 @@ projection maps the fused backbone vector to `model.dimension`.
 
 ## Hyperbolic Geometry and Live Radius
 
-For projection v, let a be its norm and u its direction. The head computes
+`model.geometry` selects the head: `hyperbolic` by default, or the flat `euclidean` and
+`spherical` arms that Req 12 compares with it (see
+[geometry arms](text_training.md#geometry-arms)). The rest of this section describes the
+hyperbolic head. For projection v, let a be its norm and u its direction. The head computes
 `r = R * tanh(a / R)`, with `R = model.radius_bound` (default 8), then maps tangent r u to
 `(cosh(r), sinh(r) u)`. The zero vector maps to the origin. There is no learned or configurable
 text curvature and no fixed radius cap at 2. The head has no parameters; gradients reach the

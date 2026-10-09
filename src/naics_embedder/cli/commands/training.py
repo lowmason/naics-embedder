@@ -100,6 +100,7 @@ def build_model_from_config(
         lora_dropout=cfg.model.lora.dropout,
         fusion=cfg.model.fusion,
         dimension=cfg.model.dimension,
+        geometry=cfg.model.geometry,
         num_experts=cfg.model.moe.num_experts,
         top_k=cfg.model.moe.top_k,
         moe_hidden_dim=cfg.model.moe.hidden_dim,
@@ -194,6 +195,7 @@ def encoder_architecture_for(cfg: Config) -> EncoderArchitecture:
         fusion=cfg.model.fusion,
         dimension=cfg.model.dimension,
         backbone=cfg.model.base_model_name,
+        geometry=cfg.model.geometry,
     )
 
 def runtime_contract_for(cfg: Config, bundle: ValidatedSupervisionBundle) -> CheckpointContract:
@@ -221,10 +223,12 @@ def generate_embeddings_from_checkpoint(
 
     Loads a trained model checkpoint, runs inference on all NAICS codes, and
     writes the resulting embeddings to a parquet file compatible with HGCN
-    training. The checkpoint must carry the supervision contract of the configured run, the
-    contract of its validated bundle; a checkpoint without one, or with another, is refused
-    before its model loads. One trained under another objective, as every checkpoint saved
-    before Stage 7 was, is refused first, and nothing migrates it (spec 4.5, D2).
+    training. HGCN refines Lorentz points, which only the hyperbolic arm has, so a configured
+    flat arm is refused before anything is read (Req 12). The checkpoint must carry the
+    supervision contract of the configured run, the contract of its validated bundle, its
+    geometry included; a checkpoint without one, or with another, is refused before its model
+    loads. One trained under another objective, as every checkpoint saved before Stage 7 was, is
+    refused first, and nothing migrates it (spec 4.5, D2).
 
     Args:
         checkpoint_path: Filesystem path to the PyTorch Lightning checkpoint
@@ -238,8 +242,18 @@ def generate_embeddings_from_checkpoint(
 
     Returns:
         str: Filesystem path to the generated embeddings parquet file.
+
+    Raises:
+        ValueError: If the configured arm is not hyperbolic, or the checkpoint's contract is not
+            the configured run's.
     '''
 
+    geometry = config.model.geometry
+    if geometry != 'hyperbolic':
+        raise ValueError(
+            f'the HGCN feeder writes Lorentz points, and a {geometry} arm has none: HGCN refines '
+            'the hyperbolic arm only (Req 12)'
+        )
     logger.info('=' * 80)
     logger.info('GENERATING EMBEDDINGS FROM CHECKPOINT')
     logger.info('=' * 80)
@@ -506,6 +520,7 @@ def train(
             f'  • Base: {cfg.model.base_model_name.split("/")[-1]}',
             f'  • LoRA rank: {cfg.model.lora.r}',
             f'  • Fusion: {cfg.model.fusion}',
+            f'  • Geometry: {cfg.model.geometry}',
             f'  • Dimension: {cfg.model.dimension}\n',
             '[cyan]Training:[/cyan]',
             f'  • Learning rate: {cfg.training.learning_rate}',
@@ -675,11 +690,16 @@ def train(
             f'{summary_paths.get("yaml", summary_paths.get("json"))}[/cyan]\n'
         )
 
-        # Ask about embeddings for HGCN training (the feeder stays until Stage 11), but only on a
-        # terminal: a remote launch reads stdin from /dev/null, where typer.confirm would abort the
-        # finished run (spec 4.5, "Stays"). Without one, the answer is the question's default, no.
+        # Ask about embeddings for HGCN training (the feeder stays until Stage 11), but only for a
+        # hyperbolic arm, the one with Lorentz points (Req 12), and only on a terminal: a remote
+        # launch reads stdin from /dev/null, where typer.confirm would abort the finished run
+        # (spec 4.5, "Stays"). Otherwise the answer is the question's default, no.
         generate_embeddings = False
-        if _stdin_is_terminal():
+        if cfg.model.geometry != 'hyperbolic':
+            logger.info(
+                f'a {cfg.model.geometry} arm has no Lorentz points: no HGCN embeddings question'
+            )
+        elif _stdin_is_terminal():
             console.print('\n[bold cyan]Generate embeddings for HGCN training?[/bold cyan]')
             generate_embeddings = typer.confirm(
                 'Generate embeddings parquet file from this checkpoint?', default=False

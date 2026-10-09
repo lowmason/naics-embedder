@@ -9,9 +9,11 @@ MiniLM.
 The arm fixtures train nothing. ``shared_model`` is a d = 16 model of the five-code supervision
 bundle (``tests/fixtures/supervision.py``) on the tiny backbone, and ``shared_checkpoint`` saves it
 as Lightning would. ``truncated_checkpoint`` and ``pre_stage7_checkpoint`` save it as checkpoints
-trained before Stage 6b and before Stage 7, which every load refuses. ``text_only_comparator_table``
-is a table a read can be pointed at by mistake: the text-only comparator's, written by its own
-builder.
+trained before Stage 6b and before Stage 7, which every load refuses. ``pre_stage8_checkpoint``
+saves it as Stage 7 did, naming no geometry, which every load reads as hyperbolic (P7), and
+``geometry_checkpoint`` saves its arm in a geometry a test names (Req 12).
+``text_only_comparator_table`` is a table a read can be pointed at by mistake: the text-only
+comparator's, written by its own builder.
 
 ``reference_arm_model`` is a d = 16 model of the reference bundle, whose 17 codes span levels 2-6
 and whose 11 task queries train Req 11's three terms. ``reference_arm_steps`` holds one epoch of
@@ -19,7 +21,7 @@ its two-stream steps, in the layout ``StepDataset`` hands the training step.
 '''
 
 from pathlib import Path
-from typing import Any, Dict, List, Mapping
+from typing import Any, Callable, Dict, List, Mapping
 
 import polars as pl
 import pytest
@@ -113,25 +115,32 @@ def five_code_token_config(tmp_path, five_code_descriptions_parquet) -> Tokeniza
         output_path=str(tmp_path / 'token_cache' / 'token_cache.pt'),
     )
 
+def five_code_model(manifest: Path, **overrides: Any) -> NAICSContrastiveModel:
+    '''
+    A d = 16 masked-mean model of the five-code bundle, in eval mode, with constructor overrides.
+
+    Call it with the tiny backbone in place (``tiny_backbone``). It records MiniLM's summaries, as
+    training does: under the test seam, the dummy pin's sha256.
+    '''
+
+    arguments: Dict[str, Any] = {
+        'base_model_name': MINILM,
+        'lora_r': 2,
+        'lora_alpha': 4,
+        'lora_dropout': 0.0,
+        'fusion': 'masked_mean',
+        'dimension': ARM_DIMENSION,
+        'supervision_manifest_path': str(manifest),
+        'summaries': summaries_identity(MINILM),
+    }
+    arguments.update(overrides)
+    return NAICSContrastiveModel(**arguments).eval()
+
 @pytest.fixture
 def shared_model(tiny_backbone, generated_bundle) -> NAICSContrastiveModel:
-    '''
-    A d = 16 masked-mean model of the five-code bundle on the tiny backbone, in eval mode.
+    '''``five_code_model`` with its defaults, on the tiny backbone: the hyperbolic arm.'''
 
-    It records MiniLM's summaries, as training does: under the test seam, the dummy pin's sha256.
-    '''
-
-    model = NAICSContrastiveModel(
-        base_model_name=MINILM,
-        lora_r=2,
-        lora_alpha=4,
-        lora_dropout=0.0,
-        fusion='masked_mean',
-        dimension=ARM_DIMENSION,
-        supervision_manifest_path=str(generated_bundle),
-        summaries=summaries_identity(MINILM),
-    )
-    return model.eval()
+    return five_code_model(generated_bundle)
 
 @pytest.fixture
 def shared_checkpoint(tmp_path, shared_model) -> Path:
@@ -140,6 +149,21 @@ def shared_checkpoint(tmp_path, shared_model) -> Path:
     path = tmp_path / 'arm.ckpt'
     torch.save(lightning_checkpoint(shared_model), path)
     return path
+
+@pytest.fixture
+def geometry_checkpoint(tmp_path, tiny_backbone, generated_bundle) -> Callable[[str], Path]:
+    '''
+    Save ``shared_model``'s arm in a geometry (Req 12) as a Lightning checkpoint: call it with the
+    geometry's name.
+    '''
+
+    def save(geometry: str) -> Path:
+        path = tmp_path / f'{geometry}_arm.ckpt'
+        model = five_code_model(generated_bundle, geometry=geometry)
+        torch.save(lightning_checkpoint(model), path)
+        return path
+
+    return save
 
 @pytest.fixture
 def truncated_checkpoint(tmp_path, shared_model) -> Path:
@@ -187,6 +211,20 @@ def pre_stage7_checkpoint(tmp_path, shared_model) -> Path:
     checkpoint['hyper_parameters']['curvature'] = 1.0
     del checkpoint['hyper_parameters']['radius_bound']
     path = tmp_path / 'pre_stage7.ckpt'
+    torch.save(checkpoint, path)
+    return path
+
+@pytest.fixture
+def pre_stage8_checkpoint(tmp_path, shared_model) -> Path:
+    '''
+    ``shared_model`` saved as Stage 7 saved its checkpoints (P7): neither its encoder record nor
+    its hyperparameters name a geometry, so every load reads it as hyperbolic.
+    '''
+
+    checkpoint = lightning_checkpoint(shared_model)
+    del checkpoint['stage3_supervision']['encoder']['geometry']
+    del checkpoint['hyper_parameters']['geometry']
+    path = tmp_path / 'pre_stage8.ckpt'
     torch.save(checkpoint, path)
     return path
 

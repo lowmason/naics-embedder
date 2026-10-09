@@ -19,17 +19,13 @@ import pytest
 import torch
 from transformers import AutoTokenizer
 
-from naics_embedder.panels.decoding import score_decoding
+from naics_embedder.panels.decoding import GEOMETRY_DISTANCES, score_decoding
 from naics_embedder.panels.outcome import OutcomePanel
 from naics_embedder.panels.text_only import matrix_fingerprint, provenance_path
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 from naics_embedder.text_model import monitor
-from naics_embedder.text_model.arm_encoder import (
-    ArmEncoder,
-    exp_map_origin,
-    read_outcome_validation,
-)
+from naics_embedder.text_model.arm_encoder import ArmEncoder, read_outcome_validation
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.dataloader.tokenization_cache import tokenization_cache
 from naics_embedder.text_model.export import (
@@ -38,6 +34,8 @@ from naics_embedder.text_model.export import (
     encode_token_rows,
     export_code_table,
 )
+from naics_embedder.text_model.heads import GEOMETRIES
+from naics_embedder.text_model.hyperbolic import exp_map_origin
 from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import TokenizationConfig
 from tests.fixtures.shared_encoder import (
@@ -583,8 +581,13 @@ def reference_token_config(tmp_path, reference_bundle) -> TokenizationConfig:
     )
 
 @pytest.fixture
-def reference_model(tiny_backbone, reference_manifest, reference_bundle) -> NAICSContrastiveModel:
-    '''A d = 16 masked-mean model of the reference bundle on the tiny backbone, in eval mode.'''
+def reference_model(
+    request, tiny_backbone, reference_manifest, reference_bundle
+) -> NAICSContrastiveModel:
+    '''
+    A d = 16 masked-mean model of the reference bundle on the tiny backbone, in eval mode, in the
+    geometry arm an indirect parameter names (Req 12).
+    '''
 
     model = NAICSContrastiveModel(
         base_model_name=MINILM,
@@ -593,6 +596,7 @@ def reference_model(tiny_backbone, reference_manifest, reference_bundle) -> NAIC
         lora_dropout=0.0,
         fusion='masked_mean',
         dimension=ARM_DIMENSION,
+        geometry=request.param,
         supervision_manifest_path=str(reference_manifest),
         summaries=summaries_identity(MINILM),
         supervision_bundle=reference_bundle,
@@ -613,13 +617,14 @@ def _code_rows(bundle: ValidatedSupervisionBundle, config: TokenizationConfig) -
     )
     return [cache[code_id] for code_id in range(len(cache))]
 
+@pytest.mark.parametrize('reference_model', GEOMETRIES, indirect=True)
 def test_the_live_read_is_the_read_of_the_export_of_its_cache(
     tmp_path, tokenizer, reference_model, reference_bundle, reference_token_config
 ):
     '''
-    Spec 4.4's agreement, on the CPU and exactly: the live encoder on the model and its cache, and
-    the arm encoder on the model's checkpoint and the table exported from it, decode the
-    validation split alike.
+    Spec 4.4's agreement, on the CPU and exactly, in every geometry arm: the live encoder on the
+    model and its cache, and the arm encoder on the model's checkpoint and the table exported
+    from it, decode the validation split alike, under the arm's own distance (Req 12).
     '''
 
     rows = _code_rows(reference_bundle, reference_token_config)
@@ -637,7 +642,10 @@ def test_the_live_read_is_the_read_of_the_export_of_its_cache(
 
     read = outcome_monitor.read(reference_model, cache, training_run='run-a', seed=0, epoch=0)
     live_encoder = monitor.LiveEncoder(reference_model, cache, tokenizer, REFERENCE_WINDOW)
-    live = live_panel.score(live_encoder, 'validation', PURPOSE, distance='lorentz')
+    distance = GEOMETRY_DISTANCES[reference_model.encoder.head.geometry]
+    assert live_encoder.distance == arm.distance == distance
+    assert read.record['detail']['distance'] == distance
+    live = live_panel.score(live_encoder, 'validation', PURPOSE, distance=distance)
     exported = read_outcome_validation(
         arm, OutcomePanel.from_bundle(reference_bundle, tmp_path / 'arm_log.jsonl'), PURPOSE
     )

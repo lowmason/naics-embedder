@@ -5,10 +5,10 @@
 Logging mixin for NAICSContrastiveModel: the epoch's health logs (P20).
 
 Each epoch logs the mean of each term over its steps (``loss/task``, ``loss/code_code``,
-``loss/radial``, ``loss/total``, and ``loss/load_balancing`` under ``moe``), the two logit scales
-(``logit_scale/task``, ``logit_scale/code_code``), and r's mean and SD at each level from the
-refreshed code cache (``radius/mean/level_<k>``, ``radius/sd/level_<k>``). Nothing selects on
-them (spec 4.4).
+``loss/total``, ``loss/radial`` in the hyperbolic arm only, and ``loss/load_balancing`` under
+``moe``), the two logit scales (``logit_scale/task``, ``logit_scale/code_code``), and r's mean
+and SD at each level from the refreshed code cache (``radius/mean/level_<k>``,
+``radius/sd/level_<k>``). Nothing selects on them (spec 4.4).
 
 A step has two leading sizes, its anchors and its queries, so Lightning's own epoch means would
 weight each step by whichever it took for the batch size. The mixin keeps each step's values and
@@ -25,7 +25,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The terms whose epoch means are logged; load balancing exists under moe only (R11)
+# The terms whose epoch means are logged; the radial term exists in the hyperbolic arm only
+# (Req 12), and load balancing under moe only (R11)
 HEALTH_TERMS = ('task', 'code_code', 'radial', 'total', 'load_balancing')
 
 class LoggingMixin:

@@ -15,6 +15,7 @@ from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.metrics.diagnostics import DiagnosticsReport
 from naics_embedder.panels.regressor import RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.panels.window_summaries import SummariesPin
 from naics_embedder.utils.config import Config
 from tests.fixtures.decision import spec, synthetic_arm
@@ -435,6 +436,99 @@ def test_diagnostics_refuses_a_table_that_misses_a_codebook_code(runner, tmp_pat
 
     assert result.exit_code == 1
     assert 'Diagnostics failed' in result.output
+
+def _diagnose(runner, tmp_path, geometry, provenance):
+    '''
+    ``tools diagnostics`` on a stub arm's table, with ``provenance`` (JSON text) written beside
+    it, and the report written to ``tmp_path/report.json``.
+    '''
+
+    codebook = tmp_path / 'naics_codebook.parquet'
+    pl.DataFrame({'code': list(CODEBOOK)}).write_parquet(codebook)
+    table = tmp_path / 'arm.parquet'
+    coordinate_table(CODEBOOK, dimension=4).write_parquet(table)
+    provenance_path(table).write_text(provenance)
+    return runner.invoke(
+        tools_cli.app,
+        [
+            'diagnostics', '--table',
+            str(table), '--codebook',
+            str(codebook), '--geometry', geometry, '--output',
+            str(tmp_path / 'report.json')
+        ],
+    )
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('exported', 'geometry'),
+    [('euclidean', 'spherical'), ('spherical', 'hyperbolic')],
+    ids=['euclidean-as-spherical', 'spherical-as-hyperbolic'],
+)
+def test_diagnostics_refuses_a_table_exported_from_another_geometry(
+    runner, tmp_path, monkeypatch, exported, geometry
+):
+    '''P9: the export names its arm's geometry, and Req 6's numbers for a table read under
+    another arm's distance look plausible, so the table is refused before anything is read.'''
+
+    reports = []
+    report = tools_cli.diagnostics_report
+
+    def spy(*args, **kwargs):
+        reports.append(args)
+        return report(*args, **kwargs)
+
+    monkeypatch.setattr(tools_cli, 'diagnostics_report', spy)
+
+    result = _diagnose(runner, tmp_path, geometry, json.dumps({'geometry': exported}))
+
+    assert result.exit_code == 1
+    output = ' '.join(result.output.split())
+    assert 'Diagnostics failed' in output
+    assert f'--geometry {geometry}' in output
+    assert f'names {exported}' in output
+    assert reports == []
+    assert not (tmp_path / 'report.json').exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('geometry', 'named'),
+    [
+        ('euclidean', 'euclidean'),
+        ('spherical', 'spherical'),
+        ('hyperbolic', 'hyperbolic'),
+        ('hyperbolic', None),
+    ],
+    ids=['euclidean', 'spherical', 'hyperbolic', 'no-geometry-key'],
+)
+def test_diagnostics_reads_a_table_whose_provenance_agrees_or_names_no_geometry(
+    runner, tmp_path, geometry, named
+):
+    '''
+    P9: only a provenance that names another geometry refuses the table. A table that names its
+    own, or whose provenance has no geometry key (a text-only or HGCN table, a Stage 7 export),
+    is read as before; a table with no provenance is covered by the first diagnostics test.
+    '''
+
+    provenance = {'dimension': 4}
+    if named is not None:
+        provenance['geometry'] = named
+
+    result = _diagnose(runner, tmp_path, geometry, json.dumps(provenance))
+
+    assert result.exit_code == 0, result.output
+    assert json.loads((tmp_path / 'report.json').read_text())['geometry'] == geometry
+
+@pytest.mark.unit
+def test_diagnostics_refuses_a_table_whose_provenance_is_not_json(runner, tmp_path):
+    '''An unreadable provenance cannot show the arm, so the table is refused, not read blind.'''
+
+    result = _diagnose(runner, tmp_path, 'hyperbolic', '{"geometry": ')
+
+    assert result.exit_code == 1
+    output = ' '.join(result.output.split())
+    assert 'Diagnostics failed' in output
+    assert 'cannot be read as JSON' in output
+    assert not (tmp_path / 'report.json').exists()
 
 @pytest.mark.unit
 def test_verify_stage4_is_gone(runner):

@@ -37,6 +37,11 @@ pytestmark = pytest.mark.unit
 SEEDS = (0, 1, 2, 3, 4)
 PURPOSE = 'fixture seed sweep'
 
+def _spec(name, **overrides):
+    '''A synthetic arm's spec: its encoder decodes by cosine, the spherical arm's distance.'''
+
+    return spec(name, **{'geometry': 'spherical', **overrides})
+
 class SyntheticEncoder:
     '''Codes on their own axes; each query near its code's axis, or a random code's.'''
 
@@ -114,7 +119,12 @@ class TrainedRunner(SyntheticRunner):
     def run(self, arm_spec, seed):
         training_run = f'{arm_spec.name}-training-{seed}'
         records = monitor_records(
-            training_run, seed, TRAINED_MRRS, time=TRAINED_AT, fingerprint=self.outcome
+            training_run,
+            seed,
+            TRAINED_MRRS,
+            time=TRAINED_AT,
+            fingerprint=self.outcome,
+            distance='cosine',
         )
         self.returned[seed] = replace(
             super().run(arm_spec, seed),
@@ -181,7 +191,7 @@ def text_only(tmp_path):
 def _sweep(name, informed, tmp_path, regressor_rows, panels, store, text_only, **overrides):
     runner = SyntheticRunner(tmp_path / 'runs' / name, informed, _signal(regressor_rows))
     return run_seed_sweep(
-        spec(name, dimension=3, **overrides),
+        _spec(name, dimension=3, **overrides),
         SEEDS,
         runner,
         text_only_table=text_only,
@@ -226,7 +236,7 @@ def test_each_trained_seeds_monitor_reads_pass_through_to_its_run(
     runner = TrainedRunner(tmp_path / 'runs' / 'trained', False, _signal(regressor_rows), outcome)
 
     arm = run_seed_sweep(
-        spec('trained', dimension=3),
+        _spec('trained', dimension=3),
         SEEDS,
         runner,
         text_only_table=text_only,
@@ -278,7 +288,7 @@ def test_a_text_only_table_from_another_backbone_is_refused_before_any_read(
         )
     with pytest.raises(ValueError, match='dimension'):
         run_seed_sweep(
-            spec('mislabelled', dimension=16),
+            _spec('mislabelled', dimension=16),
             SEEDS,
             SyntheticRunner(tmp_path / 'runs' / 'mislabelled', False, _signal(regressor_rows)),
             text_only_table=text_only,
@@ -319,7 +329,7 @@ def test_a_seed_exported_from_other_text_is_refused_before_any_read(
 
     with pytest.raises(ValueError, match='misread seed 0: the table was exported from .*D9'):
         run_seed_sweep(
-            spec('misread', dimension=3),
+            _spec('misread', dimension=3),
             SEEDS,
             runner,
             text_only_table=text_only,
@@ -344,7 +354,30 @@ def test_a_seed_table_without_its_export_provenance_is_refused_before_any_read(
 
     with pytest.raises(ValueError, match='has no export provenance'):
         run_seed_sweep(
-            spec('unexported', dimension=3),
+            _spec('unexported', dimension=3),
+            SEEDS,
+            runner,
+            text_only_table=text_only,
+            store=store,
+            purpose=PURPOSE,
+            **panels,
+        )
+    assert log.records() == []
+
+def test_a_seed_decoding_by_another_distance_than_its_geometrys_is_refused_before_any_read(
+    tmp_path, regressor_rows, panels, store, text_only, log
+):
+    '''Req 12: a hyperbolic arm decodes by the Lorentz distance, and this encoder by cosine.'''
+
+    runner = SyntheticRunner(tmp_path / 'runs' / 'misdecoded', False, _signal(regressor_rows))
+    message = (
+        "misdecoded seed 0: the encoder decodes by 'cosine', but a hyperbolic arm decodes by "
+        "'lorentz' \\(Req 12\\)"
+    )
+
+    with pytest.raises(ValueError, match=message):
+        run_seed_sweep(
+            _spec('misdecoded', dimension=3, geometry='hyperbolic'),
             SEEDS,
             runner,
             text_only_table=text_only,
@@ -359,7 +392,7 @@ def test_a_repeated_seed_is_refused_before_any_read(
 ):
     with pytest.raises(ValueError, match='a seed repeats'):
         run_seed_sweep(
-            spec('uninformed', dimension=3),
+            _spec('uninformed', dimension=3),
             (0, 1, 1),
             SyntheticRunner(tmp_path / 'runs' / 'uninformed', False, _signal(regressor_rows)),
             text_only_table=text_only,
