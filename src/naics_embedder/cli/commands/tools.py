@@ -680,8 +680,8 @@ def diagnostics_command(
     report describes an arm: nothing selects on it, and no statistic in it has a threshold.
 
     ``--geometry`` must be the table's own arm: a table whose export provenance names another
-    geometry is refused. A table with no provenance, or none that names a geometry, is read as
-    given.
+    geometry is refused, and so is one whose provenance file exists but cannot be read as JSON.
+    A table with no provenance file, or whose provenance names no geometry, is read as given.
 
     Example:
         Report on a hyperbolic arm's export::

@@ -413,7 +413,7 @@ uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperboli
   for a hyperbolic arm; Lorentz points are refused)
 - `--geometry euclidean|spherical|hyperbolic` - The arm's distance: Euclidean, cosine, or the
   geodesic distance after the exponential map at the origin; a table whose export provenance
-  names another geometry is refused (P9)
+  names another geometry, or cannot be read as JSON, is refused (Req 12)
 - `--codebook PATH` - A supervision bundle's `naics_codebook.parquet`; the table must hold
   exactly its codes
 - `--curvature FLOAT` - A hyperbolic arm's curvature magnitude (default: 1.0)
