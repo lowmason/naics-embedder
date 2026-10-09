@@ -11,9 +11,9 @@ live code cache and selected on the outcome panel's validation MRR (spec 4.1-4.4
 - A step reads two streams (spec 4.3): a chunk of the codes, as anchors, and a chunk of the task
   queries. Every candidate comes from the code cache, each code's (r, û) at its last refresh, with
   the step's anchors replaced by their live points.
-- Req 11's terms (spec 4.1): the task term over each query's candidates, the code-code listwise
-  term over each anchor's J_a, and the radial term; under ``moe`` only, the experts' load
-  balancing.
+- Req 11's terms (spec 4.1): the task term over each query's candidates and the code-code
+  listwise term over each anchor's J_a, both under the arm's own distance, and, in the hyperbolic
+  arm only, the radial term (Req 12); under ``moe`` only, the experts' load balancing.
 - The cache is refreshed at fit start and at each epoch's end. The end-of-epoch refresh feeds the
   outcome monitor's read, whose MRR is logged as ``val/outcome_mrr`` and steps the plateau.
 
@@ -45,7 +45,6 @@ from naics_embedder.supervision.schema import CONTRACT_VERSION
 from naics_embedder.text_model.epoch_summary import EPOCH_SUMMARY, EpochSummary
 from naics_embedder.text_model.fusion import FUSIONS
 from naics_embedder.text_model.heads import GEOMETRIES
-from naics_embedder.text_model.hyperbolic import polar_distance
 from naics_embedder.text_model.loss import LogitScale, code_code_loss, radial_loss, task_loss
 from naics_embedder.text_model.mixins import OUTCOME_MRR, LoggingMixin, LossMixin, OptimizerMixin
 from naics_embedder.text_model.shared_encoder import DIMENSIONS, SharedEncoder
@@ -71,21 +70,21 @@ class StepLosses(NamedTuple):
     One step's losses (spec 4.1).
 
     Attributes:
-        total: What the step optimizes: L = L_task + w_c · L_cc + w_r · L_rad, plus the
-            load-balancing term times its coefficient under ``moe``.
+        total: What the step optimizes: L = L_task + w_c · L_cc, plus w_r · L_rad in the
+            hyperbolic arm, plus the load-balancing term times its coefficient under ``moe``.
         task: L_task, the task term.
         code_code: L_cc, the code-code listwise term.
-        radial: L_rad, the radial term.
+        radial: L_rad, the radial term; None unless the arm is hyperbolic (Req 12).
         load_balancing: The experts' load-balancing term, before its coefficient; None unless the
             fusion is ``moe``.
-        anchor_radius: The anchors' live radii r_a, (A,): every term's gradient reaches the radius
-            through them (Verification "Radius").
+        anchor_radius: The anchors' live radii r_a, (A,): in the hyperbolic arm, every term's
+            gradient reaches the radius through them (Verification "Radius").
     '''
 
     total: torch.Tensor
     task: torch.Tensor
     code_code: torch.Tensor
-    radial: torch.Tensor
+    radial: Optional[torch.Tensor]
     load_balancing: Optional[torch.Tensor]
     anchor_radius: torch.Tensor
 
@@ -381,7 +380,8 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         candidate is the code cache's point, with the anchors' rows replaced by their live points,
         so gradient reaches the codes through the anchors alone, as anchors and as candidates.
         The distances and the terms run in float32 with autocast off: only the backbone runs in
-        reduced precision (spec 4.2).
+        reduced precision (spec 4.2). Every distance is the arm's own (``head.pair_distance``),
+        and the radial term exists only in the hyperbolic arm (Req 12).
 
         Args:
             batch: One step, as ``StepDataset`` builds it: ``codes`` (``inputs``, ``ids`` and
@@ -406,13 +406,14 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
         query_output = self(queries['inputs'])
         ids = codes['ids']
         settings = self.hparams
+        head = self.encoder.head
         with torch.autocast(device_type=ids.device.type, enabled=False):
             anchor_radius = code_output['radius'].float()
             anchor_direction = code_output['direction'].float()
             radius, direction = cache.with_live(ids, anchor_radius, anchor_direction)
             # The task term: each query against the codes at its level and its forced negatives,
             # over all N codes (spec 4.1(i))
-            query_distances = polar_distance(
+            query_distances = head.pair_distance(
                 query_output['radius'].float(),
                 query_output['direction'].float(),
                 radius,
@@ -427,15 +428,21 @@ class NAICSContrastiveModel(LossMixin, LoggingMixin, OptimizerMixin, pyl.Lightni
             )
             # The code-code term: each anchor against J_a (spec 4.1(ii))
             code_code = code_code_loss(
-                polar_distance(anchor_radius, anchor_direction, radius, direction),
+                head.pair_distance(anchor_radius, anchor_direction, radius, direction),
                 self.logit_scale_code(),
                 self.structural_distance[ids],
                 self._keep(ids),
                 settings.target_temperature,
             )
-            # The radial term (spec 4.1(iii))
-            radial = radial_loss(anchor_radius, codes['levels'], settings.radial_step)
-            total = task + settings.code_code_weight * code_code + settings.radial_weight * radial
+            # The radial term (spec 4.1(iii)), in the hyperbolic arm only (Req 12). It and the
+            # total are computed in Stage 7's order, so the hyperbolic arm's values and gradients
+            # are Stage 7's bit for bit (P6)
+            radial = None
+            if head.radial:
+                radial = radial_loss(anchor_radius, codes['levels'], settings.radial_step)
+            total = task + settings.code_code_weight * code_code
+            if radial is not None:
+                total = total + settings.radial_weight * radial
             load_balancing = None
             if self.fusion == 'moe':
                 # Over both streams' gates (R11)
