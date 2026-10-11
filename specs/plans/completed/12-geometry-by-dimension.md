@@ -1,5 +1,8 @@
 # Geometry × Dimension Implementation Plan
 
+**Status: COMPLETE (2026-10-11)** — executed via subagent-driven-development (Phase 1) and
+executing-plans (Phase 2); deferred items in `specs/deferred_items.md`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -722,7 +725,7 @@ own.
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
 
 Run: `git fetch origin`, then:
 
@@ -749,7 +752,7 @@ Expected: this plan's commits, and possibly PR #130's merge commit; no other com
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the worktree's environment**
+- [x] **Step 2: Build the worktree's environment**
 
 Run: `uv sync --locked`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number.
@@ -765,7 +768,7 @@ Run: `shasum -a 256 uv.lock`
 Expected: `4167042e8a5a8caa9af62973151f681fffb50afaa1a7f6d1f801bd9e58bdac21  uv.lock`. If it
 differs, stop and ask: the lock is frozen (**Project rules**).
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `2999 passed, 2 skipped`, measured at 699a5d2 on 2026-10-08 in a worktree without
@@ -792,7 +795,7 @@ The full suite after each task, measured on this Mac (MPS present, no `data/` in
 After Task 8, `uv run pytest --collect-only -q -q | tail -1` reports 3,092 tests. CI has no MPS,
 so more tests skip there.
 
-- [ ] **Step 4: Check Task 9's real inputs, read-only**
+- [x] **Step 4: Check Task 9's real inputs, read-only**
 
 Task 9 is Phase 1's only reader of these files. Check them now, so a missing input fails early.
 
@@ -826,7 +829,7 @@ Record both in the ledger. At plan time they were 37 lines and
 `654e2232f8a10eb406cdab580f771575a75a972842f02232d73637a8976a4a66`. If they differ, another session
 has read a panel since: record it, and use the new values in Task 9.
 
-- [ ] **Step 5: Route the tasks**
+- [x] **Step 5: Route the tasks**
 
 Under executing-plans, run every task inline, in order.
 
@@ -923,7 +926,7 @@ The tests cover:
   - `naics_embedder.panels.decoding.GEOMETRY_DISTANCES = {'euclidean': 'euclidean',
     'spherical': 'cosine', 'hyperbolic': 'lorentz'}`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/unit/test_heads.py` is new. The two other test files import `exp_map_origin` from its new
 home.
@@ -1221,7 +1224,7 @@ from naics_embedder.text_model.naics_model import NAICSContrastiveModel
 from naics_embedder.utils.config import TokenizationConfig
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -1234,7 +1237,7 @@ Expected: FAIL, `3 errors`, all at collection:
 - `tests/unit/test_arm_encoder.py` and `tests/unit/test_monitor.py`: `ImportError: cannot import
   name 'exp_map_origin' from 'naics_embedder.text_model.hyperbolic'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/panels/decoding.py`, make one edit.
 
@@ -1790,7 +1793,7 @@ from naics_embedder.text_model.hyperbolic import exp_map_origin, polar_distance
 # polar_distance materializes (rows, codes, dimension), so bound the first axis (spec 4.2).
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -1799,7 +1802,7 @@ uv run pytest tests/unit/test_heads.py tests/unit/test_arm_encoder.py tests/unit
 ```
 Expected: PASS, `102 passed`.
 
-- [ ] **Step 5: Format, lint and run the full suite**
+- [x] **Step 5: Format, lint and run the full suite**
 
 Run:
 
@@ -1814,7 +1817,7 @@ Expected: `All checks passed!`
 Run: `uv run pytest -n auto -q`
 Expected: `3023 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/text_model/heads.py src/naics_embedder/text_model/hyperbolic.py src/naics_embedder/panels/decoding.py src/naics_embedder/text_model/arm_encoder.py src/naics_embedder/text_model/monitor.py src/naics_embedder/text_model/radius_report.py tests/unit/test_heads.py tests/unit/test_arm_encoder.py tests/unit/test_monitor.py
@@ -1901,7 +1904,7 @@ The tests cover:
     `shared_model` saved with no geometry in its encoder record or hyperparameters, as Stage 7
     saved its checkpoints.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/shared_encoder.py`, make these 2 edits, in order.
 
@@ -2630,7 +2633,7 @@ with:
         '''
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -2648,7 +2651,7 @@ The failures are of these kinds:
 - `'ModelConfig' object has no attribute 'geometry'` and `KeyError: 'geometry'`;
 - `Failed: DID NOT RAISE` for the geometry refusals.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `conf/config.yaml`, make these 2 edits, in order.
 
@@ -3443,7 +3446,7 @@ with:
     logit_scale_init: float = Field(
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -3452,7 +3455,7 @@ uv run pytest tests/unit/test_checkpoint_contract.py tests/unit/test_checkpoint_
 ```
 Expected: PASS, `591 passed`.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -3471,7 +3474,7 @@ bullets are rendered by mkdocstrings, and a wrapped bullet there warns "Confusin
 Run: `uv run pytest -n auto -q`
 Expected: `3053 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add conf/config.yaml src/naics_embedder/cli/commands/tools.py src/naics_embedder/cli/commands/training.py src/naics_embedder/supervision/checkpoints.py src/naics_embedder/text_model/checkpoint_runner.py src/naics_embedder/text_model/naics_model.py src/naics_embedder/text_model/shared_encoder.py src/naics_embedder/utils/config.py tests/fixtures/shared_encoder.py tests/unit/test_checkpoint_contract.py tests/unit/test_checkpoint_runner.py tests/unit/test_cli_training.py tests/unit/test_config.py tests/unit/test_encoder.py tests/unit/test_export.py tests/unit/test_heads.py tests/unit/test_naics_model.py
@@ -3515,7 +3518,7 @@ The tests cover:
   `StepLosses.total` is task + w_c · code-code, plus w_r · radial in the hyperbolic arm only. The
   health logs record a term only when it is not None.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_naics_model.py`, make these 8 edits, in order.
 
@@ -3805,7 +3808,7 @@ with:
         model.compute_losses(step)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_naics_model.py -n auto -q`
 Expected: FAIL, `9 failed, 85 passed`, all in `TestComputeLosses`:
@@ -3815,7 +3818,7 @@ Expected: FAIL, `9 failed, 85 passed`, all in `TestComputeLosses`:
   `assert 0 == 2`;
 - the gradient test fails under `euclidean` and `spherical`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/text_model/mixins/logging.py`, make these 2 edits, in order.
 
@@ -4075,12 +4078,12 @@ with:
             if self.fusion == 'moe':
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_naics_model.py -n auto -q`
 Expected: PASS, `94 passed`.
 
-- [ ] **Step 5: Format, lint and run the full suite**
+- [x] **Step 5: Format, lint and run the full suite**
 
 Run:
 
@@ -4095,7 +4098,7 @@ Expected: `All checks passed!`
 Run: `uv run pytest -n auto -q`
 Expected: `3059 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/text_model/mixins/logging.py src/naics_embedder/text_model/naics_model.py tests/unit/test_naics_model.py
@@ -4161,7 +4164,7 @@ The tests cover:
     NAICSContrastiveModel` and the fixture `geometry_checkpoint -> Callable[[str], Path]`, which
     saves `tmp_path / f'{geometry}_arm.ckpt'`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/shared_encoder.py`, make these 4 edits, in order.
 
@@ -4710,7 +4713,7 @@ with:
         arm, OutcomePanel.from_bundle(reference_bundle, tmp_path / 'arm_log.jsonl'), PURPOSE
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -4725,7 +4728,7 @@ Expected: FAIL, `13 failed, 164 passed`:
 - the feeder reads the bundle before it refuses the flat arm;
 - `train` still asks the flat arm `Generate embeddings … checkpoint?`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/cli/commands/training.py`, make these 3 edits, in order.
 
@@ -5390,7 +5393,7 @@ with:
 # -------------------------------------------------------------------------------------------------
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -5399,7 +5402,7 @@ uv run pytest tests/unit/test_arm_encoder.py tests/unit/test_cli_training.py tes
 ```
 Expected: PASS, `177 passed`.
 
-- [ ] **Step 5: Format, lint and run the full suite**
+- [x] **Step 5: Format, lint and run the full suite**
 
 Run:
 
@@ -5414,7 +5417,7 @@ Expected: `All checks passed!`
 Run: `uv run pytest -n auto -q`
 Expected: `3071 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/cli/commands/training.py src/naics_embedder/text_model/arm_encoder.py src/naics_embedder/text_model/export.py src/naics_embedder/text_model/monitor.py tests/fixtures/shared_encoder.py tests/unit/test_arm_encoder.py tests/unit/test_cli_training.py tests/unit/test_export.py tests/unit/test_monitor.py
@@ -5473,7 +5476,7 @@ The tests cover:
   - In `tests/fixtures/decision.py`, `_read(panel, run_id, table, text_only, time, arm_spec)` and
     `monitor_records(..., distance='lorentz')`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/decision.py`, make these 6 edits, in order.
 
@@ -6110,7 +6113,7 @@ with:
             SyntheticRunner(tmp_path / 'runs' / 'uninformed', False, _signal(regressor_rows)),
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -6123,7 +6126,7 @@ Expected: FAIL, `3 failed, 59 passed, 1 error`:
 - the failures are the runner's two distance tests and the sweep's distance refusal, none of which
   raises.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/decision/decide.py`, make these 7 edits, in order.
 
@@ -6484,7 +6487,7 @@ with:
         repeated = sorted(epoch for epoch, count in Counter(epochs).items() if count > 1)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -6493,7 +6496,7 @@ uv run pytest tests/unit/test_checkpoint_runner.py tests/unit/test_decision.py t
 ```
 Expected: PASS, `137 passed`.
 
-- [ ] **Step 5: Format, lint and run the full suite**
+- [x] **Step 5: Format, lint and run the full suite**
 
 Run:
 
@@ -6508,7 +6511,7 @@ Expected: `All checks passed!`
 Run: `uv run pytest -n auto -q`
 Expected: `3082 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision/decide.py src/naics_embedder/decision/sweep.py src/naics_embedder/text_model/checkpoint_runner.py tests/fixtures/decision.py tests/unit/test_checkpoint_runner.py tests/unit/test_decision.py tests/unit/test_decision_sweep.py
@@ -6545,7 +6548,7 @@ report. The existing CLI test also checks the report's `geometry`.
   - The `tools radius-report` JSON gains `geometry`, and `radius` is null for a flat arm.
     `passed` is `(radius is None or radius.passed) and not inert_terms`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_radius_report.py`, make these 5 edits, in order.
 
@@ -6714,7 +6717,7 @@ def test_cli_writes_a_failed_capped_report_and_exits_one(cli_arm, tmp_path):
     table = pl.read_parquet(cli_arm.table)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_radius_report.py -n auto -q`
 Expected: FAIL, `6 failed, 21 passed`:
@@ -6723,7 +6726,7 @@ Expected: FAIL, `6 failed, 21 passed`:
   type(s) for *: 'float' and 'NoneType'`);
 - the flat CLI tests fail, under `euclidean` and `spherical`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/cli/commands/tools.py`, make these 2 edits, in order.
 
@@ -6934,12 +6937,12 @@ with:
     return result
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_radius_report.py -n auto -q`
 Expected: PASS, `27 passed`.
 
-- [ ] **Step 5: Format, lint and run the full suite**
+- [x] **Step 5: Format, lint and run the full suite**
 
 Run:
 
@@ -6954,7 +6957,7 @@ Expected: `All checks passed!`
 Run: `uv run pytest -n auto -q`
 Expected: `3086 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/cli/commands/tools.py src/naics_embedder/text_model/radius_report.py tests/unit/test_radius_report.py
@@ -6984,7 +6987,7 @@ fails first: make Step 1's three edits, then Step 3's two, in that order.
   `read_epoch_summary`.
 - Produces: nothing later tasks use.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/integration/test_reference_training.py`, make these 3 edits, in order.
 
@@ -7099,13 +7102,13 @@ def test_a_flat_arm_trains_without_the_radial_term_and_reads_by_its_own_distance
 ```
 
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `uv run pytest tests/integration/test_reference_training.py -n auto -q`
 Expected: FAIL, `4 failed, 18 passed`. Each of the four new cases fails with `AttributeError:
 'NoneType' object has no attribute 'item'`, in `_ModuleHooks.recorded_losses`.
 
-- [ ] **Step 3: Record only the terms the arm has**
+- [x] **Step 3: Record only the terms the arm has**
 
 In `tests/integration/test_reference_training.py`, make these 2 edits, in order.
 
@@ -7164,12 +7167,12 @@ with:
 ```
 
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `uv run pytest tests/integration/test_reference_training.py -n auto -q`
 Expected: PASS, `22 passed`.
 
-- [ ] **Step 5: Format, lint and run the full suite**
+- [x] **Step 5: Format, lint and run the full suite**
 
 Run: `./scripts/format_code.sh tests/integration/test_reference_training.py`
 Expected: no file changes.
@@ -7180,7 +7183,7 @@ Expected: `All checks passed!`
 Run: `uv run pytest -n auto -q`
 Expected: `3090 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/integration/test_reference_training.py
@@ -7224,7 +7227,7 @@ Source files are not touched.
 - Produces: the `#geometry-arms` anchor in `docs/text_training.md`, which `docs/overview.md`,
   `docs/usage.md` and `README.md` link.
 
-- [ ] **Step 1: Edit the documentation**
+- [x] **Step 1: Edit the documentation**
 
 In `CLAUDE.md`, make these 7 edits, in order.
 
@@ -7915,7 +7918,7 @@ with:
 | Cache and outcome monitor | `test_monitor.py`: eval/no-grad refresh, detached candidates, live-anchor replacement, validation reads and durable records |
 ```
 
-- [ ] **Step 2: Build the docs and check the new anchor and API section**
+- [x] **Step 2: Build the docs and check the new anchor and API section**
 
 Run: `uv run mkdocs build --strict -d /tmp/naics_plan12_site`
 Expected: the build succeeds with no warning.
@@ -7940,7 +7943,7 @@ Expected: one line, `id="naics_embedder.text_model.heads.build_head"`.
 
 Run: `rm -rf /tmp/naics_plan12_site`
 
-- [ ] **Step 3: Check the counts the docs give**
+- [x] **Step 3: Check the counts the docs give**
 
 Run: `find src -name '*.py' | wc -l`, then `find tests/unit -name 'test_*.py' | wc -l`
 Expected: `118`, then `100`.
@@ -7948,7 +7951,7 @@ Expected: `118`, then `100`.
 Run: `uv run pytest --collect-only -q -q | tail -1`
 Expected: `3092 tests collected` followed by a time.
 
-- [ ] **Step 4: Check the line lengths**
+- [x] **Step 4: Check the line lengths**
 
 Write this script to `/tmp/naics_plan12_check_lines.py` with the Write tool:
 
@@ -7989,12 +7992,14 @@ python3 /tmp/naics_plan12_check_lines.py HEAD CLAUDE.md README.md docs/api/encod
 Expected: `[]`. Only the lines this task adds are checked, and lines in fences and tables are exempt
 (**Project rules**). `README.md`'s long fifth line is older than this plan.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `3090 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
+
+> Deviation: the commit was made by the user, after auto mode denied the implementer's and controller's `git commit` (a524eb7).
 
 ```bash
 git add CLAUDE.md README.md docs/api/encoder.md docs/api/export.md docs/api/radius_report.md docs/overview.md docs/quickstart.md docs/text_training.md docs/usage.md tests/README.md
@@ -8037,7 +8042,7 @@ deleted in Step 7. Runs may build `data/token_cache/` in the main checkout and a
 
 Record each command's output in the ledger.
 
-- [ ] **Step 1: Check both checkouts**
+- [x] **Step 1: Check both checkouts**
 
 Run: `pwd`, then `git status --short`, then `git log --oneline origin/main..HEAD`
 Expected: the worktree's root; no output; then the eight task commits, newest first.
@@ -8053,7 +8058,7 @@ wc -l /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl && shasum -
 ```
 Expected: Pre-flight Step 4's values.
 
-- [ ] **Step 2: Seed 1's radius report under the new code**
+- [x] **Step 2: Seed 1's radius report under the new code**
 
 The paths must be given exactly as below: the report records them resolved, and Step 4 compares
 them with Stage 7's report.
@@ -8066,7 +8071,7 @@ cd /Users/lowell/Projects/naics-embedder && HF_HUB_OFFLINE=1 uv run --project WO
 Expected: exit 0, the report printed. It ends with the term gradients, the last being
 `"task": 15.713854933674163`. At plan time it took 28 s.
 
-- [ ] **Step 3: Re-export seed 1**
+- [x] **Step 3: Re-export seed 1**
 
 Run:
 
@@ -8076,7 +8081,7 @@ cd /Users/lowell/Projects/naics-embedder && HF_HUB_OFFLINE=1 uv run --project WO
 Expected: exit 0, ending `Code table: /tmp/naics_plan12_s1.parquet` and
 `Provenance: /tmp/naics_plan12_s1_provenance.json`.
 
-- [ ] **Step 4: Compare both with Stage 7's**
+- [x] **Step 4: Compare both with Stage 7's**
 
 Write this script to `/tmp/naics_plan12_compare_seed1.py` with the Write tool:
 
@@ -8137,7 +8142,7 @@ The radius report's 25 anchor gradients, five term norms and every radius check 
 which is P6's bit-for-bit claim on a real checkpoint. The table's sha256 `a2dee842…` and matrix
 fingerprint `51f17bd3…` are Stage 7's seed-1 table's (P9).
 
-- [ ] **Step 5: The exit checks**
+- [x] **Step 5: The exit checks**
 
 Write this script to `/tmp/naics_plan12_exit.py` with the Write tool:
 
@@ -8294,7 +8299,7 @@ The models of section 3 are built unseeded, so the flat norms differ run to run.
 run gave Euclidean task 0.390, code-code 0.338 and scales 0.121 and 0.043. It gave spherical task
 1.302, code-code 1.466 and scales 0.385 and 0.107. Record the run's own values.
 
-- [ ] **Step 6: Nothing else changed**
+- [x] **Step 6: Nothing else changed**
 
 Run: `git -C /Users/lowell/Projects/naics-embedder status --short`
 Expected: no output.
@@ -8309,7 +8314,7 @@ Expected: Pre-flight Step 4's values.
 Run: `ls /tmp/naics_plan12_never_written.jsonl`
 Expected: "No such file or directory": building the outcome panel logged nothing.
 
-- [ ] **Step 7: Clean up**
+- [x] **Step 7: Clean up**
 
 Run:
 
@@ -8321,7 +8326,7 @@ rm /tmp/naics_plan12_rr_s1.json /tmp/naics_plan12_s1.parquet /tmp/naics_plan12_s
 
 Run every check before the final review, and paste each output into the ledger.
 
-- [ ] **Step 1: The suite on both CI versions**
+- [x] **Step 1: The suite on both CI versions**
 
 Run: `uv run pytest -n auto -q`
 Expected: `3090 passed, 2 skipped`.
@@ -8338,7 +8343,7 @@ Expected:
 
 Run: `rm -rf /tmp/naics_plan12_py310`
 
-- [ ] **Step 2: Lint, format and docs**
+- [x] **Step 2: Lint, format and docs**
 
 Run: `uv run ruff check src/ tests/`
 Expected: `All checks passed!`
@@ -8349,7 +8354,7 @@ Expected: exit 0, with no file listed.
 Run: `uv run mkdocs build --strict -d /tmp/naics_plan12_site`, then `rm -rf /tmp/naics_plan12_site`
 Expected: the build succeeds with no warning.
 
-- [ ] **Step 3: The branch**
+- [x] **Step 3: The branch**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected: the eight task commits, newest first, and none of the six private commits:
@@ -8371,7 +8376,7 @@ Expected: `44 files changed, 1660 insertions(+), 314 deletions(-)`.
 Run: `git diff --name-only origin/main...HEAD -- uv.lock conf/data`
 Expected: no output. The lock and the panels' configs are untouched.
 
-- [ ] **Step 4: No caller branches on the geometry (P3)**
+- [x] **Step 4: No caller branches on the geometry (P3)**
 
 Run: `git grep -n -E "[!=]= *'(euclidean|spherical|hyperbolic)'" -- src/naics_embedder/text_model`
 Expected: exactly `build_head`'s three lines:
@@ -8385,7 +8390,9 @@ Outside `text_model/`, the HGCN feeder and `train`'s prompt (P10), the tie order
 encoder record's four-copy check (P7) and the diagnostics' geometry dispatch (Stage 4) compare
 names, by design.
 
-- [ ] **Step 5: The final review**
+- [x] **Step 5: The final review**
+
+> Deviation: the final review's user rulings added a diagnostics provenance guard with 7 tests (d33bd73) and Task 8 fixes (18ff5ef), so the branch has more commits than the 8 task commits, and the suite 3097 passed / 3099 collected, not 3090 / 3092; M2, M4 and m2 were deferred to Plan completion's gate.
 
 Dispatch the code-reviewer agent, which is pinned to Opus, on the whole branch, with:
 - `git diff origin/main...HEAD -- src tests conf docs CLAUDE.md README.md`;
@@ -8403,7 +8410,7 @@ Then, for each finding:
 
 Phase 1 ends here (P1). No Lambda time is spent until this PR has merged.
 
-- [ ] **Step 1: Open the PR, with the user's go-ahead**
+- [x] **Step 1: Open the PR, with the user's go-ahead**
 
 Run: `git log --oneline origin/main..HEAD`
 Expected: Final verification Step 3's list.
@@ -8419,7 +8426,7 @@ bare `git push`, and open the PR against `main`. The PR description carries:
 
 End the description with the session's PR attribution line.
 
-- [ ] **Step 2: Wait for review and merge**
+- [x] **Step 2: Wait for review and merge**
 
 The PR's review and merge are the hard checkpoint. GitHub auto-merge is off, and main has no
 required checks.
@@ -8436,7 +8443,7 @@ required checks.
 Before pushing a follow-up fix, check that the PR is still open (`gh pr view <number> --json
 state`). If the user merged meanwhile, land the follow-up as a new PR from `origin/main`.
 
-- [ ] **Step 3: Keep the ledger, then finish the branch**
+- [x] **Step 3: Keep the ledger, then finish the branch**
 
 Finishing removes this worktree, and with it every ignored file. Keep the execution ledger first.
 Skip this in the main checkout.
@@ -8519,7 +8526,9 @@ supervision.manifest_path=data/supervision/stage3-supervision-v2/301cce28-539c-4
 - Produces: local `main` = merged origin/main plus the six private commits; the checked lock,
   records, panels and log.
 
-- [ ] **Step 1: Confirm the first PR has merged, and pin it**
+- [x] **Step 1: Confirm the first PR has merged, and pin it**
+
+> Deviation: the handoff's refs were stale (BASE `eac0704` after docs PRs #132 and #133; local `main` already `7ef00c2`); the user ruled to continue.
 
 Run: `git fetch origin`, then:
 
@@ -8549,7 +8558,9 @@ At plan time local `main` was 22df5e1, and the list also held 22df5e1, cd0f80b a
 another commit appears, stop and ask. If `main` already sits on BASE with exactly the six commits
 above it, someone has synced it: skip Step 2.
 
-- [ ] **Step 2: Replay the six private commits onto BASE**
+- [x] **Step 2: Replay the six private commits onto BASE**
+
+> Skipped: local `main` was already `7ef00c2`, the merge of `22df5e1` with BASE (the user's merge-not-replay ruling; tree equal to `git merge-tree`) → nothing to defer.
 
 The replay drops aa7ac39 and 22df5e1, two merges, and cd0f80b, which PR #129 published. Use the
 six commits' SHAs on local `main`, oldest first. At plan time they were aa8ebd6, 3fc580a, d7927a5,
@@ -8606,7 +8617,7 @@ Run: `git log --oneline origin/main..main`, then `git diff --name-only BASE main
 Expected: the six private commits, then `17`. Never push `main`. The pre-push hook refuses it
 anyway.
 
-- [ ] **Step 3: The suite on the campaign's source**
+- [x] **Step 3: The suite on the campaign's source**
 
 Run: `uv sync --locked`, then `uv run pytest -n auto -q`
 Expected: exactly two failures, the two pin tests the private config commits fail by design:
@@ -8620,7 +8631,7 @@ Every other test passes or skips. At plan time the replay onto the dry run's tip
 3152 passed, 2 skipped` in a worktree without `data/`. The main checkout has `data/`, so plan 9's
 local-only test runs there too. If any other test fails, stop and ask.
 
-- [ ] **Step 4: The lock, the records and the log**
+- [x] **Step 4: The lock, the records and the log**
 
 Run: `shasum -a 256 uv.lock`
 Expected: `4167042e8a5a8caa9af62973151f681fffb50afaa1a7f6d1f801bd9e58bdac21  uv.lock`.
@@ -8649,7 +8660,7 @@ Expected: "No such file or directory" for both. If either exists, stop and ask.
 
 Run: `mkdir /Users/lowell/naics-artifacts/records/stage8`
 
-- [ ] **Step 5: The panels Stage 8 reads are Stage 7's**
+- [x] **Step 5: The panels Stage 8 reads are Stage 7's**
 
 `check_pairing` requires every arm of the decision to read the reference's panels, with the same
 data and fit settings. Rebuild them, without reading them, and compare.
@@ -8815,7 +8826,7 @@ gate refused a run of another geometry.
 
 For each cell, in the table's order, make Steps 1–6 with s = 1:
 
-- [ ] **Step 1: Bring up the session**
+- [x] **Step 1: Bring up the session**
 
 Ask the user for an instance's address, a new one or the one already up. Then:
 
@@ -8827,7 +8838,7 @@ HF_HUB_OFFLINE=1 uv run --locked --no-sync naics-embedder remote up --host ubunt
 Expected: the tool check, the bundle gate on the Mac, the bootstrap with its clock and native BF16
 checks, then `Ready session <session_id> on ubuntu@<IP>`. Stop and ask on any failure.
 
-- [ ] **Step 2: Launch the run**
+- [x] **Step 2: Launch the run**
 
 Run:
 
@@ -8836,7 +8847,9 @@ HF_HUB_OFFLINE=1 uv run --locked --no-sync naics-embedder remote train seed=1 ex
 ```
 Expected: `Launched segment <segment_id>`.
 
-- [ ] **Step 3: Gate the first epoch**
+- [x] **Step 3: Gate the first epoch**
+
+> Deviation: the first-epoch gate ran after each seed-1 run, since the sync defers a run written every epoch; the first run also got a read-only SSH spot check mid-run (21:57:17Z).
 
 Poll `HF_HUB_OFFLINE=1 uv run --locked --no-sync naics-embedder remote sync --once` and
 `uv run --locked --no-sync naics-embedder remote status` until both
@@ -8851,7 +8864,7 @@ cell's (`euclidean`, `cosine` or `lorentz`), and the count is at least 1.
 If the gate fails, run `uv run --locked --no-sync naics-embedder remote finish --stop-training`,
 then stop and ask.
 
-- [ ] **Step 4: Let the run finish**
+- [x] **Step 4: Let the run finish**
 
 Poll `remote status` until it reports the run's exit code. Expected: 0, after early stopping or the
 40-epoch budget. If the run fails, stop and ask; never relaunch it under the same
@@ -8864,14 +8877,14 @@ launch another, run Step 1's `remote up` there, then continue with:
 HF_HUB_OFFLINE=1 uv run --locked --no-sync naics-embedder remote train --resume seed=1 experiment_name=stage8-<g>-d<d>-s1 model.geometry=<g> model.dimension=<d> supervision.manifest_path=data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/manifest.json
 ```
 
-- [ ] **Step 5: Finish the session**
+- [x] **Step 5: Finish the session**
 
 Run: `uv run --locked --no-sync naics-embedder remote finish`
 Expected: the final pull, no checksum difference and no instance edit, then "Safe to terminate"
 with the latest checkpoint's SHA-256 on both sides. Tell the user the instance may be terminated or
 kept for the next run.
 
-- [ ] **Step 6: Check the finished run**
+- [x] **Step 6: Check the finished run**
 
 Run: `HF_HUB_OFFLINE=1 uv run --locked --no-sync python /tmp/naics_plan12_gate.py <g> <d> 1`
 Expected: the gate's line again, now counting every epoch.
@@ -8898,7 +8911,7 @@ and their sessions' logs and outputs.
 
 For each cell, in the table's order, and for each seed s from 2 to 5, make Steps 1–5:
 
-- [ ] **Step 1: Bring up the session**
+- [x] **Step 1: Bring up the session**
 
 Run:
 
@@ -8907,7 +8920,7 @@ HF_HUB_OFFLINE=1 uv run --locked --no-sync naics-embedder remote up --host ubunt
 ```
 Expected: `Ready session <session_id> on ubuntu@<IP>`.
 
-- [ ] **Step 2: Launch the run**
+- [x] **Step 2: Launch the run**
 
 Run:
 
@@ -8916,7 +8929,9 @@ HF_HUB_OFFLINE=1 uv run --locked --no-sync naics-embedder remote train seed=<s> 
 ```
 Expected: `Launched segment <segment_id>`.
 
-- [ ] **Step 3: Let the run finish**
+- [x] **Step 3: Let the run finish**
+
+> Deviation: 22 of the 40 runs used source `4a1a3f2` (SOURCE plus a `remote/sync.py` fix) on a second instance, after `remote finish` slowed about 1.2-1.4 min per run; the fix cut that to about 0.2 min per run (finding §1, deviation 3).
 
 Poll `remote sync --once` and `remote status` as in Task 11, until `remote status` reports the
 exit code. Expected: 0. If the run fails, stop and ask. If the instance has to go first, run
@@ -8926,12 +8941,14 @@ exit code. Expected: 0. If the run fails, stop and ask. If the instance has to g
 HF_HUB_OFFLINE=1 uv run --locked --no-sync naics-embedder remote train --resume seed=<s> experiment_name=stage8-<g>-d<d>-s<s> model.geometry=<g> model.dimension=<d> supervision.manifest_path=data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/manifest.json
 ```
 
-- [ ] **Step 4: Finish the session**
+- [x] **Step 4: Finish the session**
+
+> Deviation: `remote finish` was refused as busy while a sync pass held the lock (7 times for euclidean-d8 seed 1; all 20 retries for hyperbolic-d8 seed 3); the drivers retried, later up to 90 times.
 
 Run: `uv run --locked --no-sync naics-embedder remote finish`
 Expected: "Safe to terminate", with the latest checkpoint's SHA-256 on both sides.
 
-- [ ] **Step 5: Check the finished run**
+- [x] **Step 5: Check the finished run**
 
 Run: `HF_HUB_OFFLINE=1 uv run --locked --no-sync python /tmp/naics_plan12_gate.py <g> <d> <s>`
 Expected: `<g> <d> <s> cuda bf16-mixed <distance> <count> <mrr>`.
@@ -8943,7 +8960,7 @@ Record the run's facts for the finding, as in Task 11 Step 6.
 
 After the last run:
 
-- [ ] **Step 6: All 40 runs**
+- [x] **Step 6: All 40 runs**
 
 Run: `uv run --locked --no-sync python /tmp/naics_plan12_runs.py all`
 Expected: 40 lines, eight cells of five seeds, with no assertion error. `tools sweep` re-checks
@@ -8970,12 +8987,12 @@ contract, geometry and distance. It then exports each seed's selected checkpoint
 on each of the three validation panels. A refusal before the first read logs nothing. A later
 failure leaves logged reads with no record, and the log keeps them.
 
-- [ ] **Step 1: Record the log's count**
+- [x] **Step 1: Record the log's count**
 
 Run: `wc -l logs/selection_log.jsonl`
 Record the count as the sweeps' FIRST. Task 16's receipts start after it.
 
-- [ ] **Step 2: Sweep each cell**
+- [x] **Step 2: Sweep each cell**
 
 Run each command in turn. After each, check that the record path was printed and that
 `wc -l logs/selection_log.jsonl` grew by exactly 15: five seeds, three panels each. Stop and ask if
@@ -9016,7 +9033,7 @@ HF_HUB_OFFLINE=1 uv run --locked --no-sync naics-embedder tools sweep --runs 'ch
 Run: `wc -l logs/selection_log.jsonl`
 Expected: FIRST + 120.
 
-- [ ] **Step 3: The records**
+- [x] **Step 3: The records**
 
 Write this script to `/tmp/naics_plan12_records.py` with the Write tool:
 
@@ -9061,7 +9078,7 @@ its checkpoints.
 - Produces: every run's "Radius" and "No inert terms" numbers and its diagnostics, for the
   finding.
 
-- [ ] **Step 1: A radius report for every run**
+- [x] **Step 1: A radius report for every run**
 
 For each of the 40 runs, with `<kkk>` its selected epoch in three digits (`003` for epoch 3, from
 Task 13 Step 3), run:
@@ -9081,7 +9098,7 @@ checkpoint itself, so it needs no geometry override.
 **Stop and ask if `tools radius-report` exits 1, raises, or reports a failed check. Never change a
 tolerance (the resume ruling).** The report records its failed criterion; the user rules on it.
 
-- [ ] **Step 2: Every report, together**
+- [x] **Step 2: Every report, together**
 
 Write this script to `/tmp/naics_plan12_reports.py` with the Write tool:
 
@@ -9129,7 +9146,7 @@ run's line adds its least anchor gradient, least level SD, sector gap, largest r
 residual and largest relative error. At plan time the script reproduced the Stage 7 finding's
 radius table from Stage 7's reports.
 
-- [ ] **Step 3: Every campaign record is a validation read**
+- [x] **Step 3: Every campaign record is a validation read**
 
 Write this script to `/tmp/naics_plan12_logs.py` with the Write tool:
 
@@ -9164,7 +9181,7 @@ Expected: no assertion error, then the two counts. The log count is physical: th
 plus every instance log's, and an instance's log carries its earlier sessions' reads too. The
 monitor count is the 40 runs' epochs summed.
 
-- [ ] **Step 4: Diagnostics, for the record only (Req 6)**
+- [x] **Step 4: Diagnostics, for the record only (Req 6)**
 
 For each run, with `<kkk>` as in Step 1:
 
@@ -9195,7 +9212,7 @@ is non-inferior on all three panels and superior on at least one (D8). The tie o
 the arms no other arm is adopted over: fewer components, then lower dimension, then
 non-hyperbolic geometry, then the higher held-out gain (D11).
 
-- [ ] **Step 1: Decide**
+- [x] **Step 1: Decide**
 
 Run: `wc -l logs/selection_log.jsonl`
 Record the count.
@@ -9219,7 +9236,7 @@ Expected:
 Run: `wc -l logs/selection_log.jsonl`
 Expected: Step 1's count; the decision logged nothing.
 
-- [ ] **Step 2: The decision, summarized**
+- [x] **Step 2: The decision, summarized**
 
 Write this script to `/tmp/naics_plan12_decision.py` with the Write tool:
 
@@ -9268,7 +9285,7 @@ Run: `rm /tmp/naics_plan12_decision.py`
 - Consumes: the outputs of Tasks 10–15.
 - Produces: the finding, which Plan completion's roadmap stamp cites.
 
-- [ ] **Step 1: The receipts, before branching**
+- [x] **Step 1: The receipts, before branching**
 
 The receipts come from the main checkout's gitignored files, so make them before switching
 branches.
@@ -9315,7 +9332,7 @@ Expected on stderr: `monitor records <n>, sweep reads 120`, where n is Task 14 S
 count. At plan time the script reproduced the Stage 7 finding's 256 verbatim lines from Stage 7's
 files.
 
-- [ ] **Step 2: Branch for the second PR**
+- [x] **Step 2: Branch for the second PR**
 
 Run: `git status --short`
 Expected: no output.
@@ -9324,7 +9341,9 @@ Run: `git checkout --no-track -b claude/stage-8-campaign origin/main`
 Expected: a clean switch. The private commits stay on `main`; this branch carries only the finding
 and the completion markup. Its `conf/` is public, so run no campaign command on it.
 
-- [ ] **Step 3: Write the finding**
+- [x] **Step 3: Write the finding**
+
+> Deviation: this step's line check ran before `git add`, so it passed vacuously on the untracked file; re-run after the commit it flagged two lines, fixed in 2fb3751 with the review fixes.
 
 Create `specs/findings/geometry-by-dimension.md` in the format of
 `specs/findings/reference-configuration.md`. Wrap prose at 100 columns. Copy every value from
@@ -9389,7 +9408,9 @@ python3 /tmp/naics_plan12_check_lines.py origin/main specs/findings/geometry-by-
 ```
 Expected: `[]`. If `/tmp/naics_plan12_check_lines.py` is gone, write it again from Task 8 Step 4.
 
-- [ ] **Step 4: Commit the finding**
+- [x] **Step 4: Commit the finding**
+
+> Deviation: two commits, f4d3424 (the finding) and 2fb3751 (review fixes); the scratch scripts were kept until the end of Plan completion because they regenerate the finding.
 
 Run: `git status --short`
 Expected: `?? specs/findings/geometry-by-dimension.md`, and nothing else that is tracked or
@@ -9408,7 +9429,7 @@ rm /tmp/naics_plan12_receipts.py /tmp/naics_plan12_receipts.md /tmp/naics_plan12
 
 ## Final verification, Phase 2 (controller, inline)
 
-- [ ] **Step 1: The exit criteria**
+- [x] **Step 1: The exit criteria**
 
 Check each against the roadmap's Exit and Verification "Geometry × dimension", citing the output
 that shows it:
@@ -9422,13 +9443,15 @@ that shows it:
   Step 2);
 - the campaign's log records are validation reads only (Task 14 Step 3).
 
-- [ ] **Step 2: The lock**
+- [x] **Step 2: The lock**
 
 Run: `shasum -a 256 uv.lock`
 Expected: Task 10's hash. It stays frozen until the last Stage 8–10 decision that uses Stage 7's
 margins.
 
-- [ ] **Step 3: Review the finding**
+- [x] **Step 3: Review the finding**
+
+> Deviation: reviewed by Codex as well as the code-reviewer, as executing-plans Step 3 requires: Codex found no defects; the code-reviewer's findings were applied.
 
 Dispatch the code-reviewer agent on `git diff origin/main...HEAD`, with this plan, Req 12, Req 5
 and the roadmap's Stage 8 entry. Fix each finding in the finding, or triage it as deferred for
@@ -9440,7 +9463,7 @@ Run this after Final verification, Phase 2, once the finding's review findings a
 before finishing-a-development-branch. It is writing-plans' Plan Completion Protocol, with this
 plan's edits written out. It runs on `claude/stage-8-campaign` (Task 16 Step 2).
 
-- [ ] **Step 1: Check for parallel sessions**
+- [x] **Step 1: Check for parallel sessions**
 
 `specs/naics-embedding-roadmap.md` and `specs/deferred_items.md` are shared by every session.
 
@@ -9449,7 +9472,7 @@ Run: `git worktree list`
 - If another worktree belongs to a running session, or the user has mentioned one, hold the
   shared edits (Steps 4 and 5) and give the user the exact text of each.
 
-- [ ] **Step 2: The resolve-before-defer gate**
+- [x] **Step 2: The resolve-before-defer gate**
 
 Collect the leftovers of both phases: plan steps skipped or descoped, and review findings not
 fixed. Partition them:
@@ -9459,7 +9482,7 @@ fixed. Partition them:
 
 The partition is final only once every question is answered.
 
-- [ ] **Step 3: Mark up this plan**
+- [x] **Step 3: Mark up this plan**
 
 - Tick every completed step (`- [x]`).
 - Under each step that deviated, add a one-line `> Deviation: …` note.
@@ -9468,7 +9491,7 @@ The partition is final only once every question is answered.
   deferred items in specs/deferred_items.md`, or `… ; nothing deferred` when the gate deferred
   nothing.
 
-- [ ] **Step 4: The deferred items**
+- [x] **Step 4: The deferred items**
 
 In `specs/deferred_items.md`:
 - Annotate the `tie_order` item with this plan's outcome. Its Revisit condition names Stage 8.
@@ -9480,7 +9503,7 @@ In `specs/deferred_items.md`:
 - Append this plan's deferred items, if the gate deferred any, as a `## 12-geometry-by-dimension —
   <date>` section in the file's item schema. Skip the section if nothing was deferred.
 
-- [ ] **Step 5: The roadmap stamp**
+- [x] **Step 5: The roadmap stamp**
 
 In `specs/naics-embedding-roadmap.md`, Stage 8's entry:
 - tick it: `- [ ] Stage 8: Geometry × dimension` becomes `- [x] Stage 8: Geometry × dimension`;
@@ -9501,7 +9524,7 @@ roadmap resume rather than editing later stages here, as Stage 7's completion di
 Stage 9's reference cell, and, if the chosen cell is flat, the HGCN feeder's refusal (P10) for
 Stages 10–11.
 
-- [ ] **Step 6: Backlog triage**
+- [x] **Step 6: Backlog triage**
 
 Run:
 
@@ -9512,7 +9535,7 @@ Report its summary line: the open count, the closure rate and the aged tail. Wit
 items or any aged tail, run steps 1–4 of the skill's Triage rubric and present the proposal. It
 is read-only; `/deferred` acts on a selection.
 
-- [ ] **Step 7: Retire the plan**
+- [x] **Step 7: Retire the plan**
 
 Run:
 

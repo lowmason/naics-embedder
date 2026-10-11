@@ -857,7 +857,7 @@ differs from its own.
       Stage 7: COMPLETE (2026-10-07) — implemented by plan 10
       (specs/plans/completed/10-objective-anchors-and-live-radius.md). Next: resume the roadmap.
 
-- [ ] Stage 8: Geometry × dimension
+- [x] Stage 8: Geometry × dimension
       Objective: Implement the Euclidean and spherical arms and run the crossed nine-cell
       comparison under Req 5.
       Spec: Req 12; Req 5 (several arms, ties); Req 2 (export form per arm); Verification
@@ -883,6 +883,24 @@ differs from its own.
       record names the non-dominated set and the chosen cell under the tie order; each arm's
       export uses tangent coordinates for hyperbolic and raw coordinates otherwise.
       ROUTING: writing-plans
+      Realized: eight new cells (hyperbolic at d = 8 and 32, Euclidean and spherical at d = 8, 16
+      and 32) trained 5 seeds each on Lambda at `bf16-mixed` under Stage 7's settings, with only
+      `model.geometry` and `model.dimension` changed; the hyperbolic d = 16 cell is Stage 7's
+      reference record (10 seeds). Every decision read ran on the Mac (R9). The eight arm records
+      are in `~/naics-artifacts/records/stage8/` and the nine-cell decision record is
+      `~/naics-artifacts/records/stage8/decision.json` (sha256 `601a8e52…`). The non-dominated set
+      is `euclidean-d16` alone, with no tie, and the chosen cell is `euclidean-d16`: adopted over
+      all eight other arms, including the hyperbolic reference, so Stage 9's reference is Euclidean
+      at dimension 16. Every hyperbolic run passed "Radius" and every run passed "No inert terms";
+      every campaign log record is a validation read. `uv.lock` stays frozen at sha256
+      `4167042e…` through the last Stages 8-10 decision that uses Stage 7's margins. The finding is
+      `specs/findings/geometry-by-dimension.md`.
+      Source boundary: training used private local source `7ef00c2` for 18 runs and `4a1a3f2`
+      (`7ef00c2` plus a local fix to `remote/sync.py`) for 22; Mac reads used `4a1a3f2`. The finding
+      branch excludes all private commits and does not claim the unchanged public base has
+      identical native readiness.
+      Stage 8: COMPLETE (2026-10-11) — implemented by plan 12
+      (specs/plans/completed/12-geometry-by-dimension.md). Next: resume the roadmap.
 
 - [ ] Stage 9: Backbone and one-factor ablations
       Objective: Choose the backbone and settle the one-factor ablations (mixture of experts,
