@@ -84,10 +84,12 @@ and were not changed.
 
 Every run was fresh, used its seed once, and had a fixed 40-epoch budget with early stopping at a
 patience of five epochs. The 21-key `run_settings` below are those of euclidean-d16 seed 1.
-Across the 40 runs the saved configuration, which holds 24 flattened keys, differs in exactly one
-of them, `run_settings.dimension`, which takes the value 8, 16 or 32 with the cell. The geometry
-is not a configuration key; each run's geometry is recorded in its exported-table provenance and
-in its arm record, and the provenance of all 40 runs names the geometry of its cell.
+Across the 40 runs the 24-key `config_snapshot` in `training_summary.json` (the 21 `run_settings`
+keys and three `model` keys) differs in exactly one key, `run_settings.dimension`, which takes the
+value 8, 16 or 32 with the cell. Geometry is not one of the 21 `run_settings` keys (P7). It is the
+`model.geometry` key of each run's saved `config.yaml`, and the 40 `config.yaml` files differ from
+one another only in `experiment_name`, `seed`, `model.dimension` and `model.geometry`. The
+provenance of every run's exported table also names the geometry of its cell.
 
 ```json
 {
@@ -119,52 +121,56 @@ in its arm record, and the provenance of all 40 runs names the geometry of its c
 ```
 
 Every run completed, with no resume. The "Stopped by" column says which rule ended it: the
-40-epoch budget, or early stopping.
+40-epoch budget, or early stopping. Start is the segment's recorded start and End is the
+`training_summary.json` timestamp, both UTC (End is recorded without an offset); Seconds is their
+difference. The GPU is the one the run's hardware record reports.
 
-| Arm | Seed | Instance | Source | Session | Segment | Epochs | Selected | Stopped by | Start | End | Seconds |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| euclidean-d16 | 1 | I1 | 7ef00c2 | 20261009T214819Z | 20261009T215045Z | 40 | 39 | epoch budget | 2026-10-09T21:50:45.900631+00:00 | 2026-10-09T22:14:27.751628 | 1421.850997 |
-| euclidean-d16 | 2 | I1 | 7ef00c2 | 20261010T002226Z | 20261010T002351Z | 40 | 39 | epoch budget | 2026-10-10T00:23:51.966674+00:00 | 2026-10-10T00:47:29.965342 | 1417.998668 |
-| euclidean-d16 | 3 | I1 | 7ef00c2 | 20261010T005622Z | 20261010T005750Z | 40 | 39 | epoch budget | 2026-10-10T00:57:50.007746+00:00 | 2026-10-10T01:21:27.597052 | 1417.589306 |
-| euclidean-d16 | 4 | I1 | 7ef00c2 | 20261010T013053Z | 20261010T013219Z | 40 | 38 | epoch budget | 2026-10-10T01:32:19.261759+00:00 | 2026-10-10T01:55:47.926883 | 1408.665124 |
-| euclidean-d16 | 5 | I1 | 7ef00c2 | 20261010T020615Z | 20261010T020741Z | 40 | 39 | epoch budget | 2026-10-10T02:07:41.332226+00:00 | 2026-10-10T02:31:15.042952 | 1413.710726 |
-| spherical-d16 | 1 | I1 | 7ef00c2 | 20261009T221715Z | 20261009T221845Z | 7 | 1 | early stopping | 2026-10-09T22:18:45.067441+00:00 | 2026-10-09T22:24:35.798977 | 350.731536 |
-| spherical-d16 | 2 | I1 | 7ef00c2 | 20261010T024255Z | 20261010T024422Z | 7 | 1 | early stopping | 2026-10-10T02:44:22.045619+00:00 | 2026-10-10T02:50:14.604333 | 352.558714 |
-| spherical-d16 | 3 | I1 | 7ef00c2 | 20261010T030325Z | 20261010T030452Z | 8 | 2 | early stopping | 2026-10-10T03:04:52.543308+00:00 | 2026-10-10T03:11:18.128252 | 385.584944 |
-| spherical-d16 | 4 | I1 | 7ef00c2 | 20261010T032607Z | 20261010T032735Z | 7 | 1 | early stopping | 2026-10-10T03:27:35.037203+00:00 | 2026-10-10T03:33:31.977268 | 356.940065 |
-| spherical-d16 | 5 | I1 | 7ef00c2 | 20261010T034931Z | 20261010T035059Z | 7 | 1 | early stopping | 2026-10-10T03:50:59.711067+00:00 | 2026-10-10T03:56:54.175261 | 354.464194 |
-| hyperbolic-d8 | 1 | I1 | 7ef00c2 | 20261009T222720Z | 20261009T222847Z | 40 | 39 | epoch budget | 2026-10-09T22:28:47.023354+00:00 | 2026-10-09T22:52:30.129465 | 1423.106111 |
-| hyperbolic-d8 | 2 | I1 | 7ef00c2 | 20261010T041434Z | 20261010T041601Z | 40 | 38 | epoch budget | 2026-10-10T04:16:01.664157+00:00 | 2026-10-10T04:39:32.943146 | 1411.278989 |
-| hyperbolic-d8 | 3 | I1 | 7ef00c2 | 20261010T045932Z | 20261010T050100Z | 40 | 39 | epoch budget | 2026-10-10T05:01:00.333709+00:00 | 2026-10-10T05:24:36.631809 | 1416.2981 |
-| hyperbolic-d8 | 4 | I2 | 4a1a3f2 | 20261011T161622Z | 20261011T161838Z | 40 | 39 | epoch budget | 2026-10-11T16:18:38.939086+00:00 | 2026-10-11T16:41:44.899974 | 1385.960888 |
-| hyperbolic-d8 | 5 | I2 | 4a1a3f2 | 20261011T164331Z | 20261011T164458Z | 40 | 39 | epoch budget | 2026-10-11T16:44:58.431592+00:00 | 2026-10-11T17:07:46.995895 | 1368.564303 |
-| hyperbolic-d32 | 1 | I1 | 7ef00c2 | 20261009T225515Z | 20261009T225640Z | 8 | 2 | early stopping | 2026-10-09T22:56:40.408324+00:00 | 2026-10-09T23:03:06.555087 | 386.146763 |
-| hyperbolic-d32 | 2 | I2 | 4a1a3f2 | 20261011T170913Z | 20261011T171042Z | 9 | 3 | early stopping | 2026-10-11T17:10:42.100368+00:00 | 2026-10-11T17:17:29.853662 | 407.753294 |
-| hyperbolic-d32 | 3 | I2 | 4a1a3f2 | 20261011T171907Z | 20261011T172034Z | 11 | 5 | early stopping | 2026-10-11T17:20:34.679774+00:00 | 2026-10-11T17:28:30.670983 | 475.991209 |
-| hyperbolic-d32 | 4 | I2 | 4a1a3f2 | 20261011T173049Z | 20261011T173217Z | 8 | 2 | early stopping | 2026-10-11T17:32:17.956408+00:00 | 2026-10-11T17:38:38.104481 | 380.148073 |
-| hyperbolic-d32 | 5 | I2 | 4a1a3f2 | 20261011T174120Z | 20261011T174249Z | 7 | 1 | early stopping | 2026-10-11T17:42:49.195773+00:00 | 2026-10-11T17:48:38.998911 | 349.803138 |
-| euclidean-d8 | 1 | I1 | 7ef00c2 | 20261009T230653Z | 20261009T230818Z | 40 | 38 | epoch budget | 2026-10-09T23:08:18.475044+00:00 | 2026-10-09T23:31:46.328076 | 1407.853032 |
-| euclidean-d8 | 2 | I2 | 4a1a3f2 | 20261011T175108Z | 20261011T175237Z | 40 | 39 | epoch budget | 2026-10-11T17:52:37.603973+00:00 | 2026-10-11T18:15:21.391411 | 1363.787438 |
-| euclidean-d8 | 3 | I2 | 4a1a3f2 | 20261011T181805Z | 20261011T181936Z | 40 | 37 | epoch budget | 2026-10-11T18:19:36.388424+00:00 | 2026-10-11T18:42:33.955981 | 1377.567557 |
-| euclidean-d8 | 4 | I2 | 4a1a3f2 | 20261011T184535Z | 20261011T184708Z | 40 | 38 | epoch budget | 2026-10-11T18:47:08.840304+00:00 | 2026-10-11T19:10:01.750540 | 1372.910236 |
-| euclidean-d8 | 5 | I2 | 4a1a3f2 | 20261011T191316Z | 20261011T191448Z | 40 | 39 | epoch budget | 2026-10-11T19:14:48.213134+00:00 | 2026-10-11T19:37:40.079134 | 1371.866 |
-| euclidean-d32 | 1 | I1 | 7ef00c2 | 20261009T233925Z | 20261009T234051Z | 7 | 1 | early stopping | 2026-10-09T23:40:51.852258+00:00 | 2026-10-09T23:46:42.284776 | 350.432518 |
-| euclidean-d32 | 2 | I2 | 4a1a3f2 | 20261011T194104Z | 20261011T194236Z | 7 | 1 | early stopping | 2026-10-11T19:42:36.079870+00:00 | 2026-10-11T19:48:23.864282 | 347.784412 |
-| euclidean-d32 | 3 | I2 | 4a1a3f2 | 20261011T195207Z | 20261011T195340Z | 7 | 1 | early stopping | 2026-10-11T19:53:40.698518+00:00 | 2026-10-11T19:59:31.989021 | 351.290503 |
-| euclidean-d32 | 4 | I2 | 4a1a3f2 | 20261011T200323Z | 20261011T200455Z | 7 | 1 | early stopping | 2026-10-11T20:04:55.801076+00:00 | 2026-10-11T20:10:49.853047 | 354.051971 |
-| euclidean-d32 | 5 | I2 | 4a1a3f2 | 20261011T201435Z | 20261011T201609Z | 7 | 1 | early stopping | 2026-10-11T20:16:09.204386+00:00 | 2026-10-11T20:21:59.772002 | 350.567616 |
-| spherical-d8 | 1 | I1 | 7ef00c2 | 20261009T235206Z | 20261009T235332Z | 9 | 3 | early stopping | 2026-10-09T23:53:32.602787+00:00 | 2026-10-10T00:00:29.601906 | 416.999119 |
-| spherical-d8 | 2 | I2 | 4a1a3f2 | 20261011T202612Z | 20261011T202745Z | 8 | 2 | early stopping | 2026-10-11T20:27:45.934737+00:00 | 2026-10-11T20:34:11.744613 | 385.809876 |
-| spherical-d8 | 3 | I2 | 4a1a3f2 | 20261011T203847Z | 20261011T204020Z | 9 | 3 | early stopping | 2026-10-11T20:40:20.468671+00:00 | 2026-10-11T20:47:12.929312 | 412.460641 |
-| spherical-d8 | 4 | I2 | 4a1a3f2 | 20261011T205141Z | 20261011T205313Z | 11 | 5 | early stopping | 2026-10-11T20:53:13.840263+00:00 | 2026-10-11T21:01:09.037998 | 475.197735 |
-| spherical-d8 | 5 | I2 | 4a1a3f2 | 20261011T210522Z | 20261011T210654Z | 11 | 5 | early stopping | 2026-10-11T21:06:54.577065+00:00 | 2026-10-11T21:14:49.433973 | 474.856908 |
-| spherical-d32 | 1 | I1 | 7ef00c2 | 20261010T000707Z | 20261010T000833Z | 7 | 1 | early stopping | 2026-10-10T00:08:33.020381+00:00 | 2026-10-10T00:14:26.068427 | 353.048046 |
-| spherical-d32 | 2 | I2 | 4a1a3f2 | 20261011T212008Z | 20261011T212143Z | 7 | 1 | early stopping | 2026-10-11T21:21:43.089971+00:00 | 2026-10-11T21:27:33.528769 | 350.438798 |
-| spherical-d32 | 3 | I2 | 4a1a3f2 | 20261011T213242Z | 20261011T213416Z | 7 | 1 | early stopping | 2026-10-11T21:34:16.166179+00:00 | 2026-10-11T21:40:08.906438 | 352.740259 |
-| spherical-d32 | 4 | I2 | 4a1a3f2 | 20261011T214515Z | 20261011T214648Z | 7 | 1 | early stopping | 2026-10-11T21:46:48.854959+00:00 | 2026-10-11T21:52:41.035356 | 352.180397 |
-| spherical-d32 | 5 | I2 | 4a1a3f2 | 20261011T215823Z | 20261011T220000Z | 7 | 1 | early stopping | 2026-10-11T22:00:00.379912+00:00 | 2026-10-11T22:05:53.123758 | 352.743846 |
+| Arm | Seed | Instance | GPU | Source | Session | Segment | Epochs | Selected | Stopped by | Start | End | Seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| euclidean-d16 | 1 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261009T214819Z | 20261009T215045Z | 40 | 39 | epoch budget | 2026-10-09T21:50:45.900631+00:00 | 2026-10-09T22:14:27.751628 | 1421.850997 |
+| euclidean-d16 | 2 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T002226Z | 20261010T002351Z | 40 | 39 | epoch budget | 2026-10-10T00:23:51.966674+00:00 | 2026-10-10T00:47:29.965342 | 1417.998668 |
+| euclidean-d16 | 3 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T005622Z | 20261010T005750Z | 40 | 39 | epoch budget | 2026-10-10T00:57:50.007746+00:00 | 2026-10-10T01:21:27.597052 | 1417.589306 |
+| euclidean-d16 | 4 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T013053Z | 20261010T013219Z | 40 | 38 | epoch budget | 2026-10-10T01:32:19.261759+00:00 | 2026-10-10T01:55:47.926883 | 1408.665124 |
+| euclidean-d16 | 5 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T020615Z | 20261010T020741Z | 40 | 39 | epoch budget | 2026-10-10T02:07:41.332226+00:00 | 2026-10-10T02:31:15.042952 | 1413.710726 |
+| spherical-d16 | 1 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261009T221715Z | 20261009T221845Z | 7 | 1 | early stopping | 2026-10-09T22:18:45.067441+00:00 | 2026-10-09T22:24:35.798977 | 350.731536 |
+| spherical-d16 | 2 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T024255Z | 20261010T024422Z | 7 | 1 | early stopping | 2026-10-10T02:44:22.045619+00:00 | 2026-10-10T02:50:14.604333 | 352.558714 |
+| spherical-d16 | 3 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T030325Z | 20261010T030452Z | 8 | 2 | early stopping | 2026-10-10T03:04:52.543308+00:00 | 2026-10-10T03:11:18.128252 | 385.584944 |
+| spherical-d16 | 4 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T032607Z | 20261010T032735Z | 7 | 1 | early stopping | 2026-10-10T03:27:35.037203+00:00 | 2026-10-10T03:33:31.977268 | 356.940065 |
+| spherical-d16 | 5 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T034931Z | 20261010T035059Z | 7 | 1 | early stopping | 2026-10-10T03:50:59.711067+00:00 | 2026-10-10T03:56:54.175261 | 354.464194 |
+| hyperbolic-d8 | 1 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261009T222720Z | 20261009T222847Z | 40 | 39 | epoch budget | 2026-10-09T22:28:47.023354+00:00 | 2026-10-09T22:52:30.129465 | 1423.106111 |
+| hyperbolic-d8 | 2 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T041434Z | 20261010T041601Z | 40 | 38 | epoch budget | 2026-10-10T04:16:01.664157+00:00 | 2026-10-10T04:39:32.943146 | 1411.278989 |
+| hyperbolic-d8 | 3 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T045932Z | 20261010T050100Z | 40 | 39 | epoch budget | 2026-10-10T05:01:00.333709+00:00 | 2026-10-10T05:24:36.631809 | 1416.2981 |
+| hyperbolic-d8 | 4 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T161622Z | 20261011T161838Z | 40 | 39 | epoch budget | 2026-10-11T16:18:38.939086+00:00 | 2026-10-11T16:41:44.899974 | 1385.960888 |
+| hyperbolic-d8 | 5 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T164331Z | 20261011T164458Z | 40 | 39 | epoch budget | 2026-10-11T16:44:58.431592+00:00 | 2026-10-11T17:07:46.995895 | 1368.564303 |
+| hyperbolic-d32 | 1 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261009T225515Z | 20261009T225640Z | 8 | 2 | early stopping | 2026-10-09T22:56:40.408324+00:00 | 2026-10-09T23:03:06.555087 | 386.146763 |
+| hyperbolic-d32 | 2 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T170913Z | 20261011T171042Z | 9 | 3 | early stopping | 2026-10-11T17:10:42.100368+00:00 | 2026-10-11T17:17:29.853662 | 407.753294 |
+| hyperbolic-d32 | 3 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T171907Z | 20261011T172034Z | 11 | 5 | early stopping | 2026-10-11T17:20:34.679774+00:00 | 2026-10-11T17:28:30.670983 | 475.991209 |
+| hyperbolic-d32 | 4 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T173049Z | 20261011T173217Z | 8 | 2 | early stopping | 2026-10-11T17:32:17.956408+00:00 | 2026-10-11T17:38:38.104481 | 380.148073 |
+| hyperbolic-d32 | 5 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T174120Z | 20261011T174249Z | 7 | 1 | early stopping | 2026-10-11T17:42:49.195773+00:00 | 2026-10-11T17:48:38.998911 | 349.803138 |
+| euclidean-d8 | 1 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261009T230653Z | 20261009T230818Z | 40 | 38 | epoch budget | 2026-10-09T23:08:18.475044+00:00 | 2026-10-09T23:31:46.328076 | 1407.853032 |
+| euclidean-d8 | 2 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T175108Z | 20261011T175237Z | 40 | 39 | epoch budget | 2026-10-11T17:52:37.603973+00:00 | 2026-10-11T18:15:21.391411 | 1363.787438 |
+| euclidean-d8 | 3 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T181805Z | 20261011T181936Z | 40 | 37 | epoch budget | 2026-10-11T18:19:36.388424+00:00 | 2026-10-11T18:42:33.955981 | 1377.567557 |
+| euclidean-d8 | 4 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T184535Z | 20261011T184708Z | 40 | 38 | epoch budget | 2026-10-11T18:47:08.840304+00:00 | 2026-10-11T19:10:01.750540 | 1372.910236 |
+| euclidean-d8 | 5 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T191316Z | 20261011T191448Z | 40 | 39 | epoch budget | 2026-10-11T19:14:48.213134+00:00 | 2026-10-11T19:37:40.079134 | 1371.866 |
+| euclidean-d32 | 1 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261009T233925Z | 20261009T234051Z | 7 | 1 | early stopping | 2026-10-09T23:40:51.852258+00:00 | 2026-10-09T23:46:42.284776 | 350.432518 |
+| euclidean-d32 | 2 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T194104Z | 20261011T194236Z | 7 | 1 | early stopping | 2026-10-11T19:42:36.079870+00:00 | 2026-10-11T19:48:23.864282 | 347.784412 |
+| euclidean-d32 | 3 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T195207Z | 20261011T195340Z | 7 | 1 | early stopping | 2026-10-11T19:53:40.698518+00:00 | 2026-10-11T19:59:31.989021 | 351.290503 |
+| euclidean-d32 | 4 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T200323Z | 20261011T200455Z | 7 | 1 | early stopping | 2026-10-11T20:04:55.801076+00:00 | 2026-10-11T20:10:49.853047 | 354.051971 |
+| euclidean-d32 | 5 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T201435Z | 20261011T201609Z | 7 | 1 | early stopping | 2026-10-11T20:16:09.204386+00:00 | 2026-10-11T20:21:59.772002 | 350.567616 |
+| spherical-d8 | 1 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261009T235206Z | 20261009T235332Z | 9 | 3 | early stopping | 2026-10-09T23:53:32.602787+00:00 | 2026-10-10T00:00:29.601906 | 416.999119 |
+| spherical-d8 | 2 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T202612Z | 20261011T202745Z | 8 | 2 | early stopping | 2026-10-11T20:27:45.934737+00:00 | 2026-10-11T20:34:11.744613 | 385.809876 |
+| spherical-d8 | 3 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T203847Z | 20261011T204020Z | 9 | 3 | early stopping | 2026-10-11T20:40:20.468671+00:00 | 2026-10-11T20:47:12.929312 | 412.460641 |
+| spherical-d8 | 4 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T205141Z | 20261011T205313Z | 11 | 5 | early stopping | 2026-10-11T20:53:13.840263+00:00 | 2026-10-11T21:01:09.037998 | 475.197735 |
+| spherical-d8 | 5 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T210522Z | 20261011T210654Z | 11 | 5 | early stopping | 2026-10-11T21:06:54.577065+00:00 | 2026-10-11T21:14:49.433973 | 474.856908 |
+| spherical-d32 | 1 | I1 | A100-SXM4-40GB | 7ef00c2 | 20261010T000707Z | 20261010T000833Z | 7 | 1 | early stopping | 2026-10-10T00:08:33.020381+00:00 | 2026-10-10T00:14:26.068427 | 353.048046 |
+| spherical-d32 | 2 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T212008Z | 20261011T212143Z | 7 | 1 | early stopping | 2026-10-11T21:21:43.089971+00:00 | 2026-10-11T21:27:33.528769 | 350.438798 |
+| spherical-d32 | 3 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T213242Z | 20261011T213416Z | 7 | 1 | early stopping | 2026-10-11T21:34:16.166179+00:00 | 2026-10-11T21:40:08.906438 | 352.740259 |
+| spherical-d32 | 4 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T214515Z | 20261011T214648Z | 7 | 1 | early stopping | 2026-10-11T21:46:48.854959+00:00 | 2026-10-11T21:52:41.035356 | 352.180397 |
+| spherical-d32 | 5 | I2 | A100-SXM4-40GB | 4a1a3f2 | 20261011T215823Z | 20261011T220000Z | 7 | 1 | early stopping | 2026-10-11T22:00:00.379912+00:00 | 2026-10-11T22:05:53.123758 | 352.743846 |
 
-Each run's training-run ID, best monitor MRR and selected checkpoint's SHA-256:
+Each run's training-run ID, best monitor MRR and selected checkpoint's SHA-256. The monitor MRR
+serves checkpoint selection and may differ slightly from the Mac's re-encoding result in §2: the
+largest difference over the 40 runs is 4.48e-07 (hyperbolic-d32 seed 1).
 
 | Arm | Seed | Training run | Best monitor MRR | Selected checkpoint SHA-256 |
 |---|---|---|---|---|
@@ -211,9 +217,20 @@ Each run's training-run ID, best monitor MRR and selected checkpoint's SHA-256:
 
 **What the epochs show.** All 15 runs of euclidean-d16, euclidean-d8 and hyperbolic-d8 used the
 full 40 epochs and selected epochs 37–39, so the budget bound those arms, and their scores are
-not converged values. The other 25 runs early-stopped after 7–11 epochs and selected epochs 1–5.
-Every euclidean-d32 and spherical-d32 run selected epoch 1. This campaign did not investigate why
-the d = 32 arms peak so early.
+not converged values. The other 25 runs, the five cells spherical-d16, spherical-d8, euclidean-d32,
+spherical-d32 and hyperbolic-d32, early-stopped after 7–11 epochs and selected epochs 1–5. Every
+euclidean-d32 and spherical-d32 run selected epoch 1. The reference's seed 9 was budget-bound too:
+it trained 40 epochs and selected epoch 39, with its monitor MRR still rising (0.4579 at epoch 29,
+0.4609 at 34 and 0.4682 at 39). This campaign did not investigate why those five arms peak so
+early.
+
+**Exported coordinates.** Each export's provenance names its `geometry` and its `coordinates`, and
+every export of a geometry carries the same string:
+
+- euclidean, 15 exports: "the point v itself, the projection of the fused text (Req 12)";
+- spherical, 15 exports: "the unit direction u = v / |v| on the sphere (Req 12)";
+- hyperbolic, 10 exports: "the bounded tangent vector at the origin, r * u with
+  r = R * tanh(|v| / R) (Req 13); no time coordinate".
 
 ### Deviations from the plan
 
@@ -225,21 +242,31 @@ the d = 32 arms peak so early.
    stop rule for a new commit on a file-structure file fired on a literal reading, and the user
    ruled to continue.
 2. **The epoch-0 gate.** The plan's mid-run check could not run, because the sync defers a run
-   whose files change every epoch. The gate (CUDA, `bf16-mixed`, geometry, dimension and the
-   monitor's distance for the geometry) ran after each seed-1 run instead, followed by a read-only
-   spot check over SSH of the first run's files. The gate then ran after every run.
-3. **The second source.** `remote finish` slowed with every run on one instance: from 8.7 min
-   after training ended for euclidean-d16 seed 2 to 14.6 min for spherical-d16 seed 3, about 1.2
-   min more per run. A Mac-side profile found the cause. The final pull treats every file on the
-   instance as a replacement, and the promotion step re-hashed the whole cumulative baseline once
-   per replacement, so the cost grew with the number of runs on the instance. SOURCE 2 verifies
-   the baseline once after the last replacement; a regression test fails on the old code. The first
-   run on SOURCE 2 took 1.6 min and the next 1.2 min. The user chose the fix as a private commit.
-   The user then sent a new instance, I2, and the remaining 22 runs trained there.
+   whose files change every epoch. The first seed-1 run got a read-only spot check over SSH of its
+   files during training (21:57:17Z). The gate (CUDA, `bf16-mixed`, geometry, dimension and the
+   monitor's distance for the geometry) then ran after each seed-1 run finished, and after every
+   later run.
+3. **The second source.** `remote finish` slowed with every run on one instance. Measured from the
+   end of a run's training to the driver's DONE line, which also covers the gate, the run check and
+   the facts scripts, the overhead on I1 rose from 8.68 min (euclidean-d16 seed 2) to 14.6 min
+   (spherical-d16 seed 3) and 19.77 min (hyperbolic-d8 seed 2), about 1.2–1.4 min more per run. A
+   Mac-side profile found the cause. The final pull treats every file on the instance as a
+   replacement, and the promotion step re-hashed the whole cumulative baseline once per
+   replacement, so the cost grew with the number of runs on the instance. SOURCE 2 verifies the
+   baseline once after the last replacement, and a regression test fails on the old code. The same
+   overhead on I2 began at 1.55 min (hyperbolic-d8 seed 4) and 1.2 min (seed 5) and still rose, to
+   5.67 min for the last run (spherical-d32 seed 5), about 0.2 min per run. So the fix cut the
+   per-run growth by roughly a factor of six and did not remove it; the remaining cost was not
+   diagnosed. I2 began empty, so the first two figures alone do not show the fix's effect. The user
+   chose the fix as a private commit and then sent the new instance, I2, where the remaining 22 runs
+   trained.
 4. **Hyperbolic-d8 seed 3.** It finished training on I1 on 2026-10-10 at 05:24Z, but the driver
    halted when `remote finish` stayed busy for all 20 retries. The run was not relaunched. Its
    `finish` ran about 13:58Z with SOURCE's code, and the local and remote `last.ckpt` SHA-256
    agreed, as for every run.
+5. **Busy refusals.** `remote finish` was refused as busy while a sync pass held the state lock:
+   seven times for euclidean-d8 seed 1, and for all 20 retries of the first driver on
+   hyperbolic-d8 seed 3 (deviation 4). The drivers retried it, and from SOURCE 2 on up to 90 times.
 
 ## 2. The arms
 
@@ -300,8 +327,9 @@ is better). The reference's ten seeds are Stage 7's, read from `reference.json`.
 | reference | 9 | 39 | 0.46817039917573405 | 0.06888468333747536 | 0.0775760099792989 |
 | reference | 10 | 11 | 0.38602594448256355 | 0.07760419110831754 | 0.08741875702210121 |
 
-The means and sample standard deviations below are derived from the stored values above; the
-decision resamples the stored per-unit values and does not use them.
+The means and sample standard deviations below are derived from the stored values above, and the
+means may differ from the decision record's point statistics in the last digits. The decision
+resamples the stored per-unit values and does not use them.
 
 | Arm | Geometry | Dimension | Seeds | Outcome mean | Outcome SD | Seen mean | Seen SD | Held-out mean | Held-out SD |
 |---|---|---|---|---|---|---|---|---|---|
@@ -333,11 +361,21 @@ Each Stage 8 record's path and SHA-256, with Stage 7's reference and margins:
 ## 3. The decision
 
 The decision record is `~/naics-artifacts/records/stage8/decision.json`, SHA-256
-`601a8e52e5594ae6a1cfb7c9069eb94b01add30c196b8069a6ecab0b04b593fa`. Its question is "Which geometry and dimension should the text stage use (Req 12)?" It resampled the stored per-unit values
-with 10000 bootstrap replicates, bootstrap seed 20260924, a minimum of 5 seeds, and interval levels 0.95 (non-inferiority) and 0.9833333333333333 (superiority). It read no panel and logged nothing: the selection log held 157 records
-before and after. Each A-against-B comparison adopts A when A is non-inferior on all three panels
-and superior on at least one (D8). The 72 comparisons are every ordered pair of the nine arms.
-33 of the 72 are adopted.
+`601a8e52e5594ae6a1cfb7c9069eb94b01add30c196b8069a6ecab0b04b593fa`.
+
+| Field | Value |
+|---|---|
+| Question | Which geometry and dimension should the text stage use (Req 12)? |
+| Bootstrap replicates | 10000 |
+| Bootstrap seed | 20260924 |
+| Minimum seeds | 5 |
+| Non-inferiority interval level | 0.95 |
+| Superiority interval level | 0.9833333333333333 |
+
+It resampled the stored per-unit values with these settings. It read no panel and logged nothing:
+the selection log held 157 records before and after. Each A-against-B comparison adopts A when A
+is non-inferior on all three panels and superior on at least one (D8). The 72 comparisons are
+every ordered pair of the nine arms. 33 of the 72 are adopted.
 
 The adoption matrix: a row's arm is adopted over a column's arm where the cell says `adopted`.
 
@@ -478,16 +516,23 @@ fewer components, lower dimension and non-hyperbolic geometry, and here it broke
 | spherical-d32 | 0.004809760717932669 |
 | reference | 0.005002948986867558 |
 
-**Reading the result against Req 12.** Req 12 asked whether a hyperbolic advantage appears at low
-dimension. At a matched dimension the record shows one comparison in the hyperbolic arm's favor,
-hyperbolic-d8 over spherical-d8. Against the Euclidean arm it shows none: at each of d = 8, 16 and
-32 the Euclidean arm is adopted over the hyperbolic arm, and the reverse is not adopted. At d = 16
-neither the reference nor spherical-d16 is adopted over the other, and at d = 32 spherical-d32 is
-adopted over hyperbolic-d32. Across dimensions the record has four more adoptions of a hyperbolic
-arm over a flat one, each over a lower-dimension arm: hyperbolic-d32 over euclidean-d8,
-spherical-d16 and spherical-d8, and the reference over spherical-d8. These compare dimensions as
-much as geometries. In all, five comparisons adopt a hyperbolic arm over a flat arm and eleven
-adopt a flat arm over a hyperbolic one.
+**Reading the result against Req 12.** Req 12 crosses geometry and dimension because their
+interaction is the question, and it expects any hyperbolic advantage at low dimension. At a matched
+dimension the record has one comparison in a hyperbolic arm's favor, hyperbolic-d8 over
+spherical-d8, against four in a flat arm's favor: euclidean-d8 over hyperbolic-d8, euclidean-d16
+over the reference, and euclidean-d32 and spherical-d32 over hyperbolic-d32. At d = 16 neither the
+reference nor spherical-d16 is adopted over the other. Across dimensions the record has four
+adoptions of a hyperbolic arm over a flat one, each over a lower-dimension arm (hyperbolic-d32 over
+euclidean-d8, spherical-d16 and spherical-d8, and the reference over spherical-d8), and seven of a
+flat arm over a hyperbolic one (euclidean-d16 over hyperbolic-d8 and hyperbolic-d32, spherical-d16
+over hyperbolic-d8, euclidean-d32 over hyperbolic-d8 and the reference, and spherical-d32 over
+hyperbolic-d8 and the reference). Cross-dimension comparisons compare dimensions as much as
+geometries. In all, five comparisons adopt a hyperbolic arm over a flat arm and eleven the reverse.
+
+The chosen arm's adoptions differ in strength. `euclidean-d16` is superior on all three panels
+over hyperbolic-d8, euclidean-d8 and spherical-d8, and on the outcome and regressor-seen panels
+over spherical-d16. Over the reference, hyperbolic-d32, euclidean-d32 and spherical-d32 it is
+superior on the outcome panel alone, and non-inferior but not superior on both regressor panels.
 
 | Dimension | Hyperbolic arm | Flat arm | Hyperbolic adopted over flat | Flat adopted over hyperbolic |
 |---|---|---|---|---|
@@ -499,10 +544,15 @@ adopt a flat arm over a hyperbolic one.
 | 32 | hyperbolic-d32 | spherical-d32 | False | True |
 
 The record bounds this reading. The reference has ten seeds and each new arm five, and every
-margin comes from the reference's own spread. The 40-epoch budget bound the three arms named in
-§1, so a longer budget could move their standing and the record cannot say how. The d = 32 arms
-of every geometry peaked early, for a reason this campaign did not examine. The statistics are
-validation-panel reads of each seed's selected checkpoint, and nothing here extends beyond them.
+margin comes from the reference's own spread. The 40-epoch budget bound three new arms and one
+reference seed (§1), so a longer budget could move their standing and the record cannot say how.
+The other five arms peaked within five epochs and early-stopped, for a reason this campaign did
+not examine; hyperbolic-d8's one matched-dimension win is over spherical-d8, a budget-bound arm
+against an early-stopping one. The reference trained earlier, in Stage 7, on source
+`b94ecf344cee5ae7f27c343b904455022cfde265` and instance C, an A100-SXM4-40GB; this finding did not
+retrain it, and relies on the plan's specification (P6) that the hyperbolic arm's terms and
+gradients stayed Stage 7's. The statistics are validation-panel reads of each seed's selected
+checkpoint, and nothing here extends beyond them.
 
 ## 4. Radius and inert terms
 
@@ -617,9 +667,10 @@ Each radius report's SHA-256:
 Task 14's check read every campaign log record and every monitor record. There are 10583
 log records across 54 physical logs (the Mac's and every instance session's, and an
 instance's log carries its earlier sessions' reads too) and 797 monitor records, which is the 40
-runs' epochs summed. Every one is a validation read, and none opens a split. The Mac's log held 37
-records before the first sweep and 157 after it, so the eight sweeps added exactly 120, fifteen
-each. The logs are gitignored, so the lines below are their committed record.
+runs' epochs summed. Every one is a validation read, and none opens a split. The logs include
+earlier campaigns' reads: 13 instance sessions dated 2026-10-07 hold 1076 records. The Mac's log
+held 37 records before the first sweep and 157 after it, so the eight sweeps added exactly 120,
+fifteen each. The logs are gitignored, so the lines below are their committed record.
 
 | Log | Records | SHA-256 |
 |---|---|---|
@@ -1940,8 +1991,9 @@ shasum -a 256 uv.lock ~/naics-artifacts/records/stage8/*.json
 ```
 
 Run the 40 runs one at a time, finishing and verifying each pull before the next run. The sweep of
-a cell checks every seed before its first read, so a refusal logs nothing. Run the cells in the
-order of §1's table. Each sweep must add exactly 15 records to the Mac log, and the eight must
+a cell checks every seed before its first read, so a refusal logs nothing. Run seed 1 of all
+eight cells first, in §1's table order, and gate each; then run seeds 2–5 of each cell in that
+order. Each sweep must add exactly 15 records to the Mac log, and the eight must
 add 120. A run that has to move to another instance restores the whole coherent checkpoint and
 history set under the same absolute directory and user, then continues only with
 `remote train --resume`, keeping seed, settings and budget exact; never resume a finished run to
