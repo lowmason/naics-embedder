@@ -240,6 +240,7 @@
       arbitrary. Fix: raise only when the first two survivors tie. Size: quick-fix. Revisit if:
       a tie below first place blocks a decision (Stage 8's nine cells are the first multi-arm
       decision).
+      → plan 12: the nine-arm decision raised no TieUnresolvedError; the rule stays strict.
 - [ ] Pre-existing, found during plan 6: every Lorentz distance in
       src/naics_embedder/text_model/hyperbolic.py (`_lorentz_distance_compiled`,
       `LorentzDistance.batched_forward` and `_lorentz_distance_ops_compiled`, behind
@@ -325,12 +326,16 @@
       bare-override and legacy refusals, its failure on a bad `--output` before the read is
       logged, and its payload's `fingerprint` key (:958-984). `exp_map_origin`'s `.cpu()`
       (src/naics_embedder/text_model/arm_encoder.py:57) never meets an MPS tensor in the tests:
-      removing it fails nothing. Deferred from plan 8's final review as coverage gaps, not
+      removing it fails nothing, and the same holds for the flat heads' `read_points`
+      (src/naics_embedder/text_model/heads.py:173, :222; plan 12's review M4). Deferred from plan
+      8's final review as coverage gaps, not
       defects. Size: plan. Done when: each branch has a test, or a recorded ruling that it needs
       none.
       → partly mooted by plan 10: the curvature branches left with `require_unit_curvature`
       (Task 11), and the cap check is a check that the table holds the head's bounded tangent
       (Task 4). The other branches stay open.
+      → partly done in plan 12: each geometry's coordinates are checked in the provenance (Task 4);
+      `generated_at`, the exact key set and the other branches stay open.
 - [ ] Review Minor: the export and the outcome read handle a few failures untidily.
       src/naics_embedder/text_model/export.py writes the table (:246) before it hashes the
       checkpoint and descriptions and writes the provenance (:273), so a failure between them
@@ -555,3 +560,35 @@
       plan. Revisit if: native readiness is claimed for a public release or later campaign; use a
       separately authorized fresh public-base change and review/qualification, preserving the
       private configuration and campaign artifacts.
+      → plan 12 (Stage 8): the campaign source also carries `4a1a3f2`, a further local-only
+      correction to remote/sync.py (a final pull verifies its baseline once, not once per file);
+      the public base lacks it too. The finding qualifies only the recorded private sources.
+
+## 12-geometry-by-dimension — 2026-10-11
+- [ ] Review M2 (Phase 1 final review): `build_head` and `head_of`
+      (src/naics_embedder/text_model/heads.py:232, :255) are annotated `nn.Module`, so nothing
+      types the surface the three heads share and a type checker cannot see what a caller may use
+      on a head. Deferred because the finding branch carries no source change. Size: quick-fix.
+      Done when: a `typing.Protocol` names that surface, `build_head` and `head_of` use it, and the
+      suite, Ruff and the format check pass. Revisit if: a fourth head is added, or a caller
+      reaches for a hyperbolic-only member on a flat head.
+- [ ] Review m2 (Phase 1 final review): flat arms still log radius per level.
+      `LoggingMixin` (src/naics_embedder/text_model/mixins/logging.py:77-82) writes
+      `radius/mean/level_<k>` and `radius/sd/level_<k>` from the code cache for every geometry, and
+      the epoch summary admits those keys (text_model/epoch_summary.py:14), so the spherical arm
+      plots a flat line at 1 with SD 0, and nothing documents it. Nothing selects on these values.
+      Size: quick-fix. Done when: either a flat arm's summary and plots omit the radius panels, or
+      docs/text_training.md says what each geometry's radius means. Revisit if: a reader takes a
+      flat arm's radius for a learned quantity.
+- [ ] `remote finish` overhead still grows with the runs on one instance (Phase 2 campaign):
+      after the private fix `4a1a3f2` (src/naics_embedder/remote/sync.py,
+      `recover_pending_promotion` verifies the cumulative baseline once, not once per
+      replacement), the time from a run's training end to the driver's DONE line still rose about
+      0.2 min per run on a fresh instance (1.55 min for the first run to 5.67 min for the 22nd;
+      about 1.2-1.4 min per run before the fix). The residual cause is undiagnosed. `4a1a3f2` is
+      local on `main` and never pushed, and the public base lacks it. Size: plan. Done when: the
+      residual is profiled (a CPU-bound `remote finish` python; macOS `sample`) and either removed
+      or recorded as the cost of one cumulative-manifest hash per pull, and a public PR branched
+      from origin/main carries the `4a1a3f2` fix with its regression test
+      (`test_a_final_pull_verifies_the_cumulative_baseline_a_constant_number_of_times`). Revisit
+      if: a campaign runs more than about 15 runs on one instance.
