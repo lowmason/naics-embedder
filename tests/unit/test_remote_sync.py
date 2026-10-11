@@ -533,3 +533,23 @@ def test_pending_recovery_cannot_drop_inherited_baseline(remote_sync_fixture, mo
     with pytest.raises(ValueError, match='baseline'):
         module.recover_pending_promotion(env.root, state)
     assert journal.is_file()
+
+def test_a_final_pull_verifies_the_cumulative_baseline_a_constant_number_of_times(
+    remote_sync_fixture, monkeypatch
+):
+    import naics_embedder.remote.sync as module
+
+    env = remote_sync_fixture
+    calls = []
+    original = module._verify_pending_destinations
+
+    def counting(root, previous, replacements):
+        calls.append(len(replacements))
+        return original(root, previous, replacements)
+
+    monkeypatch.setattr(module, '_verify_pending_destinations', counting)
+    result = sync_once(env.root, env.state, env.transport, env.cfg, final=True)
+    assert result.pulled == 7
+    # Verifying the whole manifest once per promoted file made a final pull quadratic in the number
+    # of runs; the baseline is verified before the first replacement and after the last
+    assert len(calls) == 2
