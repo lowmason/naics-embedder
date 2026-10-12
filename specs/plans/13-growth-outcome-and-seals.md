@@ -515,9 +515,11 @@ The full suite after each task, measured at plan time on this Mac (no `data/` in
 | Task 5 | 3117 | 2 | 3119 |
 | Task 6 | 3117 | 2 | 3119 |
 
-CI runs Linux, with no MPS and no `data/`. Its test jobs showed `3089 passed, 11 skipped` at
-d61f49b on both Pythons. After Task 5 they should show `3106 passed, 13 skipped`: the 19 new
-tests, two of which, Task 1's `CAPTURED_HERE` tests, skip there.
+CI runs Linux, with no MPS and no `data/`. Each test job runs pytest twice: a 47-test
+remote-transport step, then the full suite with coverage. At d61f49b the full suite's summary
+line read `3089 passed, 11 skipped` under both Pythons. After Task 5 it should read
+`3106 passed, 13 skipped`: the 19 new tests, two of which, Task 1's `CAPTURED_HERE` tests, skip
+there.
 
 - [ ] **Step 4: Route the tasks**
 
@@ -2867,9 +2869,13 @@ reverted, saying it is gone.
   - **Traps.** Two of the level pins (`CAPTURED_HERE`) run only on macOS arm64, and Linux CI
     skips them. `decide` pairs reads only on bit-identical regressor rows, so growth reads pair
     only within one platform and one `uv.lock`.
-- **Stage 3 (the growth margin read)** consumes the growth panel through Stage 2's read. The
-  committed `conf/data/regressor_panel.yaml` keeps `outcome: level`. No growth read of real data
-  happened in Stage 1, and no real split was opened.
+- **Stage 3 (the growth margin read)** consumes the growth panel through Stage 2's read.
+  - The committed `conf/data/regressor_panel.yaml` keeps `outcome: level`.
+  - No growth read of real data happened in Stage 1, and no real split was opened.
+  - **Existing openings.** Under Req 22, a real `open` or `reopen` of `regressor_seen` or
+    `regressor_heldout` under the draw `deddfd4c…` now also seals growth's split for that
+    regime. Stage 1 never read the real selection log, and Stage 3 is the first stage to.
+    `SelectionLog.openings(seal_names(regime), fingerprint)` lists any such opening.
 ```
 
 - [ ] **Step 6: The roadmap stamp**
@@ -2931,8 +2937,8 @@ Ask the user before pushing. Then run `git push -u origin claude/stage-1-growth-
 bare `git push`, and open the PR against `main`. Its description carries:
 - what the stage changes: the plan's Goal and Architecture, shortened;
 - the recorded deviations, one line each, with P6's refusals flagged for the reviewer;
-- the suite counts: `3117 passed, 2 skipped` locally under both Pythons, and the expected CI
-  count, `3106 passed, 13 skipped` per test job.
+- the suite counts: `3117 passed, 2 skipped` locally under both Pythons, and the full suite's
+  expected summary line in each CI test job, `3106 passed, 13 skipped`.
 
 End the description with the session's PR attribution line.
 
@@ -2940,7 +2946,8 @@ End the description with the session's PR attribution line.
 
 GitHub auto-merge is off, and main has no required checks.
 - Watch `gh pr checks <number>` until the lint, docs and both test jobs pass.
-- Each test job should show `3106 passed, 13 skipped`. If a Task 1 pin not marked
+- In each test job, the full suite's summary line should read `3106 passed, 13 skipped`. The
+  47-test remote-transport step before it is unchanged. If a Task 1 pin not marked
   `CAPTURED_HERE` fails there, stop and ask (**Stop-and-ask conditions**).
 - The user merges. If the user asks you to merge, run
   `gh pr merge <number> --merge --match-head-commit <sha>`.
