@@ -45,8 +45,8 @@ question, the ruling is the chosen option's label.
 |---|---|---|
 | U1 | (the user's own proposal) | "I wonder if we are trying to do too much with one set of embeddings. Would it make more sense to have separate codes for text-to-code, NAICS hierarchy, and downstream economic measurement?" |
 | U2 | Which downstream economic analyses must the economic representation serve? | "1. Employment growth; 2. wages; 3. shock exposure; 4. nowcasting; 5. joint non-response + wage growth modeling; Order in terms of importance (1, 5, 2, 3, 4)" |
-| U3 | Commit to the split, and which sub-project first? | "Split; panels first (Recommended)": record the split, then design the economic panels around employment growth before any representation work |
-| U4 | Does the umbrella design look right, and what happens to the graph stage? | "Approve; park graph stage (Recommended)": Q2 stands, and the graph-stage question is asked again once the economic panels exist |
+| U3 | Commit to the split, and which sub-project first? | "Split; panels first (Recommended)" |
+| U4 | Does the umbrella design look right, and what happens to the graph stage? | "Approve; park graph stage (Recommended)" |
 | U5 | Which data would the joint non-response + wage growth model use? | "No data exists..." |
 | U6 | How far back should the employment-growth panel's history reach? | "Let's focus on employment growth initially, and just use NAICS 2022" |
 | U7 | May the economic artifact learn from employment data, or only from text and the tree? | "Text and tree only (Recommended)" |
@@ -111,8 +111,8 @@ the code universe, the bundle's 2,125 NAICS 2022 codes.
 | Economic | Low-dimensional coordinates for the 2,125 codes | Economic panels only; the first is Req 21 |
 
 - The hierarchy needs no new work. Its ancestor indicators are the economic reference (Req 24).
-- Each artifact has its own reference, margins, deliverable and sealed opening. No artifact is
-  chosen on another artifact's panel.
+- Each artifact has its own reference, margins, deliverable and sealed opening. No artifact's
+  adoption decision reads another artifact's panel.
 - The text→code artifact's design belongs to its own spec (Out of scope).
 
 **Req 19 — The roadmap's stages under the split (U3, U4).**
