@@ -1,9 +1,14 @@
 # NAICS Hyperbolic Embedding System
 
-The system learns a shared space for North American Industry Classification System (NAICS)
-codes and activity queries. One LoRA-adapted transformer reads marked text fields, masked fusion
-combines each code's present channels, and one linear map produces a direction and a live radius
-on the unit-curvature Lorentz hyperboloid. An optional HGCN stage refines the code graph.
+The project serves three artifacts over the 2,125 North American Industry Classification System
+(NAICS) 2022 codes, each judged only on evidence for its own use (user adjudication Q3, recorded
+in the repository's `specs/naics-representation-split.md`): the hierarchy itself, text→code
+retrieval, and low-dimensional economic coordinates for downstream models.
+
+The trained text model learns a shared space for NAICS codes and activity queries. One
+LoRA-adapted transformer reads marked text fields, masked fusion combines each code's present
+channels, and one linear map produces a direction and a live radius on the unit-curvature Lorentz
+hyperboloid. An optional HGCN stage refines the code graph.
 
 ## Text Training
 

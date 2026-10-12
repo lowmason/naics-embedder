@@ -5,10 +5,10 @@
 > this document wholesale.
 
 **Status: APPROVED (2026-09-23); resumed three times on 2026-09-24, once on 2026-10-03, twice
-on 2026-10-04 and once on 2026-10-07.** Derived in a session that could not ask questions, then
-the six open questions were answered interactively and the eleven-stage partition approved at
-the human checkpoint
-(decisions D1–D6 below). Stages 1–7 and 6b are complete. The first resume re-validated Stages 2–11
+on 2026-10-04, once on 2026-10-07 and once on 2026-10-12.** Derived in a session that could not
+ask questions, then the six open questions were answered interactively and the eleven-stage
+partition approved at the human checkpoint
+(decisions D1–D6 below). Stages 1–8 and 6b are complete. The first resume re-validated Stages 2–11
 against Stage 1 and recorded D7 and D8; the second re-validated Stages 3–11 against Stage 2,
 recorded D9 and added Stage 12 (below); the third re-validated Stages 4–12 against Stage 3 and
 recorded D10 and D11, which settle the former Open questions. Stage 4's completion commit
@@ -19,7 +19,10 @@ Stages 6–12 against both (below). Stage 6b was added on 2026-10-03 during Stag
 fifth resume re-validated Stages 11 and 12 and the Gap analysis (below). Stage 6b's completion
 commit (1d2240c, 2026-10-04) re-validated Stages 7–12, and the sixth resume re-read the Gap
 analysis and routed plan 9's deferred entries (below). The seventh resume reconciled Stages 8–12
-with completed Plan 10 and the post-merge handoffs (below). Stage 8 is next, via writing-plans.
+with completed Plan 10 and the post-merge handoffs (below). The eighth reconciled Stage 8 and
+recorded the representation split, user adjudication Q3: Stage 9 is held, Stages 10–11 are
+parked and Stage 12 is one sealed opening per judged artifact (below). No stage here routes now;
+the economic artifact's stages are in `specs/naics-representation-split-roadmap.md`.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
@@ -208,12 +211,14 @@ source `b94ecf3` and Mac-read source `2d1f045`.
 The reference and margin files still match the Stage 7 handoff's full hashes (`c885b9c5…` and
 `e619b3b3…`). `uv.lock` still has SHA-256
 `4167042e8a5a8caa9af62973151f681fffb50afaa1a7f6d1f801bd9e58bdac21`; keep it frozen through
-the last Stages 8–10 decision using these margins. Stages 8–10 train on Lambda at `bf16-mixed`
-and read on the Mac, through `tools sweep` and `CheckpointRunner`. All seeds preflight before
-any export or decision read. Preserve exact settings, seed, contract, LoRA and active-MoE
-controls; continue only from last at the same absolute checkpoint path and user, restoring all
-kept checkpoints and both histories together. Finished runs stay finished. Every hyperbolic arm
-through Stage 10 passes `tools radius-report`; stop on failure without changing tolerances.
+the last Stages 8–10 decision using these margins (released on 2026-10-12, when the
+representation split merged: see the eighth resume, below). Stages 8–10 train on Lambda at
+`bf16-mixed` and read on the Mac, through `tools sweep` and `CheckpointRunner`. All seeds
+preflight before any export or decision read. Preserve exact settings, seed, contract, LoRA and
+active-MoE controls; continue only from last at the same absolute checkpoint path and user,
+restoring all kept checkpoints and both histories together. Finished runs stay finished. Every
+hyperbolic arm through Stage 10 passes `tools radius-report`; stop on failure without changing
+tolerances.
 
 Stages 8–12 were re-validated against shipped interfaces and Plan 10 section 10. Stage 8 still
 needs Euclidean and spherical heads, training distances, export and query maps, plus the two
@@ -226,6 +231,34 @@ pulled into Stage 8. Stage 12 consumes `SeedRun.monitor_records`, `training_run`
 `checkpoint_epoch`, and keeps every sealed set closed until its final evaluation. No campaign,
 export, panel read or sealed opening ran during this resume. Stage 8 routes to writing-plans;
 the next plan number is 12.
+
+**Resume after Stage 8, and the split (2026-10-12).** Stage 8's stamp is authoritative: plan 12,
+merged as PRs #130, #131 and #134 (252deb4), with follow-ups #135 and #136. The plan has no
+Handoff section; its completion step handed its notes on later stages to this resume, and the
+finding names them (`specs/findings/geometry-by-dimension.md`, section 7): Stage 9's reference
+cell is `euclidean-d16`, and the HGCN feeder refuses a flat arm (P10), which Stages 10–11 must
+answer. Before this resume, user adjudication Q3 replaced the shared embedding with three
+artifacts (`specs/naics-representation-split.md`, Req 18; merged as PR #137, 5ef7e7b). Its Req 19
+settles Stages 8–12, applied here with the user's approval at the split's derivation:
+
+- Stage 8 stays complete as a record, and its winner defines no deliverable.
+- Stage 9 is held. Its questions, with that reference cell and Plan 10 R7's term-weight
+  decision, move to the text→code artifact's spec.
+- Stages 10–11 are parked under Q2, with Reqs 15 and 17 and the flat-arm note.
+- Stage 12 is one sealed opening per judged artifact (amended in its entry).
+- The split's Supersessions table lists what it replaces, D7, D8 and D10's sparse baselines
+  among them for the economic artifact; D1, D9 and D11 stand.
+
+The `uv.lock` freeze and Stage 7's margins were released when the split merged. The margin record
+stays valid for Stage 8's decision, and `uv.lock` still hashes `4167042e…`. The deferred entries
+routed to Stage 9 move with it: nothing ties the bundle's backbone to training at runtime, and the
+tokenizer-name watch from plan 9. Those routed to Stages 10–11 wait with them: the degenerate
+curriculum thresholds, the diagnostics report's interfaces, HGCN feeder precision, HGCN metric
+mutation coverage and the HGCN half of the Lorentz-distance item. `specs/deferred_items.md` was
+read, not edited. The Gap analysis was not re-read: its rows stay the entry-time snapshot, and
+the Completion audit reads the Supersessions table. No stage here routes now: the economic
+artifact's stages are in `specs/naics-representation-split-roadmap.md`, and the text→code
+artifact awaits its own spec.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -902,7 +935,7 @@ differs from its own.
       Stage 8: COMPLETE (2026-10-11) — implemented by plan 12
       (specs/plans/completed/12-geometry-by-dimension.md). Next: resume the roadmap.
 
-- [ ] Stage 9: Backbone and one-factor ablations
+- [ ] Stage 9: Backbone and one-factor ablations (HELD)
       Objective: Choose the backbone and settle the one-factor ablations (mixture of experts,
       channel-presence indicator, information-content target and term weights) from the
       selected cell under Req 5, and resolve the input-window item for each candidate.
@@ -936,8 +969,10 @@ differs from its own.
       control ran; the adopted backbone's window is recorded from its own documentation with
       no input beyond it, the text-only builder's included.
       ROUTING: brainstorming
+      Stage 9: HELD (2026-10-12) — user adjudication Q3 (`specs/naics-representation-split.md`,
+      Req 19): its questions move to the text→code artifact's spec (eighth resume).
 
-- [ ] Stage 10: Graph-stage decision experiment
+- [ ] Stage 10: Graph-stage decision experiment (PARKED)
       Objective: Run arms A–E on the selected text stage and decide whether the graph stage
       stays, with arm D repaired only to run in the text stage's space.
       Spec: Req 15; Req 16; Req 4 (graph-stage rows: no private validation tail, no last-epoch
@@ -968,8 +1003,11 @@ differs from its own.
       protocol; E ran if and only if D won, and its result is recorded; the decision record
       states keep or drop under Req 5; the 2,125-code table exists for the selected arm.
       ROUTING: writing-plans
+      Stage 10: PARKED (2026-10-12) — user adjudication Q3 (`specs/naics-representation-split.md`,
+      Req 19); Q2 stands. Its question returns once the economic panels exist, with the HGCN
+      feeder's refusal of a flat arm (P10) (eighth resume).
 
-- [ ] Stage 11: Graph-stage outcome: repairs or removal
+- [ ] Stage 11: Graph-stage outcome: repairs or removal (PARKED)
       Objective: If Stage 10 kept the graph stage, apply Req 17's repairs; if it dropped the
       stage, remove the graph stage and its curriculum system from the method.
       Spec: Req 17; Req 15 (decision); Req 16 (one space retained).
@@ -997,8 +1035,10 @@ differs from its own.
       hashes.
       ROUTING: brainstorming if kept (the retention and normalization choices are open);
       writing-plans if dropped
+      Stage 11: PARKED (2026-10-12) — with Stage 10 (`specs/naics-representation-split.md`,
+      Req 19; eighth resume).
 
-- [ ] Stage 12: Sealed final evaluation
+- [ ] Stage 12: Sealed final evaluation (one opening per judged artifact)
       Objective: Open each sealed test split once, for the final configuration and the
       comparisons recorded for it, and report Req 1's two estimands on sealed held-out data.
       Spec: Req 4 (the test splits opened once); Req 1 (measured on sealed held-out data); Req 5
@@ -1048,6 +1088,14 @@ differs from its own.
       provenance names its arm's backbone and descriptions; the finding reports each sealed
       estimate with its interval.
       ROUTING: writing-plans
+      Amended at the eighth resume (2026-10-12): one sealed opening per judged artifact, each
+      planned in writing before anything opens (`specs/naics-representation-split.md`, Req 19).
+      The hierarchy, exact by construction, has none. The text→code artifact's opening reads the
+      outcome test split once its own spec has decided. The economic artifact's opens each growth
+      regime's outer set, one seal per split (Req 22), once the candidates' decision on the growth
+      panels exists. Req 1's two estimands give way to each artifact's own panels
+      (Supersessions). The fields above describe the shared table's opening and are read per
+      artifact.
 
 ## Stage-spec stamp
 
@@ -1075,3 +1123,6 @@ to the next critique round. When improvement directions are diffuse, route to cr
 Parking is a first-class exit: remaining stages append to `specs/deferred_items.md` as
 self-contained items, and this file moves to `specs/completed/` marked
 `PARKED (date) — N of M stages complete`, retiring the methodology and review files with it.
+Since the eighth resume (2026-10-12) the audit reads the Supersessions table of
+`specs/naics-representation-split.md`: what it supersedes is audited as superseded, Req 14 goes
+with the text→code artifact's spec, and Reqs 15 and 17 wait with the parked graph stage.
