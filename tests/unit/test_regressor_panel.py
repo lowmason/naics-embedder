@@ -1035,6 +1035,9 @@ KEY_COLUMNS = [name for name in PREDICTION_COLUMNS if name not in ('outcome', 'p
 # differently: 7 of level 6's cell values lie within glibc's 0.519-ULP error bound of a rounding
 # midpoint, the closest at 0.0019 ULP. Another BLAS can round a ridge fit differently. The d61f49b
 # oracle and the float-free digests hold on every platform.
+# The literals also depend on the lock's numpy and polars and the BLAS they call (Accelerate here).
+# A CAPTURED_HERE pin failing while the d61f49b oracle and the digest pins pass means that
+# environment changed, not the rows or the fit: review the change, then re-capture the literals.
 CAPTURED_HERE = pytest.mark.skipif(
     (sys.platform, platform.machine()) != ('darwin', 'arm64'),
     reason='pinned where captured, on macOS arm64: another libm or BLAS can differ in a last bit',
@@ -1188,6 +1191,29 @@ def test_growth_reads_score_every_comparator_on_level_modes_folds_under_their_ow
     # Under the draw's fingerprint, with the level read's detail
     assert {r['fingerprint'] for r in records} == {panel.fingerprint}
     assert records[1]['detail'] == records[0]['detail']
+
+@pytest.mark.parametrize('regime', list(Regime))
+def test_a_growth_read_scores_each_rows_log_employment_change(
+    regressor_cells, growth_panel, regressor_arm, regime
+):
+    '''Every scored outcome is log E(t + 1) - log E(t), read from the cells of t and t + 1.'''
+
+    employment = level_cells(regressor_cells, CODEBOOK, 6).select(
+        'code', 'year', log_emp=pl.col('emp').cast(pl.Float64).log()
+    )
+    current = employment.rename({'year': 'feature_year', 'log_emp': 'current'})
+    following = employment.rename({'year': 'outcome_year', 'log_emp': 'following'})
+    validation = growth_panel.validation(regime, 6, regressor_arm, PURPOSE)
+    growth_panel.open_outer(regime, PURPOSE)
+    test = growth_panel.test(regime, 6, regressor_arm, PURPOSE)
+
+    for read in (validation, test):
+        scored = read.join(current, on=['code', 'feature_year'])
+        scored = scored.join(following, on=['code', 'outcome_year'])
+        assert scored.height == read.height > 0
+        assert scored.get_column('outcome').equals(
+            scored.get_column('following') - scored.get_column('current'), check_names=False
+        )
 
 def test_a_growth_opening_and_its_reads_are_logged_under_the_growth_names(
     growth_panel, regressor_arm, log

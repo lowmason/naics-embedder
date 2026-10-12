@@ -230,6 +230,34 @@ def test_the_log_is_append_only_json_lines(panel, log):
     lines = log.path.read_text().splitlines()
     assert [json.loads(line)['purpose'] for line in lines] == ['first', 'second']
 
+def test_openings_match_one_name_or_any_of_several_under_one_fingerprint(log):
+    for event, panel, fingerprint in [
+        (SelectionEvent.OPEN, 'regressor_heldout', 'f'),
+        (SelectionEvent.READ, 'regressor_heldout', 'f'),
+        (SelectionEvent.REOPEN, 'growth_heldout', 'f'),
+        (SelectionEvent.OPEN, 'growth_heldout', 'other'),
+        (SelectionEvent.OPEN, 'regressor_seen', 'f'),
+    ]:
+        log.append(
+            event,
+            panel=panel,
+            split='test',
+            purpose='fixture',
+            fingerprint=fingerprint,
+            n_queries=1,
+        )
+
+    def opened(panel):
+        return [(record['event'], record['panel']) for record in log.openings(panel, 'f')]
+
+    # One name is matched whole, not as a collection of its characters
+    assert opened('regressor_heldout') == [('open', 'regressor_heldout')]
+    assert opened(('regressor_heldout', 'growth_heldout')) == [
+        ('open', 'regressor_heldout'), ('reopen', 'growth_heldout')
+    ]
+    assert opened(['growth_heldout']) == [('reopen', 'growth_heldout')]
+    assert opened(()) == []
+
 # -------------------------------------------------------------------------------------------------
 # Exit: a stub encoder scored on the sealed splits
 # -------------------------------------------------------------------------------------------------
