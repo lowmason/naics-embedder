@@ -16,11 +16,18 @@ import pytest
 
 from naics_embedder.panels import regressor, regressor_splits
 from naics_embedder.panels.outcome import SealedSplitError, SplitAlreadyOpenedError
-from naics_embedder.panels.qcew_rows import level_cells, panel_rows, population
+from naics_embedder.panels.qcew_rows import (
+    RegressorOutcome,
+    level_cells,
+    panel_rows,
+    population,
+)
 from naics_embedder.panels.regressor import (
     LEVELS,
     OUTER_SPLITS,
+    PANEL_NAMES,
     PREDICTION_COLUMNS,
+    READ_NAMES,
     ArmTables,
     FitSettings,
     Regime,
@@ -795,9 +802,14 @@ def test_the_config_builds_the_panel_over_a_codebook(tmp_path, regressor_cells):
     )
 
     panel = load_regressor_panel(cfg, codebook, levels=(6, ))
+    growth = load_regressor_panel(
+        cfg.model_copy(update={'outcome': 'growth'}), codebook, levels=(6, )
+    )
 
     assert panel.settings == SETTINGS
     assert panel.levels == (6, )
+    assert (panel.outcome, growth.outcome) == (RegressorOutcome.LEVEL, RegressorOutcome.GROWTH)
+    assert growth.data_fingerprint(6) != panel.data_fingerprint(6)
     assert panel.log.path == tmp_path / 'selection_log.jsonl'
     other = load_regressor_panel(cfg, codebook, log_path=tmp_path / 'other.jsonl', levels=(6, ))
     assert other.log.path == tmp_path / 'other.jsonl'
@@ -1073,3 +1085,97 @@ def test_level_predictions_are_the_captured_ones_bit_for_bit(level_reads):
 
     for key, (*_, digest) in LEVEL_READS.items():
         assert _digest(reads[key], list(PREDICTION_COLUMNS)) == digest
+
+# -------------------------------------------------------------------------------------------------
+# The growth outcome (Req 21): level mode's rows, partition, draw and folds, under its own names
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def growth_panel(regressor_growth_rows, log):
+    return RegressorPanel(
+        regressor_growth_rows, HELDOUT_GROUPS, log, SETTINGS, outcome=RegressorOutcome.GROWTH
+    )
+
+def test_each_outcome_reads_under_its_own_names():
+    assert READ_NAMES == {
+        RegressorOutcome.LEVEL: {
+            Regime.SEEN: 'regressor_seen',
+            Regime.HELDOUT: 'regressor_heldout'
+        },
+        RegressorOutcome.GROWTH: {
+            Regime.SEEN: 'growth_seen',
+            Regime.HELDOUT: 'growth_heldout'
+        },
+    }
+    # The levels history's names, which D8's decision reads
+    assert PANEL_NAMES == READ_NAMES[RegressorOutcome.LEVEL]
+
+def test_growth_keeps_level_modes_partition_and_draw(
+    panel, growth_panel, regressor_rows, regressor_growth_rows
+):
+    assert (panel.outcome, growth_panel.outcome) == (
+        RegressorOutcome.LEVEL, RegressorOutcome.GROWTH
+    )
+    assert growth_panel.fingerprint == panel.fingerprint
+    for level in LEVELS:
+        level_frame = assign_splits(regressor_rows[level], HELDOUT_GROUPS)
+        growth_frame = assign_splits(regressor_growth_rows[level], HELDOUT_GROUPS)
+
+        assert growth_frame.drop('outcome').equals(level_frame.drop('outcome'))
+        assert growth_panel.split_counts(level) == panel.split_counts(level)
+        # Only the outcome differs, and the data fingerprint names it
+        assert growth_panel.data_fingerprint(level) != panel.data_fingerprint(level)
+
+def test_growth_reads_score_every_comparator_on_level_modes_folds_under_their_own_names(
+    panel, growth_panel, regressor_arm, log
+):
+    keys = ['comparator', 'repeat', 'fold', 'code', 'group', 'feature_year', 'outcome_year']
+
+    for regime in Regime:
+        level = panel.validation(regime, 6, regressor_arm, PURPOSE)
+        growth = growth_panel.validation(regime, 6, regressor_arm, PURPOSE)
+
+        assert growth.columns == list(PREDICTION_COLUMNS)
+        name = READ_NAMES[RegressorOutcome.GROWTH][regime]
+        assert growth.get_column('panel').unique().to_list() == [name]
+        assert growth.select(keys).equals(level.select(keys))
+        assert growth.get_column('prediction').is_finite().all()
+
+    records = log.records()
+    assert [(r['panel'], r['split'], r['n_queries']) for r in records] == [
+        ('regressor_seen', 'validation', 52),
+        ('growth_seen', 'validation', 52),
+        ('regressor_heldout', 'validation', 52),
+        ('growth_heldout', 'validation', 52),
+    ]
+    # Under the draw's fingerprint, with the level read's detail
+    assert {r['fingerprint'] for r in records} == {panel.fingerprint}
+    assert records[1]['detail'] == records[0]['detail']
+
+def test_a_growth_opening_and_its_reads_are_logged_under_the_growth_names(
+    growth_panel, regressor_arm, log
+):
+    growth_panel.open_outer(Regime.HELDOUT, PURPOSE)
+    predictions = growth_panel.test(Regime.HELDOUT, 6, regressor_arm, PURPOSE)
+
+    assert predictions.get_column('panel').unique().to_list() == ['growth_heldout']
+    assert [(r['event'], r['panel'], r['split'], r['n_queries']) for r in log.records()] == [
+        ('open', 'growth_heldout', 'test', 18),
+        ('read', 'growth_heldout', 'test', 18),
+    ]
+    with pytest.raises(SealedSplitError, match='growth_seen outer set is sealed'):
+        growth_panel.test(Regime.SEEN, 6, regressor_arm, PURPOSE)
+
+def test_from_sources_builds_the_rows_of_its_outcome(
+    tmp_path, regressor_cells, regressor_growth_rows
+):
+    built, _ = _from_sources(
+        tmp_path, regressor_cells, HELDOUT_GROUPS, outcome=RegressorOutcome.GROWTH
+    )
+
+    expected = RegressorPanel(
+        regressor_growth_rows, HELDOUT_GROUPS, built.log, SETTINGS, outcome=RegressorOutcome.GROWTH
+    )
+    assert built.outcome is RegressorOutcome.GROWTH
+    for level in built.levels:
+        assert built.data_fingerprint(level) == expected.data_fingerprint(level)

@@ -5,8 +5,10 @@ An arm's coordinates enter a ridge regression as regressors, and the panel retur
 predictions per row, keyed by code, year and group, so that Stage 4 can compute whichever
 statistic it settles on and resample by four-digit group.
 
-- **Rows (D7).** A code in a feature year t (2022–2024): covariates from year t, outcome log
-  employment in t + 1 (``qcew_rows``).
+- **Rows (D7; Req 21).** A code in a feature year t (2022–2024): covariates from year t, and the
+  panel's ``outcome`` (``qcew_rows``): log employment in t + 1 (``level``, the default) or its
+  log change from t (``growth``). The outcome names the reads: ``regressor_seen`` and
+  ``regressor_heldout`` for the levels, ``growth_seen`` and ``growth_heldout`` for growth.
 - **Regimes (D8: each is a panel).** ``seen``: every scored code has earlier rows in the fit set;
   one-hot is a real competitor. ``heldout``: every row of a held-out four-digit group leaves the
   fit set; it runs at levels 4–6, where four-digit parents exist.
@@ -42,6 +44,7 @@ from naics_embedder.panels.outcome import SealedSplitError, SplitAlreadyOpenedEr
 from naics_embedder.panels.qcew_rows import (
     PRIVATE,
     WINDOW_YEARS,
+    RegressorOutcome,
     level_cells,
     load_national_cells,
     panel_rows,
@@ -75,7 +78,19 @@ class Regime(str, Enum):
     SEEN = 'seen'
     HELDOUT = 'heldout'
 
-PANEL_NAMES = {Regime.SEEN: 'regressor_seen', Regime.HELDOUT: 'regressor_heldout'}
+# Each outcome's read names: growth reads stay apart from the levels history (Req 21)
+READ_NAMES = {
+    RegressorOutcome.LEVEL: {
+        Regime.SEEN: 'regressor_seen',
+        Regime.HELDOUT: 'regressor_heldout'
+    },
+    RegressorOutcome.GROWTH: {
+        Regime.SEEN: 'growth_seen',
+        Regime.HELDOUT: 'growth_heldout'
+    },
+}
+# The levels history's names, which D8's decision reads
+PANEL_NAMES = READ_NAMES[RegressorOutcome.LEVEL]
 OUTER_SPLITS = {
     Regime.SEEN: RegressorSplit.SEEN_OUTER,
     Regime.HELDOUT: RegressorSplit.HELDOUT_OUTER
@@ -511,6 +526,7 @@ class RegressorPanel:
         heldout_groups: The committed held-out four-digit groups.
         log: The selection log.
         settings: Tuning and resampling settings.
+        outcome: The outcome ``rows_by_level`` were built for, which names every read (Req 21).
     '''
 
     def __init__(
@@ -519,6 +535,8 @@ class RegressorPanel:
         heldout_groups: Collection[str],
         log: SelectionLog,
         settings: FitSettings,
+        *,
+        outcome: RegressorOutcome = RegressorOutcome.LEVEL,
     ):
         self._rows: Dict[int, pl.DataFrame] = {}
         for level, rows in rows_by_level.items():
@@ -531,6 +549,8 @@ class RegressorPanel:
         self.fingerprint = group_table_fingerprint(self.heldout_groups)
         self.log = log
         self.settings = settings
+        self.outcome = RegressorOutcome(outcome)
+        self.read_names: Mapping[Regime, str] = READ_NAMES[self.outcome]
         self._open: Set[Regime] = set()
 
     @classmethod
@@ -546,9 +566,11 @@ class RegressorPanel:
         settings: FitSettings,
         branch_record: Mapping[str, Any],
         levels: Sequence[int] = LEVELS,
+        outcome: RegressorOutcome = RegressorOutcome.LEVEL,
     ) -> 'RegressorPanel':
         '''
-        The panel from the pinned QCEW slices, a codebook and the committed held-out groups.
+        The panel from the pinned QCEW slices, a codebook and the committed held-out groups, its
+        rows built for ``outcome`` (Req 21).
 
         The groups must be the pinned draw: the log counts openings under the draw's
         fingerprint, so a table edited or redrawn since would read as never opened.
@@ -574,8 +596,9 @@ class RegressorPanel:
         rows_by_level = {}
         for level in levels:
             cells_at_level = level_cells(cells, codebook_codes, level)
-            rows_by_level[level] = panel_rows(cells_at_level, population(cells_at_level))
-        return cls(rows_by_level, heldout_groups, SelectionLog(Path(log_path)), settings)
+            rows_by_level[level] = panel_rows(cells_at_level, population(cells_at_level), outcome)
+        log = SelectionLog(Path(log_path))
+        return cls(rows_by_level, heldout_groups, log, settings, outcome=outcome)
 
     @property
     def levels(self) -> Tuple[int, ...]:
@@ -671,7 +694,7 @@ class RegressorPanel:
                 ``reopen_reason`` is given.
         '''
 
-        panel = PANEL_NAMES[Regime(regime)]
+        panel = self.read_names[Regime(regime)]
         prior = self.log.openings(panel, self.fingerprint)
         if prior and not (reopen_reason or '').strip():
             first = prior[0]
@@ -693,7 +716,7 @@ class RegressorPanel:
 
         regime = Regime(regime)
         self.require_openable(regime, reopen_reason)
-        panel = PANEL_NAMES[regime]
+        panel = self.read_names[regime]
         prior = self.log.openings(panel, self.fingerprint)
         reason = (reopen_reason or '').strip()
         outer = {
@@ -736,8 +759,8 @@ class RegressorPanel:
         self._require_defined(regime, level)
         if regime not in self._open:
             raise SealedSplitError(
-                f'the {PANEL_NAMES[regime]} outer set is sealed: call open_outer(regime, purpose) '
-                'first, which is logged'
+                f'the {self.read_names[regime]} outer set is sealed: call '
+                'open_outer(regime, purpose) first, which is logged'
             )
         splits = [RegressorSplit.REMAINDER.value, OUTER_SPLITS[regime].value]
         frame = self._frame(level).filter(pl.col('split').is_in(splits))
@@ -781,7 +804,7 @@ class RegressorPanel:
     ) -> None:
         self.log.append(
             SelectionEvent.READ,
-            panel=PANEL_NAMES[regime],
+            panel=self.read_names[regime],
             split=split,
             purpose=purpose,
             fingerprint=self.fingerprint,
@@ -807,7 +830,7 @@ class RegressorPanel:
                 scored = keys[list(task.score)]
                 parts.append(
                     scored.with_columns(
-                        panel=pl.lit(PANEL_NAMES[regime]),
+                        panel=pl.lit(self.read_names[regime]),
                         split=pl.lit(split),
                         level=pl.lit(level, dtype=pl.Int32),
                         comparator=pl.lit(comparator),
@@ -856,7 +879,10 @@ def load_regressor_panel(
     log_path: Optional[Union[str, Path]] = None,
     levels: Sequence[int] = LEVELS,
 ) -> RegressorPanel:
-    '''The panel the config describes, over a codebook, logging to ``log_path`` or the config's.'''
+    '''
+    The panel the config describes, its ``outcome`` included, over a codebook, logging to
+    ``log_path`` or the config's.
+    '''
 
     return RegressorPanel.from_sources(
         qcew_dir=cfg.qcew_dir,
@@ -868,6 +894,7 @@ def load_regressor_panel(
         settings=fit_settings(cfg),
         branch_record=require_branch_record(cfg).model_dump(),
         levels=levels,
+        outcome=RegressorOutcome(cfg.outcome),
     )
 
 def summarize(predictions: pl.DataFrame) -> pl.DataFrame:
