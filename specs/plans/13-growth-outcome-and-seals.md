@@ -2785,9 +2785,17 @@ Dispatch the code-reviewer agent, which is pinned to Opus, on the whole branch, 
 - this plan;
 - the spec's Reqs 20–22 and Req 24, and the roadmap's Stage 1 entry.
 
-Also run Codex beside it, from the worktree root: `codex exec review -m gpt-6-astra`. The
-config's default model fails for this account, so always pass `-m gpt-6-astra`, and never edit
-`~/.codex/config.toml`.
+Also run Codex beside it, from the worktree root:
+
+```bash
+codex exec review --base origin/main -m gpt-6-astra
+```
+
+- `--base origin/main` makes it review the branch's commits. Without it, Codex reviews only
+  uncommitted changes, and there are none at this point.
+- `--base` takes no custom prompt: Codex refuses the combination.
+- The config's default model fails for this account, so always pass `-m gpt-6-astra`, and never
+  edit `~/.codex/config.toml`.
 
 Then, for each finding:
 - fix it, with a test where it is behavior, and rerun Steps 1–3; or
