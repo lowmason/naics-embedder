@@ -1035,6 +1035,9 @@ KEY_COLUMNS = [name for name in PREDICTION_COLUMNS if name not in ('outcome', 'p
 # differently: 7 of level 6's cell values lie within glibc's 0.519-ULP error bound of a rounding
 # midpoint, the closest at 0.0019 ULP. Another BLAS can round a ridge fit differently. The d61f49b
 # oracle and the float-free digests hold on every platform.
+# The literals also depend on the lock's numpy and polars and the BLAS they call (Accelerate here).
+# A CAPTURED_HERE pin failing while the d61f49b oracle and the digest pins pass means that
+# environment changed, not the rows or the fit: review the change, then re-capture the literals.
 CAPTURED_HERE = pytest.mark.skipif(
     (sys.platform, platform.machine()) != ('darwin', 'arm64'),
     reason='pinned where captured, on macOS arm64: another libm or BLAS can differ in a last bit',
