@@ -61,7 +61,7 @@ roadmap's resume. The ridge path's SVD cache stays standalone, because one refer
 not trigger it, though the candidates' sweeps may. The tie order's strictness keeps its trigger
 for the candidates' decision.
 
-- [ ] Stage 1: Growth outcome and one seal per split
+- [x] Stage 1: Growth outcome and one seal per split
       Objective: Give the regressor panel a growth outcome on the committed rows, read under its
       own names, and make an opening of a regime's split count for both outcomes, with level
       mode pinned before any change.
@@ -86,6 +86,10 @@ for the candidates' decision.
       other is refused without a reason and logged as a reopening with one (test); Verification
       "Checks" passes.
       ROUTING: writing-plans
+      > Stage 1: COMPLETE (2026-10-12) — implemented by plan 13
+      > (specs/plans/completed/13-growth-outcome-and-seals.md). Its Handoff section names what
+      > Stages 2 and 3 consume.
+      > Next: resume the roadmap.
 
 - [ ] Stage 2: Economic decision tooling
       Objective: Build Req 24's rule for the economic artifact and exercise it on fixtures: the

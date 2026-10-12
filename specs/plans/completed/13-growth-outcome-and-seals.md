@@ -2873,7 +2873,7 @@ The partition is final only once every question is answered.
   deferred items in specs/deferred_items.md`, or `…; nothing deferred` when the gate deferred
   nothing.
 
-- [ ] **Step 4: The deferred items**
+- [x] **Step 4: The deferred items**
 
 In `specs/deferred_items.md`:
 - Tick any earlier item this plan implemented, as `- [x] … → done in plan 13`. None was expected
@@ -2923,7 +2923,7 @@ reverted, saying it is gone.
     `SelectionLog.openings(seal_names(regime), fingerprint)` lists any such opening.
 ```
 
-- [ ] **Step 6: The roadmap stamp**
+- [x] **Step 6: The roadmap stamp**
 
 In `specs/naics-representation-split-roadmap.md`, Stage 1's entry:
 - tick it: `- [ ] Stage 1: Growth outcome and one seal per split` becomes
@@ -2941,7 +2941,7 @@ In `specs/naics-representation-split-roadmap.md`, Stage 1's entry:
 The stamp asks completion to re-validate later stages. That re-validation is the Handoff section
 (Step 5); amending Stages 2–3's entries is the next roadmap resume's job.
 
-- [ ] **Step 7: Backlog triage**
+- [x] **Step 7: Backlog triage**
 
 Run:
 
@@ -2952,7 +2952,7 @@ Report its summary line: the open count, the closure rate and the aged tail. Wit
 items or any aged tail, run steps 1–4 of the skill's Triage rubric and present the proposal. It
 is read-only; `/deferred` acts on a selection.
 
-- [ ] **Step 8: Retire the plan**
+- [x] **Step 8: Retire the plan**
 
 Run:
 
