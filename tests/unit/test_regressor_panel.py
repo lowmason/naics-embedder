@@ -1192,6 +1192,30 @@ def test_growth_reads_score_every_comparator_on_level_modes_folds_under_their_ow
     assert {r['fingerprint'] for r in records} == {panel.fingerprint}
     assert records[1]['detail'] == records[0]['detail']
 
+@pytest.mark.parametrize('regime', list(Regime))
+def test_a_growth_read_scores_each_rows_log_employment_change(
+    regressor_cells, growth_panel, regressor_arm, regime
+):
+    '''Every scored outcome is log E(t + 1) - log E(t), read from the cells of t and t + 1.'''
+
+    employment = level_cells(regressor_cells, CODEBOOK, 6).select(
+        'code', 'year', log_emp=pl.col('emp').cast(pl.Float64).log()
+    )
+    current = employment.rename({'year': 'feature_year', 'log_emp': 'current'})
+    following = employment.rename({'year': 'outcome_year', 'log_emp': 'following'})
+    validation = growth_panel.validation(regime, 6, regressor_arm, PURPOSE)
+    growth_panel.open_outer(regime, PURPOSE)
+    test = growth_panel.test(regime, 6, regressor_arm, PURPOSE)
+
+    for read in (validation, test):
+        scored = read.join(current, on=['code', 'feature_year']).join(
+            following, on=['code', 'outcome_year']
+        )
+        assert scored.height == read.height > 0
+        assert scored.get_column('outcome').equals(
+            scored.get_column('following') - scored.get_column('current'), check_names=False
+        )
+
 def test_a_growth_opening_and_its_reads_are_logged_under_the_growth_names(
     growth_panel, regressor_arm, log
 ):
