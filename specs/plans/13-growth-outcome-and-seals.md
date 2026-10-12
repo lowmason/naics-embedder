@@ -2882,7 +2882,7 @@ In `specs/deferred_items.md`:
   `## 13-growth-outcome-and-seals — <date>` section in the file's item schema. Skip the section
   if nothing was deferred.
 
-- [ ] **Step 5: The handoff to later stages**
+- [x] **Step 5: The handoff to later stages**
 
 Add this section at the end of this plan, after **Integration**. It was drafted at plan time.
 Check each bullet against what shipped: the deviation notes, the ledger and the final code.
@@ -3016,3 +3016,53 @@ Run: `mkdir /Users/lowell/Projects/naics-embedder/logs/plan13_worktree`, then
 
 Then finish the branch: detach onto `origin/main`, delete the local branch, and remove the
 worktree, or archive the app session that owns it.
+
+## Handoff to later stages
+
+Stage 1's code shipped as PR #139 (merge c2b381b); its review fixes and this completion shipped in
+a second PR. Nothing was deferred.
+
+- **Stage 2 (economic decision tooling)** consumes, as built:
+  - **Read names.** `READ_NAMES[RegressorOutcome.GROWTH]` in `panels/regressor.py` gives
+    `growth_seen` and `growth_heldout`. `PANEL_NAMES` is now `READ_NAMES[RegressorOutcome.LEVEL]`,
+    the levels' names, which `decision/scores.py:25-28` imports for D8's decision; the economic
+    decision's panels are not in it.
+  - **The panel.** `RegressorPanel(rows_by_level, heldout_groups, log, settings,
+    outcome=RegressorOutcome.GROWTH)`, `RegressorPanel.from_sources(..., outcome=...)`, or
+    `load_regressor_panel(cfg, codebook)` with `cfg.outcome == 'growth'`. `RegressorOutcome` is
+    in `panels/qcew_rows.py`, where `panel_rows(cells, codes, outcome)` builds one NAICS level's
+    rows. A panel's `outcome` and `read_names` say which outcome it reads.
+  - **The data fingerprint.** `RegressorPanel.data_fingerprint(level)` hashes the rows, outcome
+    included, so a growth panel's differs from level mode's at every level. The draw
+    fingerprint, `RegressorPanel.fingerprint`, is the same under both outcomes (`deddfd4c…` on
+    the real panel).
+  - **Prediction columns.** `PREDICTION_COLUMNS` is unchanged. A growth read's frame carries its
+    read name in `panel`, and its `outcome` column holds each row's log change.
+  - **The seal.** `seal_names(regime)`, and `SelectionLog.openings(panel, fingerprint)`, which
+    takes one name or a collection of names.
+  - **The read path moved.** The roadmap's Consumes cites `panels/regressor.py:146-160`,
+    `:635-660` and `:763-777` as they were at d61f49b. They are now `:163-177` (`comparators`),
+    `:670-695` (`validation`) and `:799-813` (`_read_detail`). Stage 1 left the decision
+    package's cited files unchanged.
+  - **Refusals to lift or route around, beyond Stage 1's Produces.** `tools regressor-panel`
+    refuses `outcome: growth`, `tools sweep` refuses it before any seed is checked (5bfe756), and
+    `run_seed_sweep` refuses a growth panel. Each scores `embedding` and `text_only` on every
+    read, so the reference-only read cannot go through any of them as they stand (Req 24).
+  - **Traps.**
+    - The constructor trusts its caller. `RegressorPanel(..., outcome=RegressorOutcome.GROWTH)`
+      given level rows scores level outcomes and logs them under the growth names; its data
+      fingerprint then equals level mode's. Build a growth panel through `from_sources` or
+      `load_regressor_panel`, or from `panel_rows(..., RegressorOutcome.GROWTH)`.
+    - Two of the level pins (`CAPTURED_HERE`) run only on macOS arm64. On #139's Linux CI the
+      three cross-platform level pins passed and those two skipped. Their literals also depend on
+      the lock's numpy and polars and the BLAS they call: one failing alone, while the d61f49b
+      oracle and the digest pins pass, means the environment changed. Review it, then re-capture.
+    - `decide` pairs reads only on bit-identical regressor rows, so growth reads pair only within
+      one platform and one `uv.lock`.
+- **Stage 3 (the growth margin read)** consumes the growth panel through Stage 2's read.
+  - The committed `conf/data/regressor_panel.yaml` keeps `outcome: level`.
+  - No growth read of real data happened in Stage 1, and no real split was opened.
+  - **Existing openings.** Under Req 22, a real `open` or `reopen` of `regressor_seen` or
+    `regressor_heldout` under the draw `deddfd4c…` now also seals growth's split for that
+    regime. Stage 1 never read the real selection log, and Stage 3 is the first stage to.
+    `SelectionLog.openings(seal_names(regime), fingerprint)` lists any such opening.
