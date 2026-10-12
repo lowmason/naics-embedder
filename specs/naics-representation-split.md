@@ -57,6 +57,7 @@ question, the ruling is the chosen option's label.
 | U12 | Does the panel section look right: which covariates? | "Keep D1 covariates (Recommended)" |
 | U13 | Does the decision section look right: which margin r? | "r = 0.05 (Recommended)" |
 | U14 | Does the verification section look right? | "yes, write the spec" |
+| U15 | (the user's correction, after reviewing the written spec) | "In the spec, Req 20.2 should read: 2. joint non-response + employment growth;" |
 
 ## Motivation — one space, three purposes
 
@@ -134,11 +135,11 @@ the code universe, the bundle's 2,125 NAICS 2022 codes.
 
 ### The economic artifact
 
-**Req 20 — Uses, and the first panel.** The economic artifact's uses, ranked by importance (U2),
-are:
+**Req 20 — Uses, and the first panel.** The economic artifact's uses, ranked by importance (U2,
+with use 2 as corrected by U15), are:
 
 1. employment growth;
-2. joint non-response + wage growth;
+2. joint non-response + employment growth;
 3. wages;
 4. shock exposure;
 5. nowcasting.
@@ -147,8 +148,8 @@ How they are handled for now:
 
 - The first panel, and for now the only one, is employment growth (U6). Each later use joins
   through its own panel spec, once its data are verified.
-- Joint non-response + wage growth has no panel. Asked for its data source, the user answered "No
-  data exists..." (U5).
+- Joint non-response + employment growth has no panel. Asked for its data source under its earlier
+  name, joint non-response + wage growth, the user answered "No data exists..." (U5).
 - Data stay on the NAICS 2022 basis (U6). Cross-vintage history stays Out of scope, as in
   naics-embedding.
 
