@@ -378,12 +378,22 @@ def test_tools_sweep_refuses_a_growth_config_before_any_seed_is_checked(
             return super().check(spec, seed)
 
     monkeypatch.setattr(tools_cli, 'CheckpointRunner', CountingRunner)
+    built = []
+    stub = tools_cli.load_regressor_panel
+
+    def counting_load(*args, **kwargs):
+        built.append(args)
+        return stub(*args, **kwargs)
+
+    # A real load would build growth rows from the QCEW slices
+    monkeypatch.setattr(tools_cli, 'load_regressor_panel', counting_load)
 
     result = CliRunner().invoke(tools_cli.app, sweep_env.args)
 
     assert result.exit_code == 1, result.output
     assert 'the sweep reads level mode only' in ' '.join(result.output.split())
     assert checked == []
+    assert built == []
     assert SelectionLog(sweep_env.log).records() == []
     assert not sweep_env.output.exists()
     assert not list(sweep_env.root.glob('**/*.parquet'))
