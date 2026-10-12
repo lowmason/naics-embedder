@@ -20,6 +20,7 @@ from naics_embedder.decision.scores import PANELS
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.decision.sweep import SeedArtifacts, run_seed_sweep
 from naics_embedder.panels.outcome import OutcomePanel
+from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import DECISION_LEVEL, RegressorPanel
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
@@ -401,6 +402,31 @@ def test_a_repeated_seed_is_refused_before_any_read(
             **panels,
         )
     assert log.records() == []
+
+def test_a_growth_regressor_panel_is_refused_before_any_read(
+    tmp_path, regressor_rows, regressor_growth_rows, panels, store, text_only, log
+):
+    # D8 decides on the levels regimes, and a growth read of an arm before the economic margin is
+    # recorded would break Req 24
+    growth = RegressorPanel(
+        regressor_growth_rows, HELDOUT_GROUPS, log, SETTINGS, outcome=RegressorOutcome.GROWTH
+    )
+
+    with pytest.raises(ValueError, match='reads level mode only'):
+        run_seed_sweep(
+            _spec('uninformed', dimension=3),
+            SEEDS,
+            SyntheticRunner(tmp_path / 'runs' / 'uninformed', False, _signal(regressor_rows)),
+            text_only_table=text_only,
+            store=store,
+            purpose=PURPOSE,
+            **{
+                **panels, 'regressor_panel': growth
+            },
+        )
+    assert log.records() == []
+    assert not (tmp_path / 'runs').exists()
+    assert not store.root.exists()
 
 def test_a_decision_over_swept_arms_adopts_the_informed_one(
     tmp_path, regressor_rows, panels, store, text_only

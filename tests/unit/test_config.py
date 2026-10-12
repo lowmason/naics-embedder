@@ -576,6 +576,14 @@ class TestRegressorPanelConfig:
         assert cfg.heldout_groups_csv == './conf/data/regressor_heldout_groups.csv'
         assert cfg.selection_log == './logs/selection_log.jsonl'
 
+    def test_the_outcome_is_level_by_default_or_growth(self):
+        # Req 21: level is today's panel; growth is the economic artifact's first panel
+        assert RegressorPanelConfig().outcome == 'level'
+        assert load_config(RegressorPanelConfig, 'data/regressor_panel.yaml').outcome == 'level'
+        assert RegressorPanelConfig(outcome='growth').outcome == 'growth'
+        with pytest.raises(ValidationError):
+            RegressorPanelConfig(outcome='rate')
+
     def test_the_text_only_comparator_reads_like_the_arm(self):
         # D9: the arm's own backbone, at the arm's tokenization length
         arm = yaml.safe_load(Path('conf/config.yaml').read_text())

@@ -546,6 +546,10 @@ class RegressorPanelConfig(BaseModel):
         default='9b646af189dbc46870861367e7cd399d2328972754dbf1abb30ca5a864f2481a',
         description="SHA-256 of the codebook's codes, sorted, one per line",
     )
+    outcome: Literal['level', 'growth'] = Field(
+        default='level',
+        description="Each row's outcome (Req 21): next-year log employment, or its log growth",
+    )
     heldout_groups_csv: str = Field(
         default='./conf/data/regressor_heldout_groups.csv',
         description='The committed held-out four-digit groups (data regressor-groups)',

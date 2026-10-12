@@ -6,6 +6,9 @@ data and a trained arm. Every outer set opened here is a fixture's: no test read
 '''
 
 import hashlib
+import json
+import platform
+import sys
 
 import numpy as np
 import polars as pl
@@ -13,10 +16,18 @@ import pytest
 
 from naics_embedder.panels import regressor, regressor_splits
 from naics_embedder.panels.outcome import SealedSplitError, SplitAlreadyOpenedError
-from naics_embedder.panels.qcew_rows import level_cells, population
+from naics_embedder.panels.qcew_rows import (
+    RegressorOutcome,
+    level_cells,
+    panel_rows,
+    population,
+)
 from naics_embedder.panels.regressor import (
+    LEVELS,
     OUTER_SPLITS,
+    PANEL_NAMES,
     PREDICTION_COLUMNS,
+    READ_NAMES,
     ArmTables,
     FitSettings,
     Regime,
@@ -50,6 +61,7 @@ from tests.fixtures.regressor_panel import (
     POPULATION,
     SETTINGS,
     coordinate_table,
+    panel_rows_d61f49b,
     text_only_table,
     write_qcew_slices,
 )
@@ -435,12 +447,49 @@ def test_every_panel_object_opens_for_itself_and_a_reopening_needs_a_reason(
     assert records[0]['detail']['rows_by_level'] == {'2': 1, '3': 5, '4': 14, '5': 14, '6': 26}
     assert records[2]['n_queries'] == 18
 
-def test_openings_are_counted_per_held_out_draw(regressor_rows, log):
+def test_openings_are_counted_per_held_out_draw(regressor_rows, regressor_growth_rows, log):
+    growth = RegressorOutcome.GROWTH
     RegressorPanel(regressor_rows, HELDOUT_GROUPS, log, SETTINGS).open_outer(Regime.SEEN, 'first')
 
     RegressorPanel(regressor_rows, ['1111'], log, SETTINGS).open_outer(Regime.SEEN, 'other draw')
+    third = RegressorPanel(regressor_growth_rows, ['1112'], log, SETTINGS, outcome=growth)
+    third.open_outer(Regime.SEEN, 'a third draw')
 
-    assert [r['event'] for r in log.records()] == ['open', 'open']
+    assert [r['event'] for r in log.records()] == ['open', 'open', 'open']
+
+@pytest.mark.parametrize(
+    ('first', 'second'),
+    [
+        (RegressorOutcome.LEVEL, RegressorOutcome.GROWTH),
+        (RegressorOutcome.GROWTH, RegressorOutcome.LEVEL),
+    ],
+)
+def test_an_opening_under_either_outcome_seals_the_split_for_both(
+    regressor_rows, regressor_growth_rows, log, first, second
+):
+    # Req 22: 2025 employment underlies both outcomes' outer rows, so the split is the key
+    rows = {RegressorOutcome.LEVEL: regressor_rows, RegressorOutcome.GROWTH: regressor_growth_rows}
+    opener = RegressorPanel(rows[first], HELDOUT_GROUPS, log, SETTINGS, outcome=first)
+    other = RegressorPanel(rows[second], HELDOUT_GROUPS, log, SETTINGS, outcome=second)
+    opened = READ_NAMES[first][Regime.SEEN]
+
+    opener.open_outer(Regime.SEEN, 'first opening')
+
+    with pytest.raises(SplitAlreadyOpenedError, match=f'as {opened} for'):
+        other.require_openable(Regime.SEEN)
+    with pytest.raises(SplitAlreadyOpenedError, match='reopen_reason'):
+        other.open_outer(Regime.SEEN, 'second opening')
+    # Each regime's outer set is its own split
+    other.require_openable(Regime.HELDOUT)
+    other.open_outer(Regime.SEEN, 'second opening', reopen_reason='a fixture rerun')
+
+    records = log.records()
+    assert [(r['event'], r['panel']) for r in records] == [
+        ('open', opened),
+        ('reopen', READ_NAMES[second][Regime.SEEN]),
+    ]
+    assert records[1]['detail']['reason'] == 'a fixture rerun'
+    assert {r['fingerprint'] for r in records} == {opener.fingerprint}
 
 def test_the_data_fingerprint_names_the_rows_a_read_at_a_level_scores(panel, regressor_rows, log):
     moved = _shift_outcomes(regressor_rows, pl.col('group') == '1111')
@@ -790,9 +839,14 @@ def test_the_config_builds_the_panel_over_a_codebook(tmp_path, regressor_cells):
     )
 
     panel = load_regressor_panel(cfg, codebook, levels=(6, ))
+    growth = load_regressor_panel(
+        cfg.model_copy(update={'outcome': 'growth'}), codebook, levels=(6, )
+    )
 
     assert panel.settings == SETTINGS
     assert panel.levels == (6, )
+    assert (panel.outcome, growth.outcome) == (RegressorOutcome.LEVEL, RegressorOutcome.GROWTH)
+    assert growth.data_fingerprint(6) != panel.data_fingerprint(6)
     assert panel.log.path == tmp_path / 'selection_log.jsonl'
     other = load_regressor_panel(cfg, codebook, log_path=tmp_path / 'other.jsonl', levels=(6, ))
     assert other.log.path == tmp_path / 'other.jsonl'
@@ -820,3 +874,345 @@ def test_the_summary_pools_rows_per_panel_split_level_and_comparator():
         'covariates', 2, 0.0, 1.0
     )
     assert (second['rmse'], second['r2'], second['median_alpha']) == (1.0, 0.0, 55.0)
+
+# -------------------------------------------------------------------------------------------------
+# Levels unchanged (Req 21): level mode's values, pinned at d61f49b before the growth outcome
+# -------------------------------------------------------------------------------------------------
+
+# Captured at d61f49b on macOS arm64, where Python 3.12 (numpy 2.3.4) and Python 3.10 (numpy 2.2.6)
+# agree bit for bit under polars 1.35.1
+LEVEL_DRAW = 'b47d16873ea7065cdd9a1b9718268d9d5095dfc2b5879c3e966710e3bec9c78d'
+# Each level's rows per split (remainder, seen outer set, held-out outer set), and the digest of
+# every row's code, feature year, outcome year, group and split, sorted by code and feature year
+LEVEL_PARTITIONS = {
+    2: ((2, 1, 9), 'ae050a881bfaaeeea3588e545a50f6930afed9f912e808b2ff3868c1bfa41e97'),
+    3: ((10, 5, 9), '2cf28b0b3ed39230fa250133b3269d2c081065a4e62b0d72519d973d21d34de7'),
+    4: ((28, 14, 9), '40ee441f5f6fc808275c21555925f4247a4cabd90d0b2402b65b2b5e69afaa24'),
+    5: ((28, 14, 9), '536780bc9117e2e5b7551d7f8169f655b5223d91fbb7ce5ab584428529e945be'),
+    6: ((52, 26, 18), '1f719ca447c6ac66307846f5b869e396ffa04db423c355710288c5fae639d1f7'),
+}
+# The log of ``level_reads``: each defined cell's validation read, then each regime's opening and
+# its outer-set reads
+LEVEL_LOG = [
+    ('read', 'regressor_seen', 'validation', 10),
+    ('read', 'regressor_seen', 'validation', 28),
+    ('read', 'regressor_seen', 'validation', 28),
+    ('read', 'regressor_seen', 'validation', 52),
+    ('read', 'regressor_heldout', 'validation', 28),
+    ('read', 'regressor_heldout', 'validation', 28),
+    ('read', 'regressor_heldout', 'validation', 52),
+    ('open', 'regressor_seen', 'test', 26),
+    ('read', 'regressor_seen', 'test', 5),
+    ('read', 'regressor_seen', 'test', 14),
+    ('read', 'regressor_seen', 'test', 14),
+    ('read', 'regressor_seen', 'test', 26),
+    ('open', 'regressor_heldout', 'test', 18),
+    ('read', 'regressor_heldout', 'test', 9),
+    ('read', 'regressor_heldout', 'test', 9),
+    ('read', 'regressor_heldout', 'test', 18),
+]
+# Each read's digest of its key columns and chosen penalties, the sums of its predictions and of
+# their squared errors, and the digest of every prediction column
+LEVEL_READS = {
+    (Regime.SEEN, 'validation', 3): (
+        '0d3fe43ef5a84011a6c630421057bacfa43924b7c494e6c5cd6a8a4747467791',
+        667.4451283013116,
+        5.130531432910643,
+        '650a98f3f27e0bd8ba0ab1302ff0dc3ca4b7c904b90a4abfbdb84d78f8ba2761',
+    ),
+    (Regime.SEEN, 'validation', 4): (
+        '2a0db0140205fced1794f7e7d1fba820bc7e90833078443ba2e88a722d889f86',
+        1771.3781051987503,
+        79.44066289871006,
+        '6fe8812179def263a314bc78e935eb9c73103981689d749db49d9cdb20ce42b5',
+    ),
+    (Regime.SEEN, 'validation', 5): (
+        '348a229977df37a13fecec449db1c4fc59a9f3041e01de54395f47233c659705',
+        1672.4597586951015,
+        162.28358979019288,
+        '178f31610ecabfca5a6acdfcb2f2041704d12cb0d2408a1ce9e5005114683b12',
+    ),
+    (Regime.SEEN, 'validation', 6): (
+        'd6a1914d785a674c188d50e7c1eddd738bd079ee50e11ce15a83320dc54e1446',
+        3127.5068050704963,
+        131.82012311086612,
+        'bd48f3a7b2a5e128eeb2cd3f2bc300013455ae238483c804731c532bf051adac',
+    ),
+    (Regime.HELDOUT, 'validation', 4): (
+        'd4ef9be4090fa25a61cc0f756f1adddd2616a22830d483361c43d9e9894bd658',
+        2762.234709277887,
+        311.1588055545941,
+        '3331930a7ef3034fa708b88e148125084527b552ec5a1277e43e8e5cd42f6b95',
+    ),
+    (Regime.HELDOUT, 'validation', 5): (
+        '8a5720352cf749805294ab4dd431122f86c5e01c7fbe117b4d352451aaa2189f',
+        2603.8437776456385,
+        902.0747609652292,
+        '21dd412769a514eda499d2413c0656ec608a3365c4ffe5ba80e409041098c734',
+    ),
+    (Regime.HELDOUT, 'validation', 6): (
+        'fa2b27d4692a5fc28c294a71c58283f73f9eed0a7f626b4fccf14df7f5890d91',
+        4890.906428128532,
+        438.6849114831849,
+        '6173effe96fa20085250cb6f42fb2647e76574cc68cf18401ab7c378d3c287fc',
+    ),
+    (Regime.SEEN, 'test', 3): (
+        '858a694a6dd83a2763f5d1832d9e43d5fdf916a7026c858e1c91714d67bedfb3',
+        335.91313347500005,
+        1.141657267795871,
+        'f1662bb791d10ef9f03d194defe2cc3efcd34e35567ddbda8915e9bdb6ae6871',
+    ),
+    (Regime.SEEN, 'test', 4): (
+        '3aa1a3896e4548f68397f51f5da22fe5e9b913527af8c0fd02f302b7797e25d2',
+        889.6516122009634,
+        33.50275136228421,
+        '5d7dd4b34c774e42b1de017a5135b05dc917e66a7641fd47973c6df0ecb5b3ca',
+    ),
+    (Regime.SEEN, 'test', 5): (
+        'de3c54f5b8e38ec881a3f7f1f0d91434c77980a741cba24535169ab17b875c46',
+        839.5593902615201,
+        70.59059817108438,
+        'cc3f2ed072f133b27fb22a8168d5f3a21bdc25a090c4198067ac6b72f0f66942',
+    ),
+    (Regime.SEEN, 'test', 6): (
+        '4557c61fe0967915cddc93cd3fc2f3735c01d8ebf62b33445815c260ce50ec8b',
+        1572.8628775819825,
+        69.21606532040232,
+        'c4b2af96f52d1192f35dcfa3860455d9be47bfe516c5407baf176560e3bcb8c5',
+    ),
+    (Regime.HELDOUT, 'test', 4): (
+        '96a88a55e35dde451daa931a1c32be5fc46e0dd547fd74bbd5cc34da21cc5f30',
+        437.0580054753184,
+        116.30107865000055,
+        'de2f101d3a16831cf7d3ea39a3ae31752fcd6f3abe85914bf57af52a51d3d0c5',
+    ),
+    (Regime.HELDOUT, 'test', 5): (
+        'ae4b294c299114c6984dc2366ae0174841bf0456068ecb6953c145c190f95c33',
+        384.49482348133023,
+        165.4899488131396,
+        '3b6a5b59e1e81e715ae3dd6db70c15a13a67c9eea98d10956129c44ccc1a4f10',
+    ),
+    (Regime.HELDOUT, 'test', 6): (
+        '8b25d80ee6fe623a979501877b9ce3fa2229ee99baa36d6138141bf9a272a303',
+        857.1212167419905,
+        98.41731977089233,
+        '497f48b7e809d2984b20762684e67b6f4c07a90f2ae3e174f5937ebc42b794e8',
+    ),
+}
+# Level 6's validation folds: each regime's and repeat's groups in fold 0, then in fold 1
+LEVEL_SIX_FOLDS = {
+    (Regime.SEEN, 0): (
+        ('1111', '1121', '1122', '2381', '3111', '3112', '5221'), (
+            '1112', '1114', '3212', '3321', '3322', '5222', '5232'
+        )
+    ),
+    (Regime.SEEN, 1): (
+        ('1111', '1112', '1114', '2381', '3111', '3322', '5222'), (
+            '1121', '1122', '3112', '3212', '3321', '5221', '5232'
+        )
+    ),
+    (Regime.HELDOUT, 0): (
+        ('1114', '2381', '3111', '3212', '3321', '3322', '5221'), (
+            '1111', '1112', '1121', '1122', '3112', '5222', '5232'
+        )
+    ),
+    (Regime.HELDOUT, 1): (
+        ('1111', '1114', '1122', '2381', '3112', '3322', '5221'), (
+            '1112', '1121', '3111', '3212', '3321', '5222', '5232'
+        )
+    ),
+}
+LEVEL_DATA_FINGERPRINTS = {
+    2: 'eca3bfb9319d9c28ba0e48b8cca2279e56aac8711113833bb24d03be96f7881a',
+    3: '1b3f9104506d9f6866131731d0f5d7f2c4422538fb0172eae80d12e3b2906e0d',
+    4: 'cba83a33960191032af7cff326c02d37c17ec087cd8c206d722bd729a793160c',
+    5: '221c729fbd73c45fe07a136cc8c5ca904a022d69390b6bc4dfed5c0a59ce9443',
+    6: '9501d616de750922fb899f9310be2ab00587bc9487dc7542b3e1f77ada6821c7',
+}
+PARTITION_COLUMNS = ['code', 'feature_year', 'outcome_year', 'group', 'split']
+KEY_COLUMNS = [name for name in PREDICTION_COLUMNS if name not in ('outcome', 'prediction')]
+# Literal float pins hold where they were captured. Another libm can round a log a last bit
+# differently: 7 of level 6's cell values lie within glibc's 0.519-ULP error bound of a rounding
+# midpoint, the closest at 0.0019 ULP. Another BLAS can round a ridge fit differently. The d61f49b
+# oracle and the float-free digests hold on every platform.
+CAPTURED_HERE = pytest.mark.skipif(
+    (sys.platform, platform.machine()) != ('darwin', 'arm64'),
+    reason='pinned where captured, on macOS arm64: another libm or BLAS can differ in a last bit',
+)
+
+def _digest(frame, columns):
+    '''SHA-256 of the columns' values as JSON, row by row in the frame's order.'''
+
+    return hashlib.sha256(json.dumps(frame.select(columns).rows()).encode('utf-8')).hexdigest()
+
+@pytest.fixture(scope='module')
+def level_reads(regressor_rows, regressor_arm, tmp_path_factory):
+    '''
+    Every read of the fixture panel in level mode: each defined cell's validation split, then each
+    regime's outer set, opened once, at each defined level. Returns the predictions by (regime,
+    split, level), and the log's records.
+    '''
+
+    log = SelectionLog(tmp_path_factory.mktemp('level') / 'selection_log.jsonl')
+    panel = RegressorPanel(regressor_rows, HELDOUT_GROUPS, log, SETTINGS)
+    cells = [
+        (regime, level) for regime in Regime for level in panel.levels
+        if panel.cell_status(regime, level) is None
+    ]
+    reads = {
+        (regime, 'validation', level): panel.validation(regime, level, regressor_arm, PURPOSE)
+        for regime, level in cells
+    }
+    for regime in Regime:
+        panel.open_outer(regime, PURPOSE)
+        for level in [level for other, level in cells if other is regime]:
+            reads[regime, 'test', level] = panel.test(regime, level, regressor_arm, PURPOSE)
+    return reads, log.records()
+
+def test_level_rows_are_d61f49bs_at_every_level(regressor_cells, regressor_rows):
+    for level in LEVELS:
+        cells = level_cells(regressor_cells, CODEBOOK, level)
+        codes = population(cells)
+        oracle = panel_rows_d61f49b(cells, codes)
+
+        assert panel_rows(cells, codes).equals(oracle)
+        assert regressor_rows[level].equals(oracle)
+
+def test_level_partitions_and_data_fingerprints_are_pinned(panel, regressor_rows):
+    assert panel.fingerprint == LEVEL_DRAW
+    for level, (counts, digest) in LEVEL_PARTITIONS.items():
+        frame = assign_splits(regressor_rows[level], HELDOUT_GROUPS).sort('code', 'feature_year')
+        named = frame.select(sorted(frame.columns))
+        payload = json.dumps({'columns': named.columns, 'rows': named.rows()}).encode('utf-8')
+
+        assert tuple(panel.split_counts(level).values()) == counts
+        assert _digest(frame, PARTITION_COLUMNS) == digest
+        # The data fingerprint hashes every column of those rows, in name order
+        assert panel.data_fingerprint(level) == hashlib.sha256(payload).hexdigest()
+
+@CAPTURED_HERE
+def test_level_data_fingerprints_are_the_captured_ones(panel):
+    assert {level: panel.data_fingerprint(level) for level in LEVELS} == LEVEL_DATA_FINGERPRINTS
+
+def test_level_reads_and_folds_are_pinned(level_reads):
+    reads, records = level_reads
+
+    assert [(r['event'], r['panel'], r['split'], r['n_queries']) for r in records] == LEVEL_LOG
+    assert list(reads) == list(LEVEL_READS)
+    for key, (digest, prediction_sum, error_sum, _) in LEVEL_READS.items():
+        sums = reads[key].select(
+            predictions=pl.col('prediction').sum(),
+            squared_errors=((pl.col('prediction') - pl.col('outcome'))**2).sum(),
+        ).row(0)
+        assert _digest(reads[key], KEY_COLUMNS) == digest
+        assert sums == pytest.approx((prediction_sum, error_sum), rel=1e-9)
+    for (regime, repeat), folds in LEVEL_SIX_FOLDS.items():
+        rows = reads[regime, 'validation', 6].filter(
+            (pl.col('comparator') == 'covariates') & (pl.col('repeat') == repeat)
+        )
+        assigned = tuple(
+            tuple(sorted(rows.filter(pl.col('fold') == fold).get_column('group').unique()))
+            for fold in range(SETTINGS.folds)
+        )
+        assert assigned == folds
+
+@CAPTURED_HERE
+def test_level_predictions_are_the_captured_ones_bit_for_bit(level_reads):
+    reads, _ = level_reads
+
+    for key, (*_, digest) in LEVEL_READS.items():
+        assert _digest(reads[key], list(PREDICTION_COLUMNS)) == digest
+
+# -------------------------------------------------------------------------------------------------
+# The growth outcome (Req 21): level mode's rows, partition, draw and folds, under its own names
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def growth_panel(regressor_growth_rows, log):
+    return RegressorPanel(
+        regressor_growth_rows, HELDOUT_GROUPS, log, SETTINGS, outcome=RegressorOutcome.GROWTH
+    )
+
+def test_each_outcome_reads_under_its_own_names():
+    assert READ_NAMES == {
+        RegressorOutcome.LEVEL: {
+            Regime.SEEN: 'regressor_seen',
+            Regime.HELDOUT: 'regressor_heldout'
+        },
+        RegressorOutcome.GROWTH: {
+            Regime.SEEN: 'growth_seen',
+            Regime.HELDOUT: 'growth_heldout'
+        },
+    }
+    # The levels history's names, which D8's decision reads
+    assert PANEL_NAMES == READ_NAMES[RegressorOutcome.LEVEL]
+
+def test_growth_keeps_level_modes_partition_and_draw(
+    panel, growth_panel, regressor_rows, regressor_growth_rows
+):
+    assert (panel.outcome, growth_panel.outcome) == (
+        RegressorOutcome.LEVEL, RegressorOutcome.GROWTH
+    )
+    assert growth_panel.fingerprint == panel.fingerprint
+    for level in LEVELS:
+        level_frame = assign_splits(regressor_rows[level], HELDOUT_GROUPS)
+        growth_frame = assign_splits(regressor_growth_rows[level], HELDOUT_GROUPS)
+
+        assert growth_frame.drop('outcome').equals(level_frame.drop('outcome'))
+        assert growth_panel.split_counts(level) == panel.split_counts(level)
+        # Only the outcome differs, and the data fingerprint names it
+        assert growth_panel.data_fingerprint(level) != panel.data_fingerprint(level)
+
+def test_growth_reads_score_every_comparator_on_level_modes_folds_under_their_own_names(
+    panel, growth_panel, regressor_arm, log
+):
+    keys = ['comparator', 'repeat', 'fold', 'code', 'group', 'feature_year', 'outcome_year']
+
+    for regime in Regime:
+        level = panel.validation(regime, 6, regressor_arm, PURPOSE)
+        growth = growth_panel.validation(regime, 6, regressor_arm, PURPOSE)
+
+        assert growth.columns == list(PREDICTION_COLUMNS)
+        name = READ_NAMES[RegressorOutcome.GROWTH][regime]
+        assert growth.get_column('panel').unique().to_list() == [name]
+        assert growth.select(keys).equals(level.select(keys))
+        assert growth.get_column('prediction').is_finite().all()
+
+    records = log.records()
+    assert [(r['panel'], r['split'], r['n_queries']) for r in records] == [
+        ('regressor_seen', 'validation', 52),
+        ('growth_seen', 'validation', 52),
+        ('regressor_heldout', 'validation', 52),
+        ('growth_heldout', 'validation', 52),
+    ]
+    # Under the draw's fingerprint, with the level read's detail
+    assert {r['fingerprint'] for r in records} == {panel.fingerprint}
+    assert records[1]['detail'] == records[0]['detail']
+
+def test_a_growth_opening_and_its_reads_are_logged_under_the_growth_names(
+    growth_panel, regressor_arm, log
+):
+    growth_panel.open_outer(Regime.HELDOUT, PURPOSE)
+    predictions = growth_panel.test(Regime.HELDOUT, 6, regressor_arm, PURPOSE)
+
+    assert predictions.get_column('panel').unique().to_list() == ['growth_heldout']
+    assert [(r['event'], r['panel'], r['split'], r['n_queries']) for r in log.records()] == [
+        ('open', 'growth_heldout', 'test', 18),
+        ('read', 'growth_heldout', 'test', 18),
+    ]
+    with pytest.raises(SealedSplitError, match='growth_seen outer set is sealed'):
+        growth_panel.test(Regime.SEEN, 6, regressor_arm, PURPOSE)
+
+def test_from_sources_builds_the_rows_of_its_outcome(
+    tmp_path, regressor_cells, regressor_growth_rows
+):
+    built, _ = _from_sources(
+        tmp_path, regressor_cells, HELDOUT_GROUPS, outcome=RegressorOutcome.GROWTH
+    )
+
+    expected = RegressorPanel(
+        regressor_growth_rows, HELDOUT_GROUPS, built.log, SETTINGS, outcome=RegressorOutcome.GROWTH
+    )
+    assert built.outcome is RegressorOutcome.GROWTH
+    for level in built.levels:
+        assert built.data_fingerprint(level) == expected.data_fingerprint(level)

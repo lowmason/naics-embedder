@@ -46,6 +46,7 @@ from naics_embedder.panels.lexical_encoder import (
     code_texts_from_descriptions,
 )
 from naics_embedder.panels.outcome import OutcomePanel, SealedSplitError, SplitAlreadyOpenedError
+from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import (
     DECISION_LEVEL,
     TEST,
@@ -385,6 +386,10 @@ def regressor_panel(
     the remainder. The validation split reads only the remainder; the test split opens each
     regime's sealed outer set first, and both the opening and the read are logged.
 
+    It reads level mode only. Every read scores the arm and the text-only table, and Req 24
+    records the economic margin before any candidate's growth error exists, so a config whose
+    ``outcome`` is ``growth`` is refused before anything is read.
+
     Example:
         Score an arm's table on the validation split of both regimes at six digits::
 
@@ -405,6 +410,14 @@ def regressor_panel(
         raise typer.Exit(code=1)
 
     cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
+    if RegressorOutcome(cfg.outcome) is not RegressorOutcome.LEVEL:
+        console.print(
+            '[bold red]tools regressor-panel reads level mode only, and the regressor panel '
+            f'config sets outcome: {cfg.outcome}. Every read scores the arm and the text-only '
+            "table, and no candidate's growth error may exist before the economic margin is "
+            'recorded (Req 24).[/bold red]'
+        )
+        raise typer.Exit(code=1)
     # A repeated regime is scored once: opening it twice would be refused after the first read
     regimes = list(dict.fromkeys(regime or list(Regime)))
     levels = sorted(set(level or [DECISION_LEVEL]))

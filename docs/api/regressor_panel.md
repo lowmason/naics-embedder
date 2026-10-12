@@ -1,7 +1,9 @@
 # Regressor Panel API
 
-Arms' coordinates as regressors for next-year QCEW employment, in two sealed regimes (roadmap
-Stage 3).
+Arms' coordinates as regressors for QCEW employment, in two sealed regimes (roadmap Stage 3).
+The `outcome` setting picks next-year log employment (`level`, the default) or its log change from
+year t (`growth`, Req 21), on the same rows, partition and folds. One opening of a regime's outer
+set counts for both outcomes (Req 22).
 
 ## QCEW rows
 

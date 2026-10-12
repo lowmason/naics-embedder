@@ -19,6 +19,7 @@ import pytest
 from naics_embedder.panels.qcew_rows import (
     SLICE_COLUMNS,
     WINDOW_YEARS,
+    RegressorOutcome,
     level_cells,
     panel_rows,
     population,
@@ -157,14 +158,44 @@ def write_qcew_slices(directory: Path, cells: pl.DataFrame) -> Dict[str, str]:
         pins[slice_name(year)] = hashlib.sha256(path.read_bytes()).hexdigest()
     return pins
 
-def synthetic_rows(cells: pl.DataFrame, levels=(2, 3, 4, 5, 6)) -> Dict[int, pl.DataFrame]:
-    '''Panel rows per level, as ``RegressorPanel.from_sources`` builds them.'''
+def synthetic_rows(cells: pl.DataFrame, levels=(2, 3, 4, 5, 6),
+                   outcome=RegressorOutcome.LEVEL) -> Dict[int, pl.DataFrame]:
+    '''Panel rows per level with ``outcome``, as ``RegressorPanel.from_sources`` builds them.'''
 
     rows = {}
     for level in levels:
         cells_at_level = level_cells(cells, CODEBOOK, level)
-        rows[level] = panel_rows(cells_at_level, population(cells_at_level))
+        rows[level] = panel_rows(cells_at_level, population(cells_at_level), outcome)
     return rows
+
+# -------------------------------------------------------------------------------------------------
+# Level mode as d61f49b built it (Req 21, "Levels unchanged")
+# -------------------------------------------------------------------------------------------------
+
+def panel_rows_d61f49b(cells: pl.DataFrame, codes) -> pl.DataFrame:
+    '''
+    ``qcew_rows.panel_rows`` as d61f49b had it, before the growth outcome, with the usable-cell
+    rule, feature years and columns it read written out. Level mode's rows must equal its output
+    bit for bit on every platform: both take their logs from the platform's own libm.
+    '''
+
+    usable = cells.filter(
+        (pl.col('disclosure_code') == '') & (pl.col('emp') > 0) & (pl.col('estabs') > 0)
+        & (pl.col('wages') > 0) & pl.col('code').is_in(list(codes))
+    )
+    features = usable.filter(pl.col('year').is_in([2022, 2023, 2024])).select(
+        'code',
+        feature_year=pl.col('year'),
+        outcome_year=pl.col('year') + 1,
+        log_estabs=pl.col('estabs').cast(pl.Float64).log(),
+        log_wages=pl.col('wages').cast(pl.Float64).log(),
+    )
+    outcomes = usable.select(
+        'code', outcome_year=pl.col('year'), outcome=pl.col('emp').cast(pl.Float64).log()
+    )
+    rows = features.join(outcomes, on=['code', 'outcome_year'], how='inner')
+    columns = ['code', 'feature_year', 'outcome_year', 'log_estabs', 'log_wages', 'outcome']
+    return rows.select(columns).sort('code', 'feature_year')
 
 # -------------------------------------------------------------------------------------------------
 # Stub arm tables
@@ -197,6 +228,10 @@ def regressor_cells() -> pl.DataFrame:
 @pytest.fixture(scope='session')
 def regressor_rows(regressor_cells) -> Dict[int, pl.DataFrame]:
     return synthetic_rows(regressor_cells)
+
+@pytest.fixture(scope='session')
+def regressor_growth_rows(regressor_cells) -> Dict[int, pl.DataFrame]:
+    return synthetic_rows(regressor_cells, outcome=RegressorOutcome.GROWTH)
 
 @pytest.fixture(scope='session')
 def regressor_arm() -> ArmTables:

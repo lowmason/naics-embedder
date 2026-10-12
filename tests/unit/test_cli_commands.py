@@ -699,6 +699,24 @@ def test_regressor_panel_needs_an_open_purpose_for_the_test_split(runner, tmp_pa
     assert log.records() == []
 
 @pytest.mark.unit
+def test_regressor_panel_refuses_a_growth_config_before_anything_is_read(
+    runner, tmp_path, fixture_panel, monkeypatch
+):
+    # Every read scores the arm and the text-only table, and on growth no candidate's error may
+    # exist before the economic margin is recorded (Req 24)
+    log, loaded = fixture_panel
+    config = tmp_path / 'regressor_panel.yaml'
+    config.write_text('outcome: growth\n')
+    monkeypatch.setattr(tools_cli, 'REGRESSOR_PANEL_CONFIG', str(config))
+
+    result = runner.invoke(tools_cli.app, _regressor_arguments(tmp_path))
+
+    assert result.exit_code == 1
+    assert 'reads level mode only' in ' '.join(result.output.split())
+    assert loaded == []
+    assert log.records() == []
+
+@pytest.mark.unit
 def test_regressor_panel_scores_validation_and_reports_undefined_cells(
     runner, tmp_path, fixture_panel
 ):
