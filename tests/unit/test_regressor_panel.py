@@ -1208,9 +1208,8 @@ def test_a_growth_read_scores_each_rows_log_employment_change(
     test = growth_panel.test(regime, 6, regressor_arm, PURPOSE)
 
     for read in (validation, test):
-        scored = read.join(current, on=['code', 'feature_year']).join(
-            following, on=['code', 'outcome_year']
-        )
+        scored = read.join(current, on=['code', 'feature_year'])
+        scored = scored.join(following, on=['code', 'outcome_year'])
         assert scored.height == read.height > 0
         assert scored.get_column('outcome').equals(
             scored.get_column('following') - scored.get_column('current'), check_names=False
