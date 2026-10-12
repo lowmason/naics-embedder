@@ -1,5 +1,12 @@
 # Growth Outcome and One Seal per Split Implementation Plan
 
+**Status: COMPLETE (2026-10-12)** — executed inline as writing-plans' plan-time dry run; nothing
+deferred
+
+> Shipped by PR #139 (merge c2b381b), the dry run's do-not-merge Linux-CI check, which was merged
+> by accident on 2026-10-12 and kept by the user. The review fixes and this completion landed in a
+> second PR.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -447,7 +454,9 @@ needs no edit of its own.
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
+
+> Deviation: run at plan time in the planning session's dry-run worktree, on branch `plan13-dryrun` cut from d61f49b before this plan merged; `claude/stage-1-growth-outcome` was never created.
 
 Run: `git fetch origin`, then:
 
@@ -474,7 +483,7 @@ Expected: this plan's commits, and possibly their merge commit; no other commit.
 Run: `gh pr list --state open`
 Expected: no open PR touching a file in **File structure**. If one does, stop and ask.
 
-- [ ] **Step 2: Build the environment**
+- [x] **Step 2: Build the environment**
 
 Run: `uv sync --locked`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number (3.12.12 at plan time).
@@ -494,7 +503,7 @@ Run: `uname -sm`
 Expected: `Darwin arm64`. Task 1's literal pins run only there (P1). Elsewhere they skip, and the
 plan's counts do not hold: stop and ask.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `3098 passed, 2 skipped`, measured at d61f49b on 2026-10-12 in a worktree without
@@ -521,7 +530,9 @@ line read `3089 passed, 11 skipped` under both Pythons. After Task 5 it should r
 `3106 passed, 13 skipped`: the 19 new tests, two of which, Task 1's `CAPTURED_HERE` tests, skip
 there.
 
-- [ ] **Step 4: Route the tasks**
+- [x] **Step 4: Route the tasks**
+
+> Deviation: the planning session ran Tasks 1–6 inline, in order, as its dry run, not a fresh execution session.
 
 Under executing-plans, run every task inline, in order.
 
@@ -590,7 +601,7 @@ Step 3 shows that they can fail.
 
     No later task changes a pin.
 
-- [ ] **Step 1: Write the pins**
+- [x] **Step 1: Write the pins**
 
 In `tests/fixtures/regressor_panel.py`, make one edit.
 
@@ -939,13 +950,13 @@ def test_level_predictions_are_the_captured_ones_bit_for_bit(level_reads):
         assert _digest(reads[key], list(PREDICTION_COLUMNS)) == digest
 ```
 
-- [ ] **Step 2: Run the pins**
+- [x] **Step 2: Run the pins**
 
 Run: `uv run pytest tests/unit/test_regressor_panel.py -n auto -q`
 Expected: PASS, `85 passed`. The five pins pass at the source as it stands. If any fails, stop
 and ask (**Stop-and-ask conditions**).
 
-- [ ] **Step 3: Check that the pins can fail**
+- [x] **Step 3: Check that the pins can fail**
 
 Each mutation changes one source line, runs the pins, and is reverted.
 
@@ -985,7 +996,9 @@ Run: `git checkout -- src/naics_embedder/panels/qcew_rows.py`, then `git status 
 Expected: only the two test files, ` M tests/fixtures/regressor_panel.py` and
 ` M tests/unit/test_regressor_panel.py`.
 
-- [ ] **Step 4: Run the pins under Python 3.10**
+- [x] **Step 4: Run the pins under Python 3.10**
+
+> Deviation: the Python 3.10 environment was `/tmp/naics-py310-plan13`, not `/tmp/naics_plan13_py310`.
 
 Run:
 
@@ -999,7 +1012,9 @@ Expected:
 
 Keep `/tmp/naics_plan13_py310` for **Final verification**.
 
-- [ ] **Step 5: Format, lint and run the full suite**
+- [x] **Step 5: Format, lint and run the full suite**
+
+> Deviation: the full suite ran at ca6bab3 (**Final verification**), not after each task; collection here gave 3105 tests.
 
 Run: `./scripts/format_code.sh tests/fixtures/regressor_panel.py tests/unit/test_regressor_panel.py`
 Expected: no file changes (`git status --short` lists the same two files as before).
@@ -1010,7 +1025,7 @@ Expected: `All checks passed!`
 Run: `uv run pytest -n auto -q`
 Expected: `3103 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit the pins alone**
+- [x] **Step 6: Commit the pins alone**
 
 This commit changes no source file, so the pins are on record before any change.
 
@@ -1051,7 +1066,7 @@ The tests cover:
     pl.DataFrame`. It accepts the enum or its string value. Any other value raises `ValueError`
     with "'rate' is not a valid RegressorOutcome".
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_regressor_qcew_rows.py`, make three edits, in this order.
 
@@ -1153,7 +1168,7 @@ def test_an_outcome_is_level_or_growth(regressor_cells):
         panel_rows(six, POPULATION, 'rate')
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -1163,7 +1178,7 @@ uv run pytest tests/unit/test_regressor_qcew_rows.py tests/unit/test_regressor_p
 Expected: FAIL, `85 passed, 1 error`. Collecting `tests/unit/test_regressor_qcew_rows.py` raises
 `ImportError: cannot import name 'RegressorOutcome' from 'naics_embedder.panels.qcew_rows'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/panels/qcew_rows.py`, make six edits, in this order.
 
@@ -1296,7 +1311,7 @@ with:
     return rows.select(ROW_COLUMNS).sort('code', 'feature_year')
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -1305,7 +1320,9 @@ uv run pytest tests/unit/test_regressor_qcew_rows.py tests/unit/test_regressor_p
 ```
 Expected: PASS, `99 passed`. Level mode's pins pass unchanged.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
+
+> Deviation: the full suite ran at ca6bab3 (**Final verification**), not after each task; collection here gave 3109 tests.
 
 Run:
 
@@ -1323,7 +1340,7 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3107 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/qcew_rows.py tests/unit/test_regressor_qcew_rows.py
@@ -1378,7 +1395,7 @@ The fixture module gains the session fixture `regressor_growth_rows`. The tests 
   - In `tests/fixtures/regressor_panel.py`: `synthetic_rows(cells, levels=(2, 3, 4, 5, 6),
     outcome=RegressorOutcome.LEVEL)`, and the session fixture `regressor_growth_rows`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/regressor_panel.py`, make three edits, in this order.
 
@@ -1613,7 +1630,7 @@ with:
     def test_the_text_only_comparator_reads_like_the_arm(self):
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -1626,7 +1643,7 @@ Expected: FAIL, `1 failed, 232 passed, 1 error`:
 - `TestRegressorPanelConfig::test_the_outcome_is_level_by_default_or_growth` fails with
   `AttributeError: 'RegressorPanelConfig' object has no attribute 'outcome'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/utils/config.py`, make one edit.
 
@@ -1898,7 +1915,7 @@ with:
     )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -1907,7 +1924,9 @@ uv run pytest tests/unit/test_regressor_panel.py tests/unit/test_config.py tests
 ```
 Expected: PASS, `323 passed`.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
+
+> Deviation: the full suite ran at ca6bab3 (**Final verification**), not after each task; collection here gave 3115 tests.
 
 Run:
 
@@ -1925,7 +1944,7 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3113 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/regressor.py src/naics_embedder/utils/config.py conf/data/regressor_panel.yaml tests/fixtures/regressor_panel.py tests/unit/test_regressor_panel.py tests/unit/test_config.py
@@ -1965,7 +1984,7 @@ third panel, under growth on another draw, still opens its split for the first t
   - the refusal `SplitAlreadyOpenedError('the <read name> outer set was opened at <time> as
     <first read name> for <purpose>; opening it again needs reopen_reason')`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_regressor_panel.py`, make one edit.
 
@@ -2028,7 +2047,7 @@ def test_an_opening_under_either_outcome_seals_the_split_for_both(
     assert {r['fingerprint'] for r in records} == {opener.fingerprint}
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -2041,7 +2060,7 @@ Expected: FAIL, `2 failed, 123 passed`. Both cases of
 `test_openings_are_counted_per_held_out_draw` already passes: openings of other draws stayed apart
 before the change, and must stay apart after it.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/panels/selection_log.py`, make two edits, in this order.
 
@@ -2192,7 +2211,7 @@ with:
         prior = self.log.openings(seal_names(regime), self.fingerprint)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -2201,7 +2220,9 @@ uv run pytest tests/unit/test_regressor_panel.py tests/unit/test_outcome_panel.p
 ```
 Expected: PASS, `125 passed`.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
+
+> Deviation: the full suite ran at ca6bab3 (**Final verification**), not after each task; collection here gave 3117 tests.
 
 Run:
 
@@ -2219,7 +2240,7 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3115 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/panels/selection_log.py src/naics_embedder/panels/regressor.py tests/unit/test_regressor_panel.py
@@ -2265,7 +2286,7 @@ panel.
   - `run_seed_sweep` raises `ValueError('the sweep reads level mode only, not growth: …')` before
     any read.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_cli_commands.py`, make one edit.
 
@@ -2357,7 +2378,7 @@ def test_a_growth_regressor_panel_is_refused_before_any_read(
 def test_a_decision_over_swept_arms_adopts_the_informed_one(
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py tests/unit/test_decision_sweep.py -n auto -q`
 Expected: FAIL, `2 failed, 64 passed`:
@@ -2368,7 +2389,9 @@ Expected: FAIL, `2 failed, 64 passed`:
   validation rows of ['regressor_seen', 'regressor_heldout']`, after it had logged the arm's
   growth reads.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
+
+> Deviation: review fix 5bfe756, in the completion PR, also refuses growth in `tools sweep` before any seed is checked; `run_seed_sweep`'s refusal stays.
 
 In `src/naics_embedder/cli/commands/tools.py`, make three edits, in this order.
 
@@ -2531,7 +2554,7 @@ comparator. The sweep reads the regressor panel in level mode only (D8): a regre
 `outcome: growth` is refused before any read.
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -2541,7 +2564,9 @@ uv run pytest tests/unit/test_cli_commands.py tests/unit/test_decision_sweep.py 
 Expected: PASS, `285 passed`. `tests/unit/test_config.py` joins the run because the YAML's
 comment changed, and its tests compare that YAML with the defaults.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
+
+> Deviation: the full suite ran at ca6bab3 (**Final verification**), not after each task; collection here gave 3119 tests.
 
 Run:
 
@@ -2559,7 +2584,9 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3117 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
+
+> Deviation: committed as `feat(panels): read level mode only from the regressor CLI and sweep (Req 24)` (c6e7f55).
 
 ```bash
 git add src/naics_embedder/cli/commands/tools.py src/naics_embedder/decision/sweep.py conf/data/regressor_panel.yaml docs/usage.md tests/unit/test_cli_commands.py tests/unit/test_decision_sweep.py
@@ -2581,7 +2608,7 @@ shared seal, and state the new count (P7).
 - Consumes: the names Tasks 1–5 produce.
 - Produces: documentation only.
 
-- [ ] **Step 1: Write the documentation**
+- [x] **Step 1: Write the documentation**
 
 In `docs/api/regressor_panel.md`, make one edit.
 
@@ -2696,7 +2723,9 @@ with:
 | Training and contracts | `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`, `test_export.py`, `test_arm_encoder.py`: objective refusal, settings/directory/seed guards, saved constructor controls, CPU/MPS float64 callback transport and export/read provenance |
 ```
 
-- [ ] **Step 2: Check the stated count and build the docs**
+- [x] **Step 2: Check the stated count and build the docs**
+
+> Deviation: the completion PR's four review-fix tests raise the stated count to 3,123 (d6dc56d).
 
 Run: `uv run pytest --collect-only -q -q | tail -1`
 Expected: `3119 tests collected`, followed by a time, matching the count the three files now
@@ -2705,7 +2734,7 @@ state.
 Run: `uv run mkdocs build --strict -d /tmp/naics_plan13_site`, then `rm -rf /tmp/naics_plan13_site`
 Expected: the build succeeds with no warning.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/api/regressor_panel.md CLAUDE.md README.md tests/README.md
@@ -2716,7 +2745,9 @@ git commit -m "docs: record the growth outcome and one seal per split"
 
 Run every check before the final review, and paste each output into the ledger.
 
-- [ ] **Step 1: The suite under both CI versions**
+- [x] **Step 1: The suite under both CI versions**
+
+> Deviation: measured at ca6bab3, `3117 passed, 2 skipped` under both; `/tmp/naics-py310-plan13` was kept for the review fixes, after which 3.12 reads `3121 passed, 2 skipped` (3,123 collected).
 
 Run: `uv run pytest -n auto -q`
 Expected: `3117 passed, 2 skipped`.
@@ -2733,7 +2764,7 @@ Expected:
 
 Run: `rm -rf /tmp/naics_plan13_py310`
 
-- [ ] **Step 2: Lint, format and docs**
+- [x] **Step 2: Lint, format and docs**
 
 Run: `uv run ruff check src/ tests/`
 Expected: `All checks passed!`
@@ -2744,7 +2775,9 @@ Expected: exit 0, with no file listed.
 Run: `uv run mkdocs build --strict -d /tmp/naics_plan13_site`, then `rm -rf /tmp/naics_plan13_site`
 Expected: the build succeeds with no warning.
 
-- [ ] **Step 3: The branch**
+- [x] **Step 3: The branch**
+
+> Deviation: checked after PR #139 merged, as d61f49b..ca6bab3: the six commits (Task 5's message as noted), this stat, no lock, config or specs change, and the five YAML lines; c2b381b's tree equals ca6bab3's.
 
 Run: `git log --oneline origin/main..HEAD`
 Expected: the six task commits, newest first, and no private commit:
@@ -2768,7 +2801,7 @@ Run: `git diff origin/main...HEAD -- conf/data/regressor_panel.yaml`
 Expected: five added lines, and no other change: the three-line `outcome` comment,
 `outcome: level` and a blank line. No pin changed.
 
-- [ ] **Step 4: The spec's Verification items**
+- [x] **Step 4: The spec's Verification items**
 
 Record in the ledger which test carries each of this stage's items:
 - **Levels unchanged:** Task 1's five `test_level_…` tests in `tests/unit/test_regressor_panel.py`.
@@ -2778,7 +2811,9 @@ Record in the ledger which test carries each of this stage's items:
   cases.
 - **Checks:** Steps 1 and 2.
 
-- [ ] **Step 5: The final review**
+- [x] **Step 5: The final review**
+
+> Deviation: ran after #139 merged, against d61f49b: Codex found nothing actionable; of the code-reviewer's five Minors, 1, 3 and 5 were fixed in the completion PR (5bfe756..d189665), 2 became a Handoff trap and 4 was dropped.
 
 Dispatch the code-reviewer agent, which is pinned to Opus, on the whole branch, with:
 - `git diff origin/main...HEAD`;
@@ -2807,7 +2842,9 @@ Run this after **Final verification**, once the review findings are resolved, an
 **Integration**. It is writing-plans' Plan Completion Protocol, with this plan's edits written
 out. Its commits land on `claude/stage-1-growth-outcome`, so the PR carries them.
 
-- [ ] **Step 1: Check for parallel sessions**
+- [x] **Step 1: Check for parallel sessions**
+
+> Deviation: these commits land on `claude/plan13-stage1-completion-bd0cb44b`, cut from c2b381b with this plan's three commits, because the stage's code had merged as #139.
 
 `specs/naics-representation-split-roadmap.md` and `specs/deferred_items.md` are shared by every
 session.
@@ -2817,7 +2854,7 @@ Run: `git worktree list`
 - If another worktree belongs to a running session, or the user has mentioned one, hold the
   shared edits (Steps 4 and 6) and give the user the exact text of each.
 
-- [ ] **Step 2: The resolve-before-defer gate**
+- [x] **Step 2: The resolve-before-defer gate**
 
 Collect the leftovers: plan steps skipped or descoped, and review findings not fixed. Partition
 them:
@@ -2827,7 +2864,7 @@ them:
 
 The partition is final only once every question is answered.
 
-- [ ] **Step 3: Mark up this plan**
+- [x] **Step 3: Mark up this plan**
 
 - Tick every completed step (`- [x]`).
 - Under each step that deviated, add a one-line `> Deviation: …` note.
@@ -2937,6 +2974,8 @@ This is finishing-a-development-branch, with this plan's PR written out.
 
 - [ ] **Step 1: Open the PR, with the user's go-ahead**
 
+> Deviation: the stage's code merged as PR #139 (c2b381b), the dry run's do-not-merge Linux-CI check, by accident; the user kept it. A second PR carries the review fixes and this completion.
+
 Run: `git log --oneline origin/main..HEAD`
 Expected: **Final verification** Step 3's six commits, any review fixes, and `chore(specs):
 retire plan 13`; no private commit.
@@ -2951,6 +2990,8 @@ bare `git push`, and open the PR against `main`. Its description carries:
 End the description with the session's PR attribution line.
 
 - [ ] **Step 2: Wait for CI, then merge**
+
+> Deviation: #139's test jobs read `3106 passed, 13 skipped`; the completion PR's should read `3110 passed, 13 skipped`.
 
 GitHub auto-merge is off, and main has no required checks.
 - Watch `gh pr checks <number>` until the lint, docs and both test jobs pass.
