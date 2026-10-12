@@ -58,6 +58,7 @@ question, the ruling is the chosen option's label.
 | U13 | Does the decision section look right: which margin r? | "r = 0.05 (Recommended)" |
 | U14 | Does the verification section look right? | "yes, write the spec" |
 | U15 | (the user's correction, after reviewing the written spec) | "In the spec, Req 20.2 should read: 2. joint non-response + employment growth;" |
+| U16 | Approve the written spec, including five additions made after the section approvals? They are: Req 24's eligibility rule; Req 24's reference-only margin read; Req 23's allowance for checkpoints selected on the outcome panel; δ's named statistic, component counting and Req 12's status; and Motivation's labeled session-analysis figures | "Spec + five additions approved" |
 
 ## Motivation — one space, three purposes
 
