@@ -262,11 +262,13 @@ def recover_pending_promotion(root: Path, state: RemoteState) -> None:
         if current != item['new'] and _local_hash(root, staged) != item['new']:
             raise ValueError(f'pending staged bytes missing or changed: {name}')
     for name, item in replacements.items():
-        _verify_pending_destinations(root, previous, replacements)
         if _local_hash(root, name) != item['new']:
             _promote_file(root, name, item)
         if _local_hash(root, name) != item['new']:
             raise ValueError(f'Mac replacement changed during promotion: {name}')
+    # The whole baseline hashes once more after the last replacement, not once per replacement:
+    # per-file passes made a final pull quadratic in the files on the instance
+    _verify_pending_destinations(root, previous, replacements)
     reference = record['pass_directory'] + '/manifest.json'
     digest = _publish_manifest(
         root, reference,
