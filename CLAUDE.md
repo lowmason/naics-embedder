@@ -227,6 +227,14 @@ reading a panel. It verifies anchor-radius gradients, per-level SD > 1e-3, posit
 sector radii, manifold error and chunked distance precision, plus gradients for the three terms
 and both scales. A failed criterion writes the report and exits 1.
 
+The regressor panel's `outcome` (`conf/data/regressor_panel.yaml`, Req 21) is `level` by default,
+the levels history read as `regressor_seen` and `regressor_heldout`. `growth` reads
+log E(t+1) − log E(t) on the same rows, partition and folds, as `growth_seen` and
+`growth_heldout`. One opening of a regime's outer set counts for both outcomes (Req 22).
+`tools regressor-panel` and `tools sweep` read level mode only, so no candidate's growth error
+exists before the economic margin (Req 24). The fixture panel pins level mode's rows, data
+fingerprints, folds and scores at d61f49b (`test_regressor_panel.py`).
+
 ### Remote Workflow and Phase 2 Boundary
 
 Five `remote` CLI adapters call `RemoteWorkflow`: up/train/sync/finish/status. Transport config
@@ -297,7 +305,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **3,099 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **3,119 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -481,6 +489,8 @@ There are 100 unit files and two integration files. Important current seams incl
   contracts, exact resume, stopped runs and settings guards.
 - `test_checkpoint_runner.py`, `test_radius_report.py`, `test_epoch_summary.py`,
   `test_visualize_metrics.py`: campaign preflight, radius checks and durable health artifacts.
+- `test_regressor_panel.py`, `test_regressor_qcew_rows.py`: level mode pinned at d61f49b, the
+  growth outcome on the same rows and folds, and one seal per regime's split (Reqs 21–22).
 - `integration/test_reference_training.py`: tiny-backbone Trainer runs, earliest-best selection,
   schedule/early stopping, health records and exact resume.
 - Graph, panel, resampling and decision tests cover their separate interfaces.
