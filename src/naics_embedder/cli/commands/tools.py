@@ -846,6 +846,9 @@ def sweep_command(
     Every seed's checkpoints and monitor reads are checked before the first decision read. The
     record carries the monitor reads that selected each checkpoint. ``--accelerator`` describes
     training; the export and decision reads use this machine's device.
+
+    It reads the regressor panel in level mode only (D8): a regressor panel config whose
+    ``outcome`` is ``growth`` is refused before any seed is checked or read (Req 24).
     '''
 
     configure_logging('tools_sweep.log')
@@ -859,6 +862,13 @@ def sweep_command(
             raise ValueError('--runs must contain {seed}')
         if len(set(seed)) != len(seed):
             raise ValueError(f'a seed repeats: {seed}')
+        regressor_cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
+        if RegressorOutcome(regressor_cfg.outcome) is not RegressorOutcome.LEVEL:
+            raise ValueError(
+                'the sweep reads level mode only, and the regressor panel config sets outcome: '
+                f'{regressor_cfg.outcome}. D8 decides on the levels regimes, and an arm read on '
+                'growth before the economic margin is recorded would break Req 24'
+            )
         directories = {number: Path(runs.format(seed=number)) for number in seed}
         cfg = _run_config(config_file, overrides)
         bundle = _run_bundle(cfg)
@@ -881,7 +891,6 @@ def sweep_command(
                 monitor_records=selected.monitor_records
             )
             _check_monitor_records(arm, run)
-        regressor_cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
         regressor = load_regressor_panel(
             regressor_cfg,
             bundle.artifact_path('codebook'),

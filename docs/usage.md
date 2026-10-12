@@ -292,7 +292,7 @@ coefficient. Missing required values are refused; the arm retains its 21-key set
 A selected epoch with a versioned sibling is ambiguous and refused. The arm's backbone revision
 is resolved independently from its cached backbone; it cannot be copied from the text-only
 comparator. The sweep reads the regressor panel in level mode only (D8): a regressor config set to
-`outcome: growth` is refused before any read.
+`outcome: growth` is refused before any seed is checked or read.
 
 ```bash
 mkdir -p ~/naics-artifacts/records/stage7
