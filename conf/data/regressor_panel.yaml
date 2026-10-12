@@ -14,7 +14,7 @@ codebook_codes_sha256: 9b646af189dbc46870861367e7cd399d2328972754dbf1abb30ca5a86
 
 # Each row's outcome (Req 21): level, log employment in t + 1 (D7), or growth, its log change from
 # t, on the same rows, partition and folds; growth reads are logged as growth_seen and
-# growth_heldout
+# growth_heldout. tools regressor-panel and tools sweep read level mode only (Req 24)
 outcome: level
 
 # data regressor-groups draws the held-out four-digit groups once: a fifth of each sector's

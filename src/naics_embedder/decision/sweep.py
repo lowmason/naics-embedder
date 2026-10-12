@@ -32,6 +32,7 @@ from naics_embedder.decision.records import ArmRecord, ArmSpec, PanelSet, SeedRu
 from naics_embedder.decision.scores import DECISION_STATISTIC, PANELS, panel_statistic, seed_scores
 from naics_embedder.decision.store import ArtifactStore, provenance_fields
 from naics_embedder.panels.outcome import OutcomePanel, QueryCodeEncoder
+from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import (
     DECISION_LEVEL,
     ArmTables,
@@ -133,12 +134,19 @@ def run_seed_sweep(
     Run a configuration for each seed and read each seed once on each panel's validation split.
 
     Raises:
-        ValueError: If a seed repeats; if the text-only table, or a seed's table by its export
-            provenance, was not built from the arm's backbone, revision, descriptions, summaries
-            and window (D9); if a seed's encoder does not decode by the distance of the arm's
-            geometry (Req 12); or if a seed's table width is not the arm spec's dimension.
+        ValueError: If the regressor panel is not in level mode (D8; Req 24); if a seed repeats;
+            if the text-only table, or a seed's table by its export provenance, was not built
+            from the arm's backbone, revision, descriptions, summaries and window (D9); if a
+            seed's encoder does not decode by the distance of the arm's geometry (Req 12); or if
+            a seed's table width is not the arm spec's dimension.
     '''
 
+    if regressor_panel.outcome is not RegressorOutcome.LEVEL:
+        raise ValueError(
+            f'the sweep reads level mode only, not {regressor_panel.outcome.value}: D8 decides on '
+            'the levels regimes, and an arm read on growth before the economic margin is recorded '
+            'would break Req 24'
+        )
     if len(set(seeds)) != len(seeds):
         raise ValueError(f'a seed repeats: {list(seeds)}')
     text_only = store.put_text_only(text_only_table)

@@ -211,6 +211,13 @@ remainder. The test split opens each regime's sealed outer set first, and both t
 the read are logged. The output holds one prediction per row, comparator and repeat (the test
 split has one repeat), with the row's outcome and the chosen penalty.
 
+The panel's `outcome` setting in `conf/data/regressor_panel.yaml` (Req 21) is `level`, the panel
+above, or `growth`: log E(t + 1) − log E(t) on the same rows, read as `growth_seen` and
+`growth_heldout`. One opening of a regime's outer set counts for both outcomes (Req 22). This
+command reads level mode only. Every read scores the arm and the text-only table, and Req 24
+records the economic margin before any candidate's growth error exists, so a config set to
+`growth` is refused before anything is read.
+
 ```bash
 uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
   --text-only /tmp/text_only.parquet --codebook PATH/naics_codebook.parquet
@@ -284,7 +291,8 @@ rank/alpha/dropout and active MoE expert count/top-k/hidden dimension/load-balan
 coefficient. Missing required values are refused; the arm retains its 21-key settings identity.
 A selected epoch with a versioned sibling is ambiguous and refused. The arm's backbone revision
 is resolved independently from its cached backbone; it cannot be copied from the text-only
-comparator.
+comparator. The sweep reads the regressor panel in level mode only (D8): a regressor config set to
+`outcome: growth` is refused before any read.
 
 ```bash
 mkdir -p ~/naics-artifacts/records/stage7
