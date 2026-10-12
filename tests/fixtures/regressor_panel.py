@@ -167,6 +167,35 @@ def synthetic_rows(cells: pl.DataFrame, levels=(2, 3, 4, 5, 6)) -> Dict[int, pl.
     return rows
 
 # -------------------------------------------------------------------------------------------------
+# Level mode as d61f49b built it (Req 21, "Levels unchanged")
+# -------------------------------------------------------------------------------------------------
+
+def panel_rows_d61f49b(cells: pl.DataFrame, codes) -> pl.DataFrame:
+    '''
+    ``qcew_rows.panel_rows`` as d61f49b had it, before the growth outcome, with the usable-cell
+    rule, feature years and columns it read written out. Level mode's rows must equal its output
+    bit for bit on every platform: both take their logs from the platform's own libm.
+    '''
+
+    usable = cells.filter(
+        (pl.col('disclosure_code') == '') & (pl.col('emp') > 0) & (pl.col('estabs') > 0)
+        & (pl.col('wages') > 0) & pl.col('code').is_in(list(codes))
+    )
+    features = usable.filter(pl.col('year').is_in([2022, 2023, 2024])).select(
+        'code',
+        feature_year=pl.col('year'),
+        outcome_year=pl.col('year') + 1,
+        log_estabs=pl.col('estabs').cast(pl.Float64).log(),
+        log_wages=pl.col('wages').cast(pl.Float64).log(),
+    )
+    outcomes = usable.select(
+        'code', outcome_year=pl.col('year'), outcome=pl.col('emp').cast(pl.Float64).log()
+    )
+    rows = features.join(outcomes, on=['code', 'outcome_year'], how='inner')
+    columns = ['code', 'feature_year', 'outcome_year', 'log_estabs', 'log_wages', 'outcome']
+    return rows.select(columns).sort('code', 'feature_year')
+
+# -------------------------------------------------------------------------------------------------
 # Stub arm tables
 # -------------------------------------------------------------------------------------------------
 
