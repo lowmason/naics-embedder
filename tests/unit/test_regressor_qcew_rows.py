@@ -1,5 +1,5 @@
 '''
-QCEW national rows for the regressor panel (Req 2; roadmap Stage 3; D1; D7).
+QCEW national rows for the regressor panel (Req 2; Req 21; roadmap Stage 3; D1; D7).
 
 Every slice here is synthetic (``tests/fixtures/regressor_panel.py``): the real slices stay outside
 the repo, under the sha256 values Stage 1's finding records.
@@ -14,6 +14,7 @@ from naics_embedder.panels.qcew_rows import (
     FEATURE_YEARS,
     ROW_COLUMNS,
     WINDOW_YEARS,
+    RegressorOutcome,
     find_split_codes,
     level_cells,
     load_national_cells,
@@ -121,8 +122,59 @@ def test_every_rows_features_are_dated_before_its_outcome(regressor_cells):
     assert row['log_wages'] == pytest.approx(math.log(cell[2023]['wages']))
     assert row['outcome'] == pytest.approx(math.log(cell[2024]['emp']))
 
-def test_panel_rows_refuse_a_code_without_every_window_year(regressor_cells):
+@pytest.mark.parametrize('outcome', list(RegressorOutcome))
+def test_panel_rows_refuse_a_code_without_every_window_year(regressor_cells, outcome):
     six = level_cells(regressor_cells, CODEBOOK, 6)
 
     with pytest.raises(ValueError, match='panel rows for'):
-        panel_rows(six, [*POPULATION, SUPPRESSED_CODE])
+        panel_rows(six, [*POPULATION, SUPPRESSED_CODE], outcome)
+
+# -------------------------------------------------------------------------------------------------
+# The growth outcome (Req 21)
+# -------------------------------------------------------------------------------------------------
+
+def test_a_growth_rows_outcome_is_the_log_change_in_employment_from_the_same_cells(regressor_cells):
+    six = level_cells(regressor_cells, CODEBOOK, 6)
+    cell = {(row['code'], row['year']): row for row in six.iter_rows(named=True)}
+
+    growth = panel_rows(six, POPULATION, RegressorOutcome.GROWTH)
+
+    assert growth.columns == list(ROW_COLUMNS)
+    assert growth.height == len(POPULATION) * len(FEATURE_YEARS)
+    for row in growth.iter_rows(named=True):
+        now, later = cell[row['code'], row['feature_year']], cell[row['code'], row['outcome_year']]
+        change = math.log(later['emp']) - math.log(now['emp'])
+        # Features from year t; the outcome from t to t + 1
+        assert row['outcome_year'] == row['feature_year'] + 1
+        assert row['log_estabs'] == pytest.approx(math.log(now['estabs']), abs=1e-12)
+        assert row['log_wages'] == pytest.approx(math.log(now['wages']), abs=1e-12)
+        assert row['outcome'] == pytest.approx(change, abs=1e-12)
+
+def test_a_growth_row_differs_from_its_level_row_in_the_outcome_alone(regressor_cells):
+    six = level_cells(regressor_cells, CODEBOOK, 6)
+    level = panel_rows(six, POPULATION)
+    earlier = level.select(
+        'code', feature_year=pl.col('feature_year') + 1, earlier=pl.col('outcome')
+    )
+
+    growth = panel_rows(six, POPULATION, RegressorOutcome.GROWTH)
+
+    assert growth.drop('outcome').equals(level.drop('outcome'))
+    # From 2023 on, log E(t) is the outcome of the code's level row a year earlier, bit for bit
+    paired = growth.join(
+        level.select('code', 'feature_year', level=pl.col('outcome')), on=['code', 'feature_year']
+    ).join(earlier, on=['code', 'feature_year'])
+    assert paired.height == 2 * len(POPULATION)
+    assert (
+        paired.get_column('outcome') == paired.get_column('level') - paired.get_column('earlier')
+    ).all()
+
+def test_an_outcome_is_level_or_growth(regressor_cells):
+    six = level_cells(regressor_cells, CODEBOOK, 6)
+
+    by_name = panel_rows(six, POPULATION, 'growth')
+
+    assert [outcome.value for outcome in RegressorOutcome] == ['level', 'growth']
+    assert by_name.equals(panel_rows(six, POPULATION, RegressorOutcome.GROWTH))
+    with pytest.raises(ValueError, match='not a valid RegressorOutcome'):
+        panel_rows(six, POPULATION, 'rate')

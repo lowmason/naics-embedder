@@ -1,5 +1,5 @@
 '''
-QCEW national rows for the regressor panel (roadmap Stage 3; Req 2; D1; D7).
+QCEW national rows for the regressor panel (roadmap Stage 3; Req 2; Req 21; D1; D7).
 
 Stage 1's finding (``specs/findings/employment-statistics-coverage.md``) fixes the source: QCEW
 annual averages for 2022–2025, national grain, private ownership (``own_code`` 5). The panel
@@ -16,6 +16,9 @@ the finding records; they agree with the annual single files on every national r
 - **Rows (D7).** One row per population code and feature year t in 2022–2024: the covariates are
   log establishments and log total annual wages from year t (D1), and the outcome is log
   annual-average employment in year t + 1.
+- **Growth (Req 21).** In growth mode the outcome is log E(t + 1) − log E(t) instead, from the
+  same cells, and nothing else changes. Every population code has a usable cell in every window
+  year, so the difference is always defined.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -23,6 +26,7 @@ the finding records; they agree with the annual single files on every national r
 # -------------------------------------------------------------------------------------------------
 
 from collections import Counter
+from enum import Enum
 from pathlib import Path
 from typing import Collection, Mapping, Sequence, Tuple
 
@@ -53,6 +57,15 @@ SLICE_COLUMNS = (
 )
 CELL_COLUMNS = ('code', 'year', 'disclosure_code', 'estabs', 'emp', 'wages', 'source')
 ROW_COLUMNS = ('code', 'feature_year', 'outcome_year', 'log_estabs', 'log_wages', 'outcome')
+
+class RegressorOutcome(str, Enum):
+    '''
+    A panel row's outcome (Req 21): ``level`` is log employment in t + 1 (D7), today's panel and
+    the default; ``growth`` is its log change from t, the economic artifact's first panel (Req 20).
+    '''
+
+    LEVEL = 'level'
+    GROWTH = 'growth'
 
 # -------------------------------------------------------------------------------------------------
 # Files
@@ -199,14 +212,28 @@ def population(cells: pl.DataFrame) -> Tuple[str, ...]:
     codes = complete.filter(pl.col('years') == len(WINDOW_YEARS)).get_column('code')
     return tuple(sorted(codes.to_list()))
 
-def panel_rows(cells: pl.DataFrame, codes: Collection[str]) -> pl.DataFrame:
+def panel_rows(
+    cells: pl.DataFrame,
+    codes: Collection[str],
+    outcome: RegressorOutcome = RegressorOutcome.LEVEL,
+) -> pl.DataFrame:
     '''
-    One row per code and feature year (D7): year-t covariates and the year-(t + 1) outcome.
+    One row per code and feature year (D7): year-t covariates and the outcome ``outcome`` names.
+
+    The level outcome is log employment in t + 1. The growth outcome subtracts log employment in
+    t, read from the same cells by the same expression, so a growth row differs from its level row
+    in ``outcome`` alone (Req 21).
+
+    Args:
+        cells: One level's cells (``level_cells``).
+        codes: The codes to build rows for (``population``).
+        outcome: ``level`` (the default) or ``growth``.
 
     Raises:
-        ValueError: If a code lacks a usable cell in a window year.
+        ValueError: If ``outcome`` is neither, or a code lacks a usable cell in a window year.
     '''
 
+    outcome = RegressorOutcome(outcome)
     usable = cells.filter(usable_cell() & pl.col('code').is_in(list(codes)))
     features = usable.filter(pl.col('year').is_in(FEATURE_YEARS)).select(
         'code',
@@ -222,4 +249,12 @@ def panel_rows(cells: pl.DataFrame, codes: Collection[str]) -> pl.DataFrame:
     expected = len(set(codes)) * len(FEATURE_YEARS)
     if rows.height != expected:
         raise ValueError(f'{rows.height:,} panel rows for {expected:,} code-years')
+    if outcome is RegressorOutcome.GROWTH:
+        # log E(t), from the feature year's own cell
+        current = outcomes.select(
+            'code', feature_year=pl.col('outcome_year'), current=pl.col('outcome')
+        )
+        rows = rows.join(current, on=['code', 'feature_year'], how='inner').with_columns(
+            outcome=pl.col('outcome') - pl.col('current')
+        )
     return rows.select(ROW_COLUMNS).sort('code', 'feature_year')
