@@ -592,3 +592,6 @@
       from origin/main carries the `4a1a3f2` fix with its regression test
       (`test_a_final_pull_verifies_the_cumulative_baseline_a_constant_number_of_times`). Revisit
       if: a campaign runs more than about 15 runs on one instance.
+      → partly done: the public fix and its regression test merged as
+      lowmason/naics-embedder#135 (2026-10-11), so the public base now has the fix. Profiling
+      the residual growth stays open and undiagnosed.
