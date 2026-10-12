@@ -318,3 +318,8 @@ campaign launch through last decision, train ten reference seeds and fix δ = 3 
 selection. Training/within-run monitoring run on Lambda; exports, QCEW/regressor reads, stores,
 margins and decisions run on the Mac. Remote selection logs stay separate; sealed splits stay
 closed. Plan 10 and Stage 7 remain open until Phase 2's final gates.
+
+The `uv.lock` freeze held through Stage 8's decision and was released when the representation
+split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on
+bit-identical regressor rows, so the growth margin read and every economic candidate read share
+one platform and one `uv.lock`.

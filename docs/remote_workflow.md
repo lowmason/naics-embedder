@@ -198,3 +198,8 @@ through the last decision using these margins. Train ten reference seeds and fix
 δ = 3 SD on the Mac before configuration selection. Plan 10 retirement and Stage 7 completion
 wait for Phase 2's final gates. See [text training](text_training.md#reference-campaign) and
 [remote API](api/remote.md).
+
+The `uv.lock` freeze held through Stage 8's decision and was released when the representation
+split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on
+bit-identical regressor rows, so the growth margin read and every economic candidate read share
+one platform and one `uv.lock`.

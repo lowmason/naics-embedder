@@ -2,10 +2,19 @@
 
 ## Project Overview
 
-NAICS Embedder learns a shared hyperbolic space for classification codes and activity queries.
-One LoRA-adapted text backbone, masked fusion and one projection feed a live radius/direction
-head. The text objective jointly learns task retrieval, code geometry and radial structure.
-An optional HGCN stage refines the parent–child graph with its own objective and curriculum.
+NAICS Embedder serves three artifacts over the bundle's 2,125 NAICS 2022 codes, each judged only
+on evidence for its own use (user adjudication Q3, `specs/naics-representation-split.md`): the
+hierarchy, which is the codebook's tree itself; text→code retrieval, judged on the outcome panel;
+and low-dimensional economic coordinates for downstream models, judged on economic panels, the
+first being national employment growth. The trained text model places classification codes and
+activity queries in one space. One LoRA-adapted text backbone, masked fusion and one projection
+feed a live radius/direction head. The text objective jointly learns task retrieval, code
+geometry and radial structure. An optional HGCN stage refines the parent–child graph with its
+own objective and curriculum.
+
+In `specs/naics-embedding-roadmap.md`, Stage 9 is held, the graph stage (Stages 10–11) is parked
+and Stage 12 is one sealed opening per judged artifact. The economic artifact's stages are in
+`specs/naics-representation-split-roadmap.md`.
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
@@ -244,6 +253,11 @@ freeze uv.lock from first campaign launch through last decision, use ten seeds a
 before selection, and never repeat the four Phase 1 exit reads in the seven-record Mac log.
 Exports, QCEW, stores and decisions stay on the Mac; remote selection logs stay separate and
 sealed test/outer splits stay closed. Plan 10 retirement and Stage 7 completion wait for Phase 2.
+
+The `uv.lock` freeze held from Plan 10's first campaign launch through Stage 8's decision and was
+released when `specs/naics-representation-split.md` merged (Req 19). `decide` pairs reads only on
+bit-identical regressor rows, so the growth margin read and every economic candidate read share
+one platform and one `uv.lock`.
 
 ## Development Setup
 
