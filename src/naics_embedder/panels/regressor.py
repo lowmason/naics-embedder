@@ -21,9 +21,11 @@ statistic it settles on and resample by four-digit group.
 - **Fitting.** Ridge on standardized features, the penalty tuned by nested cross-validation
   inside the remainder only (``FitTask``). Fold assignments depend on the regime, level, repeat
   and group ids alone, never on the arm, so every arm is scored on the same folds (Req 5).
-- **Sealing.** Each regime's outer set is read only after a logged opening by the same panel
-  object; a second opening of the same split (the same held-out draw, by fingerprint) needs a
-  stated reason. Every read goes to the selection log, whose ``n_queries`` field counts rows here.
+- **Sealing (Req 22).** Each regime's outer set is read only after a logged opening by the same
+  panel object. An opening is recorded against the split, not the outcome: one under either
+  outcome's read name counts for both, so a second opening of the same split (the same regime and
+  held-out draw, by fingerprint) needs a stated reason. Every read goes to the selection log,
+  whose ``n_queries`` field counts rows here.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -174,6 +176,16 @@ def comparators(regime: Regime, level: int) -> Tuple[str, ...]:
             continue
         names.extend([representation, f'{COVARIATES}+{representation}'])
     return tuple(names)
+
+def seal_names(regime: Regime) -> Tuple[str, ...]:
+    '''
+    Every read name an opening of the regime's outer set is logged under, one per outcome.
+
+    The outer sets are rows, and 2025 employment underlies both outcomes' outer rows, so one
+    opening of a regime's split counts for both (Req 22).
+    '''
+
+    return tuple(READ_NAMES[outcome][Regime(regime)] for outcome in RegressorOutcome)
 
 def group_folds(groups: Sequence[str], n_folds: int, seed: Sequence[int]) -> np.ndarray:
     '''
@@ -690,17 +702,17 @@ class RegressorPanel:
         used up for nothing.
 
         Raises:
-            SplitAlreadyOpenedError: If the log already records an opening of this split and no
-                ``reopen_reason`` is given.
+            SplitAlreadyOpenedError: If the log already records an opening of this split, under
+                either outcome's read name (``seal_names``), and no ``reopen_reason`` is given.
         '''
 
-        panel = self.read_names[Regime(regime)]
-        prior = self.log.openings(panel, self.fingerprint)
+        regime = Regime(regime)
+        prior = self.log.openings(seal_names(regime), self.fingerprint)
         if prior and not (reopen_reason or '').strip():
             first = prior[0]
             raise SplitAlreadyOpenedError(
-                f'the {panel} outer set was opened at {first["time"]} for {first["purpose"]!r}; '
-                'opening it again needs reopen_reason'
+                f'the {self.read_names[regime]} outer set was opened at {first["time"]} as '
+                f'{first["panel"]} for {first["purpose"]!r}; opening it again needs reopen_reason'
             )
 
     def open_outer(
@@ -710,14 +722,15 @@ class RegressorPanel:
         Open one regime's sealed outer set for this panel object, logging the opening.
 
         Raises:
-            SplitAlreadyOpenedError: If the log already records an opening of this split and no
-                ``reopen_reason`` is given (``require_openable``).
+            SplitAlreadyOpenedError: If the log already records an opening of this split, under
+                either outcome's read name, and no ``reopen_reason`` is given
+                (``require_openable``).
         '''
 
         regime = Regime(regime)
         self.require_openable(regime, reopen_reason)
         panel = self.read_names[regime]
-        prior = self.log.openings(panel, self.fingerprint)
+        prior = self.log.openings(seal_names(regime), self.fingerprint)
         reason = (reopen_reason or '').strip()
         outer = {
             level: frame.filter(pl.col('split') == OUTER_SPLITS[regime].value).height

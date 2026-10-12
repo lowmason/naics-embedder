@@ -447,12 +447,49 @@ def test_every_panel_object_opens_for_itself_and_a_reopening_needs_a_reason(
     assert records[0]['detail']['rows_by_level'] == {'2': 1, '3': 5, '4': 14, '5': 14, '6': 26}
     assert records[2]['n_queries'] == 18
 
-def test_openings_are_counted_per_held_out_draw(regressor_rows, log):
+def test_openings_are_counted_per_held_out_draw(regressor_rows, regressor_growth_rows, log):
+    growth = RegressorOutcome.GROWTH
     RegressorPanel(regressor_rows, HELDOUT_GROUPS, log, SETTINGS).open_outer(Regime.SEEN, 'first')
 
     RegressorPanel(regressor_rows, ['1111'], log, SETTINGS).open_outer(Regime.SEEN, 'other draw')
+    third = RegressorPanel(regressor_growth_rows, ['1112'], log, SETTINGS, outcome=growth)
+    third.open_outer(Regime.SEEN, 'a third draw')
 
-    assert [r['event'] for r in log.records()] == ['open', 'open']
+    assert [r['event'] for r in log.records()] == ['open', 'open', 'open']
+
+@pytest.mark.parametrize(
+    ('first', 'second'),
+    [
+        (RegressorOutcome.LEVEL, RegressorOutcome.GROWTH),
+        (RegressorOutcome.GROWTH, RegressorOutcome.LEVEL),
+    ],
+)
+def test_an_opening_under_either_outcome_seals_the_split_for_both(
+    regressor_rows, regressor_growth_rows, log, first, second
+):
+    # Req 22: 2025 employment underlies both outcomes' outer rows, so the split is the key
+    rows = {RegressorOutcome.LEVEL: regressor_rows, RegressorOutcome.GROWTH: regressor_growth_rows}
+    opener = RegressorPanel(rows[first], HELDOUT_GROUPS, log, SETTINGS, outcome=first)
+    other = RegressorPanel(rows[second], HELDOUT_GROUPS, log, SETTINGS, outcome=second)
+    opened = READ_NAMES[first][Regime.SEEN]
+
+    opener.open_outer(Regime.SEEN, 'first opening')
+
+    with pytest.raises(SplitAlreadyOpenedError, match=f'as {opened} for'):
+        other.require_openable(Regime.SEEN)
+    with pytest.raises(SplitAlreadyOpenedError, match='reopen_reason'):
+        other.open_outer(Regime.SEEN, 'second opening')
+    # Each regime's outer set is its own split
+    other.require_openable(Regime.HELDOUT)
+    other.open_outer(Regime.SEEN, 'second opening', reopen_reason='a fixture rerun')
+
+    records = log.records()
+    assert [(r['event'], r['panel']) for r in records] == [
+        ('open', opened),
+        ('reopen', READ_NAMES[second][Regime.SEEN]),
+    ]
+    assert records[1]['detail']['reason'] == 'a fixture rerun'
+    assert {r['fingerprint'] for r in records} == {opener.fingerprint}
 
 def test_the_data_fingerprint_names_the_rows_a_read_at_a_level_scores(panel, regressor_rows, log):
     moved = _shift_outcomes(regressor_rows, pl.col('group') == '1111')

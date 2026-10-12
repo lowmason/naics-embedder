@@ -16,7 +16,7 @@ import logging
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Collection, Dict, List, Mapping, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +81,21 @@ class SelectionLog:
         lines = self.path.read_text(encoding='utf-8').splitlines()
         return [json.loads(line) for line in lines if line.strip()]
 
-    def openings(self, panel: str, fingerprint: str) -> List[Dict[str, Any]]:
-        '''The recorded openings (``open`` and ``reopen``) of one panel's test split.'''
+    def openings(self, panel: Union[str, Collection[str]], fingerprint: str) -> List[Dict[str, Any]]:
+        '''
+        The recorded openings (``open`` and ``reopen``) of one test split, oldest first.
 
+        Args:
+            panel: The name the split is opened under, or every such name: the regressor panel's
+                two outcomes share each regime's outer set (Req 22).
+            fingerprint: The split's fingerprint.
+        '''
+
+        names = {panel} if isinstance(panel, str) else set(panel)
         opening = {SelectionEvent.OPEN.value, SelectionEvent.REOPEN.value}
         return [
             record for record in self.records() if record['event'] in opening
-            and record['panel'] == panel and record['fingerprint'] == fingerprint
+            and record['panel'] in names and record['fingerprint'] == fingerprint
         ]
 
 def merge_read_detail(logged: Mapping[str, Any], extra: Optional[Mapping[str,
