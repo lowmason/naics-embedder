@@ -169,10 +169,10 @@ for the candidates' decision.
       read or opening has happened (plan 13, Handoff; Resolved at resume, 2026-10-12). The main
       checkout's selection log (`logs/selection_log.jsonl`, gitignored and append-only), which
       this stage is the first to read: an opening of either level regime under `deddfd4c…`
-      already seals that regime's growth split, and `SelectionLog.openings(seal_names(regime),
-      fingerprint)` lists any (plan 13, Handoff; Resolved at resume, 2026-10-12); an artifact
-      store outside any worktree, as embedding roadmap Stages 7–8 kept theirs; the user's
-      approval, asked when the stage starts.
+      already seals that regime's growth split, and
+      `SelectionLog.openings(seal_names(regime), fingerprint)` lists any (plan 13, Handoff;
+      Resolved at resume, 2026-10-12); an artifact store outside any worktree, as embedding
+      roadmap Stages 7–8 kept theirs; the user's approval, asked when the stage starts.
       Produces: The economic margin record, stored with its sha256, holding δ for `growth_seen`
       and `growth_heldout` and naming the platform and `uv.lock` sha256 it was read under, which
       every candidate read must share, since `decide` pairs only bit-identical rows; a written
