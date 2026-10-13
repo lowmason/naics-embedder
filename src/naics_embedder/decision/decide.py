@@ -119,6 +119,26 @@ def check_text_only(spec: ArmSpec, text_only: TextOnlyRef) -> None:
             "(D9: the arm's own backbone reading the arm's text)"
         )
 
+def check_recorded_text_only(spec: ArmSpec, text_only: TextOnlyRef, store: ArtifactStore) -> None:
+    '''
+    Require a record's text-only fields to be those of its stored provenance, and that
+    provenance to be the arm's (D9).
+
+    Raises:
+        ValueError: If a recorded field differs from the stored provenance, or as
+            ``check_text_only``.
+    '''
+
+    stored = store.text_only(text_only.table, text_only.provenance)
+    recorded = text_only.model_dump()
+    wrong = sorted(key for key, value in stored.model_dump().items() if value != recorded[key])
+    if wrong:
+        raise ValueError(
+            f"{spec.name}: the record's text-only fields {wrong} differ from its stored "
+            'provenance'
+        )
+    check_text_only(spec, stored)
+
 def check_seed_table(spec: ArmSpec, seed: int, fields: Mapping[str, Any]) -> None:
     '''
     Require a seed's table to have been exported from what the arm reads (D9).
@@ -180,14 +200,7 @@ def check_arm(arm: ArmRecord, store: ArtifactStore, min_seeds: int) -> None:
         raise ValueError(f'{name}: {len(set(seeds))} distinct seeds, fewer than {min_seeds}')
     if len(set(seeds)) != len(seeds) or len({run.run_id for run in arm.runs}) != len(arm.runs):
         raise ValueError(f'{name}: a seed or run id repeats')
-    stored = store.text_only(arm.text_only.table, arm.text_only.provenance)
-    recorded = arm.text_only.model_dump()
-    wrong = sorted(key for key, value in stored.model_dump().items() if value != recorded[key])
-    if wrong:
-        raise ValueError(
-            f"{name}: the record's text-only fields {wrong} differ from its stored provenance"
-        )
-    check_text_only(arm.spec, stored)
+    check_recorded_text_only(arm.spec, arm.text_only, store)
     for run in arm.runs:
         for reference in (run.checkpoint, run.table, run.scores, run.decoding, run.predictions):
             store.resolve(reference)
