@@ -66,8 +66,8 @@ class SeedArtifacts:
             was not trained.
         checkpoint_epoch: The checkpoint's epoch, for a trained seed: the earliest with the
             highest monitor MRR.
-        monitor_records: A trained seed's ``monitor_reads.jsonl`` records, oldest first: the
-            reads that selected its checkpoint.
+        monitor_records: A trained seed's ``monitor_reads.jsonl`` records, in the file's order:
+            the reads that selected its checkpoint.
     '''
 
     checkpoint: Path
