@@ -4,17 +4,18 @@
 > reconcile step; route each unticked stage per its ROUTING line; never plan
 > this document wholesale.
 
-**Status: APPROVED (2026-10-12).** Derived in an interactive session. The user answered the
-derivation's two questions (Decisions, below) and approved the three-stage partition at the human
-checkpoint. Stage 1 is next, via writing-plans.
+**Status: APPROVED (2026-10-12); resumed once on 2026-10-12.** Derived in an interactive session.
+The user answered the derivation's two questions (Decisions, below) and approved the three-stage
+partition at the human checkpoint. Stage 1 is complete, and the resume after it re-validated
+Stages 2 and 3 (below).
 
 **Basis.** Source spec `specs/naics-representation-split.md` at 0a39042, unchanged through
 origin/main 5ef7e7b (PR #137). Evidence was read at origin/main 5ef7e7b, and line citations are
-to that commit. Paths are under `src/naics_embedder/` unless they start with `conf/`, `tests/`,
-`specs/` or `docs/`, or name a top-level file. "The embedding roadmap" is
-`specs/naics-embedding-roadmap.md`: its stages are cited as "embedding roadmap Stage N", and a
-bare "Stage N" is this roadmap's. U1–U16 are the spec's rulings and D1–D11 the embedding
-roadmap's decisions.
+to that commit unless a resume re-pointed them (below). Paths are under `src/naics_embedder/`
+unless they start with `conf/`, `tests/`, `specs/` or `docs/`, or name a top-level file. "The
+embedding roadmap" is `specs/naics-embedding-roadmap.md`: its stages are cited as "embedding
+roadmap Stage N", and a bare "Stage N" is this roadmap's. U1–U16 are the spec's rulings and
+D1–D11 the embedding roadmap's decisions.
 
 **Decisions (2026-10-12).** Two questions the derivation asked, answered by the user.
 
@@ -27,6 +28,19 @@ roadmap's decisions.
   of the `uv.lock` freeze and of the one-shared-space overview, in `CLAUDE.md`, `README.md`,
   `docs/index.md`, `docs/text_training.md`, `docs/remote_workflow.md` and the embedding roadmap.
 
+**Resume after Stage 1 (2026-10-12).** Stage 1's stamp is authoritative: plan 13, merged as PR
+#139 (c2b381b) with its completion in PR #140 (d228132). Stages 2 and 3 were re-validated at
+origin/main d228132, where the spec is still 0a39042's. Under `src/`, Stage 1 edited
+`panels/qcew_rows.py`, `panels/regressor.py`, `panels/selection_log.py`, `decision/sweep.py`,
+`cli/commands/tools.py` and `utils/config.py`; the other `decision` modules cited here,
+`conf/data/decision.yaml` and `specs/deferred_items.md` are unchanged. Plan 13's Handoff (the
+shipped section that closes the plan, not the draft inside its completion step) names what both
+stages consume, and their entries now cite it: Stage 2 lifts or routes around three paths that
+refuse a growth panel, and Stage 3 lists the real log's existing openings. The read path's three
+citations moved; they were re-pointed to d228132 in Stage 2's Consumes and the Req 24 row. Every
+verdict stands, and the rows of Reqs 20–22, which Stage 1 closed, stay as entry-time evidence. No
+panel read, selection-log read or opening ran during this resume.
+
 ## Gap analysis
 
 | Req | Verdict | Evidence | Note |
@@ -37,7 +51,7 @@ roadmap's decisions.
 | 21 | missing | `utils/config.py:532-583` (`RegressorPanelConfig` has no `outcome` setting); `panels/qcew_rows.py:202-225` (rows carry log E(t+1) only); `panels/regressor.py:78` (read names `regressor_seen` and `regressor_heldout` only) | What it keeps exists: the committed rows (finding: regressor-panel-splits §1), the draw `deddfd4c…`, the regimes and folds (`panels/regressor.py:146-160`, `:635-660`) and ridge with a nested penalty (`:484-499`). The population already requires positive employment in all four years (`panels/qcew_rows.py:186-200`). No test pins level mode's values (`tests/unit/test_regressor_panel.py`). |
 | 22 | missing | `panels/regressor.py:662-681` (`require_openable` counts the regime's level read name only), `:531` (`fingerprint`, the draw); `panels/selection_log.py:84-91` (`openings` keys on read name and fingerprint) | An opening under one outcome's name would not count against the other's. The key's fingerprint is unchanged, so existing records keep matching. |
 | 23 | missing | `decision/records.py:136-139` (every seed names a checkpoint); `decision/decide.py:85`, `:172-179`, `utils/config.py:595` (at least 5 seeds, with no lower setting); `decision/records.py:69-90` (`ArmSpec` names a trained arm's text inputs) | It holds for trained arms: `decide` admits validation reads only (`decision/decide.py:196-232`). Missing: a record that shows a deterministic candidate's provenance. Building candidates is the next spec's (Out of scope). |
-| 24 | missing | `decision/rule.py:26-27` (98⅓ %, fixed); `decision/scores.py:30-44` (D8's panels; one-hot and ancestors as the sparse baselines); `decision/records.py:165-195`, `decision/decide.py:387-429` (δ from a reference arm's across-seed SD); `decision/decide.py:344-384` (margins and the margin-first check over D8's panels and arms' reads); `panels/regressor.py:146-160`, `:635-660`, `:763-777` (every read takes an arm and scores `embedding` and `text_only`) | No reference-only read exists. Unchanged: the paired two-stage bootstrap (`decision/resampling.py`; `conf/data/decision.yaml`), the non-dominated set and the tie order (`decision/rule.py:60-105`). Two deferred entries bear on it (`specs/deferred_items.md:529-541`). |
+| 24 | missing | `decision/rule.py:26-27` (98⅓ %, fixed); `decision/scores.py:30-44` (D8's panels; one-hot and ancestors as the sparse baselines); `decision/records.py:165-195`, `decision/decide.py:387-429` (δ from a reference arm's across-seed SD); `decision/decide.py:344-384` (margins and the margin-first check over D8's panels and arms' reads); `panels/regressor.py:163-177`, `:670-695`, `:799-813` at d228132 (every read takes an arm and scores `embedding` and `text_only`) | No reference-only read exists. Unchanged: the paired two-stage bootstrap (`decision/resampling.py`; `conf/data/decision.yaml`), the non-dominated set and the tie order (`decision/rule.py:60-105`). Two deferred entries bear on it (`specs/deferred_items.md:529-541`). |
 
 No in-code-but-not-in-spec row: none found in `panels/regressor.py`, `panels/qcew_rows.py`,
 `panels/selection_log.py` or `decision/*` beyond what Reqs 21–24, and the naics-embedding
@@ -50,8 +64,8 @@ derivation (Decisions). The order follows the spec's own, which is also dependen
 reference-only read and decision read Stage 1's growth reads, and Stage 3 runs Stage 2's read on
 real data. It also agrees with the spec's priority, measurement before models (U3), since the
 margin is on record before any candidate exists. After Stage 3, the economic candidates (Req 23)
-and the text→code artifact each get their own spec (Rollout note); neither is a stage here. The
-next plan number is 13.
+and the text→code artifact each get their own spec (Rollout note); neither is a stage here. Plan
+numbers start at 13.
 
 **Deferred items.** `specs/deferred_items.md` was read, not edited. Stage 2 discharges the
 margin-timing error shape, since `check_margins_first` is the check Req 24 extends. Its plan
@@ -101,10 +115,14 @@ for the candidates' decision.
       "Deterministic arms", "Economic decision record" (on fixtures), "Checks"; Supersessions (D8,
       D10's sparse baselines); Deferred items this touches; D10; D11.
       Gap closed: Req 24 (the tooling); Req 23 (the record); Req 18 (the economic decision).
-      Consumes: Stage 1's growth reads, read names and data fingerprint. The panel's read path,
-      which takes an arm and scores `embedding` and `text_only` in every read
-      (`panels/regressor.py:146-160`, `:635-660`, `:763-777`): the reference-only read is this
-      stage's. The decision package, wired to D8's three panels: `PANELS`
+      Consumes: Stage 1's growth reads, read names, data fingerprint and seal, through the
+      interfaces and traps plan 13's Handoff names (plan 13, Handoff; Resolved at resume,
+      2026-10-12). The panel's read path, which takes an arm and scores `embedding` and
+      `text_only` in every read (`panels/regressor.py:163-177`, `:670-695`, `:799-813` at
+      d228132; plan 13, Handoff): the reference-only read is this stage's.
+      `tools regressor-panel`, `tools sweep` and `run_seed_sweep` refuse a growth panel, so this
+      stage lifts or routes around them (plan 13, Handoff; Resolved at resume, 2026-10-12). The
+      decision package, wired to D8's three panels: `PANELS`
       (`decision/scores.py:30`), the per-run read check and `check_margins`
       (`decision/decide.py:196-232`, `:344-358`), `PanelSet`'s required outcome fields and
       `SeedRun`'s required checkpoint (`decision/records.py:92-148`), a margin reference that must
@@ -139,10 +157,14 @@ for the candidates' decision.
       Consumes: Stage 2's reference-only read and margin record, and Stage 1's growth panel, merged
       to origin/main and synced into local main, where the read runs: the held `chore(local)`
       commit is what points `qcew_dir` at the verified QCEW slices, whose hashes
-      `conf/data/regressor_panel.yaml` pins. The main checkout's selection log
-      (`logs/selection_log.jsonl`, gitignored and append-only); an artifact store outside any
-      worktree, as embedding roadmap Stages 7–8 kept theirs; the user's approval, asked when the
-      stage starts.
+      `conf/data/regressor_panel.yaml` pins. That file keeps `outcome: level`, and no real growth
+      read or opening has happened (plan 13, Handoff; Resolved at resume, 2026-10-12). The main
+      checkout's selection log (`logs/selection_log.jsonl`, gitignored and append-only), which
+      this stage is the first to read: an opening of either level regime under `deddfd4c…`
+      already seals that regime's growth split, and `SelectionLog.openings(seal_names(regime),
+      fingerprint)` lists any (plan 13, Handoff; Resolved at resume, 2026-10-12); an artifact
+      store outside any worktree, as embedding roadmap Stages 7–8 kept theirs; the user's
+      approval, asked when the stage starts.
       Produces: The economic margin record, stored with its sha256, holding δ for `growth_seen`
       and `growth_heldout` and naming the platform and `uv.lock` sha256 it was read under, which
       every candidate read must share, since `decide` pairs only bit-identical rows; a written
@@ -150,7 +172,9 @@ for the candidates' decision.
       both.
       Exit: The margin record exists with r = 0.05 and one δ per growth panel; the selection log
       gained only growth validation reads that computed neither `embedding` nor `text_only`, and
-      no outer set was opened; the finding cites the record's sha256, the platform and the lock.
+      no outer set was opened; the finding cites the record's sha256, the platform and the lock,
+      and lists the existing openings that check found, or says it found none (plan 13, Handoff;
+      Resolved at resume, 2026-10-12).
       ROUTING: writing-plans
 
 ## Stage-spec stamp
