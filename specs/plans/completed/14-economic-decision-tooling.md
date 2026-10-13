@@ -1,5 +1,7 @@
 # Economic Decision Tooling Implementation Plan
 
+**Status: COMPLETE (2026-10-13)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -730,7 +732,9 @@ symlink to `CLAUDE.md` and needs no edit of its own.
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
+
+> Deviation: #143 was still open when execution began; the user merged it first (2026-10-13), and the branch was cut from origin/main 765f43e.
 
 Run: `git fetch origin`, then:
 
@@ -763,7 +767,7 @@ Run: `git fetch origin pull/142/head`, then
 Expected: `commit`. The dry run's commits are now local, for each task's Step 6. If the fetch
 fails, record that in the ledger and skip each Step 6 comparison.
 
-- [ ] **Step 2: Build the environment**
+- [x] **Step 2: Build the environment**
 
 Run: `uv sync --locked`, then `uv run python --version`
 Expected: `Python 3.12.` followed by a patch number (3.12.12 at plan time).
@@ -783,7 +787,7 @@ Run: `uname -sm`
 Expected: `Darwin arm64`. The plan's counts were measured there; two level-mode pins run only
 there. Elsewhere, stop and ask.
 
-- [ ] **Step 3: Run the baseline suite**
+- [x] **Step 3: Run the baseline suite**
 
 Run: `uv run pytest -n auto -q`
 Expected: `3121 passed, 2 skipped`, measured at 0fdfc26 on 2026-10-12 in a worktree without
@@ -813,7 +817,9 @@ remote-transport step, then the full suite with coverage.
 - On PR #142, the dry run's last commit read `3174 passed, 13 skipped` under both Pythons (O5).
   This stage's PR should read the same: every new test runs on Linux.
 
-- [ ] **Step 4: Route the tasks**
+- [x] **Step 4: Route the tasks**
+
+> Deviation: implementers ran on Sonnet; task-reviewers ran on Sonnet for Tasks 1-3 and 9 and on Opus for Tasks 4-8.
 
 Under executing-plans, run every task inline, in order.
 
@@ -864,7 +870,7 @@ The tests cover:
   - `compare_panel(panel, delta, replicates, margin, *, superiority: float) -> PanelComparison`.
   - `SUPERIORITY_LEVEL` is removed.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_decision_rule.py`, make six edits, in this order.
 
@@ -1005,13 +1011,13 @@ with:
     assert record.settings.superiority_level == 1.0 - 0.05 / 3
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision_rule.py tests/unit/test_decision.py -q`
 Expected: FAIL, `1 error`. Collecting `tests/unit/test_decision_rule.py` raises
 `ImportError: cannot import name 'superiority_level' from 'naics_embedder.decision.rule'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/decision/rule.py`, make five edits, in this order.
 
@@ -1170,12 +1176,12 @@ with:
                     superiority=settings.superiority_level,
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_rule.py tests/unit/test_decision.py -q`
 Expected: PASS, `83 passed`.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -1193,7 +1199,7 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3122 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit, and compare with the dry run**
+- [x] **Step 6: Commit, and compare with the dry run**
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -1234,7 +1240,7 @@ The tests cover:
   - `check_margins_first(arms: Sequence[Any], fixed_at: datetime, *,
     exempt: Collection[str] = ()) -> None`. Task 7 passes it economic arm records.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_decision.py`, make three edits, in this order.
 
@@ -1361,7 +1367,7 @@ def test_a_utc_time_written_with_z_reads_on_every_supported_python():
 def test_a_decision_record_carries_every_trained_runs_monitor_reads(store, tmp_path):
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision.py -q`
 Expected: FAIL, `1 error`. Collecting the file raises
@@ -1374,7 +1380,7 @@ UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics_plan14_py310 uv run --locked py
 ```
 Expected: the same `1 error`. This first run builds the 3.10 environment.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/decision/decide.py`, make four edits, in this order.
 
@@ -1507,7 +1513,7 @@ with:
     check_margins_first(arms, margins.fixed_at, exempt=reference)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision.py -q`
 Expected: PASS, `86 passed`.
@@ -1519,7 +1525,7 @@ UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics_plan14_py310 uv run --locked py
 ```
 Expected: PASS, `86 passed`. Under 3.10, the `Z` test passes only through `read_time`'s rewrite.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -1537,7 +1543,7 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3133 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit, and compare with the dry run**
+- [x] **Step 6: Commit, and compare with the dry run**
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -1580,7 +1586,7 @@ The tests cover:
   - `SeedRun.training_run: Optional[str]`, with `min_length=1` and `pattern=r'\S'`;
   - `SeedRun.checkpoint_epoch: Optional[StrictInt]`, with `ge=0`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_decision.py`, make one edit.
 
@@ -1629,13 +1635,13 @@ def test_a_monitor_read_names_its_runs_seed_as_an_integer(store, trained, seed, 
 def test_a_monitor_read_before_the_margins_were_fixed_is_refused(
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision.py -q`
 Expected: FAIL, `4 failed, 86 passed`. Each new case fails with `DID NOT RAISE`: the two
 `ValidationError` cases and the two `ValueError` cases.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/decision/records.py`, make three edits, in this order.
 
@@ -1746,12 +1752,12 @@ with:
             the reads that selected its checkpoint.
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision.py -q`
 Expected: PASS, `90 passed`.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -1769,7 +1775,9 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3137 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit, and compare with the dry run**
+- [x] **Step 6: Commit, and compare with the dry run**
+
+> Deviation: the implementer's git add was refused by the auto-mode classifier, so the controller committed its verified tree as b3ddfbe.
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -1822,7 +1830,7 @@ The tests cover:
     It returns `PREDICTION_COLUMNS` and logs one validation read, whose detail is
     `{'level': level, 'comparators': [...]}` plus `detail`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_regressor_panel.py`, make three edits, in this order.
 
@@ -1912,13 +1920,13 @@ def test_a_comparator_that_reads_an_arms_table_needs_an_arm(regressor_rows):
 
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_regressor_panel.py -q`
 Expected: FAIL, `1 error`. Collecting the file raises
 `ImportError: cannot import name 'reference_comparators' from 'naics_embedder.panels.regressor'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/panels/regressor.py`, make eleven edits, in this order.
 
@@ -2122,12 +2130,12 @@ with:
         for comparator in names:
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_regressor_panel.py -q`
 Expected: PASS, `100 passed`. Plan 13's level-mode pins pass unchanged.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -2145,7 +2153,7 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3143 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit, and compare with the dry run**
+- [x] **Step 6: Commit, and compare with the dry run**
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -2210,7 +2218,7 @@ The tests cover:
     - `fix_relative_margins(panel, r, name, store, *, purpose, lock) -> RelativeMarginRecord`.
       Its run id is `margins/<32 hex digits>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_decision_economic.py`:
 
@@ -2384,13 +2392,15 @@ def test_the_growth_panels_are_scored_only_where_the_caller_names_them():
 @pytest.mark.parametrize(
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision_economic.py tests/unit/test_decision_scores.py -q`
 Expected: FAIL, `1 error`. Collecting `tests/unit/test_decision_economic.py` raises
 `ModuleNotFoundError: No module named 'naics_embedder.decision.economic'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
+
+> Deviation: fix_relative_margins refuses r unless math.isfinite(r) and r > 0, by the owner's ruling (11641b0).
 
 In `src/naics_embedder/decision/records.py`, make two edits, in this order.
 
@@ -2757,12 +2767,12 @@ def fix_relative_margins(
     )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_economic.py tests/unit/test_decision_scores.py -q`
 Expected: PASS, `17 passed`.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -2780,7 +2790,7 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3151 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit, and compare with the dry run**
+- [x] **Step 6: Commit, and compare with the dry run**
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -2863,7 +2873,7 @@ The tests cover:
     `candidate_spec(name, **overrides) -> ArmSpec` (one component, Euclidean, dimension 3) and
     `write_candidate(directory, name, table, **entries) -> Path`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/fixtures/economic.py`:
 
@@ -3236,7 +3246,7 @@ def test_reference_predictions_that_differ_from_the_margin_reads_do_not_pair(arm
 
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -3246,7 +3256,7 @@ uv run pytest tests/unit/test_decision_economic.py tests/unit/test_decision.py t
 Expected: FAIL, `1 error`. Collecting `tests/unit/test_decision_economic.py` raises
 `ImportError: cannot import name 'check_economic_arm' from 'naics_embedder.decision.economic'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/decision/records.py`, make two edits, in this order.
 
@@ -3827,7 +3837,7 @@ def check_reference_pairing(
 
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 
@@ -3836,7 +3846,7 @@ uv run pytest tests/unit/test_decision_economic.py tests/unit/test_decision.py t
 ```
 Expected: PASS, `131 passed`.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -3854,7 +3864,9 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3165 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit, and compare with the dry run**
+- [x] **Step 6: Commit, and compare with the dry run**
+
+> Deviation: the implementer's git add was refused by the auto-mode classifier, so the controller committed its verified tree as ebba560.
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -3933,7 +3945,7 @@ The tests cover:
     run whose seed is None is named by its arm alone, and a run without `monitor_records` has
     none.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_decision_economic.py`, make five edits, in this order.
 
@@ -4343,13 +4355,13 @@ def test_a_decision_reads_distinct_candidates_none_named_for_the_reference(
 
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision_economic.py tests/unit/test_decision.py -q`
 Expected: FAIL, `1 error`. Collecting `tests/unit/test_decision_economic.py` raises
 `ImportError: cannot import name 'decide_economic' from 'naics_embedder.decision.economic'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 In `src/naics_embedder/decision/records.py`, make two edits, in this order.
 
@@ -4892,12 +4904,12 @@ def _economic_report(arm: str, frames: Sequence[pl.DataFrame]) -> EconomicReport
 
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_decision_economic.py tests/unit/test_decision.py -q`
 Expected: PASS, `126 passed`.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -4915,7 +4927,7 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3180 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit, and compare with the dry run**
+- [x] **Step 6: Commit, and compare with the dry run**
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -4979,7 +4991,7 @@ The tests cover:
   - `DecisionConfig.relative_margin: float`, default 0.05, greater than 0, and
     `relative_margin: 0.05` in `conf/data/decision.yaml`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_cli_commands.py`, make four edits, in this order.
 
@@ -5183,7 +5195,7 @@ with:
             DecisionConfig(relative_margin=r)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py tests/unit/test_config.py -q`
 Expected: FAIL, `7 failed, 267 passed`:
@@ -5201,7 +5213,9 @@ Expected: FAIL, `7 failed, 267 passed`:
   - `test_the_relative_margin_is_positive[0.0]` and `[-0.05]`: "Regex pattern did not match".
     The `ValidationError` names the key as an extra input, not as below the bound.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
+
+> Deviation: relative_margin adds allow_inf_nan=False, by the owner's ruling (fix commit 11641b0, with Task 5's guard).
 
 In `src/naics_embedder/utils/config.py`, make two edits, in this order.
 
@@ -5584,7 +5598,7 @@ with:
     console.print(f'[bold]Chosen: {chosen}[/bold]')
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py tests/unit/test_config.py -q`
 Expected: PASS, `274 passed`.
@@ -5593,7 +5607,7 @@ Run: `COLUMNS=80 uv run pytest tests/unit/test_cli_commands.py -q`
 Expected: PASS, `53 passed`. Rich wraps at 80 columns on CI, and the CLI tests match on
 whitespace-collapsed output.
 
-- [ ] **Step 5: Format, lint, build the docs and run the full suite**
+- [x] **Step 5: Format, lint, build the docs and run the full suite**
 
 Run:
 
@@ -5611,7 +5625,9 @@ Expected: the build succeeds with no warning.
 Run: `uv run pytest -n auto -q`
 Expected: `3185 passed, 2 skipped`.
 
-- [ ] **Step 6: Commit, and compare with the dry run**
+- [x] **Step 6: Commit, and compare with the dry run**
+
+> Deviation: review round 1 added fix commit 11641b0 on top of 4baae4a; the suite then read 3189 passed, 2 skipped.
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -5655,7 +5671,7 @@ describe the growth margins and the economic decision, and state the new counts 
 - Produces: documentation only. `docs/usage.md` gains the anchor `#tools-growth-margins`, and
   `docs/api/decision.md` renders `naics_embedder.decision.economic`.
 
-- [ ] **Step 1: Write the documentation**
+- [x] **Step 1: Write the documentation**
 
 In `docs/usage.md`, make three edits, in this order.
 
@@ -6070,7 +6086,9 @@ with:
 | Economic decision | `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates' records and bit-identical pairing, eligibility, the tie order, margin-first refusals and the decision record (Req 24) |
 ```
 
-- [ ] **Step 2: Check the stated counts and build the docs**
+- [x] **Step 2: Check the stated counts and build the docs**
+
+> Deviation: the collected total read 3,191, not 3,187, after 11641b0; the docs now state 3,194 after 0081110 and 08892d1.
 
 Run: `uv run pytest --collect-only -q -q | tail -1`
 Expected: `3187 tests collected`, followed by a time, matching the count the three files now
@@ -6090,7 +6108,7 @@ does the economic API.
 
 Run: `rm -rf /tmp/naics_plan14_site`
 
-- [ ] **Step 3: Commit, and compare with the dry run**
+- [x] **Step 3: Commit, and compare with the dry run**
 
 Commit, with the session's attribution trailer as the message's last `-m` paragraph:
 
@@ -6110,7 +6128,9 @@ Expected: no output. The task's files are those of its dry-run commit (**Workspa
 
 Run every check before the final review, and paste each output into the ledger.
 
-- [ ] **Step 1: The suite under both CI versions**
+- [x] **Step 1: The suite under both CI versions**
+
+> Deviation: 3189 passed, 2 skipped after 11641b0 and 3192 after the final-review fixes, under both Pythons; the 3.10 environment was built twice.
 
 Run: `uv run pytest -n auto -q`
 Expected: `3185 passed, 2 skipped`.
@@ -6127,7 +6147,7 @@ Expected:
 
 Run: `rm -rf /tmp/naics_plan14_py310`
 
-- [ ] **Step 2: Lint, format and docs**
+- [x] **Step 2: Lint, format and docs**
 
 Run: `uv run ruff check src/ tests/`
 Expected: `All checks passed!`
@@ -6138,7 +6158,9 @@ Expected: exit 0, with no file listed.
 Run: `uv run mkdocs build --strict -d /tmp/naics_plan14_site`, then `rm -rf /tmp/naics_plan14_site`
 Expected: the build succeeds with no warning.
 
-- [ ] **Step 3: The branch**
+- [x] **Step 3: The branch**
+
+> Deviation: twelve commits (nine tasks, 11641b0, 0081110, 08892d1), 29 files, 2658 insertions, 142 deletions; twelve files differ from the dry run, all in the ledger.
 
 Run: `git log --oneline origin/main..HEAD`
 Expected: the nine task commits, newest first, and no private commit:
@@ -6174,7 +6196,7 @@ Run: `git diff origin/main...HEAD -- conf/data/regressor_panel.yaml`
 Expected: one comment line replaced by two, and no other change. `outcome: level` and every pin
 are unchanged.
 
-- [ ] **Step 4: The spec's Verification items**
+- [x] **Step 4: The spec's Verification items**
 
 Record in the ledger which test carries each of this stage's items:
 - **Margin first, reference only:**
@@ -6203,7 +6225,9 @@ Record in the ledger which test carries each of this stage's items:
   `test_a_monitor_read_without_an_aware_time_is_refused_by_name`.
 - **Checks:** Steps 1 and 2.
 
-- [ ] **Step 5: The final review**
+- [x] **Step 5: The final review**
+
+> Deviation: both seats found no Critical or Important; fixes 0081110 and 08892d1 landed after 'Codex reviewed ffa16af', and a scoped re-review covered them.
 
 Dispatch the code-reviewer agent, which is pinned to Opus, on the whole branch, with:
 - `git diff origin/main...HEAD`;
@@ -6235,7 +6259,7 @@ Run this after **Final verification**, once the review findings are resolved, an
 **Integration**. It is writing-plans' Plan Completion Protocol, with this plan's edits written
 out. Its commits land on `claude/stage-2-economic-decision`, so the PR carries them.
 
-- [ ] **Step 1: Check for parallel sessions**
+- [x] **Step 1: Check for parallel sessions**
 
 `specs/naics-representation-split-roadmap.md` and `specs/deferred_items.md` are shared by every
 session.
@@ -6245,7 +6269,9 @@ Run: `git worktree list`
 - If another worktree belongs to a running session, or the user has mentioned one, hold the
   shared edits (Steps 4 and 6) and give the user the exact text of each.
 
-- [ ] **Step 2: The resolve-before-defer gate**
+- [x] **Step 2: The resolve-before-defer gate**
+
+> Deviation: the owner ruled four batched questions on 2026-10-13: fix the wording and two hardening one-liners now, defer the rest, and push and open the PR.
 
 Collect the leftovers: plan steps skipped or descoped, and review findings not fixed. Partition
 them:
@@ -6256,7 +6282,7 @@ them:
 The partition is final only once every question is answered. The trained-candidate item (O6) is
 already decided: it is deferred, and Step 4 appends it.
 
-- [ ] **Step 3: Mark up this plan**
+- [x] **Step 3: Mark up this plan**
 
 - Tick every completed step (`- [x]`).
 - Under each step that deviated, add a one-line `> Deviation: …` note.
@@ -6265,7 +6291,9 @@ already decided: it is deferred, and Step 4 appends it.
   deferred items in specs/deferred_items.md`. O6 defers one item, so the line never reads
   "nothing deferred".
 
-- [ ] **Step 4: The deferred items**
+- [x] **Step 4: The deferred items**
+
+> Deviation: the section also defers the stored-scores check, the predictions-to-table binding and a test-gap item (review Minors), beside the trained candidates.
 
 In `specs/deferred_items.md`, tick the two items this plan implemented, in their `## 10-…`
 section. Change each `- [ ]` to `- [x]`, and add a last line, indented like the item's other
@@ -6293,7 +6321,9 @@ after its item:
       inside the groups under the 5-seed floor, and a command reads a candidate, with tests.
 ```
 
-- [ ] **Step 5: The handoff to later stages**
+- [x] **Step 5: The handoff to later stages**
+
+> Deviation: the Handoff adds the selection-log check before Stage 3, the BLAS suspect and D8's printed level, and says the owner's fixes changed the plan's code.
 
 Add this section at the end of this plan, after **Integration**. It was drafted at plan time.
 Check each bullet against what shipped: the deviation notes, the ledger and the final code.
@@ -6348,7 +6378,7 @@ under `## 14-economic-decision-tooling` in `specs/deferred_items.md`.
     touched in Stage 2.
 ```
 
-- [ ] **Step 6: The roadmap stamp**
+- [x] **Step 6: The roadmap stamp**
 
 In `specs/naics-representation-split-roadmap.md`, Stage 2's entry:
 - tick it: `- [ ] Stage 2: Economic decision tooling` becomes
@@ -6366,7 +6396,7 @@ In `specs/naics-representation-split-roadmap.md`, Stage 2's entry:
 The stamp asks completion to re-validate later stages. That re-validation is the Handoff section
 (Step 5); amending Stage 3's entry is the next roadmap resume's job.
 
-- [ ] **Step 7: Backlog triage**
+- [x] **Step 7: Backlog triage**
 
 Run:
 
@@ -6377,7 +6407,7 @@ Report its summary line: the open count, the closure rate and the aged tail. Wit
 items or any aged tail, run steps 1–4 of the skill's Triage rubric and present the proposal. It
 is read-only; `/deferred` acts on a selection.
 
-- [ ] **Step 8: Retire the plan**
+- [x] **Step 8: Retire the plan**
 
 Run:
 
@@ -6394,6 +6424,8 @@ git commit -m "chore(specs): retire plan 14"
 ```
 
 ## Integration (controller, inline)
+
+> Integration runs after this retirement commit; its outcome is recorded in the PR and the ledger.
 
 This is finishing-a-development-branch, with this plan's PR written out.
 
@@ -6447,3 +6479,72 @@ Run: `mkdir /Users/lowell/Projects/naics-embedder/logs/plan14_worktree`, then
 
 Then finish the branch: detach onto `origin/main`, delete the local branch, and remove the
 worktree, or archive the app session that owns it.
+
+## Handoff to later stages
+
+Nothing was deferred into Stage 3. The trained-candidate item (O6) and the review Minors go to the
+candidates' spec, under `## 14-economic-decision-tooling` in `specs/deferred_items.md`.
+
+- **Stage 3 (the growth margin read)** consumes, as built:
+  - **The command.** `uv run naics-embedder tools growth-margins --codebook
+    <bundle>/naics_codebook.parquet --name <name> --store <store> --output <record.json>`, with
+    `--purpose`, `--log` and `--lock` optional (`cli/commands/tools.py`). It loads
+    `conf/data/regressor_panel.yaml` at level 6 with `outcome` set to growth in memory. The
+    committed config keeps `outcome: level`. r is `relative_margin` in `conf/data/decision.yaml`,
+    0.05; a non-positive or non-finite r is refused before anything is read.
+  - **Relative paths.** `--lock` defaults to `uv.lock`, and the regressor config's
+    `selection_log` to `./logs/selection_log.jsonl`. Both resolve against the working
+    directory, as `conf/` does.
+    - Run from the main checkout's root, or pass `--lock` and `--log` as absolute paths.
+    - Run from a worktree, the margin reads would be appended to that worktree's ignored log,
+      which goes with the worktree, not to the real append-only log.
+    - A missing lock is refused before any panel read.
+  - **The record.** A `RelativeMarginRecord` (`decision/records.py`, kind `relative_margins`):
+    `name`, `r`, `reference` (`covariates+ancestors`), `read`, `margins` (one `RelativeMargin`
+    per growth panel: `panel`, `statistic`, `reference_mse`, `margin`) and `fixed_at`.
+    - `read` is a `ReferenceRead`: `run_id` (`margins/<hex>`), `panels` (the draw, level 6's
+      data fingerprint and the fit settings), `predictions`, `scores`, `log_records` (one per
+      growth panel) and `environment` (platform, Python and the lock's sha256).
+    - **Differs from Stage 3's Produces.** The command writes the record to `--output`, and the
+      read's predictions and scores to the store. It neither stores the record itself nor prints
+      its sha256, so Stage 3 records that (`shasum -a 256`).
+  - **The selection log.** The read appends two validation reads, `growth_seen` and
+    `growth_heldout`. Each has the detail `{'level': 6, 'comparators': [...], 'run':
+    'margins/<hex>'}`, and the default purpose "economic margin read". They go to the log named
+    by `--log`, or by the regressor config. The read opens no outer set.
+    - The seen regime logs `covariates`, `one_hot`, `covariates+one_hot`, `ancestors` and
+      `covariates+ancestors`. The held-out regime has no one-hot comparator at level 6, so it
+      logs `covariates`, `ancestors` and `covariates+ancestors`.
+  - **Traps.**
+    - Nothing refuses a second `tools growth-margins` run. Each run appends two more reads, and
+      a candidate read before a record's `fixed_at` is refused under that record. Fix the
+      margins once.
+    - Margin first is enforced only for the reads inside the records `decide` is given; it does
+      not scan the selection log. Before the first real growth read, check that the log holds no
+      `growth_seen` or `growth_heldout` read. `tools regressor-panel` and `tools sweep` still
+      refuse growth, and `read_deterministic_arm` needs a margin record.
+    - Every candidate read must run on the platform and lock of the margin read. `decide`
+      pairs only bit-identical reference predictions (`check_reference_pairing`), and its
+      refusal names both environments. Bit identity was verified within one machine on fixtures.
+      If a margin read and a candidate read on one machine fail to pair on real data, suspect
+      BLAS threading on the larger matrices first. The check fails closed.
+    - `tools regressor-panel`, `tools sweep` and `run_seed_sweep` still refuse growth.
+  - **Merging into local main.** At the final tip (08892d1), the branch merges cleanly into local
+    main (5d19bc3), checked by `git merge-tree`. The held `chore(local)` commit edits
+    `conf/data/regressor_panel.yaml`, as Task 8 does, in hunks that do not overlap.
+  - No real data was read, no real split opened, and the main checkout's selection log was not
+    touched in Stage 2.
+- **The candidates' spec** (not a roadmap stage) builds candidates and decides through these
+  interfaces, and consumes, as built:
+  - `read_deterministic_arm` is the Python API only, and `check_economic_arm` requires exactly
+    one run with no seed. `check_reference_pairing` refuses an arm without exactly one run.
+  - D8's printed level changed: `tools decide` prints the record's own level as
+    `f'{100 * level:.4g} %'`, "98.33 %" where it printed "98⅓ %". The record's value is
+    unchanged, `1.0 - 0.05 / 3`.
+  - D8's decision-read identities still compare by value (`_check_log_records`, `decide.py`);
+    the economic reads and the monitor records compare by type as well (`_same`).
+  - The deferred items under `## 14-economic-decision-tooling`: trained economic candidates,
+    the stored-scores check, the predictions-to-table binding and a test-gap item.
+  - After the plan was written, the owner ruled two fixes that changed its code: a non-finite r
+    is refused before any read (`11641b0`), and the last review's wording, a blank-run-id
+    pattern and the run-less-arm refusal landed as `0081110` and `08892d1`.

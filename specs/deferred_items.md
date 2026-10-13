@@ -526,19 +526,22 @@
       statistics. Stage 11 owns graph verification. Size: plan. Done when: independently worked
       geometry/taxonomy/metric examples fail the recorded mutants, or each mutant has a recorded
       no-action ruling.
-- [ ] Imported monitor-record strictness (Task 12, completion gate candidate): decision/records.py
+- [x] Imported monitor-record strictness (Task 12, completion gate candidate): decision/records.py
       permits boolean `checkpoint_epoch` and whitespace-only `training_run`; decision/decide.py
       compares `detail.seed` by value, and the `SeedRun.monitor_records` docstring says oldest first
       rather than file order. Producer records in all ten audited runs are well formed. Size: plan.
       Done when: src/naics_embedder/decision/records.py and decide.py reject these malformed
       imported identities before panel reads, retain valid producer records, and document file
       order, with focused refusal tests.
-- [ ] Margin-timing error shape (completion gate candidate): `check_margins_first` in
+      → done in plan 14 (Task 3: strict SeedRun identities; monitor reads matched by type; D8's
+      decision-read identities still compare by value, see the plan 14 section below).
+- [x] Margin-timing error shape (completion gate candidate): `check_margins_first` in
       src/naics_embedder/decision/decide.py fails closed with KeyError for a missing read time and
       TypeError for a naive time. No campaign record has either shape. Deferred as imported-record
       error handling. Size: quick-fix. Done when: it validates presence and timezone awareness and
       raises a named ValueError before comparison, with tests covering both decision and monitor
       reads and valid aware times.
+      → done in plan 14 (Task 2: read_time's named ValueError, before any comparison).
 - [ ] Fixture warning cleanup (Phase 1 Task 16 review): preserved suite output includes
       benchmark/xdist plugin notices, platform/worker warnings and graph integer-log/tensor-scalar
       warnings. The final finding-branch suite passed 3000 tests with one skip and 171 warnings;
@@ -595,3 +598,43 @@
       → partly done: the public fix and its regression test merged as
       lowmason/naics-embedder#135 (2026-10-11), so the public base now has the fix. Profiling
       the residual growth stays open and undiagnosed.
+
+## 14-economic-decision-tooling — 2026-10-13
+- [ ] Trained economic candidates (plan 14, deferred by the owner to the candidates' spec):
+      src/naics_embedder/decision/economic.py records and decides deterministic candidates
+      only. `EconomicRun` (decision/records.py) has no checkpoint, training run, epoch or
+      monitor-record field, and `check_economic_arm` requires one run with no seed. Req 24 gives
+      a trained candidate at least 5 seeds, and Req 23 has its checkpoint selected on validation
+      splits only. The command that reads a candidate (only `read_deterministic_arm` exists) and
+      the text-only comparator of a candidate with no backbone of its own, such as a tree
+      embedding, wait with it. See specs/plans/completed/14-economic-decision-tooling.md (P7,
+      P9). Size: plan. Done when: an economic arm record holds a trained candidate's seeds with
+      their checkpoints' selection evidence, `decide_economic` resamples those seeds nested
+      inside the groups under the 5-seed floor, and a command reads a candidate, with tests.
+- [ ] Economic stored-scores check (plan 14 final review, Minor, triaged defer):
+      `check_economic_arm` resolves `EconomicRun.scores`, and `check_relative_margins` never
+      resolves `ReferenceRead.scores` (src/naics_embedder/decision/economic.py). Only the stored
+      predictions are rescored, so a record can name a stale or missing scores file and still
+      validate; the decision's outcome is unaffected. Size: quick-fix. Done when: both checks
+      resolve the stored scores and compare them with the rescore within `STATISTIC_TOLERANCE`,
+      or their docstrings say stored scores are informational, with a test.
+- [ ] Economic predictions-to-table binding (plan 14 final review, Minor, triaged defer):
+      the stored predictions carry no run id or table fingerprint (`PREDICTION_COLUMNS`,
+      src/naics_embedder/panels/regressor.py), so an imported `EconomicArmRecord` could pair one
+      candidate's log records, table and provenance with another's predictions and recomputed
+      statistics, and still pass `check_economic_arm`, the read-identity check and
+      `check_reference_pairing`. D8's `SeedRun` has the same gap. Size: design. Revisit if: the
+      candidates' spec builds candidates from tables it does not control, or when trained
+      candidates rewrite `EconomicRun`. Done when: a record's predictions are bound to its table
+      (the arm's matrix fingerprint stored with them, or a re-read spot check) and a mismatched
+      pair is refused, with a test.
+- [ ] Economic decision test gaps (plan 14 final review, Minors, triaged defer): enforced but
+      untested: `_same` on non-seed identities, `StrictInt` refusing `1.0` and `'1'`, a logged
+      `dimension` of 3.0 or `level` of true on the economic path, `RelativeMarginRecord.margin()`
+      with no delta, the `GROWTH_PANELS` literal, `check_economic_arm`'s statistics-edit and
+      key-set refusals, duplicate margins panels, a margin-read log record whose run id differs,
+      the CLI's adopted path ("Chosen: <candidate>") and `_margin_kind` on a non-margin file, and
+      mixed D8 and relative inputs to `tools decide`. D8's decision-read identities still compare
+      by value (`_check_log_records`, src/naics_embedder/decision/decide.py), outside the
+      strictness item's scope. Size: quick-fix. Done when: each has a focused test, and a ruling
+      is recorded on `_check_log_records`' by-value comparison.
