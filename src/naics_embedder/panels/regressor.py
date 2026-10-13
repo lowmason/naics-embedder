@@ -17,7 +17,8 @@ statistic it settles on and resample by four-digit group.
 - **Comparators (Req 2).** Covariates alone (log establishments and log wages, D1), and each
   representation alone and with the covariates: the arm's coordinates, six-digit one-hot (level-L
   one-hot in the multi-level variant; seen regime only), ancestor indicators at levels 2 to L − 1,
-  and the text-only table reduced by PCA to the arm's dimension (D9).
+  and the text-only table reduced by PCA to the arm's dimension (D9). The margin read (Req 24)
+  scores only the comparators that read no arm's tables, and reads no arm.
 - **Fitting.** Ridge on standardized features, the penalty tuned by nested cross-validation
   inside the remainder only (``FitTask``). Fold assignments depend on the regime, level, repeat
   and group ids alone, never on the arm, so every arm is scored on the same folds (Req 5).
@@ -108,6 +109,8 @@ TEST = 'test'
 
 COVARIATES = 'covariates'
 REPRESENTATIONS = ('embedding', 'one_hot', 'ancestors', 'text_only')
+# What a read takes from an arm's tables (ArmTables): a comparator with either reads a candidate
+ARM_REPRESENTATIONS = ('embedding', 'text_only')
 COVARIATE_COLUMNS = ('log_estabs', 'log_wages')
 METADATA_COLUMNS = ('code', 'index', 'level')
 PREDICTION_COLUMNS = (
@@ -176,6 +179,18 @@ def comparators(regime: Regime, level: int) -> Tuple[str, ...]:
             continue
         names.extend([representation, f'{COVARIATES}+{representation}'])
     return tuple(names)
+
+def reference_comparators(regime: Regime, level: int) -> Tuple[str, ...]:
+    '''
+    The regime's comparators at a level that read no arm's tables: covariates, one-hot (seen
+    regime only) and ancestor indicators, each alone and with the covariates (Req 24's margin
+    read).
+    '''
+
+    return tuple(
+        name for name in comparators(regime, level)
+        if not set(name.split('+')) & set(ARM_REPRESENTATIONS)
+    )
 
 def seal_names(regime: Regime) -> Tuple[str, ...]:
     '''
@@ -440,16 +455,25 @@ def indicators(values: Sequence[str]) -> np.ndarray:
     matrix[np.arange(len(values)), [column[value] for value in values]] = 1.0
     return matrix
 
-def feature_matrix(comparator: str, frame: pl.DataFrame, level: int, arm: ArmTables) -> np.ndarray:
+def feature_matrix(
+    comparator: str, frame: pl.DataFrame, level: int, arm: Optional[ArmTables]
+) -> np.ndarray:
     '''
     The comparator's features for every row of ``frame``.
 
     Indicator columns come from the codes in ``frame``, never from outcomes.
+
+    Raises:
+        ValueError: If the comparator reads an arm's table and ``arm`` is None.
     '''
 
     codes = frame.get_column('code').to_list()
     blocks: List[np.ndarray] = []
     for part in comparator.split('+'):
+        if part in ARM_REPRESENTATIONS and arm is None:
+            raise ValueError(
+                f"the comparator '{comparator}' reads an arm's table, and no arm is read"
+            )
         if part == COVARIATES:
             blocks.append(np.array(frame.select(COVARIATE_COLUMNS).to_numpy(), dtype=np.float64))
         elif part == 'embedding':
@@ -686,13 +710,38 @@ class RegressorPanel:
         logged = self._read_detail(regime, level, arm, detail)
         self._require_defined(regime, level)
         frame = self._remainder(level)
-        if regime is Regime.SEEN:
-            plan = seen_validation_plan(frame, level, self.settings)
-        else:
-            plan = heldout_validation_plan(frame, level, self.settings)
+        plan = self._validation_plan(regime, level, frame)
         _require_codes(arm, frame)
         self._log_read(regime, VALIDATION, purpose, frame.height, logged)
-        return self._predict(regime, VALIDATION, level, frame, plan, arm)
+        return self._predict(
+            regime, VALIDATION, level, frame, plan, arm, comparators(regime, level)
+        )
+
+    def reference_validation(
+        self,
+        regime: Regime,
+        level: int,
+        purpose: str,
+        detail: Optional[Mapping[str, Any]] = None,
+    ) -> pl.DataFrame:
+        '''
+        Out-of-sample predictions for the remainder rows from ``reference_comparators`` alone,
+        logging the read: Req 24's margin read, which reads no arm and computes neither
+        ``embedding`` nor ``text_only``.
+
+        It fits the rows, folds and penalties ``validation`` fits, so each of its comparators
+        predicts exactly as in any arm's read. ``detail`` joins the read's logged detail, as in
+        ``validation``.
+        '''
+
+        regime = Regime(regime)
+        names = reference_comparators(regime, level)
+        logged = merge_read_detail({'level': level, 'comparators': list(names)}, detail)
+        self._require_defined(regime, level)
+        frame = self._remainder(level)
+        plan = self._validation_plan(regime, level, frame)
+        self._log_read(regime, VALIDATION, purpose, frame.height, logged)
+        return self._predict(regime, VALIDATION, level, frame, plan, None, names)
 
     def require_openable(self, regime: Regime, reopen_reason: Optional[str] = None) -> None:
         '''
@@ -781,7 +830,7 @@ class RegressorPanel:
         n_outer = len(plan[0].score)
         _require_codes(arm, frame)
         self._log_read(regime, TEST, purpose, n_outer, logged)
-        return self._predict(regime, TEST, level, frame, plan, arm)
+        return self._predict(regime, TEST, level, frame, plan, arm, comparators(regime, level))
 
     def _frame(self, level: int) -> pl.DataFrame:
         if level not in self._rows:
@@ -790,6 +839,11 @@ class RegressorPanel:
 
     def _remainder(self, level: int) -> pl.DataFrame:
         return self._frame(level).filter(pl.col('split') == RegressorSplit.REMAINDER.value)
+
+    def _validation_plan(self, regime: Regime, level: int, frame: pl.DataFrame) -> Plan:
+        if regime is Regime.SEEN:
+            return seen_validation_plan(frame, level, self.settings)
+        return heldout_validation_plan(frame, level, self.settings)
 
     def _require_defined(self, regime: Regime, level: int) -> None:
         reason = self.cell_status(regime, level)
@@ -832,12 +886,13 @@ class RegressorPanel:
         level: int,
         frame: pl.DataFrame,
         plan: Sequence[FitTask],
-        arm: ArmTables,
+        arm: Optional[ArmTables],
+        names: Sequence[str],
     ) -> pl.DataFrame:
         y = frame.get_column('outcome').to_numpy()
         keys = frame.select('code', 'group', 'feature_year', 'outcome_year', 'outcome')
         parts = []
-        for comparator in comparators(regime, level):
+        for comparator in names:
             x = feature_matrix(comparator, frame, level, arm)
             for task, alpha, predictions in run_plan(plan, x, y, self.settings.alphas):
                 scored = keys[list(task.score)]

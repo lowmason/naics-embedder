@@ -18,11 +18,11 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Mapping, Union
+from typing import Any, Dict, Mapping, Tuple, Union
 
 import polars as pl
 
-from naics_embedder.decision.records import ArtifactRef, TableRef, TextOnlyRef
+from naics_embedder.decision.records import ArtifactRef, TableProvenance, TableRef, TextOnlyRef
 from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path, text_only_fingerprint
 from naics_embedder.supervision.artifacts import sha256_file
@@ -30,6 +30,31 @@ from naics_embedder.supervision.artifacts import sha256_file
 # -------------------------------------------------------------------------------------------------
 # Table provenance (text-only and export)
 # -------------------------------------------------------------------------------------------------
+
+def check_provenance(
+    provenance: Any, table_sha256: str, matrix_fingerprint: str, name: str
+) -> None:
+    '''
+    Require a table's provenance to describe the table.
+
+    Args:
+        provenance: The provenance's JSON content.
+        table_sha256: The table's sha256, which the provenance must name.
+        matrix_fingerprint: The table's ``matrix_fingerprint``, which the provenance must name if
+            it names one.
+        name: Names the provenance in an error.
+
+    Raises:
+        ValueError: If the provenance is not a JSON object, describes another file or names
+            another ``matrix_fingerprint``.
+    '''
+
+    if not isinstance(provenance, Mapping):
+        raise ValueError(f'{name} is not a JSON object')
+    if provenance.get('table_sha256') != table_sha256:
+        raise ValueError(f'{name} describes another file than the table')
+    if provenance.get('matrix_fingerprint', matrix_fingerprint) != matrix_fingerprint:
+        raise ValueError(f'{name} names another matrix_fingerprint')
 
 def provenance_fields(
     provenance: Mapping[str, Any], table_sha256: str, matrix_fingerprint: str, name: str
@@ -47,16 +72,10 @@ def provenance_fields(
         name: Names the provenance in an error.
 
     Raises:
-        ValueError: If the provenance is not a JSON object, describes another file, names
-            another ``matrix_fingerprint``, or lacks a field D9 reads.
+        ValueError: As ``check_provenance``, or if the provenance lacks a field D9 reads.
     '''
 
-    if not isinstance(provenance, Mapping):
-        raise ValueError(f'{name} is not a JSON object')
-    if provenance.get('table_sha256') != table_sha256:
-        raise ValueError(f'{name} describes another file than the table')
-    if provenance.get('matrix_fingerprint', matrix_fingerprint) != matrix_fingerprint:
-        raise ValueError(f'{name} names another matrix_fingerprint')
+    check_provenance(provenance, table_sha256, matrix_fingerprint, name)
     try:
         return {
             'backbone': provenance['backbone'],
@@ -181,6 +200,46 @@ class ArtifactStore:
             content, table.sha256, table.matrix_fingerprint, f'the stored {provenance.path}'
         )
         return TextOnlyRef(table=table, provenance=provenance, **fields)
+
+    def put_candidate(self, table_path: Union[str, Path]) -> Tuple[TableRef, TableProvenance]:
+        '''
+        Store an economic candidate's code table (the export form) and the provenance beside it,
+        once the provenance is checked to describe the table (Req 23).
+
+        Raises:
+            FileNotFoundError: If the provenance is missing.
+            ValueError: As ``check_provenance``, before anything is stored, or if either file
+                changes while it is stored.
+        '''
+
+        table_path = Path(table_path)
+        provenance_file = provenance_path(table_path)
+        if not provenance_file.is_file():
+            raise FileNotFoundError(f'{provenance_file}: the table has no provenance beside it')
+        check_provenance(
+            json.loads(provenance_file.read_text(encoding='utf-8')),
+            sha256_file(table_path),
+            table_fingerprint(pl.read_parquet(table_path)),
+            str(provenance_file),
+        )
+        table = self.put_table(table_path)
+        return table, self.candidate_provenance(table, self.put(provenance_file))
+
+    def candidate_provenance(self, table: TableRef, provenance: ArtifactRef) -> TableProvenance:
+        '''
+        A stored candidate table's provenance, read from the store.
+
+        Raises:
+            FileNotFoundError: If either file is not in the store.
+            ValueError: If either file changed since it was stored, or as ``check_provenance``.
+        '''
+
+        self.resolve(table)
+        content = json.loads(self.resolve(provenance).read_text(encoding='utf-8'))
+        check_provenance(
+            content, table.sha256, table.matrix_fingerprint, f'the stored {provenance.path}'
+        )
+        return TableProvenance(file=provenance, content=content)
 
     def resolve(self, reference: ArtifactRef) -> Path:
         '''

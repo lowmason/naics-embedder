@@ -26,8 +26,10 @@ MPS use `32-true`, and the text Trainer uses one device.
 
 A seed sweep reads the outcome panel and both regressor regimes from each run's kept checkpoint.
 The arm record carries every epoch's monitor reads. Margins are fixed before candidate reads,
-and decisions use the three panels under Req 5. Structural metrics describe an arm through
-`tools diagnostics`; they do not select the text checkpoint or schedule its learning rate.
+and decisions use the three panels under Req 5. The economic artifact's decision reads its own
+two growth panels against the reference `covariates+ancestors` (Req 24). Structural metrics
+describe an arm through `tools diagnostics`; they do not select the text checkpoint or schedule
+its learning rate.
 
 ## Guides
 

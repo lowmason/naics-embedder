@@ -14,7 +14,9 @@ Commands:
     text-only-table: Embed every code's text with the arm's backbone, frozen (roadmap D9).
     regressor-panel: Score an arm on the regressor panel's validation or sealed test split.
     margins: Fix each panel's non-inferiority margin from a reference arm (Req 5).
-    decide: Decide among arms under Req 5's rule over D8's three panels.
+    growth-margins: Fix each growth panel's margin from a reference-only read (Req 24).
+    decide: Decide among arms over D8's three panels (Req 5), or among economic candidates
+        against the reference on the two growth panels (Req 24).
     diagnostics: Report Req 6's structural diagnostics over every codebook code.
     export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
     outcome-panel: Score an arm on the outcome panel's validation split (Stage 6).
@@ -36,7 +38,16 @@ from rich.console import Console
 from typing_extensions import Annotated
 
 from naics_embedder.decision.decide import _check_monitor_records, decide, fix_margins
-from naics_embedder.decision.records import ArmRecord, ArmSpec, MarginRecord, read_record, write_record
+from naics_embedder.decision.economic import decide_economic, fix_relative_margins
+from naics_embedder.decision.records import (
+    ArmRecord,
+    ArmSpec,
+    EconomicArmRecord,
+    MarginRecord,
+    RelativeMarginRecord,
+    read_record,
+    write_record,
+)
 from naics_embedder.decision.rule import TieUnresolvedError
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.decision.sweep import run_seed_sweep
@@ -92,6 +103,8 @@ app = typer.Typer(
 
 REGRESSOR_PANEL_CONFIG = 'data/regressor_panel.yaml'
 DECISION_CONFIG = 'data/decision.yaml'
+# The lock a growth read runs under, which its record names (Req 24)
+LOCK_FILE = 'uv.lock'
 
 # -------------------------------------------------------------------------------------------------
 # View configuration
@@ -545,6 +558,117 @@ def margins_command(
         )
     console.print(f'\nMargin record: {path}\n')
 
+@app.command('growth-margins')
+def growth_margins_command(
+    codebook: Annotated[
+        str,
+        typer.Option('--codebook', help="A supervision bundle's naics_codebook.parquet"),
+    ],
+    name: Annotated[
+        str,
+        typer.Option('--name', help='Names the margins in the decision records that use them'),
+    ],
+    store: Annotated[
+        str,
+        typer.Option('--store', help="The artifact store for the read's predictions and scores"),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where to write the margin record (JSON)'),
+    ],
+    purpose: Annotated[
+        Optional[str],
+        typer.Option(
+            '--purpose',
+            help='Why the read happens; recorded in the selection log '
+            '(default: economic margin read)',
+        ),
+    ] = None,
+    log: Annotated[
+        Optional[str],
+        typer.Option('--log', help='Selection log (default: the regressor config)'),
+    ] = None,
+    lock: Annotated[
+        str,
+        typer.Option('--lock', help='The uv.lock the read runs under, which the record names'),
+    ] = LOCK_FILE,
+):
+    '''
+    Read the reference alone on both growth panels and fix each one's margin δ (Req 24).
+
+    The read scores, on each growth regime's level-6 validation split, only the comparators that
+    read no candidate: the covariates, one-hot (seen regime only) and ancestor indicators, each
+    alone and with the covariates. δ is the decision config's ``relative_margin`` r (0.05, U13)
+    times the MSE of the reference ``covariates+ancestors`` there. The panel reads growth
+    whatever the regressor config's ``outcome`` says; it stays ``level`` for tools
+    regressor-panel and tools sweep.
+
+    Fix the margins once, before any candidate is read on growth: a decision refuses a candidate
+    read before its margins were fixed. The record names the platform, Python and ``uv.lock``
+    the read ran under, and every candidate read must run there too, since a decision pairs only
+    bit-identical reference predictions.
+
+    Example:
+        Fix the growth margins::
+
+            $ uv run naics-embedder tools growth-margins --codebook PATH/naics_codebook.parquet \\
+                --name growth-margins --store ~/naics-artifacts --output growth_margins.json
+    '''
+
+    configure_logging('tools_growth_margins.log')
+
+    regressor_cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
+    cfg = load_config(DecisionConfig, DECISION_CONFIG)
+    read_purpose = (purpose or '').strip() or 'economic margin read'
+    try:
+        # Before the panel is loaded or read
+        _require_new_record(Path(output))
+        growth = regressor_cfg.model_copy(update={'outcome': RegressorOutcome.GROWTH.value})
+        panel = load_regressor_panel(growth, codebook, log_path=log, levels=[DECISION_LEVEL])
+        record = fix_relative_margins(
+            panel,
+            cfg.relative_margin,
+            name,
+            ArtifactStore(store),
+            purpose=read_purpose,
+            lock=lock,
+        )
+        path = write_record(record, output)
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]Growth margins failed:[/bold red] {exc}')
+        raise typer.Exit(code=1)
+
+    console.print(
+        f'\n[bold cyan]Growth margins {name!r}, fixed {record.fixed_at.isoformat()}[/bold cyan]\n'
+    )
+    for entry in record.margins:
+        console.print(
+            f'  • {entry.panel}: δ {entry.margin:.6g} = {record.r:g} × MSE '
+            f'{entry.reference_mse:.6g} of {entry.statistic}'
+        )
+    environment = record.read.environment
+    console.print(
+        f'\nRead on {environment.platform}, Python {environment.python}, uv.lock '
+        f'{environment.lock_sha256}: every candidate read must run there too'
+    )
+    console.print(f'Reads logged to {panel.log.path} (fingerprint {panel.fingerprint})')
+    console.print(f'\nMargin record: {path}\n')
+
+def _margin_kind(path: str) -> str:
+    '''
+    A margin record's kind: ``margins`` (Req 5, from a reference arm) or ``relative_margins``
+    (Req 24, from the growth margin read).
+
+    Raises:
+        ValueError: If the file is not a margin record.
+    '''
+
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    kind = data.get('kind') if isinstance(data, dict) else None
+    if kind not in ('margins', 'relative_margins'):
+        raise ValueError(f'{path} is not a margin record: its kind is {kind!r}')
+    return kind
+
 @app.command('decide')
 def decide_command(
     arm: Annotated[
@@ -553,7 +677,7 @@ def decide_command(
     ],
     margins: Annotated[
         str,
-        typer.Option('--margins', help='The margin record (tools margins)'),
+        typer.Option('--margins', help='The margin record (tools margins or tools growth-margins)'),
     ],
     name: Annotated[
         str,
@@ -573,14 +697,20 @@ def decide_command(
     ],
 ):
     '''
-    Decide among two or more arms under Req 5's rule over D8's three panels.
+    Decide among arms under Req 5's rule: over D8's three panels with margins from tools margins,
+    or over the two growth panels (Req 24) with margins from tools growth-margins.
 
     Each A-against-B comparison reads Δ on paired resamples of each panel's units, seeds nested.
-    A is adopted over B when it is non-inferior on all three panels (the 95 % interval's lower
-    bound above −δ) and superior on at least one (the 98⅓ % interval above zero). The survivors
-    are the arms no other arm is adopted over, and the tie order picks among them. The record
-    carries the arms with their selection-log records and artifact references, the margins, every
-    comparison, the non-dominated set, the tie order and the chosen arm.
+    A is adopted over B when it is non-inferior on every panel (the 95 % interval's lower bound
+    above −δ) and superior on at least one (the 1 − 0.05/n interval above zero: 98⅓ % over three
+    panels, 97.5 % over two). The survivors are the arms no other arm is adopted over, and the
+    tie order picks among them. The record carries the arms with their selection-log records and
+    artifact references, the margins, every comparison, the non-dominated set, the tie order and
+    the chosen arm.
+
+    The economic decision reads economic arm records, one or more, and compares each candidate
+    with the reference ``covariates+ancestors``. Only a candidate adopted over the reference is
+    eligible for the rule among candidates; with none, the reference stands.
 
     Example:
         Decide between a candidate and the reference::
@@ -596,22 +726,34 @@ def decide_command(
     try:
         # Before any arm is read and resampled
         _require_new_record(Path(output))
-        record = decide(
-            name,
-            question,
-            [read_record(path, ArmRecord) for path in arm],
-            read_record(margins, MarginRecord),
-            ArtifactStore(store),
-            replicates=cfg.replicates,
-            bootstrap_seed=cfg.bootstrap_seed,
-            min_seeds=cfg.min_seeds,
-        )
+        if _margin_kind(margins) == 'relative_margins':
+            record = decide_economic(
+                name,
+                question,
+                [read_record(path, EconomicArmRecord) for path in arm],
+                read_record(margins, RelativeMarginRecord),
+                ArtifactStore(store),
+                replicates=cfg.replicates,
+                bootstrap_seed=cfg.bootstrap_seed,
+            )
+        else:
+            record = decide(
+                name,
+                question,
+                [read_record(path, ArmRecord) for path in arm],
+                read_record(margins, MarginRecord),
+                ArtifactStore(store),
+                replicates=cfg.replicates,
+                bootstrap_seed=cfg.bootstrap_seed,
+                min_seeds=cfg.min_seeds,
+            )
         path = write_record(record, output)
     except (OSError, ValueError, TieUnresolvedError) as exc:
         console.print(f'[bold red]Decision failed:[/bold red] {exc}')
         raise typer.Exit(code=1)
 
     console.print(f'\n[bold cyan]Decision {name!r}[/bold cyan]\n')
+    superiority = f'{100 * record.settings.superiority_level:.4g} %'
     for comparison in record.comparisons:
         verdict = 'adopted' if comparison.adopted else 'not adopted'
         console.print(f'  • {comparison.a} over {comparison.b}: {verdict}')
@@ -620,12 +762,17 @@ def decide_command(
             upper_low, upper_high = panel.superiority_interval
             console.print(
                 f'      {panel.panel}: Δ {panel.delta:+.4g}; 95 % [{low:+.4g}, {high:+.4g}] '
-                f'against −δ {-panel.margin:.4g}; 98⅓ % [{upper_low:+.4g}, {upper_high:+.4g}]'
+                f'against −δ {-panel.margin:.4g}; {superiority} [{upper_low:+.4g}, '
+                f'{upper_high:+.4g}]'
             )
+    reference = getattr(record, 'reference', None)
+    if reference is not None:
+        console.print(f'\nAdopted over the reference: {", ".join(record.eligible) or "none"}')
     cycle = ' (dominance cycled)' if record.cycle else ''
     console.print(f'\nNon-dominated: {", ".join(record.non_dominated)}{cycle}')
     console.print(f'Tie order: {", ".join(record.tie_order)}')
-    console.print(f'[bold]Chosen: {record.chosen}[/bold]')
+    chosen = record.chosen or f'none; the reference {reference} stands'
+    console.print(f'[bold]Chosen: {chosen}[/bold]')
     console.print(f'\nDecision record: {path}\n')
 
 # -------------------------------------------------------------------------------------------------

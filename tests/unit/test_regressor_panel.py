@@ -8,6 +8,7 @@ data and a trained arm. Every outer set opened here is a fixture's: no test read
 import hashlib
 import json
 import platform
+import re
 import sys
 
 import numpy as np
@@ -39,6 +40,7 @@ from naics_embedder.panels.regressor import (
     heldout_validation_plan,
     load_regressor_panel,
     outer_plan,
+    reference_comparators,
     seen_validation_plan,
     summarize,
     table_fingerprint,
@@ -1242,3 +1244,49 @@ def test_from_sources_builds_the_rows_of_its_outcome(
     assert built.outcome is RegressorOutcome.GROWTH
     for level in built.levels:
         assert built.data_fingerprint(level) == expected.data_fingerprint(level)
+
+# -------------------------------------------------------------------------------------------------
+# The reference-only read (Req 24): the margin read reads no arm's tables
+# -------------------------------------------------------------------------------------------------
+
+def test_the_reference_comparators_are_those_that_read_no_arms_tables():
+    assert reference_comparators(Regime.SEEN, 6) == (
+        'covariates', 'one_hot', 'covariates+one_hot', 'ancestors', 'covariates+ancestors'
+    )
+    assert reference_comparators(Regime.HELDOUT, 6) == (
+        'covariates', 'ancestors', 'covariates+ancestors'
+    )
+    assert reference_comparators(Regime.SEEN, 2) == ('covariates', 'one_hot', 'covariates+one_hot')
+
+@pytest.mark.parametrize('regime', list(Regime))
+def test_the_reference_read_logs_and_scores_only_comparators_that_read_no_arm(
+    growth_panel, log, regime
+):
+    predictions = growth_panel.reference_validation(regime, 6, PURPOSE, detail={'run': 'margins'})
+
+    names = reference_comparators(regime, 6)
+    assert predictions.columns == list(PREDICTION_COLUMNS)
+    assert tuple(predictions.get_column('comparator').unique(maintain_order=True)) == names
+    (record, ) = log.records()
+    name = READ_NAMES[RegressorOutcome.GROWTH][regime]
+    assert (record['event'], record['panel'], record['split']) == ('read', name, 'validation')
+    assert record['fingerprint'] == growth_panel.fingerprint
+    # No arm, text-only table or dimension: the read names no candidate
+    assert record['detail'] == {'level': 6, 'comparators': list(names), 'run': 'margins'}
+
+@pytest.mark.parametrize('regime', list(Regime))
+def test_each_reference_comparator_predicts_as_in_any_arms_read(
+    growth_panel, regressor_arm, regime
+):
+    '''Req 24: the reference reads no candidate, so its errors pair exactly with each one's.'''
+
+    reference = growth_panel.reference_validation(regime, 6, PURPOSE)
+    read = growth_panel.validation(regime, 6, regressor_arm, PURPOSE)
+
+    names = list(reference_comparators(regime, 6))
+    assert reference.equals(read.filter(pl.col('comparator').is_in(names)))
+
+def test_a_comparator_that_reads_an_arms_table_needs_an_arm(regressor_rows):
+    for comparator in ('embedding', 'covariates+text_only'):
+        with pytest.raises(ValueError, match=f"{re.escape(comparator)}' reads an arm's table"):
+            feature_matrix(comparator, regressor_rows[6], 6, None)

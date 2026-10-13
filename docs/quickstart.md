@@ -90,4 +90,7 @@ terms' and scales' gradients. A failed criterion produces a report and exits 1.
 The [reference campaign](text_training.md#reference-campaign) trains seeds 1–10, checks every
 run before the first decision read, writes a three-panel arm record with `tools sweep`, and fixes
 margins with `tools margins --multiple 3` before candidate reads. Panel test splits stay sealed.
+The economic artifact is decided on its own growth panels: fix their margins with
+[`tools growth-margins`](usage.md#tools-growth-margins) before any candidate is read, then
+compare candidates with the reference `covariates+ancestors` through `tools decide`.
 For all options, see [CLI usage](usage.md) or `uv run naics-embedder tools --help`.

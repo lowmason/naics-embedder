@@ -19,7 +19,8 @@ Before any number is computed, every arm is checked:
 
 A decision also requires the margins to hold one δ per panel, for its decision statistic, and
 every run other than the margin record's own reference runs to have read nothing, its monitor
-reads included, before the margins were fixed.
+reads included, before the margins were fixed. Every read's time, and the margins', must name its
+timezone.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -29,7 +30,7 @@ reads included, before the margins were fixed.
 import math
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Collection, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import polars as pl
@@ -57,10 +58,10 @@ from naics_embedder.decision.resampling import (
 )
 from naics_embedder.decision.rule import (
     NONINFERIORITY_LEVEL,
-    SUPERIORITY_LEVEL,
     compare,
     compare_panel,
     non_dominated,
+    superiority_level,
     tie_order,
 )
 from naics_embedder.decision.scores import (
@@ -117,6 +118,26 @@ def check_text_only(spec: ArmSpec, text_only: TextOnlyRef) -> None:
             f'{spec.name}: the text-only table was built from {built}, the arm reads {reads} '
             "(D9: the arm's own backbone reading the arm's text)"
         )
+
+def check_recorded_text_only(spec: ArmSpec, text_only: TextOnlyRef, store: ArtifactStore) -> None:
+    '''
+    Require a record's text-only fields to be those of its stored provenance, and that
+    provenance to be the arm's (D9).
+
+    Raises:
+        ValueError: If a recorded field differs from the stored provenance, or as
+            ``check_text_only``.
+    '''
+
+    stored = store.text_only(text_only.table, text_only.provenance)
+    recorded = text_only.model_dump()
+    wrong = sorted(key for key, value in stored.model_dump().items() if value != recorded[key])
+    if wrong:
+        raise ValueError(
+            f"{spec.name}: the record's text-only fields {wrong} differ from its stored "
+            'provenance'
+        )
+    check_text_only(spec, stored)
 
 def check_seed_table(spec: ArmSpec, seed: int, fields: Mapping[str, Any]) -> None:
     '''
@@ -179,14 +200,7 @@ def check_arm(arm: ArmRecord, store: ArtifactStore, min_seeds: int) -> None:
         raise ValueError(f'{name}: {len(set(seeds))} distinct seeds, fewer than {min_seeds}')
     if len(set(seeds)) != len(seeds) or len({run.run_id for run in arm.runs}) != len(arm.runs):
         raise ValueError(f'{name}: a seed or run id repeats')
-    stored = store.text_only(arm.text_only.table, arm.text_only.provenance)
-    recorded = arm.text_only.model_dump()
-    wrong = sorted(key for key, value in stored.model_dump().items() if value != recorded[key])
-    if wrong:
-        raise ValueError(
-            f"{name}: the record's text-only fields {wrong} differ from its stored provenance"
-        )
-    check_text_only(arm.spec, stored)
+    check_recorded_text_only(arm.spec, arm.text_only, store)
     for run in arm.runs:
         for reference in (run.checkpoint, run.table, run.scores, run.decoding, run.predictions):
             store.resolve(reference)
@@ -246,13 +260,18 @@ def _monitor_record_problem(record: Any) -> Optional[str]:
         return 'its read names no non-negative integer epoch'
     return None
 
+def _same(logged: Any, named: Any) -> bool:
+    '''Whether a logged identity is the named one: equal, and of its type (True == 1, 3.0 == 3).'''
+
+    return type(logged) is type(named) and logged == named
+
 def _check_monitor_records(arm: ArmRecord, run: SeedRun) -> None:
     '''
     Require a trained run's monitor records to be the reads that selected its checkpoint (spec
     4.4): its training run's reads of the outcome panel's validation split, under the distance of
     the arm's geometry (Req 12), no epoch twice, with the checkpoint from the earliest epoch with
     the highest MRR. A run with no training run has neither monitor records nor a checkpoint
-    epoch.
+    epoch. Each read names the run's identities by type as well as value.
 
     That the records cover every epoch through the run's last checkpoint is the runner's check
     (spec §5): a record holds no last checkpoint to count the epochs against.
@@ -299,7 +318,7 @@ def _check_monitor_records(arm: ArmRecord, run: SeedRun) -> None:
             'seed': detail.get('seed'),
             'distance': detail.get('distance'),
         }
-        wrong = sorted(key for key in named if logged[key] != named[key])
+        wrong = sorted(key for key in named if not _same(logged[key], named[key]))
         if wrong:
             raise ValueError(f'{name}: a monitor read names another {wrong}')
         epochs.append(detail['epoch'])
@@ -358,26 +377,69 @@ def check_margins(margins: MarginRecord) -> None:
             f'statistic: {needed} (D10)'
         )
 
-def check_margins_first(arms: Sequence[ArmRecord], margins: MarginRecord) -> None:
+def read_time(record: Any, name: str) -> datetime:
     '''
-    Require every run but the margin record's reference runs to read after the margins were fixed:
-    its decision reads and, for a trained run, the monitor reads that selected its checkpoint.
+    A selection-log record's time: an ISO 8601 string that names its timezone.
+
+    Args:
+        record: The record, as the selection log appended it.
+        name: Names the read in a refusal.
 
     Raises:
-        ValueError: If a run read before ``margins.fixed_at``.
+        ValueError: If the record has no time, or its time is not ISO 8601 or names no timezone.
     '''
 
-    reference = {run.run_id for run in margins.reference.runs}
+    time = record.get('time') if isinstance(record, dict) else None
+    if not isinstance(time, str):
+        raise ValueError(f'{name} has no time')
+    # Python 3.10's fromisoformat cannot read the Z that pydantic writes for UTC
+    utc = time[:-1] + '+00:00' if time.endswith('Z') else time
+    try:
+        parsed = datetime.fromisoformat(utc)
+    except ValueError:
+        raise ValueError(f'{name} has the time {time!r}, which is not ISO 8601') from None
+    if parsed.utcoffset() is None:
+        raise ValueError(f'{name} has the time {time}, with no timezone')
+    return parsed
+
+def check_margins_first(
+    arms: Sequence[Any], fixed_at: datetime, *, exempt: Collection[str] = ()
+) -> None:
+    '''
+    Require every run but the ``exempt`` ones to read after the margins were fixed at ``fixed_at``:
+    its decision reads and, for a trained run, the monitor reads that selected its checkpoint.
+    ``arms`` are arm records or economic arm records.
+
+    Run it after ``check_arm``, which requires each monitor record to name its epoch.
+
+    Raises:
+        ValueError: If ``fixed_at`` or a read's time is missing or names no timezone, so that
+            the two cannot be compared, or if a run read before ``fixed_at``.
+    '''
+
+    if fixed_at.utcoffset() is None:
+        raise ValueError(f'the margins were fixed at {fixed_at.isoformat()}, with no timezone')
     for arm in arms:
         for run in arm.runs:
-            if run.run_id in reference:
+            if run.run_id in exempt:
                 continue
-            reads = [*run.log_records, *(record['read'] for record in run.monitor_records)]
-            first = min(datetime.fromisoformat(record['time']) for record in reads)
-            if first < margins.fixed_at:
+            # A deterministic economic run has no seed and no monitor reads (Req 24)
+            name = arm.spec.name if run.seed is None else f'{arm.spec.name} seed {run.seed}'
+            reads = [
+                read_time(record, f'{name}: its {record.get("panel")} read')
+                for record in run.log_records
+            ]
+            reads.extend(
+                read_time(
+                    record['read'],
+                    f'{name}: its monitor read of epoch {record["read"]["detail"]["epoch"]}'
+                ) for record in getattr(run, 'monitor_records', ())
+            )
+            first = min(reads)
+            if first < fixed_at:
                 raise ValueError(
-                    f'{arm.spec.name} seed {run.seed} read at {first.isoformat()}, before the '
-                    f'margins were fixed at {margins.fixed_at.isoformat()} (Req 5)'
+                    f'{name} read at {first.isoformat()}, before the margins were fixed at '
+                    f'{fixed_at.isoformat()} (Req 5)'
                 )
 
 # -------------------------------------------------------------------------------------------------
@@ -494,13 +556,14 @@ def decide(
     for arm in arms:
         check_arm(arm, store, min_seeds)
     check_pairing(arms, margins)
-    check_margins_first(arms, margins)
+    reference = {run.run_id for run in margins.reference.runs}
+    check_margins_first(arms, margins.fixed_at, exempt=reference)
     settings = DecisionSettings(
         replicates=replicates,
         bootstrap_seed=bootstrap_seed,
         min_seeds=min_seeds,
         noninferiority_level=NONINFERIORITY_LEVEL,
-        superiority_level=SUPERIORITY_LEVEL,
+        superiority_level=superiority_level(len(PANELS)),
     )
 
     names = [arm.spec.name for arm in arms]
@@ -535,6 +598,7 @@ def decide(
                     ORIENTATION[panel] * (points[panel][a] - points[panel][b]),
                     ORIENTATION[panel] * (draws[panel][a] - draws[panel][b]),
                     margins.margin(panel),
+                    superiority=settings.superiority_level,
                 ) for panel in PANELS
             ]
             comparisons.append(compare(a, b, panels))

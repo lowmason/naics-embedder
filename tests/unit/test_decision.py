@@ -10,12 +10,18 @@ and −5 is not non-inferior.
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
 
-from naics_embedder.decision.decide import check_arm, check_seed_distance, decide, fix_margins
+from naics_embedder.decision.decide import (
+    check_arm,
+    check_seed_distance,
+    decide,
+    fix_margins,
+    read_time,
+)
 from naics_embedder.decision.records import (
     ArmRecord,
     DecisionRecord,
@@ -23,7 +29,6 @@ from naics_embedder.decision.records import (
     read_record,
     write_record,
 )
-from naics_embedder.decision.rule import SUPERIORITY_LEVEL
 from naics_embedder.decision.scores import PANELS
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.panels.decoding import METRIC_NAMES
@@ -237,7 +242,8 @@ def test_the_record_carries_every_field_verification_lists(store, tmp_path, refe
     assert min(reads) >= record.margins.fixed_at.isoformat()
     # The 95 % non-inferiority and 98⅓ % superiority intervals, on every panel
     assert record.settings.noninferiority_level == 0.95
-    assert record.settings.superiority_level == SUPERIORITY_LEVEL
+    # Three panels still read 98⅓ % (Req 24)
+    assert record.settings.superiority_level == 1.0 - 0.05 / 3
     for comparison in record.comparisons:
         assert [panel.panel for panel in comparison.panels] == list(PANELS)
         for panel in comparison.panels:
@@ -682,6 +688,39 @@ def test_a_run_with_a_blank_training_run_or_a_negative_epoch_does_not_load(
     with pytest.raises(ValidationError, match=f'runs\\.3\\.{field}\\n.*{error}'):
         _edited(trained, lambda data: _run(data).update({field: value}))
 
+@pytest.mark.parametrize(
+    'field, value, error',
+    [('training_run', '   ', 'string_pattern_mismatch'), ('checkpoint_epoch', True, 'int_type')],
+    ids=['a-whitespace-training-run', 'a-boolean-checkpoint-epoch'],
+)
+def test_an_imported_run_with_a_whitespace_training_run_or_a_boolean_epoch_does_not_load(
+    tmp_path, trained, field, value, error
+):
+    '''A training run of spaces names none, and true would load as epoch 1.'''
+
+    path = tmp_path / 'imported.json'
+    path.write_text(
+        json.dumps(_json_edited(trained, lambda data: _run(data).update({field: value})))
+    )
+
+    with pytest.raises(ValidationError, match=f'runs\\.3\\.{field}\\n.*{error}'):
+        read_record(path, ArmRecord)
+
+@pytest.mark.parametrize(
+    'seed, logged', [(1, True), (3, 3.0)], ids=['a-boolean-seed', 'a-float-seed']
+)
+def test_a_monitor_read_names_its_runs_seed_as_an_integer(store, trained, seed, logged):
+    '''True == 1 and 3.0 == 3: only the type tells these from the run's seed.'''
+
+    arm = _edited(
+        trained, lambda data: _monitor_read(data, seed=seed)['detail'].update(seed=logged)
+    )
+
+    with pytest.raises(
+        ValueError, match=f"^trained seed {seed}: a monitor read names another \\['seed'\\]"
+    ):
+        check_arm(arm, store, min_seeds=5)
+
 def test_a_monitor_read_before_the_margins_were_fixed_is_refused(
     store, tmp_path, reference, margins
 ):
@@ -699,6 +738,87 @@ def test_a_monitor_read_before_the_margins_were_fixed_is_refused(
         match=f'^early seed 3 read at {re.escape(early)}, before the margins were fixed',
     ):
         _decide([arm, reference], margins, store)
+
+# Each malformed read time, and what follows the read's name in its refusal
+TIMELESS = [
+    (lambda read: read.pop('time'), 'has no time'),
+    (lambda read: read.update(time=None), 'has no time'),
+    (lambda read: read.update(time='2026-10-12T12:00:00'), 'has the time .*, with no timezone'),
+    (lambda read: read.update(time='yesterday'), "has the time 'yesterday', which is not ISO 8601"),
+]
+TIMELESS_IDS = ['missing', 'null', 'naive', 'not-iso-8601']
+
+@pytest.mark.parametrize('edit, message', TIMELESS, ids=TIMELESS_IDS)
+def test_a_decision_read_without_an_aware_time_is_refused_by_name(
+    store, tmp_path, reference, margins, edit, message
+):
+    arm = _edited(
+        synthetic_arm(store, tmp_path, spec('timeless', dimension=32), {}),
+        lambda data: edit(_run(data)['log_records'][1]),
+    )
+
+    with pytest.raises(ValueError, match=f'^timeless seed 3: its regressor_seen read {message}'):
+        _decide([arm, reference], margins, store)
+
+@pytest.mark.parametrize('edit, message', TIMELESS, ids=TIMELESS_IDS)
+def test_a_monitor_read_without_an_aware_time_is_refused_by_name(
+    store, tmp_path, reference, margins, edit, message
+):
+    arm = _edited(
+        synthetic_arm(
+            store, tmp_path, spec('timeless', dimension=32), {}, monitor_mrrs=MONITOR_MRRS
+        ),
+        lambda data: edit(_monitor_read(data)),
+    )
+
+    with pytest.raises(
+        ValueError, match=f'^timeless seed 3: its monitor read of epoch 2 {message}'
+    ):
+        _decide([arm, reference], margins, store)
+
+def test_margins_fixed_at_a_time_without_a_timezone_are_refused(
+    store, tmp_path, reference, margins
+):
+    naive = MarginRecord.model_validate(
+        _json_edited(
+            margins, lambda data: data.update(fixed_at=data['fixed_at'].removesuffix('Z'))
+        )
+    )
+    candidate = synthetic_arm(store, tmp_path, spec('candidate', dimension=32), {})
+
+    assert naive.fixed_at.utcoffset() is None
+    with pytest.raises(ValueError, match='^the margins were fixed at .*, with no timezone'):
+        _decide([candidate, reference], naive, store)
+
+def test_aware_read_times_compare_whatever_their_offset(store, tmp_path, reference, margins):
+    '''A minute after the margins, written at UTC+5, is after them; a minute before is not.'''
+
+    plus_five = timezone(timedelta(hours=5))
+
+    def read_at(name, minutes):
+        '''An arm whose every decision read is ``minutes`` after the margins, written at UTC+5.'''
+
+        time = (margins.fixed_at + timedelta(minutes=minutes)).astimezone(plus_five).isoformat()
+        arm = synthetic_arm(store, tmp_path, spec(name, dimension=32), {})
+        return time, _edited(
+            arm, lambda data: [
+                read.update(time=time) for run in data['runs'] for read in run['log_records']
+            ]
+        )
+
+    _, later = read_at('later', 1)
+    before, early = read_at('early', -1)
+
+    _decide([later, reference], margins, store)
+    with pytest.raises(ValueError, match=f'^early seed 0 read at {re.escape(before)}, before'):
+        _decide([early, reference], margins, store)
+
+def test_a_utc_time_written_with_z_reads_on_every_supported_python():
+    '''Pydantic writes a UTC time with Z, which Python 3.10's ``fromisoformat`` cannot read.'''
+
+    read = {'time': '2026-10-12T12:00:00Z'}
+
+    assert read_time(read, 'a read') == datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
 
 def test_a_decision_record_carries_every_trained_runs_monitor_reads(store, tmp_path):
     '''

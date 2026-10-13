@@ -10,15 +10,25 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
-from naics_embedder.decision.records import DecisionRecord, MarginRecord, read_record, write_record
+from naics_embedder.decision.economic import read_deterministic_arm
+from naics_embedder.decision.records import (
+    DecisionRecord,
+    EconomicDecisionRecord,
+    MarginRecord,
+    RelativeMarginRecord,
+    read_record,
+    write_record,
+)
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.metrics.diagnostics import DiagnosticsReport
-from naics_embedder.panels.regressor import RegressorPanel
+from naics_embedder.panels.qcew_rows import RegressorOutcome
+from naics_embedder.panels.regressor import Regime, RegressorPanel, reference_comparators
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.panels.window_summaries import SummariesPin
 from naics_embedder.utils.config import Config
-from tests.fixtures.decision import spec, synthetic_arm
+from tests.fixtures.decision import spec, synthetic_arm, write_text_only
+from tests.fixtures.economic import candidate_spec, write_candidate
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
     HELDOUT_GROUPS,
@@ -376,6 +386,8 @@ def test_decide_adopts_the_better_arm_and_writes_the_record(runner, tmp_path, de
     assert result.exit_code == 0, result.output
     output = result.output.replace('\n', '')
     assert 'better over reference: adopted' in output
+    # Three panels still read 98⅓ % (Req 24); Rich may wrap the line at any space
+    assert '98.33 % [' in ' '.join(result.output.split())
     assert 'Chosen: better' in output
     assert read_record(tmp_path / 'decision.json', DecisionRecord).chosen == 'better'
 
@@ -391,6 +403,105 @@ def test_decide_reports_a_tie_it_cannot_break(runner, tmp_path, decision_inputs)
     assert 'Decision failed' in result.output
     assert 'tie on components' in ' '.join(result.output.split())
     assert not (tmp_path / 'decision.json').exists()
+
+@pytest.fixture
+def growth_panel(monkeypatch, tmp_path, regressor_growth_rows):
+    '''The fixture growth panel in place of the real one, with the outcome each load asked for.'''
+
+    log = SelectionLog(tmp_path / 'selection_log.jsonl')
+    panel = RegressorPanel(
+        regressor_growth_rows, HELDOUT_GROUPS, log, SETTINGS, outcome=RegressorOutcome.GROWTH
+    )
+    loaded = []
+
+    def fake_load(cfg, codebook, *, log_path, levels):
+        loaded.append((cfg.outcome, codebook, log_path, tuple(levels)))
+        return panel
+
+    monkeypatch.setattr(tools_cli, 'load_regressor_panel', fake_load)
+    return panel, loaded
+
+def _growth_margins(runner, tmp_path, store):
+    lock = tmp_path / 'uv.lock'
+    lock.write_text('a fixture lock\n')
+    return runner.invoke(
+        tools_cli.app,
+        [
+            'growth-margins',
+            '--codebook',
+            'naics_codebook.parquet',
+            '--name',
+            'growth margins',
+            '--store',
+            str(store.root),
+            '--lock',
+            str(lock),
+            '--output',
+            str(tmp_path / 'margins.json'),
+        ],
+    )
+
+@pytest.mark.unit
+def test_growth_margins_reads_the_reference_alone_and_writes_the_margins(
+    runner, tmp_path, growth_panel
+):
+    panel, loaded = growth_panel
+
+    result = _growth_margins(runner, tmp_path, ArtifactStore(tmp_path / 'store'))
+
+    assert result.exit_code == 0, result.output
+    # The committed config reads level mode; the margin read reads growth in memory
+    assert loaded == [('growth', 'naics_codebook.parquet', None, (6, ))]
+    record = read_record(tmp_path / 'margins.json', RelativeMarginRecord)
+    assert record.r == 0.05
+    assert [entry.panel for entry in record.margins] == ['growth_seen', 'growth_heldout']
+    assert [read['detail']['comparators'] for read in panel.log.records()] == [
+        list(reference_comparators(regime, 6)) for regime in Regime
+    ]
+    assert {read['purpose'] for read in panel.log.records()} == {'economic margin read'}
+    output = result.output.replace('\n', '')
+    assert 'growth_heldout: δ' in output
+    assert record.read.environment.lock_sha256 in output
+
+@pytest.mark.unit
+def test_growth_margins_refuses_an_existing_record_before_anything_is_read(
+    runner, tmp_path, growth_panel
+):
+    panel, loaded = growth_panel
+    (tmp_path / 'margins.json').write_text('an earlier record')
+
+    result = _growth_margins(runner, tmp_path, ArtifactStore(tmp_path / 'store'))
+
+    assert result.exit_code == 1
+    assert 'exists; a record is written once' in ' '.join(result.output.split())
+    assert (loaded, panel.log.records()) == ([], [])
+    assert (tmp_path / 'margins.json').read_text() == 'an earlier record'
+
+@pytest.mark.unit
+def test_decide_reads_an_economic_decision_from_relative_margins(runner, tmp_path, growth_panel):
+    panel, _ = growth_panel
+    store = ArtifactStore(tmp_path / 'store')
+    assert _growth_margins(runner, tmp_path, store).exit_code == 0
+    table = write_candidate(tmp_path / 'candidates', 'tree', coordinate_table(CODEBOOK))
+    candidate = read_deterministic_arm(
+        candidate_spec('tree'),
+        table,
+        regressor_panel=panel,
+        text_only_table=write_text_only(tmp_path / 'text', codes=CODEBOOK),
+        margins=read_record(tmp_path / 'margins.json', RelativeMarginRecord),
+        store=store,
+        purpose='fixture candidate read',
+        lock=tmp_path / 'uv.lock',
+    )
+
+    result = _decide(runner, tmp_path, store, [write_record(candidate, tmp_path / 'tree.json')])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace('\n', '')
+    assert 'tree over covariates+ancestors: not adopted' in output
+    assert '97.5 % [' in ' '.join(result.output.split())
+    assert 'Chosen: none; the reference covariates+ancestors stands' in output
+    assert read_record(tmp_path / 'decision.json', EconomicDecisionRecord).chosen is None
 
 @pytest.mark.unit
 def test_diagnostics_reports_every_statistic_and_writes_json(runner, tmp_path):

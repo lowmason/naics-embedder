@@ -612,18 +612,36 @@ class TestRegressorPanelConfig:
 
 @pytest.mark.unit
 class TestDecisionConfig:
-    '''Req 5's decision procedure (roadmap Stage 4): the paired bootstrap and the seed floor.'''
+    '''
+    Req 5's decision procedure (roadmap Stage 4): the paired bootstrap and the seed floor, and
+    the economic decision's relative margin (Req 24).
+    '''
 
     def test_yaml_matches_defaults(self):
         cfg = load_config(DecisionConfig, 'data/decision.yaml')
 
         assert cfg == DecisionConfig()
         assert (cfg.replicates, cfg.bootstrap_seed, cfg.min_seeds) == (10000, 20260924, 5)
+        # U13: the economic δ is 0.05 × the reference's MSE
+        assert cfg.relative_margin == 0.05
 
     def test_the_seed_floor_is_req_5s(self):
         # Req 5: "Each arm runs at least 5 seeds"
         with pytest.raises(ValidationError):
             DecisionConfig(min_seeds=4)
+
+    @pytest.mark.parametrize(
+        ('r', 'message'),
+        [
+            (0.0, 'Input should be greater than 0'),
+            (-0.05, 'Input should be greater than 0'),
+            (float('inf'), 'Input should be a finite number'),
+            (float('nan'), 'Input should be a finite number'),
+        ],
+    )
+    def test_the_relative_margin_is_positive(self, r, message):
+        with pytest.raises(ValidationError, match=f'relative_margin\n  {message}'):
+            DecisionConfig(relative_margin=r)
 
     def test_rejects_too_few_replicates_and_unknown_keys(self):
         with pytest.raises(ValidationError):

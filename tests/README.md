@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **100 unit** test files and **2 integration** files, with **3,123 collected
+The suite contains **101 unit** test files and **2 integration** files, with **3,194 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -14,7 +14,7 @@ real selection campaign. Hugging Face fixture dependencies are resolved locally.
 
 ```text
 tests/
-├── unit/                         # 100 unit test files
+├── unit/                         # 101 unit test files
 ├── integration/
 │   ├── test_reference_training.py # tiny-backbone Trainer workflows
 │   └── test_remote_workflow.py    # GNU-rsync workflow qualification
@@ -34,6 +34,7 @@ tests/
 | Cache and outcome monitor | `test_monitor.py`: eval/no-grad refresh, detached candidates, live-anchor replacement, validation reads and durable records |
 | Selection-log guard | `test_selection_log_guard.py`: fail-closed refusals before appending reads or openings |
 | Regressor panel | `test_regressor_panel.py`, `test_regressor_qcew_rows.py`: level mode pinned at d61f49b, the growth outcome on the same rows and folds, and one seal per regime's split (Reqs 21–22) |
+| Economic decision | `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates' records and bit-identical pairing, eligibility, the tie order, margin-first refusals and the decision record (Req 24) |
 | Training and contracts | `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`, `test_export.py`, `test_arm_encoder.py`: objective refusal, settings/directory/seed guards, saved constructor controls, CPU/MPS float64 callback transport and export/read provenance |
 | Campaign runner | `test_checkpoint_runner.py`: all-seed preflight, earliest best, epoch coverage, saved-score/version-sibling refusals and monitor-record pass-through |
 | Verification and summary | `test_radius_report.py`, `test_epoch_summary.py`, `test_visualize_metrics.py`: live gradients, radius/distance checks, durable finite health, resume and SD bands |

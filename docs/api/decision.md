@@ -1,7 +1,8 @@
 # Decision Rule API
 
 Req 5's decision procedure over the three panels of roadmap D8, and the records that carry it
-(roadmap Stage 4).
+(roadmap Stage 4); and the economic artifact's decision over the two growth panels, against the
+reference `covariates+ancestors` (Req 24).
 
 ## Decision statistics
 
@@ -28,3 +29,7 @@ Req 5's decision procedure over the three panels of roadmap D8, and the records 
 ## Seed sweeps
 
 ::: naics_embedder.decision.sweep
+
+## The economic decision
+
+::: naics_embedder.decision.economic

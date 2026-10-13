@@ -111,7 +111,7 @@ for the candidates' decision.
       > Stages 2 and 3 consume.
       > Next: resume the roadmap.
 
-- [ ] Stage 2: Economic decision tooling
+- [x] Stage 2: Economic decision tooling
       Objective: Build Req 24's rule for the economic artifact and exercise it on fixtures: the
       reference-only margin read and relative margin, deterministic single-replicate arms, a
       comparator as the reference, and a superiority level set by the panel count.
@@ -157,6 +157,10 @@ for the candidates' decision.
       decision record" lists (test); `check_margins_first` refuses a missing or naive read time
       with a named error (test); Verification "Checks" passes.
       ROUTING: writing-plans
+      > Stage 2: COMPLETE (2026-10-13) — implemented by plan 14
+      > (specs/plans/completed/14-economic-decision-tooling.md). Its Handoff section names what
+      > Stage 3 consumes.
+      > Next: resume the roadmap.
 
 - [ ] Stage 3: The growth margin read
       Objective: With the user's approval at the time, run the reference-only growth read on real

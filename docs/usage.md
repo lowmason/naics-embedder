@@ -203,20 +203,21 @@ uv run naics-embedder tools text-only-table --descriptions data/naics_descriptio
 ### `tools regressor-panel`
 
 Score an arm on the regressor panel (roadmap Stage 3). Every comparator (covariates alone, and
-the arm's coordinates, one-hot, ancestor indicators and the text-only table, each alone and with
-the covariates) is fitted by ridge on standardized features, with the penalty tuned by nested
-grouped folds inside the remainder. The outcome is log employment in year t + 1 from year-t
-features. The seen and held-out regimes are separate panels. The validation split reads only the
-remainder. The test split opens each regime's sealed outer set first, and both the opening and
-the read are logged. The output holds one prediction per row, comparator and repeat (the test
-split has one repeat), with the row's outcome and the chosen penalty.
+the arm's coordinates, one-hot (seen regime only), ancestor indicators and the text-only table,
+each alone and with the covariates) is fitted by ridge on standardized features, with the penalty
+tuned by nested grouped folds inside the remainder. The outcome is log employment in year t + 1
+from year-t features. The seen and held-out regimes are separate panels. The validation split
+reads only the remainder. The test split opens each regime's sealed outer set first, and both the
+opening and the read are logged. The output holds one prediction per row, comparator and repeat
+(the test split has one repeat), with the row's outcome and the chosen penalty.
 
 The panel's `outcome` setting in `conf/data/regressor_panel.yaml` (Req 21) is `level`, the panel
 above, or `growth`: log E(t + 1) − log E(t) on the same rows, read as `growth_seen` and
 `growth_heldout`. One opening of a regime's outer set counts for both outcomes (Req 22). This
 command reads level mode only. Every read scores the arm and the text-only table, and Req 24
 records the economic margin before any candidate's growth error exists, so a config set to
-`growth` is refused before anything is read.
+`growth` is refused before anything is read. The growth margin read is
+[`tools growth-margins`](#tools-growth-margins)'s.
 
 ```bash
 uv run naics-embedder tools regressor-panel --coordinates arm.parquet \
@@ -369,21 +370,76 @@ uv run naics-embedder tools margins \
 - `--output PATH` - Where to write the margin record; an existing file is refused before any
   work, never overwritten
 
+### `tools growth-margins`
+
+Fix each growth panel's non-inferiority margin δ from a reference-only read (Req 24). The read
+scores each growth regime's level-6 validation split, `growth_seen` and `growth_heldout`, with
+only the comparators that read no candidate. The seen regime reads the covariates, one-hot and
+ancestor indicators, each alone and with the covariates; the held-out regime has no one-hot
+comparator and reads `covariates`, `ancestors` and `covariates+ancestors`. It computes neither
+`embedding` nor `text_only`, so no candidate's growth error exists before δ is recorded. δ is
+`relative_margin` in `conf/data/decision.yaml` (r = 0.05) times the validation MSE of the
+reference `covariates+ancestors`. The panel reads growth whatever the regressor config's
+`outcome` says, which stays `level` for `tools regressor-panel` and `tools sweep`.
+
+Run it once, before any candidate is read on growth: a decision refuses a candidate read before
+its margins were fixed. The record names the platform, Python and `uv.lock` sha256 the read ran
+under. A decision pairs only bit-identical reference predictions, so every candidate read must
+run on the same platform and lock.
+
+**Generates:** the relative margin record (JSON), with the read's selection-log records, and its
+predictions and scores in the store
+
+```bash
+uv run naics-embedder tools growth-margins --codebook PATH/naics_codebook.parquet \
+  --name growth-margins --store ~/naics-artifacts \
+  --output ~/naics-artifacts/records/economic/growth_margins.json
+```
+
+**Options:**
+- `--codebook PATH` - A supervision bundle's `naics_codebook.parquet`
+- `--name TEXT` - Names the margins in the decision records that use them
+- `--store PATH` - The artifact store for the read's predictions and scores
+- `--output PATH` - Where to write the margin record; an existing file is refused before anything
+  is read, never overwritten
+- `--purpose TEXT` - Why the read happens, recorded in the selection log (default: economic
+  margin read)
+- `--log PATH` - Selection log (default: the regressor config's)
+- `--lock PATH` - The `uv.lock` the read runs under, which the record names (default: `uv.lock`)
+
 ### `tools decide`
 
-Decide among two or more arms under Req 5's rule over the three panels of roadmap D8: the outcome
-panel and the regressor panel's seen and held-out regimes at level 6. Each comparison reads the
-difference Δ on paired resamples of each panel's units (codes with their queries; four-digit
-groups), with each arm's seeds resampled inside every replicate. A is adopted over B when it is
-non-inferior on all three panels (the 95 % interval's lower bound above −δ) and superior on at
-least one (the 98⅓ % interval above zero). The survivors are the arms no other arm is adopted
-over, and the tie order picks among them: fewer components, then lower dimension, then
-non-hyperbolic geometry, then the higher held-out gain over ancestors (roadmap D11). The number
-of replicates, the bootstrap seed and the seed floor come from `conf/data/decision.yaml`.
+Decide among arms under Req 5's rule. With a margin record from `tools margins`, it decides among
+two or more arms over the three panels of roadmap D8: the outcome panel and the regressor panel's
+seen and held-out regimes at level 6. With one from `tools growth-margins`, it makes the economic
+decision over the two growth panels (Req 24), below. Each comparison reads the difference Δ on
+paired resamples of each panel's units (codes with their queries; four-digit groups), with each
+arm's seeds resampled inside every replicate. A is adopted over B when it is non-inferior on
+every panel (the 95 % interval's lower bound above −δ) and superior on at least one (the
+1 − 0.05/n interval above zero, for n panels: 98⅓ % over D8's three, 97.5 % over the two growth
+panels). The survivors are the arms no other arm is adopted over, and the tie order picks among
+them: fewer components, then lower dimension, then non-hyperbolic geometry, then the higher
+held-out gain over `covariates+ancestors` (roadmap D11): on `regressor_heldout` for D8's decision,
+on `growth_heldout` for the economic decision, where it is the reference. The number of
+replicates and the bootstrap seed come from `conf/data/decision.yaml`, as does the seed floor,
+`min_seeds`, which applies to D8's decision only: the economic decision takes none, because each
+candidate is a single replicate.
+
+**The economic decision.** Its arms are economic arm records: a deterministic candidate's table,
+with the provenance its builder wrote, read once on each growth panel by
+`naics_embedder.decision.economic.read_deterministic_arm`, which has no command yet. Each
+candidate is a single replicate. A trained candidate's seeds have no economic record yet. Each
+candidate is compared with the reference `covariates+ancestors`, whose predictions in the
+margin read its read must reproduce bit for bit. Only a candidate adopted over the reference is
+eligible, and the rule above picks among the eligible; its last tie goes to the higher held-out
+gain over the reference. With none eligible, the reference stands, and there is no economic
+artifact.
 
 **Generates:** the decision record (JSON): the arms with their selection-log records and artifact
 references, the margins, every comparison with both intervals, the non-dominated set, the tie
-order, the chosen arm, and each arm's reported gains over the sparse comparators
+order, the chosen arm, and each arm's reported gains over the sparse comparators. The economic
+decision record names its reference, lists the candidates adopted over it and each candidate's
+MSE for every comparator, and chooses none when the reference stands
 
 ```bash
 uv run naics-embedder tools decide \
@@ -394,9 +450,21 @@ uv run naics-embedder tools decide \
   --store ~/naics-artifacts --output ~/naics-artifacts/records/stage7/decision.json
 ```
 
+The economic decision, over one candidate:
+
+```bash
+uv run naics-embedder tools decide \
+  --arm ~/naics-artifacts/records/economic/tree.json \
+  --margins ~/naics-artifacts/records/economic/growth_margins.json \
+  --name economic --question "Which candidate, if any, is the economic artifact?" \
+  --store ~/naics-artifacts --output ~/naics-artifacts/records/economic/decision.json
+```
+
 **Options:**
-- `--arm PATH` - An arm record; repeat for each arm
-- `--margins PATH` - The margin record (`tools margins`)
+- `--arm PATH` - An arm record, or for the economic decision an economic arm record; repeat for
+  each arm
+- `--margins PATH` - The margin record (`tools margins`, or `tools growth-margins` for the
+  economic decision)
 - `--name TEXT`, `--question TEXT` - Name the decision and say what it settles
 - `--store PATH` - The artifact store the arm records reference
 - `--output PATH` - Where to write the decision record; an existing file is refused before any

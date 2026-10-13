@@ -586,7 +586,10 @@ class RegressorPanelConfig(BaseModel):
     )
 
 class DecisionConfig(BaseModel):
-    '''Req 5's decision procedure (roadmap Stage 4): the paired bootstrap and the seed floor.'''
+    '''
+    Req 5's decision procedure (roadmap Stage 4): the paired bootstrap and the seed floor, and the
+    economic decision's relative margin (Req 24).
+    '''
 
     model_config = ConfigDict(extra='forbid')
 
@@ -597,6 +600,12 @@ class DecisionConfig(BaseModel):
         default=20260924, description='Base seed of every unit and seed draw'
     )
     min_seeds: int = Field(default=5, ge=5, description='Req 5: each arm runs at least 5 seeds')
+    relative_margin: float = Field(
+        default=0.05,
+        gt=0.0,
+        allow_inf_nan=False,
+        description="Req 24 (U13): each growth panel's δ as r times the reference's MSE",
+    )
 
 class SupervisionRuntimeConfig(BaseModel):
     '''
