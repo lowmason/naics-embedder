@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 Geometry = Literal['euclidean', 'spherical', 'hyperbolic']
 RecordType = TypeVar('RecordType', bound=BaseModel)
@@ -128,9 +128,9 @@ class SeedRun(_Record):
         training_run: The id of the training run the checkpoint is from, which its checkpoints
             save and its monitor reads name.
         checkpoint_epoch: The checkpoint's epoch: the earliest with the highest monitor MRR.
-        monitor_records: The training run's ``monitor_reads.jsonl`` records, oldest first, each
-            ``{'mrr': …, 'read': …}``: an epoch's MRR, and its read as the selection log
-            appended it.
+        monitor_records: The training run's ``monitor_reads.jsonl`` records, in the file's order,
+            each ``{'mrr': …, 'read': …}``: an epoch's MRR, and its read as the selection log
+            appended it. The checks read each record's epoch, never its position.
     '''
 
     seed: int
@@ -142,9 +142,11 @@ class SeedRun(_Record):
     predictions: ArtifactRef
     statistics: Dict[str, float]
     log_records: List[Dict[str, Any]]
-    # Each defaults, so a record written before runs carried their monitor reads still loads
-    training_run: Optional[str] = Field(default=None, min_length=1)
-    checkpoint_epoch: Optional[int] = Field(default=None, ge=0)
+    # Each defaults, so a record written before runs carried their monitor reads still loads. An
+    # imported record's identities are strict: a training run of spaces names none, and true
+    # would load as epoch 1
+    training_run: Optional[str] = Field(default=None, min_length=1, pattern=r'\S')
+    checkpoint_epoch: Optional[StrictInt] = Field(default=None, ge=0)
     monitor_records: List[Dict[str, Any]] = Field(default_factory=list)
 
 class ArmRecord(_Record):

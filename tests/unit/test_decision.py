@@ -688,6 +688,39 @@ def test_a_run_with_a_blank_training_run_or_a_negative_epoch_does_not_load(
     with pytest.raises(ValidationError, match=f'runs\\.3\\.{field}\\n.*{error}'):
         _edited(trained, lambda data: _run(data).update({field: value}))
 
+@pytest.mark.parametrize(
+    'field, value, error',
+    [('training_run', '   ', 'string_pattern_mismatch'), ('checkpoint_epoch', True, 'int_type')],
+    ids=['a-whitespace-training-run', 'a-boolean-checkpoint-epoch'],
+)
+def test_an_imported_run_with_a_whitespace_training_run_or_a_boolean_epoch_does_not_load(
+    tmp_path, trained, field, value, error
+):
+    '''A training run of spaces names none, and true would load as epoch 1.'''
+
+    path = tmp_path / 'imported.json'
+    path.write_text(
+        json.dumps(_json_edited(trained, lambda data: _run(data).update({field: value})))
+    )
+
+    with pytest.raises(ValidationError, match=f'runs\\.3\\.{field}\\n.*{error}'):
+        read_record(path, ArmRecord)
+
+@pytest.mark.parametrize(
+    'seed, logged', [(1, True), (3, 3.0)], ids=['a-boolean-seed', 'a-float-seed']
+)
+def test_a_monitor_read_names_its_runs_seed_as_an_integer(store, trained, seed, logged):
+    '''True == 1 and 3.0 == 3: only the type tells these from the run's seed.'''
+
+    arm = _edited(
+        trained, lambda data: _monitor_read(data, seed=seed)['detail'].update(seed=logged)
+    )
+
+    with pytest.raises(
+        ValueError, match=f"^trained seed {seed}: a monitor read names another \\['seed'\\]"
+    ):
+        check_arm(arm, store, min_seeds=5)
+
 def test_a_monitor_read_before_the_margins_were_fixed_is_refused(
     store, tmp_path, reference, margins
 ):

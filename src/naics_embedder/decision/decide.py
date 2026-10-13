@@ -247,13 +247,18 @@ def _monitor_record_problem(record: Any) -> Optional[str]:
         return 'its read names no non-negative integer epoch'
     return None
 
+def _same(logged: Any, named: Any) -> bool:
+    '''Whether a logged identity is the named one: equal, and of its type (True == 1, 3.0 == 3).'''
+
+    return type(logged) is type(named) and logged == named
+
 def _check_monitor_records(arm: ArmRecord, run: SeedRun) -> None:
     '''
     Require a trained run's monitor records to be the reads that selected its checkpoint (spec
     4.4): its training run's reads of the outcome panel's validation split, under the distance of
     the arm's geometry (Req 12), no epoch twice, with the checkpoint from the earliest epoch with
     the highest MRR. A run with no training run has neither monitor records nor a checkpoint
-    epoch.
+    epoch. Each read names the run's identities by type as well as value.
 
     That the records cover every epoch through the run's last checkpoint is the runner's check
     (spec §5): a record holds no last checkpoint to count the epochs against.
@@ -300,7 +305,7 @@ def _check_monitor_records(arm: ArmRecord, run: SeedRun) -> None:
             'seed': detail.get('seed'),
             'distance': detail.get('distance'),
         }
-        wrong = sorted(key for key in named if logged[key] != named[key])
+        wrong = sorted(key for key in named if not _same(logged[key], named[key]))
         if wrong:
             raise ValueError(f'{name}: a monitor read names another {wrong}')
         epochs.append(detail['epoch'])
