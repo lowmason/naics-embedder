@@ -414,7 +414,7 @@ class EconomicRun(_Record):
     '''
 
     seed: Optional[StrictInt] = None
-    run_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1, pattern=r'\S')
     table: TableRef
     provenance: TableProvenance
     scores: ArtifactRef

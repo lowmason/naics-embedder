@@ -421,11 +421,16 @@ def check_reference_pairing(
     Only the predictions decide; the environments name where each read ran.
 
     Raises:
-        ValueError: If the panels, data or fit settings differ, or the reference's predictions
-            in a run differ from the margin read's.
+        ValueError: If the arm does not hold exactly one run, if the panels, data or fit settings
+            differ, or if the reference's predictions in a run differ from the margin read's.
     '''
 
     name = arm.spec.name
+    if len(arm.runs) != 1:
+        raise ValueError(
+            f'{name}: an economic arm is one deterministic replicate (Req 24), not '
+            f'{len(arm.runs)} runs'
+        )
     _require_same_panels(name, arm.panels, margins)
     reference = _reference_rows(store.read_frame(margins.read.predictions))
     for run in arm.runs:

@@ -328,6 +328,18 @@ def test_an_imported_run_with_a_checkpoint_or_monitor_reads_does_not_load(
     with pytest.raises(ValidationError, match=f'runs\\.0\\.{field}\\n  Extra inputs'):
         read_record(path, EconomicArmRecord)
 
+@pytest.mark.parametrize('run_id', ['', '   '], ids=['empty', 'blank'])
+def test_an_imported_run_with_a_blank_run_id_does_not_load(arm, tmp_path, run_id):
+    '''A run's id names its selection-log records, so an id of spaces names nothing.'''
+
+    data = json.loads(arm.model_dump_json())
+    data['runs'][0]['run_id'] = run_id
+    path = tmp_path / 'imported.json'
+    path.write_text(json.dumps(data))
+
+    with pytest.raises(ValidationError, match='runs\\.0\\.run_id'):
+        read_record(path, EconomicArmRecord)
+
 def test_an_economic_arm_is_one_replicate_with_no_seed(arm, store):
     (run, ) = arm.runs
     seeded = arm.model_copy(update={'runs': [run.model_copy(update={'seed': 0})]})
@@ -379,6 +391,21 @@ def test_reference_predictions_that_differ_from_the_margin_reads_do_not_pair(arm
                 'runs': [refit]
             }), store
         )
+
+def test_the_pairing_check_alone_refuses_an_arm_without_exactly_one_run(arm, margins, store):
+    '''A loop over no runs would pass an arm that read nothing, so the check refuses it first.'''
+
+    (run, ) = arm.runs
+    none = arm.model_copy(update={'runs': []})
+    twice = arm.model_copy(update={'runs': [run, run]})
+
+    for record, count in ((none, 0), (twice, 2)):
+        with pytest.raises(
+            ValueError,
+            match=f'^tree: an economic arm is one deterministic replicate \\(Req 24\\), '
+            f'not {count} runs$'
+        ):
+            check_reference_pairing(margins, record, store)
 
 # -------------------------------------------------------------------------------------------------
 # The economic decision (Verification "Economic decision record", "Margin first, reference only")
