@@ -9,9 +9,11 @@ reference's errors pair exactly with each candidate's.
 import hashlib
 import json
 import platform
+import re
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import numpy as np
 import polars as pl
 import pytest
 from pydantic import ValidationError
@@ -21,16 +23,19 @@ from naics_embedder.decision.economic import (
     REFERENCE_COMPARATOR,
     check_economic_arm,
     check_reference_pairing,
+    decide_economic,
     fix_relative_margins,
     read_deterministic_arm,
 )
 from naics_embedder.decision.records import (
     EconomicArmRecord,
+    EconomicDecisionRecord,
     RelativeMarginRecord,
     read_record,
     write_record,
 )
-from naics_embedder.decision.scores import panel_statistic
+from naics_embedder.decision.resampling import percentile_interval, stream
+from naics_embedder.decision.scores import panel_statistic, regressor_scores, statistic_values
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import (
@@ -374,3 +379,334 @@ def test_reference_predictions_that_differ_from_the_margin_reads_do_not_pair(arm
                 'runs': [refit]
             }), store
         )
+
+# -------------------------------------------------------------------------------------------------
+# The economic decision (Verification "Economic decision record", "Margin first, reference only")
+# -------------------------------------------------------------------------------------------------
+
+REPLICATES = 2000
+BOOTSTRAP_SEED = 20260924
+GROWTH_SEEN, GROWTH_HELDOUT = GROWTH_PANELS
+
+def _both(factor):
+    return dict.fromkeys(GROWTH_PANELS, factor)
+
+def _scaled(arm, factors, store):
+    '''
+    The arm, rescored with each ``covariates+embedding`` prediction moved to the outcome plus
+    ``factors[panel]`` times the reference's error on its row and repeat. Every row's squared
+    error is then factor² times the reference's, so Δ on each item is (1 − factor²) times the
+    reference's error, whatever the draw.
+    '''
+
+    (run, ) = arm.runs
+    predictions = store.read_frame(run.predictions)
+    keys = ['panel', 'repeat', 'code', 'feature_year']
+    reference = predictions.filter(pl.col('comparator') == REFERENCE_COMPARATOR
+                                   ).select(*keys, reference='prediction')
+    factor = pl.when(pl.col('panel') == GROWTH_SEEN).then(factors[GROWTH_SEEN]).otherwise(
+        factors[GROWTH_HELDOUT]
+    )
+    error = pl.col('reference') - pl.col('outcome')
+    moved = predictions.join(reference, on=keys).with_columns(
+        prediction=pl.when(pl.col('comparator') == 'covariates+embedding').then(
+            pl.col('outcome') + factor * error
+        ).otherwise('prediction')
+    ).select(predictions.columns)
+    scores = regressor_scores(moved, SETTINGS.repeats, GROWTH_PANELS)
+    scaled = run.model_copy(
+        update={
+            'predictions': store.put_frame(moved, 'predictions.parquet'),
+            'scores': store.put_frame(scores, 'scores.parquet'),
+            'statistics': {
+                panel: panel_statistic(scores, panel, 'covariates+embedding')
+                for panel in GROWTH_PANELS
+            },
+        }
+    )
+    return arm.model_copy(update={'runs': [scaled]})
+
+@pytest.fixture
+def candidates(growth_panel, text_only, margins, store, lock, tmp_path):
+    '''Reads a new candidate, after the margins, and scales its errors (``_scaled``).'''
+
+    def read(name, factors, **overrides):
+        table = write_candidate(tmp_path / 'candidates', name, coordinate_table(CODEBOOK))
+        arm_spec = candidate_spec(name, **overrides)
+        arm = _read(table, growth_panel, text_only, margins, store, lock, arm_spec)
+        return _scaled(arm, factors, store)
+
+    return read
+
+def _decide(arms, margins, store):
+    return decide_economic(
+        'fixture economic decision',
+        'which candidate, if any, is the economic artifact?',
+        arms,
+        margins,
+        store,
+        replicates=REPLICATES,
+        bootstrap_seed=BOOTSTRAP_SEED,
+    )
+
+def test_a_candidate_adopted_over_the_reference_is_chosen(candidates, margins, store):
+    record = _decide([candidates('better', _both(0.5))], margins, store)
+
+    (comparison, ) = record.comparisons
+    assert (comparison.a, comparison.b, comparison.adopted) == (
+        'better', REFERENCE_COMPARATOR, True
+    )
+    assert [(panel.non_inferior, panel.superior)
+            for panel in comparison.panels] == [(True, True)] * 2
+    assert (record.eligible, record.non_dominated, record.cycle) == (['better'], ['better'], False)
+    assert (record.tie_order, record.chosen) == (['better'], 'better')
+
+@pytest.mark.parametrize(
+    'factor, verdicts', [(1.0, (True, False)), (1.5, (False, False))], ids=['equal', 'worse']
+)
+def test_with_no_candidate_adopted_the_reference_stands(
+    candidates, margins, store, factor, verdicts
+):
+    '''Req 24: with none eligible the reference stands, and there is no economic artifact.'''
+
+    record = _decide([candidates('candidate', _both(factor))], margins, store)
+
+    (comparison, ) = record.comparisons
+    assert [(panel.non_inferior, panel.superior) for panel in comparison.panels] == [verdicts] * 2
+    assert (record.eligible, record.non_dominated, record.cycle) == ([], [], False)
+    assert (record.tie_order, record.chosen) == ([], None)
+
+def test_only_candidates_adopted_over_the_reference_are_eligible(candidates, margins, store):
+    '''Req 24: the rule picks among the eligible, compared with each other only.'''
+
+    arms = [
+        candidates('better', _both(0.5)),
+        candidates('best', _both(0.3)),
+        candidates('equal', _both(1.0)),
+    ]
+
+    record = _decide(arms, margins, store)
+
+    assert [(c.a, c.b, c.adopted) for c in record.comparisons] == [
+        ('better', REFERENCE_COMPARATOR, True),
+        ('best', REFERENCE_COMPARATOR, True),
+        ('equal', REFERENCE_COMPARATOR, False),
+        ('better', 'best', False),
+        ('best', 'better', True),
+    ]
+    assert record.eligible == ['better', 'best']
+    assert (record.non_dominated, record.tie_order, record.chosen) == (['best'], ['best'], 'best')
+
+def test_the_tie_order_prefers_fewer_components_among_the_eligible(candidates, margins, store):
+    stacked = candidates('stacked', _both(0.5), components=2)
+    simple = candidates('simple', _both(0.5))
+
+    record = _decide([stacked, simple], margins, store)
+
+    # Equal errors: neither is adopted over the other
+    assert record.non_dominated == ['stacked', 'simple']
+    assert (record.tie_order, record.chosen) == (['simple', 'stacked'], 'simple')
+
+def test_the_higher_heldout_gain_over_the_reference_breaks_a_remaining_tie(
+    candidates, margins, store
+):
+    '''D11, for growth: each candidate is superior on one panel and inferior on the other.'''
+
+    seen = candidates('seen', {GROWTH_SEEN: 0.5, GROWTH_HELDOUT: 0.7})
+    heldout = candidates('heldout', {GROWTH_SEEN: 0.7, GROWTH_HELDOUT: 0.5})
+
+    record = _decide([seen, heldout], margins, store)
+
+    assert record.eligible == record.non_dominated == ['seen', 'heldout']
+    assert record.heldout_gain['heldout'] > record.heldout_gain['seen'] > 0
+    assert (record.tie_order, record.chosen) == (['heldout', 'seen'], 'heldout')
+
+def test_the_economic_decision_record_shows_what_verification_lists(
+    candidates, margins, store, tmp_path
+):
+    record = _decide([candidates('better', _both(0.5))], margins, store)
+    path = write_record(record, tmp_path / 'decision.json')
+
+    assert read_record(path, EconomicDecisionRecord) == record
+    # Two panels, with their 95 % non-inferiority and 97.5 % superiority intervals
+    assert (record.settings.noninferiority_level, record.settings.superiority_level) == (
+        0.95, 0.975
+    )
+    assert [panel.panel for panel in record.comparisons[0].panels] == list(GROWTH_PANELS)
+    # δ = 0.05 × the reference's MSE per panel, and the reference
+    scores = store.read_frame(margins.read.scores)
+    for panel, entry in zip(GROWTH_PANELS, record.margins.margins):
+        assert (entry.panel, entry.margin) == (panel, 0.05 * entry.reference_mse)
+        assert entry.reference_mse == pytest.approx(
+            panel_statistic(scores, panel, REFERENCE_COMPARATOR), rel=1e-12
+        )
+    assert record.reference == record.margins.reference == 'covariates+ancestors'
+    # Each candidate's provenance, which names no employment-data input
+    assert record.arms[0].runs[0].provenance.content['inputs'] == {
+        'codebook': 'the fixture codebook'
+    }
+    # The chosen arm
+    assert record.chosen == 'better'
+    # One-hot is still reported, where the seen regime scores it
+    (report, ) = record.reports
+    assert report.statistics == pytest.approx(record.arms[0].runs[0].statistics, rel=1e-12)
+    assert 'covariates+one_hot' in report.comparator_mse[GROWTH_SEEN]
+    assert 'covariates+one_hot' not in report.comparator_mse[GROWTH_HELDOUT]
+
+def test_a_single_replicate_is_resampled_by_its_units_alone(candidates, margins, store):
+    '''
+    Req 24: a deterministic candidate is one replicate, so each bootstrap replicate's Δ is the
+    reference's MSE minus the candidate's on a draw of four-digit groups alone, shared by both.
+    '''
+
+    arm = candidates('better', _both(0.5))
+
+    record = _decide([arm], margins, store)
+
+    for panel, comparison in zip(GROWTH_PANELS, record.comparisons[0].panels):
+        reference = statistic_values(
+            store.read_frame(margins.read.scores), panel, REFERENCE_COMPARATOR
+        )
+        candidate = statistic_values(
+            store.read_frame(arm.runs[0].scores), panel, 'covariates+embedding'
+        )
+        # yapf: disable
+        by_unit = (
+            reference
+            .join(candidate, on=['unit', 'item'], suffix='_candidate')
+            .group_by('unit')
+            .agg(delta=(pl.col('value') - pl.col('value_candidate')).sum(), n=pl.len())
+            .sort('unit')
+        )
+        # yapf: enable
+        units = by_unit.height
+        counts = np.random.default_rng([BOOTSTRAP_SEED, stream(panel)]).multinomial(
+            units, np.full(units, 1.0 / units), size=REPLICATES
+        )
+        replicates = counts @ by_unit['delta'].to_numpy() / (counts @ by_unit['n'].to_numpy())
+        assert comparison.noninferiority_interval == pytest.approx(
+            percentile_interval(replicates, 0.95), rel=1e-12
+        )
+        assert comparison.superiority_interval == pytest.approx(
+            percentile_interval(replicates, 0.975), rel=1e-12
+        )
+
+def test_a_candidate_read_before_the_margins_were_fixed_is_refused(
+    candidates, growth_panel, store, lock
+):
+    '''Verification "Margin first": margins fixed after a candidate's read cannot judge it.'''
+
+    arm = candidates('tree', _both(0.5))
+    later = fix_relative_margins(
+        growth_panel, R, 'later margins', store, purpose=PURPOSE, lock=lock
+    )
+    first = min(datetime.fromisoformat(read['time']) for read in arm.runs[0].log_records)
+
+    with pytest.raises(
+        ValueError,
+        match=f'^tree read at {re.escape(first.isoformat())}, before the margins were fixed',
+    ):
+        _decide([arm], later, store)
+
+def test_margins_fixed_before_their_own_read_are_refused(candidates, margins, store):
+    '''Verification "Margin first": δ is recorded from a reference-only read that precedes it.'''
+
+    arm = candidates('tree', _both(0.5))
+    early = margins.model_copy(update={'fixed_at': margins.fixed_at - timedelta(hours=1)})
+
+    with pytest.raises(
+        ValueError,
+        match="^the margins 'fixture margins' were fixed at .*, before their growth_seen read",
+    ):
+        _decide([arm], early, store)
+
+def _margin_read(margins, **update):
+    return margins.model_copy(update={'read': margins.read.model_copy(update=update)})
+
+def test_margins_whose_read_was_not_reference_only_are_refused(candidates, margins, store):
+    '''Verification "Margin first, reference only": decide refuses a margin read of a candidate.'''
+
+    arm = candidates('tree', _both(0.5))
+    (run, ) = arm.runs
+    reads = json.loads(json.dumps(margins.read.log_records))
+    reads[0]['detail']['arm'] = run.table.matrix_fingerprint
+    candidate_read = _margin_read(margins, predictions=run.predictions, scores=run.scores)
+
+    with pytest.raises(
+        ValueError,
+        match="^the margins 'fixture margins': the growth_seen read is not a validation read of "
+        'the reference comparators alone',
+    ):
+        _decide([arm], _margin_read(margins, log_records=reads), store)
+    with pytest.raises(
+        ValueError,
+        match=
+        "^the margins 'fixture margins': the growth_seen read scored .*'covariates\\+embedding'",
+    ):
+        _decide([arm], candidate_read, store)
+
+def test_margins_whose_delta_is_not_r_times_the_reference_mse_are_refused(
+    candidates, margins, store
+):
+    arm = candidates('tree', _both(0.5))
+    first = margins.margins[0]
+    doubled = first.model_copy(update={'margin': 2 * first.margin})
+    rescaled = first.model_copy(
+        update={
+            'reference_mse': 2 * first.reference_mse,
+            'margin': R * 2 * first.reference_mse
+        }
+    )
+
+    for entry in (doubled, rescaled):
+        edited = margins.model_copy(update={'margins': [entry, *margins.margins[1:]]})
+        with pytest.raises(
+            ValueError,
+            match="^the margins 'fixture margins': the growth_seen δ is not r × the reference's",
+        ):
+            _decide([arm], edited, store)
+    with pytest.raises(ValueError, match="name the reference 'covariates\\+one_hot'"):
+        _decide([arm], margins.model_copy(update={'reference': 'covariates+one_hot'}), store)
+
+def test_the_decision_refuses_a_candidate_whose_reference_predicts_otherwise(
+    candidates, margins, store
+):
+    arm = candidates('tree', _both(0.5))
+    (run, ) = arm.runs
+    reference = pl.col('comparator') == REFERENCE_COMPARATOR
+    predictions = store.read_frame(run.predictions).with_columns(
+        prediction=pl.when(reference).then(pl.col('prediction') + 1e-12).otherwise('prediction')
+    )
+    scores = regressor_scores(predictions, SETTINGS.repeats, GROWTH_PANELS)
+    refit = run.model_copy(
+        update={
+            'predictions': store.put_frame(predictions, 'predictions.parquet'),
+            'scores': store.put_frame(scores, 'scores.parquet'),
+        }
+    )
+
+    with pytest.raises(ValueError, match='^tree: its covariates\\+ancestors predictions differ'):
+        _decide([arm.model_copy(update={'runs': [refit]})], margins, store)
+
+def test_a_candidate_whose_statistics_are_not_its_predictions_is_refused(candidates, store):
+    '''The decision scores the predictions the pairing guard compared, and the record must agree.'''
+
+    arm = candidates('tree', _both(0.5))
+    (run, ) = arm.runs
+    shifted = store.read_frame(run.predictions).with_columns(prediction=pl.col('prediction') + 1.0)
+    moved = run.model_copy(update={'predictions': store.put_frame(shifted, 'predictions.parquet')})
+
+    with pytest.raises(ValueError, match="^tree: the record's statistics are not those of its"):
+        check_economic_arm(arm.model_copy(update={'runs': [moved]}), store)
+
+def test_a_decision_reads_distinct_candidates_none_named_for_the_reference(
+    candidates, margins, store
+):
+    better = candidates('better', _both(0.5))
+    named = candidates(REFERENCE_COMPARATOR, _both(0.5))
+
+    with pytest.raises(ValueError, match='at least one candidate'):
+        _decide([], margins, store)
+    for arms in ([better, better], [named]):
+        with pytest.raises(ValueError, match='^candidate names must be distinct'):
+            _decide(arms, margins, store)
