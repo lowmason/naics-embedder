@@ -33,9 +33,10 @@ D1–D11 the embedding roadmap's decisions.
 origin/main d228132, where the spec is still 0a39042's. Under `src/`, Stage 1 edited
 `panels/qcew_rows.py`, `panels/regressor.py`, `panels/selection_log.py`, `decision/sweep.py`,
 `cli/commands/tools.py` and `utils/config.py`; the other `decision` modules cited here,
-`conf/data/decision.yaml` and `specs/deferred_items.md` are unchanged. Plan 13's Handoff (the
-shipped section that closes the plan, not the draft inside its completion step) names what both
-stages consume, and their entries now cite it: Stage 2 lifts or routes around three paths that
+`conf/data/decision.yaml` and `specs/deferred_items.md` are unchanged. Plan 13's Handoff
+(`specs/plans/completed/13-growth-outcome-and-seals.md:3020`, the shipped section, not the draft
+at `:2893` inside its completion step) names what both stages consume, and their entries now cite
+it: Stage 2 lifts or routes around three paths that
 refuse a growth panel, and Stage 3 lists the real log's existing openings. The read path's three
 citations moved; they were re-pointed to d228132 in Stage 2's Consumes and the Req 24 row. Three
 shipped differences that no Handoff bullet names were put to the user at the resume's Ask and
@@ -121,7 +122,8 @@ for the candidates' decision.
       D10's sparse baselines); Deferred items this touches; D10; D11.
       Gap closed: Req 24 (the tooling); Req 23 (the record); Req 18 (the economic decision).
       Consumes: Stage 1's growth reads, read names, data fingerprint and seal, through the
-      interfaces and traps plan 13's Handoff names (plan 13, Handoff; Resolved at resume,
+      interfaces and traps plan 13's Handoff names (plan 13, Handoff:
+      `specs/plans/completed/13-growth-outcome-and-seals.md:3020`; Resolved at resume,
       2026-10-12). The panel's read path, which takes an arm and scores `embedding` and
       `text_only` in every read (`panels/regressor.py:163-177`, `:670-695`, `:799-813` at
       d228132; plan 13, Handoff): the reference-only read is this stage's.
@@ -166,7 +168,9 @@ for the candidates' decision.
       to origin/main and synced into local main, where the read runs: the held `chore(local)`
       commit is what points `qcew_dir` at the verified QCEW slices, whose hashes
       `conf/data/regressor_panel.yaml` pins. That file keeps `outcome: level`, and no real growth
-      read or opening has happened (plan 13, Handoff; Resolved at resume, 2026-10-12). The main
+      read or opening has happened (plan 13, Handoff:
+      `specs/plans/completed/13-growth-outcome-and-seals.md:3020`; Resolved at resume,
+      2026-10-12). The main
       checkout's selection log (`logs/selection_log.jsonl`, gitignored and append-only), which
       this stage is the first to read: an opening of either level regime under `deddfd4c…`
       already seals that regime's growth split, and
