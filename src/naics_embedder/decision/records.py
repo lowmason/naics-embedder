@@ -18,6 +18,9 @@ The economic decision (Req 24) has kinds of its own:
 
 - **Relative margin record.** Each growth panel's δ, r times the reference comparator's
   validation MSE, from a margin read that reads no candidate.
+- **Economic arm record.** A deterministic candidate's single replicate: its table and that
+  table's provenance (Req 23), read once on each growth panel, with no checkpoint or monitor
+  reads.
 
 Artifact references are paths relative to an ``ArtifactStore`` root with their sha256, so a
 record names exactly the bytes it was computed from.
@@ -371,6 +374,71 @@ class RelativeMarginRecord(_Record):
             if entry.panel == panel:
                 return entry.margin
         raise ValueError(f'the margins {self.name!r} hold no δ for {panel}')
+
+# -------------------------------------------------------------------------------------------------
+# The economic decision's arms (Req 23; Req 24)
+# -------------------------------------------------------------------------------------------------
+
+class TableProvenance(_Record):
+    '''
+    A candidate table's provenance, as its builder wrote it beside the table (Req 23).
+
+    Attributes:
+        file: The stored provenance file.
+        content: Its JSON object, verbatim: what the table was built from.
+    '''
+
+    file: ArtifactRef
+    content: Dict[str, Any]
+
+class EconomicRun(_Record):
+    '''
+    One replicate of an economic candidate: its table, read once on each growth panel.
+
+    A deterministic candidate is a single replicate (Req 24), so a run has no seed, and no field
+    for a checkpoint or monitor reads: an imported run that names one does not load.
+
+    Attributes:
+        seed: None: a deterministic candidate has no seed.
+        run_id: Names the run in its selection-log records.
+        table: The candidate's 2,125-code table, in the export form.
+        provenance: The table's provenance.
+        scores: Both growth panels' per-row scores (``decision.scores.SCORE_COLUMNS``).
+        predictions: Both growth panels' level-6 validation predictions.
+        statistics: Each growth panel's decision statistic.
+        log_records: The selection-log records of the run's reads.
+    '''
+
+    seed: Optional[StrictInt] = None
+    run_id: str = Field(min_length=1)
+    table: TableRef
+    provenance: TableProvenance
+    scores: ArtifactRef
+    predictions: ArtifactRef
+    statistics: Dict[str, float]
+    log_records: List[Dict[str, Any]]
+
+class EconomicArmRecord(_Record):
+    '''
+    An economic candidate's reads of the growth panels (``decision.economic``).
+
+    Attributes:
+        spec: The candidate, with what the tie order and D9 read.
+        text_only: The text-only table its reads scored as ``covariates+text_only`` (D9).
+        store: The artifact store's root.
+        panels: The growth panel it read.
+        environment: Where it was read.
+        runs: Its replicates: one, for a deterministic candidate (Req 24).
+    '''
+
+    kind: Literal['economic_arm'] = 'economic_arm'
+    spec: ArmSpec
+    text_only: TextOnlyRef
+    store: str
+    panels: GrowthPanelSet
+    environment: ReadEnvironment
+    runs: List[EconomicRun]
+    created_at: datetime
 
 # -------------------------------------------------------------------------------------------------
 # Files
