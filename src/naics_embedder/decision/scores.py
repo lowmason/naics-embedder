@@ -16,7 +16,7 @@ Scores are long: one row per panel, statistic and item, with the item's resampli
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
-from typing import Dict, Tuple
+from typing import Dict, Sequence, Tuple
 
 import polars as pl
 
@@ -102,25 +102,34 @@ def outcome_scores(per_query: pl.DataFrame) -> pl.DataFrame:
         feature_year=pl.lit(None, dtype=pl.Int32),
     ).select(SCORE_COLUMNS).cast(SCORE_SCHEMA)
 
-def regressor_scores(predictions: pl.DataFrame, repeats: int) -> pl.DataFrame:
+def regressor_scores(
+    predictions: pl.DataFrame,
+    repeats: int,
+    panels: Sequence[str] = REGRESSOR_PANELS,
+) -> pl.DataFrame:
     '''
     Both regimes' scores from level-6 validation predictions: each comparator's squared error per
     row (a code in a feature year), averaged over the row's repeats.
 
+    Args:
+        predictions: The reads' predictions (``panels.regressor.PREDICTION_COLUMNS``).
+        repeats: The validation repeats each row was scored under.
+        panels: The read names the predictions may carry: D8's regressor regimes, or the growth
+            panels of the economic decision (Req 24).
+
     Raises:
-        ValueError: If a row is not a level-6 validation row of a regressor panel, or a row does not
-            have exactly ``repeats`` predictions, one per repeat, under every comparator of its
-            panel.
+        ValueError: If a row is not a level-6 validation row of ``panels``, or a row does not have
+            exactly ``repeats`` predictions, one per repeat, under every comparator of its panel.
     '''
 
     outside = predictions.filter(
         (pl.col('split') != VALIDATION) | (pl.col('level') != DECISION_LEVEL)
-        | ~pl.col('panel').is_in(list(REGRESSOR_PANELS))
+        | ~pl.col('panel').is_in(list(panels))
     )
     if outside.height:
         raise ValueError(
             f'{outside.height:,} predictions are not level-{DECISION_LEVEL} validation rows of '
-            f'{list(REGRESSOR_PANELS)}'
+            f'{list(panels)}'
         )
     keys = ['panel', 'comparator', 'group', 'code', 'feature_year']
     # yapf: disable
