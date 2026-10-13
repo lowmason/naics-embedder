@@ -627,11 +627,17 @@ class TestDecisionConfig:
         with pytest.raises(ValidationError):
             DecisionConfig(min_seeds=4)
 
-    @pytest.mark.parametrize('r', [0.0, -0.05])
-    def test_the_relative_margin_is_positive(self, r):
-        with pytest.raises(
-            ValidationError, match='relative_margin\n  Input should be greater than 0'
-        ):
+    @pytest.mark.parametrize(
+        ('r', 'message'),
+        [
+            (0.0, 'Input should be greater than 0'),
+            (-0.05, 'Input should be greater than 0'),
+            (float('inf'), 'Input should be a finite number'),
+            (float('nan'), 'Input should be a finite number'),
+        ],
+    )
+    def test_the_relative_margin_is_positive(self, r, message):
+        with pytest.raises(ValidationError, match=f'relative_margin\n  {message}'):
             DecisionConfig(relative_margin=r)
 
     def test_rejects_too_few_replicates_and_unknown_keys(self):

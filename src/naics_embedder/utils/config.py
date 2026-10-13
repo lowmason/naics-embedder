@@ -603,6 +603,7 @@ class DecisionConfig(BaseModel):
     relative_margin: float = Field(
         default=0.05,
         gt=0.0,
+        allow_inf_nan=False,
         description="Req 24 (U13): each growth panel's δ as r times the reference's MSE",
     )
 

@@ -152,7 +152,7 @@ def test_the_margins_read_growth_only(regressor_rows, log, store, lock):
         fix_relative_margins(level, R, 'level margins', store, purpose=PURPOSE, lock=lock)
     assert log.records() == []
 
-@pytest.mark.parametrize('r', [0.0, -0.05])
+@pytest.mark.parametrize('r', [0.0, -0.05, float('nan'), float('inf')])
 def test_r_must_be_positive(growth_panel, log, store, lock, r):
     with pytest.raises(ValueError, match='r must be positive'):
         fix_relative_margins(growth_panel, r, 'none', store, purpose=PURPOSE, lock=lock)

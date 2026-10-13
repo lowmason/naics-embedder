@@ -201,13 +201,13 @@ def fix_relative_margins(
         lock: The ``uv.lock`` the read runs under, which the record names.
 
     Raises:
-        ValueError: If ``r`` is not positive, or the panel is not the growth panel at the decision
-            level, before anything is read.
+        ValueError: If ``r`` is not a positive finite number, or the panel is not the growth panel
+            at the decision level, before anything is read.
         FileNotFoundError: If ``lock`` is not a file, before anything is read.
     '''
 
-    if r <= 0:
-        raise ValueError(f'the margin multiple r must be positive, got {r}')
+    if not (math.isfinite(r) and r > 0):
+        raise ValueError(f'the margin multiple r must be positive and finite, got {r}')
     _require_growth(panel, 'the margins')
     environment = read_environment(lock)
     run_id = f'margins/{uuid.uuid4().hex}'
