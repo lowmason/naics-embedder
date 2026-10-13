@@ -7,7 +7,7 @@
 **Status: APPROVED (2026-10-12); resumed once on 2026-10-12.** Derived in an interactive session.
 The user answered the derivation's two questions (Decisions, below) and approved the three-stage
 partition at the human checkpoint. Stage 1 is complete, and the resume after it re-validated
-Stages 2 and 3 (below).
+Stages 2 and 3 (below). Stage 2 is next, via writing-plans.
 
 **Basis.** Source spec `specs/naics-representation-split.md` at 0a39042, unchanged through
 origin/main 5ef7e7b (PR #137). Evidence was read at origin/main 5ef7e7b, and line citations are
@@ -37,9 +37,14 @@ origin/main d228132, where the spec is still 0a39042's. Under `src/`, Stage 1 ed
 shipped section that closes the plan, not the draft inside its completion step) names what both
 stages consume, and their entries now cite it: Stage 2 lifts or routes around three paths that
 refuse a growth panel, and Stage 3 lists the real log's existing openings. The read path's three
-citations moved; they were re-pointed to d228132 in Stage 2's Consumes and the Req 24 row. Every
+citations moved; they were re-pointed to d228132 in Stage 2's Consumes and the Req 24 row. Three
+shipped differences that no Handoff bullet names were put to the user at the resume's Ask and
+approved; each is marked "found at resume" in Stage 2's Consumes. They are `min_seeds`'s move to
+`utils/config.py:599` (also re-pointed in the Req 23 row), the growth refusals that Stage 1 wrote
+into `CLAUDE.md` and the panel config's comment, and the fixture panel's growth rows. Every
 verdict stands, and the rows of Reqs 20–22, which Stage 1 closed, stay as entry-time evidence. No
-panel read, selection-log read or opening ran during this resume.
+panel read, selection-log read or opening ran during this resume. Stage 2 routes to
+writing-plans; the next plan number is 14.
 
 ## Gap analysis
 
@@ -50,7 +55,7 @@ panel read, selection-log read or opening ran during this resume.
 | 20 | missing | `panels/qcew_rows.py:218-219` (the only outcome, log E(t+1)) | Its one build is Req 21's panel. The ranking, U5's answer and the NAICS 2022 basis need no code: the panel reads the bundle's NAICS 2022 codebook. |
 | 21 | missing | `utils/config.py:532-583` (`RegressorPanelConfig` has no `outcome` setting); `panels/qcew_rows.py:202-225` (rows carry log E(t+1) only); `panels/regressor.py:78` (read names `regressor_seen` and `regressor_heldout` only) | What it keeps exists: the committed rows (finding: regressor-panel-splits §1), the draw `deddfd4c…`, the regimes and folds (`panels/regressor.py:146-160`, `:635-660`) and ridge with a nested penalty (`:484-499`). The population already requires positive employment in all four years (`panels/qcew_rows.py:186-200`). No test pins level mode's values (`tests/unit/test_regressor_panel.py`). |
 | 22 | missing | `panels/regressor.py:662-681` (`require_openable` counts the regime's level read name only), `:531` (`fingerprint`, the draw); `panels/selection_log.py:84-91` (`openings` keys on read name and fingerprint) | An opening under one outcome's name would not count against the other's. The key's fingerprint is unchanged, so existing records keep matching. |
-| 23 | missing | `decision/records.py:136-139` (every seed names a checkpoint); `decision/decide.py:85`, `:172-179`, `utils/config.py:595` (at least 5 seeds, with no lower setting); `decision/records.py:69-90` (`ArmSpec` names a trained arm's text inputs) | It holds for trained arms: `decide` admits validation reads only (`decision/decide.py:196-232`). Missing: a record that shows a deterministic candidate's provenance. Building candidates is the next spec's (Out of scope). |
+| 23 | missing | `decision/records.py:136-139` (every seed names a checkpoint); `decision/decide.py:85`, `:172-179`, `utils/config.py:599` at d228132 (at least 5 seeds, with no lower setting); `decision/records.py:69-90` (`ArmSpec` names a trained arm's text inputs) | It holds for trained arms: `decide` admits validation reads only (`decision/decide.py:196-232`). Missing: a record that shows a deterministic candidate's provenance. Building candidates is the next spec's (Out of scope). |
 | 24 | missing | `decision/rule.py:26-27` (98⅓ %, fixed); `decision/scores.py:30-44` (D8's panels; one-hot and ancestors as the sparse baselines); `decision/records.py:165-195`, `decision/decide.py:387-429` (δ from a reference arm's across-seed SD); `decision/decide.py:344-384` (margins and the margin-first check over D8's panels and arms' reads); `panels/regressor.py:163-177`, `:670-695`, `:799-813` at d228132 (every read takes an arm and scores `embedding` and `text_only`) | No reference-only read exists. Unchanged: the paired two-stage bootstrap (`decision/resampling.py`; `conf/data/decision.yaml`), the non-dominated set and the tie order (`decision/rule.py:60-105`). Two deferred entries bear on it (`specs/deferred_items.md:529-541`). |
 
 No in-code-but-not-in-spec row: none found in `panels/regressor.py`, `panels/qcew_rows.py`,
@@ -122,16 +127,19 @@ for the candidates' decision.
       d228132; plan 13, Handoff): the reference-only read is this stage's.
       `tools regressor-panel`, `tools sweep` and `run_seed_sweep` refuse a growth panel, so this
       stage lifts or routes around them (plan 13, Handoff; Resolved at resume, 2026-10-12). The
-      decision package, wired to D8's three panels: `PANELS`
-      (`decision/scores.py:30`), the per-run read check and `check_margins`
+      fixture panel's growth rows (`regressor_growth_rows` in `tests/fixtures/regressor_panel.py`;
+      found at resume; Resolved at resume, 2026-10-12). The decision package, wired to D8's three
+      panels: `PANELS` (`decision/scores.py:30`), the per-run read check and `check_margins`
       (`decision/decide.py:196-232`, `:344-358`), `PanelSet`'s required outcome fields and
       `SeedRun`'s required checkpoint (`decision/records.py:92-148`), a margin reference that must
-      be an arm (`:174-182`), the 5-seed floor (`decision/decide.py:85`; `utils/config.py:595`),
-      and `tools margins` and `tools decide`. Pairing only on bit-identical regressor rows
-      (embedding roadmap Stage 4, Rollout note). The deferred entries on margin timing and
-      imported monitor records (`specs/deferred_items.md:529-541`). The docs that describe today's
-      three-panel decision (`docs/usage.md`, `docs/overview.md`, `docs/quickstart.md`,
-      `docs/index.md`, `README.md`).
+      be an arm (`:174-182`), the 5-seed floor (`decision/decide.py:85`; `utils/config.py:599` at
+      d228132, found at resume; Resolved at resume, 2026-10-12), and `tools margins` and
+      `tools decide`. Pairing only on bit-identical regressor rows (embedding roadmap Stage 4,
+      Rollout note). The deferred entries on margin timing and imported monitor records
+      (`specs/deferred_items.md:529-541`). The docs that describe today's three-panel decision
+      (`docs/usage.md`, `docs/overview.md`, `docs/quickstart.md`, `docs/index.md`, `README.md`),
+      and the level-only growth refusals that `docs/usage.md`, `CLAUDE.md` and the comment in
+      `conf/data/regressor_panel.yaml` state (found at resume; Resolved at resume, 2026-10-12).
       Produces: A reference-only growth read that computes neither `embedding` nor `text_only`; a
       margin record of the relative rule, naming r and that read; arm records for deterministic
       single-replicate tables, with provenance and no checkpoint or monitor reads; an economic
