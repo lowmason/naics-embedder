@@ -128,6 +128,12 @@ reads. `tools decide` applies Req 5's paired resampling, non-inferiority, superi
 order. The panel test splits stay sealed. See
 [the reference campaign](docs/text_training.md#reference-campaign) for complete commands.
 
+The economic artifact is decided on its own panels, `growth_seen` and `growth_heldout`, against
+the reference `covariates+ancestors` (Req 24). `tools growth-margins` fixes each panel's δ from
+a read that scores no candidate, before any candidate is read. `tools decide` then reads 97.5 %
+superiority over the two panels, and only a candidate adopted over the reference is eligible.
+See [`tools growth-margins`](docs/usage.md#tools-growth-margins).
+
 ## Graph Refinement and Structural Diagnostics
 
 HGCN retains its four-phase graph curriculum, triplet objective and curvature utilities. Set
@@ -161,7 +167,7 @@ uv run ruff check src/ tests/
 uv run mkdocs build --strict
 ```
 
-The suite collects 3,123 tests in 100 unit files and two integration files. Actual skip counts
+The suite collects 3,187 tests in 101 unit files and two integration files. Actual skip counts
 depend on local data and hardware capabilities, including MPS. Coverage is measured separately,
 not inferred from collection counts. See [tests/README.md](tests/README.md) for test contracts and
 [CLAUDE.md](CLAUDE.md) for project conventions.

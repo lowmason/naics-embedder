@@ -168,6 +168,13 @@ uses paired two-stage resampling and the required non-inferiority/superiority ru
 diagnostics and training health cannot replace those panel decisions. The panel test splits
 remain sealed. See [the campaign workflow](text_training.md#reference-campaign).
 
+The economic artifact has a decision of its own on the two growth panels (Req 24).
+[`tools growth-margins`](usage.md#tools-growth-margins) fixes each panel's δ as 0.05 times the
+reference `covariates+ancestors`'s validation MSE, from a read that scores no candidate. Then
+`tools decide` compares each candidate with that reference at 95 % non-inferiority and 97.5 %
+superiority. Only a candidate adopted over the reference is eligible; with none, the reference
+stands.
+
 ## Implementation Reference
 
 | Area | Modules |

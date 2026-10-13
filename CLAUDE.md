@@ -18,7 +18,7 @@ and Stage 12 is one sealed opening per judged artifact. The economic artifact's 
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
-Python 3.12. The source tree has **118 Python files**; tests have **100 unit** files and two
+Python 3.12. The source tree has **119 Python files**; tests have **101 unit** files and two
 integration files. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
@@ -80,14 +80,15 @@ src/naics_embedder/
 │   ├── dataloader/            # two-stream steps, tokenization cache
 │   └── mixins/                # loss, logging and optimizer responsibilities
 ├── panels/                    # outcome/regressor panels and selection-log guards
-├── decision/                  # paired resampling, margins, arm records and decisions
+├── decision/                  # paired resampling, margins, arm records and decisions;
+│                              # economic.py: the growth margin read and economic decision
 ├── graph_model/               # HGCN, graph data loading and four-phase curriculum
 ├── metrics/                   # structural and retrieval diagnostics
 ├── tools/                     # config display, epoch-summary plotting and metrics API
 └── utils/                     # config, training, input-window and geometry utilities
 
 tests/
-├── unit/                      # 100 unit test files
+├── unit/                      # 101 unit test files
 ├── integration/               # test_reference_training.py, test_remote_workflow.py
 ├── fixtures/                  # tiny models, bundles, panels and runs
 └── conftest.py
@@ -235,6 +236,18 @@ log E(t+1) − log E(t) on the same rows, partition and folds, as `growth_seen` 
 exists before the economic margin (Req 24). The fixture panel pins level mode's rows, data
 fingerprints, folds and scores at d61f49b (`test_regressor_panel.py`).
 
+The economic decision (Req 24, `decision/economic.py`) reads `growth_seen` and `growth_heldout`
+against the reference `covariates+ancestors`. `tools growth-margins` reads growth whatever the
+config says, scoring only the comparators that read no candidate, and records δ = r × the
+reference's validation MSE, with r = `relative_margin` (0.05) in `conf/data/decision.yaml`.
+A deterministic candidate is one replicate, read by `read_deterministic_arm` (no command yet)
+with its table's provenance and no checkpoint or monitor reads. `tools decide` makes the economic
+decision from a relative margin record. It refuses a candidate whose reference predictions
+differ from the margin read's bit for bit, or that read before the margins. Superiority is
+1 − 0.05/n: 97.5 % over the two growth panels, 98⅓ % over D8's three. Only a candidate adopted
+over the reference is eligible; with none, the reference stands. A trained candidate's seeds
+have no economic record yet.
+
 ### Remote Workflow and Phase 2 Boundary
 
 Five `remote` CLI adapters call `RemoteWorkflow`: up/train/sync/finish/status. Transport config
@@ -305,7 +318,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **3,123 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **3,187 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -478,7 +491,7 @@ evaluation currently uses curvature 1; a non-unit-curvature correction is a sepa
 
 ## Testing and Validation
 
-There are 100 unit files and two integration files. Important current seams include:
+There are 101 unit files and two integration files. Important current seams include:
 
 - `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
   and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and
@@ -491,6 +504,9 @@ There are 100 unit files and two integration files. Important current seams incl
   `test_visualize_metrics.py`: campaign preflight, radius checks and durable health artifacts.
 - `test_regressor_panel.py`, `test_regressor_qcew_rows.py`: level mode pinned at d61f49b, the
   growth outcome on the same rows and folds, and one seal per regime's split (Reqs 21–22).
+- `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates'
+  records and pairing, eligibility, the tie order, margin-first refusals and the economic
+  decision record (Req 24).
 - `integration/test_reference_training.py`: tiny-backbone Trainer runs, earliest-best selection,
   schedule/early stopping, health records and exact resume.
 - Graph, panel, resampling and decision tests cover their separate interfaces.
