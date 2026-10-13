@@ -19,7 +19,8 @@ Before any number is computed, every arm is checked:
 
 A decision also requires the margins to hold one δ per panel, for its decision statistic, and
 every run other than the margin record's own reference runs to have read nothing, its monitor
-reads included, before the margins were fixed.
+reads included, before the margins were fixed. Every read's time, and the margins', must name its
+timezone.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -29,7 +30,7 @@ reads included, before the margins were fixed.
 import math
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Collection, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import polars as pl
@@ -358,26 +359,67 @@ def check_margins(margins: MarginRecord) -> None:
             f'statistic: {needed} (D10)'
         )
 
-def check_margins_first(arms: Sequence[ArmRecord], margins: MarginRecord) -> None:
+def read_time(record: Any, name: str) -> datetime:
     '''
-    Require every run but the margin record's reference runs to read after the margins were fixed:
-    its decision reads and, for a trained run, the monitor reads that selected its checkpoint.
+    A selection-log record's time: an ISO 8601 string that names its timezone.
+
+    Args:
+        record: The record, as the selection log appended it.
+        name: Names the read in a refusal.
 
     Raises:
-        ValueError: If a run read before ``margins.fixed_at``.
+        ValueError: If the record has no time, or its time is not ISO 8601 or names no timezone.
     '''
 
-    reference = {run.run_id for run in margins.reference.runs}
+    time = record.get('time') if isinstance(record, dict) else None
+    if not isinstance(time, str):
+        raise ValueError(f'{name} has no time')
+    # Python 3.10's fromisoformat cannot read the Z that pydantic writes for UTC
+    utc = time[:-1] + '+00:00' if time.endswith('Z') else time
+    try:
+        parsed = datetime.fromisoformat(utc)
+    except ValueError:
+        raise ValueError(f'{name} has the time {time!r}, which is not ISO 8601') from None
+    if parsed.utcoffset() is None:
+        raise ValueError(f'{name} has the time {time}, with no timezone')
+    return parsed
+
+def check_margins_first(
+    arms: Sequence[Any], fixed_at: datetime, *, exempt: Collection[str] = ()
+) -> None:
+    '''
+    Require every run but the ``exempt`` ones to read after the margins were fixed at ``fixed_at``:
+    its decision reads and, for a trained run, the monitor reads that selected its checkpoint.
+
+    Run it after ``check_arm``, which requires each monitor record to name its epoch.
+
+    Raises:
+        ValueError: If ``fixed_at`` or a read's time is missing or names no timezone, so that
+            the two cannot be compared, or if a run read before ``fixed_at``.
+    '''
+
+    if fixed_at.utcoffset() is None:
+        raise ValueError(f'the margins were fixed at {fixed_at.isoformat()}, with no timezone')
     for arm in arms:
         for run in arm.runs:
-            if run.run_id in reference:
+            if run.run_id in exempt:
                 continue
-            reads = [*run.log_records, *(record['read'] for record in run.monitor_records)]
-            first = min(datetime.fromisoformat(record['time']) for record in reads)
-            if first < margins.fixed_at:
+            name = f'{arm.spec.name} seed {run.seed}'
+            reads = [
+                read_time(record, f'{name}: its {record.get("panel")} read')
+                for record in run.log_records
+            ]
+            reads.extend(
+                read_time(
+                    record['read'],
+                    f'{name}: its monitor read of epoch {record["read"]["detail"]["epoch"]}'
+                ) for record in run.monitor_records
+            )
+            first = min(reads)
+            if first < fixed_at:
                 raise ValueError(
-                    f'{arm.spec.name} seed {run.seed} read at {first.isoformat()}, before the '
-                    f'margins were fixed at {margins.fixed_at.isoformat()} (Req 5)'
+                    f'{name} read at {first.isoformat()}, before the margins were fixed at '
+                    f'{fixed_at.isoformat()} (Req 5)'
                 )
 
 # -------------------------------------------------------------------------------------------------
@@ -494,7 +536,8 @@ def decide(
     for arm in arms:
         check_arm(arm, store, min_seeds)
     check_pairing(arms, margins)
-    check_margins_first(arms, margins)
+    reference = {run.run_id for run in margins.reference.runs}
+    check_margins_first(arms, margins.fixed_at, exempt=reference)
     settings = DecisionSettings(
         replicates=replicates,
         bootstrap_seed=bootstrap_seed,
