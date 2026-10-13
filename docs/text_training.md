@@ -321,5 +321,6 @@ closed. Plan 10 and Stage 7 remain open until Phase 2's final gates.
 
 The `uv.lock` freeze held through Stage 8's decision and was released when the representation
 split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on
-bit-identical regressor rows, so the growth margin read and every economic candidate read share
-one platform and one `uv.lock`.
+bit-identical regressor rows, so the growth margin read
+([`tools growth-margins`](usage.md#tools-growth-margins)) and every economic candidate read share
+one platform and one `uv.lock`; the margin record names both.
