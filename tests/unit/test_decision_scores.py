@@ -146,6 +146,20 @@ def test_a_repeat_counted_twice_beside_every_other_one_is_refused():
     with pytest.raises(ValueError, match='do not have 2 predictions'):
         regressor_scores(predictions, repeats=2)
 
+def test_the_growth_panels_are_scored_only_where_the_caller_names_them():
+    '''Req 24: the economic decision scores growth reads by D10's statistic; D8's never does.'''
+
+    row = _prediction('growth_seen', 'covariates+ancestors', 0, '111111', 2023, 1.5)
+
+    with pytest.raises(ValueError, match="rows of \\['regressor_seen', 'regressor_heldout'\\]"):
+        regressor_scores(_predictions([row]), repeats=1)
+    scores = regressor_scores(
+        _predictions([row]), repeats=1, panels=('growth_seen', 'growth_heldout')
+    )
+    assert scores.select('panel', 'statistic', 'item', 'value').rows() == [
+        ('growth_seen', 'covariates+ancestors', '111111/2023', 0.25)
+    ]
+
 @pytest.mark.parametrize(
     'column, value', [('split', 'test'), ('level', 5), ('panel', 'regressor_other')]
 )

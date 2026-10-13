@@ -14,6 +14,11 @@ Three kinds, each one JSON file:
   non-inferiority and 98⅓ % superiority intervals (D8), the non-dominated set, the tie order,
   the chosen arm, and the reported statistics.
 
+The economic decision (Req 24) has kinds of its own:
+
+- **Relative margin record.** Each growth panel's δ, r times the reference comparator's
+  validation MSE, from a margin read that reads no candidate.
+
 Artifact references are paths relative to an ``ArtifactStore`` root with their sha256, so a
 record names exactly the bytes it was computed from.
 '''
@@ -273,6 +278,99 @@ class DecisionRecord(_Record):
     heldout_gain: Dict[str, float]
     chosen: str
     reports: List[ArmReport]
+
+# -------------------------------------------------------------------------------------------------
+# The economic decision's margins (Req 24)
+# -------------------------------------------------------------------------------------------------
+
+class ReadEnvironment(_Record):
+    '''
+    Where a growth read ran. Decisions pair reads only on bit-identical rows and fits, so every
+    candidate read of an economic decision runs where its margin read ran (Req 24).
+
+    Attributes:
+        platform: ``platform.platform()``.
+        python: ``platform.python_version()``.
+        lock_sha256: The sha256 of the ``uv.lock`` the read ran under.
+    '''
+
+    platform: str
+    python: str
+    lock_sha256: str
+
+class GrowthPanelSet(_Record):
+    '''
+    The growth panel an economic read scored (Req 21), which every read of a decision shares.
+
+    Attributes:
+        regressor: The held-out draw (``RegressorPanel.fingerprint``).
+        regressor_data: Its rows at the decision level (``RegressorPanel.data_fingerprint``).
+        fit_settings: The panel's tuning and resampling settings.
+    '''
+
+    regressor: str
+    regressor_data: str
+    fit_settings: Dict[str, Any]
+
+class ReferenceRead(_Record):
+    '''
+    The margin read (Req 24): each growth panel's validation split at the decision level, scored
+    by the comparators that read no candidate.
+
+    Attributes:
+        run_id: Names the read in its selection-log records.
+        panels: The growth panel it read.
+        predictions: Both regimes' level-6 validation predictions.
+        scores: Their per-row scores (``decision.scores.SCORE_COLUMNS``).
+        log_records: The selection-log records of the read, one per growth panel.
+        environment: Where the read ran.
+    '''
+
+    run_id: str = Field(min_length=1)
+    panels: GrowthPanelSet
+    predictions: ArtifactRef
+    scores: ArtifactRef
+    log_records: List[Dict[str, Any]]
+    environment: ReadEnvironment
+
+class RelativeMargin(_Record):
+    '''One growth panel's δ: r times the reference comparator's validation MSE (Req 24).'''
+
+    panel: str
+    statistic: str
+    reference_mse: float
+    margin: float
+
+class RelativeMarginRecord(_Record):
+    '''
+    Each growth panel's δ, fixed from the margin read before any candidate is read (Req 24).
+
+    Attributes:
+        r: Each δ as a multiple of the reference's MSE (U13).
+        reference: The reference comparator, which reads no candidate (U9).
+        read: The margin read the MSEs come from.
+    '''
+
+    kind: Literal['relative_margins'] = 'relative_margins'
+    name: str
+    r: float = Field(gt=0)
+    reference: str
+    read: ReferenceRead
+    margins: List[RelativeMargin]
+    fixed_at: datetime
+
+    def margin(self, panel: str) -> float:
+        '''
+        The panel's δ.
+
+        Raises:
+            ValueError: If the record holds no δ for the panel.
+        '''
+
+        for entry in self.margins:
+            if entry.panel == panel:
+                return entry.margin
+        raise ValueError(f'the margins {self.name!r} hold no δ for {panel}')
 
 # -------------------------------------------------------------------------------------------------
 # Files
