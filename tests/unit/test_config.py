@@ -619,11 +619,20 @@ class TestDecisionConfig:
 
         assert cfg == DecisionConfig()
         assert (cfg.replicates, cfg.bootstrap_seed, cfg.min_seeds) == (10000, 20260924, 5)
+        # U13: the economic δ is 0.05 × the reference's MSE
+        assert cfg.relative_margin == 0.05
 
     def test_the_seed_floor_is_req_5s(self):
         # Req 5: "Each arm runs at least 5 seeds"
         with pytest.raises(ValidationError):
             DecisionConfig(min_seeds=4)
+
+    @pytest.mark.parametrize('r', [0.0, -0.05])
+    def test_the_relative_margin_is_positive(self, r):
+        with pytest.raises(
+            ValidationError, match='relative_margin\n  Input should be greater than 0'
+        ):
+            DecisionConfig(relative_margin=r)
 
     def test_rejects_too_few_replicates_and_unknown_keys(self):
         with pytest.raises(ValidationError):
