@@ -1,9 +1,11 @@
 '''
-Req 5's rule on paired resamples, over D8's three panels.
+Req 5's rule on paired resamples, over a decision's panels.
 
 - **Non-inferior** on a panel: the lower bound of the 95 % interval on Δ exceeds −δ.
-- **Superior** on a panel: the 98⅓ % interval lies above zero. D8 gives each of the three panels
-  a third of the 5 % error rate; this supersedes the 97.5 % that Req 5 names for two panels.
+- **Superior** on a panel: the interval at 1 − 0.05/n lies above zero, for a decision over n
+  panels, each of which gets an even share of the 5 % error rate (Req 24). D8's three panels read
+  98⅓ %, which supersedes the 97.5 % that Req 5 names for two; the economic decision's two growth
+  panels read 97.5 %.
 - **Adopted:** non-inferior on every panel and superior on at least one.
 - **Several arms:** the survivors are the arms no other arm is adopted over; when every arm is,
   dominance cycles and the tie order picks among all of them. The pairwise comparisons are not
@@ -24,7 +26,8 @@ from naics_embedder.decision.records import ArmSpec, Comparison, PanelComparison
 from naics_embedder.decision.resampling import percentile_interval
 
 NONINFERIORITY_LEVEL = 0.95
-SUPERIORITY_LEVEL = 1.0 - 0.05 / 3
+# The error rate superiority splits evenly over a decision's panels (Req 24)
+SUPERIORITY_ERROR = 0.05
 
 class TieUnresolvedError(RuntimeError):
     '''Two candidate arms tie on every key of the tie order.'''
@@ -33,28 +36,47 @@ class TieUnresolvedError(RuntimeError):
 # Comparisons
 # -------------------------------------------------------------------------------------------------
 
+def superiority_level(panels: int) -> float:
+    '''
+    The superiority interval's level for a decision over ``panels`` panels: 1 − 0.05/n (Req 24).
+
+    Raises:
+        ValueError: If ``panels`` is below 1.
+    '''
+
+    if panels < 1:
+        raise ValueError(f'a decision reads at least one panel, not {panels}')
+    return 1.0 - SUPERIORITY_ERROR / panels
+
 def compare_panel(
-    panel: str, delta: float, replicates: np.ndarray, margin: float
+    panel: str,
+    delta: float,
+    replicates: np.ndarray,
+    margin: float,
+    *,
+    superiority: float,
 ) -> PanelComparison:
     '''
     One panel's verdict for A against B.
 
     Args:
+        panel: The panel's name.
         delta: The point estimate of Δ, positive when it favours A.
         replicates: Δ on each paired resample, oriented the same way.
         margin: The panel's δ.
+        superiority: The superiority interval's level (``superiority_level``).
     '''
 
     noninferiority = percentile_interval(replicates, NONINFERIORITY_LEVEL)
-    superiority = percentile_interval(replicates, SUPERIORITY_LEVEL)
+    upper = percentile_interval(replicates, superiority)
     return PanelComparison(
         panel=panel,
         delta=float(delta),
         noninferiority_interval=noninferiority,
-        superiority_interval=superiority,
+        superiority_interval=upper,
         margin=float(margin),
         non_inferior=noninferiority[0] > -margin,
-        superior=superiority[0] > 0.0,
+        superior=upper[0] > 0.0,
     )
 
 def compare(a: str, b: str, panels: Sequence[PanelComparison]) -> Comparison:

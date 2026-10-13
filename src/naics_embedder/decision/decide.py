@@ -57,10 +57,10 @@ from naics_embedder.decision.resampling import (
 )
 from naics_embedder.decision.rule import (
     NONINFERIORITY_LEVEL,
-    SUPERIORITY_LEVEL,
     compare,
     compare_panel,
     non_dominated,
+    superiority_level,
     tie_order,
 )
 from naics_embedder.decision.scores import (
@@ -500,7 +500,7 @@ def decide(
         bootstrap_seed=bootstrap_seed,
         min_seeds=min_seeds,
         noninferiority_level=NONINFERIORITY_LEVEL,
-        superiority_level=SUPERIORITY_LEVEL,
+        superiority_level=superiority_level(len(PANELS)),
     )
 
     names = [arm.spec.name for arm in arms]
@@ -535,6 +535,7 @@ def decide(
                     ORIENTATION[panel] * (points[panel][a] - points[panel][b]),
                     ORIENTATION[panel] * (draws[panel][a] - draws[panel][b]),
                     margins.margin(panel),
+                    superiority=settings.superiority_level,
                 ) for panel in PANELS
             ]
             comparisons.append(compare(a, b, panels))

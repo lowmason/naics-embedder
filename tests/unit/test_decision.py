@@ -23,7 +23,6 @@ from naics_embedder.decision.records import (
     read_record,
     write_record,
 )
-from naics_embedder.decision.rule import SUPERIORITY_LEVEL
 from naics_embedder.decision.scores import PANELS
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.panels.decoding import METRIC_NAMES
@@ -237,7 +236,8 @@ def test_the_record_carries_every_field_verification_lists(store, tmp_path, refe
     assert min(reads) >= record.margins.fixed_at.isoformat()
     # The 95 % non-inferiority and 98⅓ % superiority intervals, on every panel
     assert record.settings.noninferiority_level == 0.95
-    assert record.settings.superiority_level == SUPERIORITY_LEVEL
+    # Three panels still read 98⅓ % (Req 24)
+    assert record.settings.superiority_level == 1.0 - 0.05 / 3
     for comparison in record.comparisons:
         assert [panel.panel for panel in comparison.panels] == list(PANELS)
         for panel in comparison.panels:
