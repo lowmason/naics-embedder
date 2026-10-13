@@ -15,24 +15,42 @@ and the decision over the two growth panels.
   one replicate: its table, with the provenance its builder wrote, read once on each growth panel
   the margins read, with no checkpoint or monitor reads (Req 24; Req 23). Its reads pair with
   the margin read only where the reference predicts bit for bit as it did there.
+- **Decision.** Each candidate against the reference on both panels, at 95 % non-inferiority and
+  97.5 % superiority. Only a candidate adopted over the reference is eligible; among the eligible,
+  Req 5's non-dominated set and tie order pick one, the higher held-out gain over the reference
+  breaking a last tie (D11). With none eligible, the reference stands. The decision scores each
+  read's stored predictions itself, so the values it resamples are those the pairing compared.
 '''
 
 # -------------------------------------------------------------------------------------------------
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import math
 import platform
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Union
+from typing import Dict, List, Sequence, Tuple, Union
 
+import numpy as np
 import polars as pl
 
-from naics_embedder.decision.decide import _same, check_recorded_text_only, check_text_only
+from naics_embedder.decision.decide import (
+    _same,
+    check_margins_first,
+    check_recorded_text_only,
+    check_text_only,
+    read_time,
+)
 from naics_embedder.decision.records import (
     ArmSpec,
+    ArtifactRef,
+    Comparison,
     EconomicArmRecord,
+    EconomicDecisionRecord,
+    EconomicDecisionSettings,
+    EconomicReport,
     EconomicRun,
     GrowthPanelSet,
     ReadEnvironment,
@@ -40,7 +58,28 @@ from naics_embedder.decision.records import (
     RelativeMargin,
     RelativeMarginRecord,
 )
-from naics_embedder.decision.scores import EMBEDDING_COMPARATOR, panel_statistic, regressor_scores
+from naics_embedder.decision.resampling import (
+    PanelItems,
+    point_statistic,
+    replicate_statistics,
+    seed_draws,
+    unit_draws,
+)
+from naics_embedder.decision.rule import (
+    NONINFERIORITY_LEVEL,
+    compare,
+    compare_panel,
+    non_dominated,
+    superiority_level,
+    tie_order,
+)
+from naics_embedder.decision.scores import (
+    EMBEDDING_COMPARATOR,
+    panel_statistic,
+    regressor_scores,
+    statistic_means,
+    statistic_values,
+)
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.decision.sweep import _fit_settings, _log_records
 from naics_embedder.panels.qcew_rows import RegressorOutcome
@@ -51,13 +90,22 @@ from naics_embedder.panels.regressor import (
     ArmTables,
     Regime,
     RegressorPanel,
+    reference_comparators,
 )
 from naics_embedder.supervision.artifacts import sha256_file
 
 # The growth outcome's two regimes: the economic decision's panels (Req 24)
 GROWTH_PANELS = tuple(READ_NAMES[RegressorOutcome.GROWTH][regime] for regime in Regime)
+GROWTH_HELDOUT = READ_NAMES[RegressorOutcome.GROWTH][Regime.HELDOUT]
 # The hierarchy's ancestor indicators beside the covariates (U9)
 REFERENCE_COMPARATOR = 'covariates+ancestors'
+GROWTH_STATISTIC_DEFINITIONS = dict.fromkeys(
+    GROWTH_PANELS,
+    'mean squared error of covariates+embedding on level-6 log employment growth, each row '
+    'averaged over its repeats; unit: a four-digit group',
+)
+# A recomputed statistic agrees with a recorded one to within float summation order
+STATISTIC_TOLERANCE = 1e-12
 
 # -------------------------------------------------------------------------------------------------
 # Reads
@@ -308,6 +356,19 @@ def check_economic_arm(arm: EconomicArmRecord, store: ArtifactStore) -> None:
         store.resolve(reference)
     if store.candidate_provenance(run.table, run.provenance.file) != run.provenance:
         raise ValueError(f"{name}: the record's provenance differs from its stored provenance")
+    scores = _rescored(store, run.predictions, arm.panels.fit_settings['repeats'])
+    statistics = {
+        panel: panel_statistic(scores, panel, EMBEDDING_COMPARATOR)
+        for panel in GROWTH_PANELS
+    }
+    if set(run.statistics) != set(statistics) or not all(
+        math.isclose(run.statistics[panel], value, rel_tol=STATISTIC_TOLERANCE)
+        for panel, value in statistics.items()
+    ):
+        raise ValueError(
+            f"{name}: the record's statistics are not those of its stored predictions, "
+            f'{statistics}'
+        )
     _check_growth_reads(arm, run)
 
 def _check_growth_reads(arm: EconomicArmRecord, run: EconomicRun) -> None:
@@ -374,3 +435,232 @@ def check_reference_pairing(
                 f'so its errors do not pair with the reference (Req 24). It was read on '
                 f'{_where(arm.environment)}; the margins on {_where(margins.read.environment)}'
             )
+
+def _rescored(store: ArtifactStore, predictions: ArtifactRef, repeats: int) -> pl.DataFrame:
+    '''A read's scores, from its stored predictions (D10's statistic on the growth panels).'''
+
+    return regressor_scores(store.read_frame(predictions), repeats, GROWTH_PANELS)
+
+def check_relative_margins(margins: RelativeMarginRecord, store: ArtifactStore) -> None:
+    '''
+    Require the margins to hold, for each growth panel, δ = r × the reference's validation MSE,
+    from a margin read that read no candidate (Req 24; U9; U13).
+
+    Raises:
+        ValueError: If the margins name another reference, hold another δ than one per growth
+            panel for the reference's statistic, or their read logged or scored a comparator that
+            reads a candidate; or if a δ is not r times the MSE the read's predictions give.
+    '''
+
+    name = f'the margins {margins.name!r}'
+    if margins.reference != REFERENCE_COMPARATOR:
+        raise ValueError(
+            f'{name} name the reference {margins.reference!r}, not {REFERENCE_COMPARATOR} (U9)'
+        )
+    held = sorted((entry.panel, entry.statistic) for entry in margins.margins)
+    needed = sorted((panel, REFERENCE_COMPARATOR) for panel in GROWTH_PANELS)
+    if held != needed:
+        raise ValueError(f'{name} hold {held}, not one δ per growth panel: {needed} (Req 24)')
+    predictions = store.read_frame(margins.read.predictions)
+    _check_reference_read(name, margins.read, predictions)
+    scores = regressor_scores(
+        predictions, margins.read.panels.fit_settings['repeats'], GROWTH_PANELS
+    )
+    for entry in margins.margins:
+        mse = panel_statistic(scores, entry.panel, REFERENCE_COMPARATOR)
+        scored = math.isclose(entry.reference_mse, mse, rel_tol=STATISTIC_TOLERANCE)
+        if not scored or entry.margin != margins.r * entry.reference_mse:
+            raise ValueError(
+                f"{name}: the {entry.panel} δ is not r × the reference's MSE its read scored, "
+                f'{margins.r} × {mse} (Req 24)'
+            )
+
+def _check_reference_read(name: str, read: ReferenceRead, predictions: pl.DataFrame) -> None:
+    '''Require the margin read to be each growth panel's validation read of the reference alone.'''
+
+    regimes = {READ_NAMES[RegressorOutcome.GROWTH][regime]: regime for regime in Regime}
+    panels = sorted(str(record.get('panel')) for record in read.log_records)
+    if panels != sorted(GROWTH_PANELS):
+        raise ValueError(f'{name}: the margin read read {panels}, not each growth panel once')
+    for record in read.log_records:
+        panel = record['panel']
+        names = list(reference_comparators(regimes[panel], DECISION_LEVEL))
+        logged = (record.get('event'), record.get('split'), record.get('fingerprint'))
+        detail = {'level': DECISION_LEVEL, 'comparators': names, 'run': read.run_id}
+        if logged != ('read', VALIDATION, read.panels.regressor) or record.get('detail') != detail:
+            raise ValueError(
+                f'{name}: the {panel} read is not a validation read of the reference comparators '
+                f"alone: {logged}, {record.get('detail')} (Req 24)"
+            )
+        scored = predictions.filter(pl.col('panel') == panel).get_column('comparator')
+        if sorted(scored.unique().to_list()) != sorted(names):
+            raise ValueError(
+                f'{name}: the {panel} read scored {sorted(scored.unique().to_list())}, not the '
+                'reference comparators alone (Req 24)'
+            )
+
+def check_economic_margins_first(
+    arms: Sequence[EconomicArmRecord], margins: RelativeMarginRecord
+) -> None:
+    '''
+    Require the margin read to precede the margins, and every candidate read to follow them
+    (Req 24: δ is fixed from a reference-only read before any candidate is read).
+
+    Raises:
+        ValueError: If a read's time or the margins' is missing or names no timezone, or if
+            either order fails.
+    '''
+
+    check_margins_first(arms, margins.fixed_at)
+    name = f'the margins {margins.name!r}'
+    for record in margins.read.log_records:
+        time = read_time(record, f'{name}: its {record.get("panel")} read')
+        if time > margins.fixed_at:
+            raise ValueError(
+                f'{name} were fixed at {margins.fixed_at.isoformat()}, before their '
+                f'{record["panel"]} read at {time.isoformat()} (Req 24)'
+            )
+
+# -------------------------------------------------------------------------------------------------
+# Decision
+# -------------------------------------------------------------------------------------------------
+
+def decide_economic(
+    name: str,
+    question: str,
+    arms: Sequence[EconomicArmRecord],
+    margins: RelativeMarginRecord,
+    store: ArtifactStore,
+    *,
+    replicates: int,
+    bootstrap_seed: int,
+) -> EconomicDecisionRecord:
+    '''
+    Req 24's decision: each candidate against the reference on both growth panels; among those
+    adopted over it, Req 5's non-dominated set and tie order pick one. With none adopted, the
+    reference stands and ``chosen`` is None.
+
+    Every check runs before any number is computed: the margins (``check_relative_margins``),
+    each candidate (``check_economic_arm``) and its pairing with the margin read
+    (``check_reference_pairing``), then the order of the reads
+    (``check_economic_margins_first``).
+
+    Raises:
+        ValueError: If no candidate is given, two share a name or one is named for the
+            reference, or a check fails.
+        TieUnresolvedError: If the tie order cannot separate the surviving candidates.
+    '''
+
+    names = [arm.spec.name for arm in arms]
+    if not names:
+        raise ValueError('an economic decision reads at least one candidate')
+    if len(set(names)) != len(names) or REFERENCE_COMPARATOR in names:
+        raise ValueError(
+            f"candidate names must be distinct, and none the reference's {REFERENCE_COMPARATOR}: "
+            f'{names}'
+        )
+    check_relative_margins(margins, store)
+    for arm in arms:
+        check_economic_arm(arm, store)
+        check_reference_pairing(margins, arm, store)
+    check_economic_margins_first(arms, margins)
+    settings = EconomicDecisionSettings(
+        replicates=replicates,
+        bootstrap_seed=bootstrap_seed,
+        noninferiority_level=NONINFERIORITY_LEVEL,
+        superiority_level=superiority_level(len(GROWTH_PANELS)),
+    )
+
+    repeats = margins.read.panels.fit_settings['repeats']
+    # Each side's per-run scores and the statistic the rule reads from them: the reference is
+    # the margin read, a single replicate
+    sides: Dict[str, Tuple[str, List[pl.DataFrame]]] = {
+        REFERENCE_COMPARATOR: (
+            REFERENCE_COMPARATOR, [_rescored(store, margins.read.predictions, repeats)]
+        )
+    }
+    for arm in arms:
+        sides[arm.spec.name] = (
+            EMBEDDING_COMPARATOR, [_rescored(store, run.predictions, repeats) for run in arm.runs]
+        )
+    points: Dict[Tuple[str, str], float] = {}
+    draws: Dict[Tuple[str, str], np.ndarray] = {}
+    for panel in GROWTH_PANELS:
+        reference = sides[REFERENCE_COMPARATOR][1][0]
+        items = PanelItems.from_values(statistic_values(reference, panel, REFERENCE_COMPARATOR))
+        units = unit_draws(panel, len(items.units), replicates, bootstrap_seed)
+        for side, (statistic, frames) in sides.items():
+            sums = items.sums(
+                np.stack(
+                    [items.values(statistic_values(frame, panel, statistic)) for frame in frames]
+                )
+            )
+            seeds = seed_draws(panel, side, len(frames), replicates, bootstrap_seed)
+            points[panel, side] = point_statistic(sums, items.sizes)
+            draws[panel, side] = replicate_statistics(sums, items.sizes, units, seeds)
+
+    def against(a: str, b: str) -> Comparison:
+        # A lower MSE is better, so Δ = B's MSE − A's favours A when positive
+        return compare(
+            a,
+            b,
+            [
+                compare_panel(
+                    panel,
+                    points[panel, b] - points[panel, a],
+                    draws[panel, b] - draws[panel, a],
+                    margins.margin(panel),
+                    superiority=settings.superiority_level,
+                ) for panel in GROWTH_PANELS
+            ],
+        )
+
+    comparisons = [against(arm, REFERENCE_COMPARATOR) for arm in names]
+    eligible = [comparison.a for comparison in comparisons if comparison.adopted]
+    among = [against(a, b) for a in eligible for b in eligible if a != b]
+    heldout_gain = {
+        arm: points[GROWTH_HELDOUT, REFERENCE_COMPARATOR] - points[GROWTH_HELDOUT, arm]
+        for arm in names
+    }
+    survivors: List[str] = []
+    cycle = False
+    order: List[str] = []
+    if eligible:
+        survivors, cycle = non_dominated(eligible, among)
+        order = tie_order([arm.spec for arm in arms if arm.spec.name in survivors], heldout_gain)
+    return EconomicDecisionRecord(
+        name=name,
+        question=question,
+        created_at=datetime.now(timezone.utc),
+        statistics=dict(GROWTH_STATISTIC_DEFINITIONS),
+        settings=settings,
+        reference=REFERENCE_COMPARATOR,
+        margins=margins,
+        arms=list(arms),
+        comparisons=[*comparisons, *among],
+        eligible=eligible,
+        non_dominated=survivors,
+        cycle=cycle,
+        tie_order=order,
+        heldout_gain=heldout_gain,
+        chosen=order[0] if order else None,
+        reports=[_economic_report(arm.spec.name, sides[arm.spec.name][1]) for arm in arms],
+    )
+
+def _economic_report(arm: str, frames: Sequence[pl.DataFrame]) -> EconomicReport:
+    '''Every comparator's MSE on each growth panel, a mean over the arm's runs.'''
+
+    means = [statistic_means(frame) for frame in frames]
+    comparator_mse = {
+        panel: {
+            statistic: float(np.mean([run[panel][statistic] for run in means]))
+            for statistic in means[0][panel]
+        }
+        for panel in GROWTH_PANELS
+    }
+    return EconomicReport(
+        arm=arm,
+        statistics={panel: comparator_mse[panel][EMBEDDING_COMPARATOR]
+                    for panel in GROWTH_PANELS},
+        comparator_mse=comparator_mse,
+    )

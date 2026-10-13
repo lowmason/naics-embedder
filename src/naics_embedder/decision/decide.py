@@ -408,6 +408,7 @@ def check_margins_first(
     '''
     Require every run but the ``exempt`` ones to read after the margins were fixed at ``fixed_at``:
     its decision reads and, for a trained run, the monitor reads that selected its checkpoint.
+    ``arms`` are arm records or economic arm records.
 
     Run it after ``check_arm``, which requires each monitor record to name its epoch.
 
@@ -422,7 +423,8 @@ def check_margins_first(
         for run in arm.runs:
             if run.run_id in exempt:
                 continue
-            name = f'{arm.spec.name} seed {run.seed}'
+            # A deterministic economic run has no seed and no monitor reads (Req 24)
+            name = arm.spec.name if run.seed is None else f'{arm.spec.name} seed {run.seed}'
             reads = [
                 read_time(record, f'{name}: its {record.get("panel")} read')
                 for record in run.log_records
@@ -431,7 +433,7 @@ def check_margins_first(
                 read_time(
                     record['read'],
                     f'{name}: its monitor read of epoch {record["read"]["detail"]["epoch"]}'
-                ) for record in run.monitor_records
+                ) for record in getattr(run, 'monitor_records', ())
             )
             first = min(reads)
             if first < fixed_at:

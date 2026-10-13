@@ -21,6 +21,10 @@ The economic decision (Req 24) has kinds of its own:
 - **Economic arm record.** A deterministic candidate's single replicate: its table and that
   table's provenance (Req 23), read once on each growth panel, with no checkpoint or monitor
   reads.
+- **Economic decision record.** Its candidates and margins, each candidate's comparison with the
+  reference ``covariates+ancestors`` with its 95 % non-inferiority and 97.5 % superiority
+  intervals, the candidates adopted over the reference, the non-dominated set and tie order among
+  them, and the chosen candidate, or none when the reference stands.
 
 Artifact references are paths relative to an ``ArtifactStore`` root with their sha256, so a
 record names exactly the bytes it was computed from.
@@ -439,6 +443,69 @@ class EconomicArmRecord(_Record):
     environment: ReadEnvironment
     runs: List[EconomicRun]
     created_at: datetime
+
+# -------------------------------------------------------------------------------------------------
+# The economic decision (Req 24)
+# -------------------------------------------------------------------------------------------------
+
+class EconomicDecisionSettings(_Record):
+    '''How the economic decision resampled and which intervals it read.'''
+
+    replicates: int
+    bootstrap_seed: int
+    noninferiority_level: float
+    superiority_level: float
+
+class EconomicReport(_Record):
+    '''
+    What the economic decision reports for a candidate besides the rule's statistics.
+
+    Attributes:
+        statistics: Each growth panel's decision statistic, ``covariates+embedding``'s MSE.
+        comparator_mse: Each growth panel's MSE for every comparator its read scored, one-hot
+            included where the seen regime scores it (Req 24).
+    '''
+
+    arm: str
+    statistics: Dict[str, float]
+    comparator_mse: Dict[str, Dict[str, float]]
+
+class EconomicDecisionRecord(_Record):
+    '''
+    The economic decision (Req 24): each candidate against the reference on both growth panels,
+    and Req 5's rule among the candidates adopted over it.
+
+    Attributes:
+        reference: The reference comparator (U9).
+        comparisons: Each candidate against the reference, then each eligible candidate against
+            each other.
+        eligible: The candidates adopted over the reference.
+        non_dominated: The eligible candidates no eligible candidate is adopted over.
+        cycle: Whether dominance among the eligible cycled.
+        tie_order: The non-dominated candidates, from the one that stands first.
+        heldout_gain: Each candidate's held-out gain over the reference: the reference's
+            ``growth_heldout`` MSE minus the candidate's (D11).
+        chosen: The candidate whose table is the economic deliverable; None when no candidate is
+            eligible, and the reference stands.
+    '''
+
+    kind: Literal['economic_decision'] = 'economic_decision'
+    name: str
+    question: str
+    created_at: datetime
+    statistics: Dict[str, str]
+    settings: EconomicDecisionSettings
+    reference: str
+    margins: RelativeMarginRecord
+    arms: List[EconomicArmRecord]
+    comparisons: List[Comparison]
+    eligible: List[str]
+    non_dominated: List[str]
+    cycle: bool
+    tie_order: List[str]
+    heldout_gain: Dict[str, float]
+    chosen: Optional[str]
+    reports: List[EconomicReport]
 
 # -------------------------------------------------------------------------------------------------
 # Files
