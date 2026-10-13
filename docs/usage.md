@@ -203,13 +203,13 @@ uv run naics-embedder tools text-only-table --descriptions data/naics_descriptio
 ### `tools regressor-panel`
 
 Score an arm on the regressor panel (roadmap Stage 3). Every comparator (covariates alone, and
-the arm's coordinates, one-hot, ancestor indicators and the text-only table, each alone and with
-the covariates) is fitted by ridge on standardized features, with the penalty tuned by nested
-grouped folds inside the remainder. The outcome is log employment in year t + 1 from year-t
-features. The seen and held-out regimes are separate panels. The validation split reads only the
-remainder. The test split opens each regime's sealed outer set first, and both the opening and
-the read are logged. The output holds one prediction per row, comparator and repeat (the test
-split has one repeat), with the row's outcome and the chosen penalty.
+the arm's coordinates, one-hot (seen regime only), ancestor indicators and the text-only table,
+each alone and with the covariates) is fitted by ridge on standardized features, with the penalty
+tuned by nested grouped folds inside the remainder. The outcome is log employment in year t + 1
+from year-t features. The seen and held-out regimes are separate panels. The validation split
+reads only the remainder. The test split opens each regime's sealed outer set first, and both the
+opening and the read are logged. The output holds one prediction per row, comparator and repeat
+(the test split has one repeat), with the row's outcome and the chosen penalty.
 
 The panel's `outcome` setting in `conf/data/regressor_panel.yaml` (Req 21) is `level`, the panel
 above, or `growth`: log E(t + 1) − log E(t) on the same rows, read as `growth_seen` and
@@ -374,12 +374,13 @@ uv run naics-embedder tools margins \
 
 Fix each growth panel's non-inferiority margin δ from a reference-only read (Req 24). The read
 scores each growth regime's level-6 validation split, `growth_seen` and `growth_heldout`, with
-only the comparators that read no candidate: the covariates, one-hot and ancestor indicators,
-each alone and with the covariates. It computes neither `embedding` nor `text_only`, so no
-candidate's growth error exists before δ is recorded. δ is `relative_margin` in
-`conf/data/decision.yaml` (r = 0.05) times the validation MSE of the reference
-`covariates+ancestors`. The panel reads growth whatever the regressor config's `outcome` says,
-which stays `level` for `tools regressor-panel` and `tools sweep`.
+only the comparators that read no candidate. The seen regime reads the covariates, one-hot and
+ancestor indicators, each alone and with the covariates; the held-out regime has no one-hot
+comparator and reads `covariates`, `ancestors` and `covariates+ancestors`. It computes neither
+`embedding` nor `text_only`, so no candidate's growth error exists before δ is recorded. δ is
+`relative_margin` in `conf/data/decision.yaml` (r = 0.05) times the validation MSE of the
+reference `covariates+ancestors`. The panel reads growth whatever the regressor config's
+`outcome` says, which stays `level` for `tools regressor-panel` and `tools sweep`.
 
 Run it once, before any candidate is read on growth: a decision refuses a candidate read before
 its margins were fixed. The record names the platform, Python and `uv.lock` sha256 the read ran
@@ -418,8 +419,11 @@ every panel (the 95 % interval's lower bound above −δ) and superior on at lea
 1 − 0.05/n interval above zero, for n panels: 98⅓ % over D8's three, 97.5 % over the two growth
 panels). The survivors are the arms no other arm is adopted over, and the tie order picks among
 them: fewer components, then lower dimension, then non-hyperbolic geometry, then the higher
-held-out gain over ancestors (roadmap D11). The number of replicates, the bootstrap seed and the
-seed floor come from `conf/data/decision.yaml`.
+held-out gain over `covariates+ancestors` (roadmap D11): on `regressor_heldout` for D8's decision,
+on `growth_heldout` for the economic decision, where it is the reference. The number of
+replicates and the bootstrap seed come from `conf/data/decision.yaml`, as does the seed floor,
+`min_seeds`, which applies to D8's decision only: the economic decision takes none, because each
+candidate is a single replicate.
 
 **The economic decision.** Its arms are economic arm records: a deterministic candidate's table,
 with the provenance its builder wrote, read once on each growth panel by

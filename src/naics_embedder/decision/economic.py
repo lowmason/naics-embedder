@@ -420,6 +420,10 @@ def check_reference_pairing(
 
     Only the predictions decide; the environments name where each read ran.
 
+    Run it after ``check_economic_arm``, which requires the record to be one intact deterministic
+    replicate. Called alone, it still refuses an arm that does not hold exactly one run, since a
+    loop over no runs would pair nothing.
+
     Raises:
         ValueError: If the arm does not hold exactly one run, if the panels, data or fit settings
             differ, or if the reference's predictions in a run differ from the margin read's.

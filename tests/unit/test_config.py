@@ -612,7 +612,10 @@ class TestRegressorPanelConfig:
 
 @pytest.mark.unit
 class TestDecisionConfig:
-    '''Req 5's decision procedure (roadmap Stage 4): the paired bootstrap and the seed floor.'''
+    '''
+    Req 5's decision procedure (roadmap Stage 4): the paired bootstrap and the seed floor, and
+    the economic decision's relative margin (Req 24).
+    '''
 
     def test_yaml_matches_defaults(self):
         cfg = load_config(DecisionConfig, 'data/decision.yaml')

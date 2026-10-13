@@ -11,7 +11,8 @@ Req 5's rule on paired resamples, over a decision's panels.
   dominance cycles and the tie order picks among all of them. The pairwise comparisons are not
   corrected for multiplicity: the tie order toward the simpler arm is the guard (Req 5).
 - **Tie order:** fewer components, then lower dimension, then non-hyperbolic geometry, then the
-  higher held-out gain over ancestors (D11).
+  higher held-out gain over ``covariates+ancestors`` (D11): on ``regressor_heldout`` for D8's
+  decision, on ``growth_heldout`` for the economic decision, where it is the reference (Req 24).
 '''
 
 # -------------------------------------------------------------------------------------------------

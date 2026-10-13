@@ -182,8 +182,9 @@ def comparators(regime: Regime, level: int) -> Tuple[str, ...]:
 
 def reference_comparators(regime: Regime, level: int) -> Tuple[str, ...]:
     '''
-    The regime's comparators at a level that read no arm's tables: covariates, one-hot and
-    ancestor indicators, each alone and with the covariates (Req 24's margin read).
+    The regime's comparators at a level that read no arm's tables: covariates, one-hot (seen
+    regime only) and ancestor indicators, each alone and with the covariates (Req 24's margin
+    read).
     '''
 
     return tuple(

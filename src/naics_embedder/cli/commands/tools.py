@@ -597,10 +597,11 @@ def growth_margins_command(
     Read the reference alone on both growth panels and fix each one's margin δ (Req 24).
 
     The read scores, on each growth regime's level-6 validation split, only the comparators that
-    read no candidate: the covariates, one-hot and ancestor indicators, each alone and with the
-    covariates. δ is the decision config's ``relative_margin`` r (0.05, U13) times the MSE of the
-    reference ``covariates+ancestors`` there. The panel reads growth whatever the regressor
-    config's ``outcome`` says; it stays ``level`` for tools regressor-panel and tools sweep.
+    read no candidate: the covariates, one-hot (seen regime only) and ancestor indicators, each
+    alone and with the covariates. δ is the decision config's ``relative_margin`` r (0.05, U13)
+    times the MSE of the reference ``covariates+ancestors`` there. The panel reads growth
+    whatever the regressor config's ``outcome`` says; it stays ``level`` for tools
+    regressor-panel and tools sweep.
 
     Fix the margins once, before any candidate is read on growth: a decision refuses a candidate
     read before its margins were fixed. The record names the platform, Python and ``uv.lock``
