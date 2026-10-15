@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **102 unit** test files and **2 integration** files, with **3,198 collected
+The suite contains **102 unit** test files and **2 integration** files, with **3,206 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 

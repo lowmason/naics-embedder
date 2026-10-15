@@ -53,9 +53,6 @@ dev = [
     'pytest-xdist>=3.6',
     'hypothesis>=6.100',
     'pytest-benchmark>=4.0',
-    "jupyter>=1.1.1",
-    "nbformat>=5.10.4",
-    "nbclient>=0.10.2",
     'pre-commit>=3.8.0',
 ]
 

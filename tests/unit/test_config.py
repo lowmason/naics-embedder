@@ -837,17 +837,18 @@ def test_the_text_streaming_config_holds_only_the_text_fields():
     ]
     assert type(Config().data_loader.streaming) is text_streaming
     assert StreamingConfig not in _models_reachable_from(Config)
-    # StreamingConfig keeps the fields hgcn_datamodule._streaming_cfg_from_loader sets
-    assert set(StreamingConfig.model_fields) >= {
+    # StreamingConfig holds just the fields hgcn_datamodule._streaming_cfg_from_loader sets
+    assert set(StreamingConfig.model_fields) == {
         'descriptions_parquet', 'relations_parquet', 'triplets_parquet', 'n_negatives', 'seed'
     }
 
 # -------------------------------------------------------------------------------------------------
-# HGCN's StreamingConfig: the retired sampling keys
+# HGCN's StreamingConfig: the retired keys
 # -------------------------------------------------------------------------------------------------
 
-# The phase-1 and on-the-fly sampling keys, each at its old default. Only their own ratio validator
-# read them; HGCN's cache reads the paths, n_negatives and seed.
+# The phase-1 and on-the-fly sampling keys, then the distance paths and the tokenizer window, each
+# at its old default. Only their own validators read them; HGCN's cache reads the descriptions,
+# relations and triplets paths, n_negatives and seed.
 RETIRED_STREAMING_KEYS = {
     'use_phase1_sampling': True,
     'phase1_alpha': 1.5,
@@ -859,14 +860,18 @@ RETIRED_STREAMING_KEYS = {
     'phase1_easy_end': 0.2,
     'phase1_semi_start': 0.2,
     'phase1_semi_end': 0.4,
+    'distances_parquet': './data/naics_distances.parquet',
+    'distance_matrix_parquet': './data/naics_distance_matrix.parquet',
+    'tokenizer_name': 'sentence-transformers/all-MiniLM-L6-v2',
+    'max_length': 128,
 }
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ('key', 'value'), list(RETIRED_STREAMING_KEYS.items()), ids=list(RETIRED_STREAMING_KEYS)
 )
-def test_hgcn_streaming_config_refuses_the_retired_sampling_keys(key, value):
-    '''No HGCN run carries a sampling setting that nothing reads.'''
+def test_hgcn_streaming_config_refuses_the_retired_keys(key, value):
+    '''No HGCN run carries a setting that nothing reads.'''
 
     with pytest.raises(ValidationError) as excinfo:
         StreamingConfig(**{key: value})
@@ -1134,14 +1139,12 @@ class TestGraphConfig:
 @pytest.mark.unit
 def test_every_tokenizing_config_defaults_to_the_trained_window():
     assert TokenizationConfig().max_length == 128
-    assert StreamingConfig().max_length == 128
     assert config_module.TextStreamingConfig().max_length == 128
     assert TextOnlyConfig().max_length == 128
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    'config_class',
-    ['TokenizationConfig', 'StreamingConfig', 'TextStreamingConfig', 'TextOnlyConfig'],
+    'config_class', ['TokenizationConfig', 'TextStreamingConfig', 'TextOnlyConfig']
 )
 def test_a_max_length_beyond_the_trained_window_is_refused(config_class):
     with pytest.raises(ValidationError, match='trained input window'):

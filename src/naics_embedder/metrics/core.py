@@ -6,7 +6,7 @@ Core metrics classes for embedding evaluation.
 
 Contains:
 - lorentz_distance_matrix: Float64 pairwise Lorentz distances for evaluation
-- EmbeddingEvaluator: Pairwise distance and similarity computation
+- EmbeddingEvaluator: Float32 pairwise Lorentz distances on the evaluation device
 - HierarchyMetrics: Cophenetic/Spearman correlation, NDCG ranking, distortion
 '''
 
@@ -14,7 +14,6 @@ import logging
 from typing import Dict, List, Union
 
 import torch
-import torch.nn.functional as F
 
 from naics_embedder.metrics.structural_spearman import (
     StructuralSpearmanResult,
@@ -78,70 +77,31 @@ class EmbeddingEvaluator:
         self.device, _, _ = get_device()
 
     def compute_pairwise_distances(
-        self, embeddings: torch.Tensor, metric: str = 'euclidean', curvature: float = 1.0
+        self, embeddings: torch.Tensor, metric: str = 'lorentz', curvature: float = 1.0
     ) -> torch.Tensor:
         '''
-        Compute pairwise distances between embeddings.
+        Compute pairwise Lorentz distances between embeddings.
+
+        HGCN's hyperbolic points are the only input; a flat arm's distances come from
+        ``panels.decoding``.
 
         Args:
-            embeddings: Tensor of shape (N, D) for Euclidean or (N, D+1) for Lorentz
-            metric: Distance metric ('euclidean', 'cosine', or 'lorentz')
-            curvature: Curvature parameter for Lorentz metric (default: 1.0)
+            embeddings: Lorentz embeddings of shape (N, D+1)
+            metric: Distance metric; only 'lorentz' is accepted
+            curvature: Curvature parameter for the Lorentz metric (default: 1.0)
 
         Returns:
             Float32 distance matrix of shape (N, N) on self.device
+
+        Raises:
+            ValueError: If metric is not 'lorentz'.
         '''
 
-        if metric == 'lorentz':
-            # Computed in float64 from the embeddings as given, so it skips the float32 cast.
-            distances = lorentz_distance_matrix(embeddings, curvature=curvature)
-            return distances.to(device=self.device, dtype=torch.float32)
-
-        embeddings = embeddings.to(self.device)
-        embeddings = embeddings.float()
-
-        if metric == 'euclidean':
-            # Euclidean distance: ||u - v||_2
-            distances = torch.cdist(embeddings, embeddings, p=2)
-
-        elif metric == 'cosine':
-            # Cosine distance: 1 - cos(u, v)
-            normalized = F.normalize(embeddings, p=2, dim=1)
-            similarities = torch.mm(normalized, normalized.t())
-            distances = 1.0 - similarities
-
-        else:
+        if metric != 'lorentz':
             raise ValueError(f'Unknown metric: {metric}')
-
-        return distances
-
-    def compute_similarity_matrix(
-        self, embeddings: torch.Tensor, metric: str = 'cosine'
-    ) -> torch.Tensor:
-        '''
-        Compute pairwise similarities between embeddings.
-
-        Args:
-            embeddings: Tensor of shape (N, D)
-            metric: Similarity metric ('cosine' or 'dot')
-
-        Returns:
-            Similarity matrix of shape (N, N)
-        '''
-
-        embeddings = embeddings.to(self.device)
-
-        if metric == 'cosine':
-            normalized = F.normalize(embeddings, p=2, dim=1)
-            similarities = torch.mm(normalized, normalized.t())
-
-        elif metric == 'dot':
-            similarities = torch.mm(embeddings, embeddings.t())
-
-        else:
-            raise ValueError(f'Unknown metric: {metric}')
-
-        return similarities
+        # Computed in float64 from the embeddings as given, then cast for the hierarchy metrics
+        distances = lorentz_distance_matrix(embeddings, curvature=curvature)
+        return distances.to(device=self.device, dtype=torch.float32)
 
 # -------------------------------------------------------------------------------------------------
 # Hierarchy preservation metrics

@@ -576,7 +576,7 @@ class TokenizationConfig(BaseModel):
         return cls(**data)
 
 class StreamingConfig(BaseModel):
-    '''Configuration for streaming dataset.'''
+    '''HGCN's streaming triplet cache: the paths, n_negatives and seed it samples and keys on.'''
 
     model_config = ConfigDict(extra='forbid')
 
@@ -584,26 +584,11 @@ class StreamingConfig(BaseModel):
         default='./data/naics_descriptions.parquet',
         description='Path to descriptions parquet file'
     )
-    distances_parquet: str = Field(
-        default='./data/naics_distances.parquet', description='Path to distances parquet file'
-    )
-    distance_matrix_parquet: str = Field(
-        default='./data/naics_distance_matrix.parquet',
-        description='Path to distance matrix parquet file',
-    )
     relations_parquet: str = Field(
         default='./data/naics_relations.parquet', description='Path to relations parquet file'
     )
     triplets_parquet: str = Field(
         default='./data/naics_training_pairs', description='Path to training pairs directory'
-    )
-    tokenizer_name: str = Field(
-        default='sentence-transformers/all-MiniLM-L6-v2', description='HuggingFace tokenizer name'
-    )
-    max_length: int = Field(
-        default=128,
-        ge=1,
-        description="Tokens kept per channel text, at most the backbone's trained window",
     )
     seed: int = Field(default=42, ge=0, description='Random seed for sampling')
 
@@ -611,13 +596,6 @@ class StreamingConfig(BaseModel):
     n_negatives: int = Field(
         default=24, gt=0, description='Maximum number of negatives per positive'
     )
-
-    @model_validator(mode='after')
-    def fit_the_trained_window(self) -> 'StreamingConfig':
-        '''Refuse a max_length beyond the backbone's trained window (Req 9).'''
-
-        check_window(self.tokenizer_name, self.max_length)
-        return self
 
 class TextStreamingConfig(BaseModel):
     '''

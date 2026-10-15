@@ -132,6 +132,15 @@ def test_legacy_stage_commands_build_nothing(monkeypatch, runner, command):
     assert 'naics-embedder data supervision' in result.output.replace('\n', ' ')
     assert calls == []
 
+def test_the_data_module_docstring_says_the_legacy_stages_build_nothing():
+    '''The CLI API page renders this docstring, so it describes the stubs as they behave.'''
+
+    doc = ' '.join(data_cli.__doc__.split())
+    legacy = doc[doc.index('relations, distances, triplets:'):doc.index('all:')]
+
+    assert 'builds nothing' in legacy
+    assert 'supervision bundle' not in legacy
+
 def test_data_roles_draws_the_table_with_both_configs(monkeypatch, runner, tmp_path):
     calls = []
 

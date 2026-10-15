@@ -16,13 +16,11 @@ The controller monitors metrics and decides when to:
   - ROLLBACK: Return to previous phase (overfitting detected)
 '''
 
-import json
 import logging
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum, auto
-from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, Optional
 
 from naics_embedder.graph_model.curriculum.event_bus import (
     CurriculumEvent,
@@ -549,31 +547,6 @@ class CurriculumController:
             }
 
         return base_config
-
-    def get_history(self) -> List[Dict[str, Any]]:
-        '''Get metrics history as list of dicts.'''
-        return [
-            {
-                'epoch': s.epoch,
-                'step': s.step,
-                'train_loss': s.train_loss,
-                'val_loss': s.val_loss,
-                'generalization_gap': s.generalization_gap,
-                'loss_velocity': s.loss_velocity,
-                'mrr': s.mrr,
-                'phase': s.phase.name,
-            } for s in self._metrics_history
-        ]
-
-    def save_history(self, path: str) -> None:
-        '''Save metrics history to JSON file.'''
-        output_path = Path(path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(output_path, 'w') as f:
-            json.dump(self.get_history(), f, indent=2)
-
-        logger.info(f'Saved curriculum history to {path}')
 
     def load_state(self, state: Dict[str, Any]) -> None:
         '''Load controller state from dict (for checkpoint restoration).'''
