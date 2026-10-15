@@ -4,7 +4,8 @@ Dead code the 2026-10-15 technical-debt audit deleted stays deleted.
 Each entry had no caller: the torch.compile utilities (compilation was never enabled, so every
 decorator returned its function unchanged), and the general evaluation runner with the two metric
 classes only it used (it measured Euclidean distance whatever the geometry), and the HGCN
-curriculum analyzer (it read a history file nothing writes). Git history keeps them.
+curriculum analyzer (it read a history file nothing writes). A second pass removed the HGCN
+curriculum controller's history export, which nothing called. Git history keeps them.
 '''
 
 import importlib
@@ -12,7 +13,8 @@ import importlib.util
 
 import pytest
 
-# A bare module path must not be importable; 'module:attribute' must not be an attribute of it
+# A bare module path must not be importable; 'module:attribute' must not be an attribute of it,
+# and 'module:Owner.attribute' must not be an attribute of Owner
 DELETIONS = [
     # torch.compile utilities: never enabled, so maybe_compile was an identity
     'naics_embedder.utils.compile',
@@ -48,6 +50,9 @@ DELETIONS = [
     'naics_embedder.graph_model.curriculum:plot_curriculum_training',
     'naics_embedder.graph_model:CurriculumAnalyzer',
     'naics_embedder.graph_model:generate_report',
+    # The HGCN curriculum controller's history export: nothing called it
+    'naics_embedder.graph_model.curriculum.controller:CurriculumController.get_history',
+    'naics_embedder.graph_model.curriculum.controller:CurriculumController.save_history',
 ]
 
 @pytest.mark.unit
@@ -59,4 +64,9 @@ def test_the_audited_dead_code_is_deleted(path):
     if not attribute:
         assert importlib.util.find_spec(module) is None
         return
-    assert not hasattr(importlib.import_module(module), attribute)
+    owner = importlib.import_module(module)
+    *owners, name = attribute.split('.')
+    # Owner must exist, so a renamed class fails the guard instead of passing it vacuously
+    for part in owners:
+        owner = getattr(owner, part)
+    assert not hasattr(owner, name)
