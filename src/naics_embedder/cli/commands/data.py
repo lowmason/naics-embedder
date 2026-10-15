@@ -21,8 +21,8 @@ Commands:
     preprocess: Download raw NAICS files and produce descriptions parquet.
     supervision: Build codebook, pair facts, compatibility distance/relation artifacts,
         training pairs, and curriculum thresholds as one versioned bundle.
-    relations, distances, triplets: Deprecated stage commands; each prints a migration notice
-        and builds the complete supervision bundle.
+    relations, distances, triplets: Deprecated stage commands; each builds nothing, names
+        ``data supervision`` and exits with status 1.
     all: Run the complete data generation pipeline.
 '''
 
