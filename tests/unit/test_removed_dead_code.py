@@ -5,7 +5,8 @@ Each entry had no caller: the torch.compile utilities (compilation was never ena
 decorator returned its function unchanged), and the general evaluation runner with the two metric
 classes only it used (it measured Euclidean distance whatever the geometry), and the HGCN
 curriculum analyzer (it read a history file nothing writes). A second pass removed the HGCN
-curriculum controller's history export, which nothing called. Git history keeps them.
+curriculum controller's history export, which nothing called, and the evaluator's flat
+similarity matrix, which only tests called. Git history keeps them.
 '''
 
 import importlib
@@ -53,6 +54,8 @@ DELETIONS = [
     # The HGCN curriculum controller's history export: nothing called it
     'naics_embedder.graph_model.curriculum.controller:CurriculumController.get_history',
     'naics_embedder.graph_model.curriculum.controller:CurriculumController.save_history',
+    # The evaluator's flat similarity matrix: only tests called it
+    'naics_embedder.metrics.core:EmbeddingEvaluator.compute_similarity_matrix',
 ]
 
 @pytest.mark.unit

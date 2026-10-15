@@ -2,7 +2,7 @@
 Unit tests for text model evaluation module.
 
 Tests cover:
-- EmbeddingEvaluator (distance and similarity computation)
+- EmbeddingEvaluator (Lorentz distances; the flat metrics are refused)
 - HierarchyMetrics (cophenetic correlation, Spearman correlation, distortion)
 '''
 
@@ -58,27 +58,6 @@ class TestEmbeddingEvaluator:
         assert isinstance(evaluator.device, str)
         assert evaluator.device in ['cpu', 'cuda', 'mps']
 
-    def test_compute_pairwise_distances_euclidean(self, sample_embeddings):
-        '''Test Euclidean distance computation.'''
-        evaluator = EmbeddingEvaluator()
-        distances = evaluator.compute_pairwise_distances(sample_embeddings, metric='euclidean')
-
-        assert distances.shape == (20, 20)
-        assert torch.allclose(distances, distances.t())  # Symmetric
-        # Zero diagonal
-        assert torch.allclose(torch.diag(distances), torch.zeros(20, device=distances.device))
-
-    def test_compute_pairwise_distances_cosine(self, sample_embeddings):
-        '''Test cosine distance computation.'''
-        evaluator = EmbeddingEvaluator()
-        distances = evaluator.compute_pairwise_distances(sample_embeddings, metric='cosine')
-
-        assert distances.shape == (20, 20)
-        # Allow small numerical errors (cosine distance should be >= -1e-6)
-        assert torch.all(distances >= -1e-6)  # Non-negative (with numerical tolerance)
-        assert torch.all(distances <= 2.0 + 1e-6)  # Cosine distance is in [0, 2]
-        assert torch.allclose(distances, distances.t())  # Symmetric
-
     def test_compute_pairwise_distances_lorentz(self, sample_lorentz_embeddings):
         '''Test Lorentz distance computation.'''
         evaluator = EmbeddingEvaluator()
@@ -99,35 +78,21 @@ class TestEmbeddingEvaluator:
         with pytest.raises(ValueError, match='Unknown metric'):
             evaluator.compute_pairwise_distances(sample_embeddings, metric='invalid')
 
-    def test_compute_similarity_matrix_cosine(self, sample_embeddings):
-        '''Test cosine similarity computation.'''
+    def test_lorentz_is_the_default_metric(self, sample_lorentz_embeddings):
+        '''HGCN's hyperbolic points are the evaluator's only input.'''
         evaluator = EmbeddingEvaluator()
-        similarities = evaluator.compute_similarity_matrix(sample_embeddings, metric='cosine')
 
-        assert similarities.shape == (20, 20)
-        # Allow small numerical errors (cosine similarity should be in [-1, 1] with tolerance)
-        assert torch.all(similarities >= -1.0 - 1e-6) and torch.all(similarities <= 1.0 + 1e-6)
-        assert torch.allclose(similarities, similarities.t())  # Symmetric
-        # Self-similarity = 1
-        assert torch.allclose(
-            torch.diag(similarities),
-            torch.ones(20, device=similarities.device),
-            atol=1e-5,
+        assert torch.equal(
+            evaluator.compute_pairwise_distances(sample_lorentz_embeddings),
+            evaluator.compute_pairwise_distances(sample_lorentz_embeddings, metric='lorentz'),
         )
 
-    def test_compute_similarity_matrix_dot(self, sample_embeddings):
-        '''Test dot product similarity computation.'''
-        evaluator = EmbeddingEvaluator()
-        similarities = evaluator.compute_similarity_matrix(sample_embeddings, metric='dot')
-
-        assert similarities.shape == (20, 20)
-        assert torch.allclose(similarities, similarities.t())  # Symmetric
-
-    def test_compute_similarity_matrix_invalid_metric(self, sample_embeddings):
-        '''Test error handling for invalid similarity metric.'''
+    @pytest.mark.parametrize('metric', ['euclidean', 'cosine'])
+    def test_the_flat_metrics_are_refused(self, sample_embeddings, metric):
+        '''Flat arms take their distances from panels.decoding, not from the evaluator.'''
         evaluator = EmbeddingEvaluator()
         with pytest.raises(ValueError, match='Unknown metric'):
-            evaluator.compute_similarity_matrix(sample_embeddings, metric='invalid')
+            evaluator.compute_pairwise_distances(sample_embeddings, metric=metric)
 
 # -------------------------------------------------------------------------------------------------
 # HierarchyMetrics Tests
@@ -147,8 +112,7 @@ class TestHierarchyMetrics:
     def test_cophenetic_correlation(self, sample_embeddings, sample_tree_distances):
         '''Test cophenetic correlation computation.'''
         metrics = HierarchyMetrics()
-        evaluator = EmbeddingEvaluator()
-        emb_distances = evaluator.compute_pairwise_distances(sample_embeddings, metric='euclidean')
+        emb_distances = torch.cdist(sample_embeddings, sample_embeddings)
 
         result = metrics.cophenetic_correlation(emb_distances, sample_tree_distances)
 
@@ -163,8 +127,7 @@ class TestHierarchyMetrics:
     ):
         '''Test cophenetic correlation with minimum distance filter.'''
         metrics = HierarchyMetrics()
-        evaluator = EmbeddingEvaluator()
-        emb_distances = evaluator.compute_pairwise_distances(sample_embeddings, metric='euclidean')
+        emb_distances = torch.cdist(sample_embeddings, sample_embeddings)
 
         result = metrics.cophenetic_correlation(
             emb_distances, sample_tree_distances, min_distance=1.0
@@ -194,8 +157,7 @@ class TestHierarchyMetrics:
     def test_spearman_correlation(self, sample_embeddings, sample_tree_distances):
         '''Test Spearman correlation computation.'''
         metrics = HierarchyMetrics()
-        evaluator = EmbeddingEvaluator()
-        emb_distances = evaluator.compute_pairwise_distances(sample_embeddings, metric='euclidean')
+        emb_distances = torch.cdist(sample_embeddings, sample_embeddings)
 
         result = metrics.spearman_correlation(emb_distances, sample_tree_distances)
 
@@ -232,8 +194,7 @@ class TestHierarchyMetrics:
     def test_distortion(self, sample_embeddings, sample_tree_distances):
         '''Test distortion metrics computation.'''
         metrics = HierarchyMetrics()
-        evaluator = EmbeddingEvaluator()
-        emb_distances = evaluator.compute_pairwise_distances(sample_embeddings, metric='euclidean')
+        emb_distances = torch.cdist(sample_embeddings, sample_embeddings)
 
         result = metrics.distortion(emb_distances, sample_tree_distances)
 
@@ -266,8 +227,7 @@ class TestHierarchyMetrics:
     def test_ndcg_ranking(self, sample_embeddings, sample_tree_distances):
         '''Test NDCG ranking computation.'''
         metrics = HierarchyMetrics()
-        evaluator = EmbeddingEvaluator()
-        emb_distances = evaluator.compute_pairwise_distances(sample_embeddings, metric='euclidean')
+        emb_distances = torch.cdist(sample_embeddings, sample_embeddings)
 
         result = metrics.ndcg_ranking(emb_distances, sample_tree_distances, k_values=[5, 10])
 
@@ -364,7 +324,6 @@ class TestLevelConsistency:
         self, level_embeddings, level_tree_distances
     ):
         '''Test hierarchy preservation metrics for each level.'''
-        evaluator = EmbeddingEvaluator()
         hierarchy_metrics = HierarchyMetrics()
 
         for level in [2, 3, 4, 5, 6]:
@@ -375,7 +334,7 @@ class TestLevelConsistency:
             tree_dists = (tree_dists + tree_dists.t()) / 2
             tree_dists.fill_diagonal_(0.0)
 
-            emb_distances = evaluator.compute_pairwise_distances(embeddings, metric='euclidean')
+            emb_distances = torch.cdist(embeddings, embeddings)
             result = hierarchy_metrics.cophenetic_correlation(
                 emb_distances, tree_dists, min_distance=0.05
             )
@@ -388,32 +347,3 @@ class TestLevelConsistency:
                 assert -1.0 <= corr.item() <= 1.0
             else:
                 assert -1.0 <= corr <= 1.0
-
-    def test_level_consistency_cross_level_coherence(self, test_device):
-        '''Test that embeddings from different levels maintain coherent relationships.
-
-        Parent codes should generally be closer to their children than to
-        codes from different branches in a well-trained embedding space.
-        '''
-        torch.manual_seed(42)
-        evaluator = EmbeddingEvaluator()
-
-        # Create parent and child embeddings with expected relationship
-        # Parent embedding
-        parent = torch.randn(1, 128, device=test_device)
-        # Child embeddings (similar to parent with some noise)
-        children = parent + torch.randn(3, 128, device=test_device) * 0.5
-        # Unrelated codes (different random embeddings)
-        unrelated = torch.randn(3, 128, device=test_device) * 2.0
-
-        all_embeddings = torch.cat([parent, children, unrelated], dim=0)
-        distances = evaluator.compute_pairwise_distances(all_embeddings, metric='euclidean')
-
-        # Distance from parent (idx 0) to children (idx 1,2,3) should generally be
-        # smaller than to unrelated (idx 4,5,6)
-        parent_to_children = distances[0, 1:4].mean()
-        parent_to_unrelated = distances[0, 4:7].mean()
-
-        # In a well-structured embedding, children should be closer
-        # (with high probability given our construction)
-        assert parent_to_children < parent_to_unrelated
