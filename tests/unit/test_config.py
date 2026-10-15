@@ -52,9 +52,7 @@ class TestDirConfig:
         config = DirConfig()
 
         assert config.checkpoint_dir == './checkpoints'
-        assert config.conf_dir == './conf'
         assert config.data_dir == './data'
-        assert config.docs_dir == './docs'
         assert config.log_dir == './logs'
         assert config.output_dir == './outputs'
 
@@ -69,7 +67,7 @@ class TestDirConfig:
         assert config.checkpoint_dir == '/custom/checkpoints'
         assert config.data_dir == '/custom/data'
         # Other fields should still have defaults
-        assert config.conf_dir == './conf'
+        assert config.log_dir == './logs'
 
     def test_serialization(self):
         '''Test that config can be serialized to dict.'''
@@ -759,12 +757,12 @@ def test_exact_resume_is_the_only_checkpoint_load_mode():
     assert [mode.value for mode in CheckpointLoadMode] == ['exact']
 
 # -------------------------------------------------------------------------------------------------
-# The old objective's removed keys (spec 4.5; P22)
+# Removed keys: the old objective's (spec 4.5; P22) and config nothing read
 # -------------------------------------------------------------------------------------------------
 
 # Spec 4.5's removed keys, plus P22's two (loss.rank_order_weight and data_loader.num_workers), each
 # at its old default, so a value the old configuration accepted is refused too. A removed section
-# is set empty.
+# is set empty. The data section and dirs.conf_dir and dirs.docs_dir were config no code read.
 REMOVED_KEYS = {
     'supervision.mode': 'repaired',
     'curriculum': {},
@@ -804,12 +802,15 @@ REMOVED_KEYS = {
     'loss.level_radius_weight': 0.05,
     'training.warmup_steps': 500,
     'training.use_warmup_cosine': False,
+    'data': {},
+    'dirs.conf_dir': './conf',
+    'dirs.docs_dir': './docs',
 }
 
 @pytest.mark.parametrize(('key', 'value'), list(REMOVED_KEYS.items()), ids=list(REMOVED_KEYS))
 def test_a_removed_key_is_refused_as_extra(valid_config_dict, key, value):
-    '''Spec 4.5: the shipped YAML with a removed key, or an override that sets one, is refused as an
-    unknown key, so no run reads a setting of the old objective.'''
+    '''The shipped YAML with a removed key, or an override that sets one, is refused as an unknown
+    key, so no run carries a setting of the old objective (spec 4.5) or one no code read.'''
 
     loc = tuple(key.split('.'))
     section = valid_config_dict
@@ -826,8 +827,8 @@ def test_a_removed_key_is_refused_as_extra(valid_config_dict, key, value):
     assert _error_locs_and_types(from_override) == [(loc, 'extra_forbidden')]
 
 def test_the_text_streaming_config_holds_only_the_text_fields():
-    '''P22: data_loader.streaming is TextStreamingConfig; StreamingConfig, with the sampling fields
-    HGCN's cache reads, belongs to graph_model alone.'''
+    '''P22: data_loader.streaming is TextStreamingConfig; StreamingConfig, with the paths,
+    n_negatives and seed HGCN's cache reads, belongs to graph_model alone.'''
 
     text_streaming = config_module.TextStreamingConfig
 
@@ -842,50 +843,35 @@ def test_the_text_streaming_config_holds_only_the_text_fields():
     }
 
 # -------------------------------------------------------------------------------------------------
-# StreamingConfig's ratio checks, kept unchanged for HGCN (P22)
+# HGCN's StreamingConfig: the retired sampling keys
 # -------------------------------------------------------------------------------------------------
 
-class TestStreamingConfigValidation:
-    '''Tests for config validation.'''
+# The phase-1 and on-the-fly sampling keys, each at its old default. Only their own ratio validator
+# read them; HGCN's cache reads the paths, n_negatives and seed.
+RETIRED_STREAMING_KEYS = {
+    'use_phase1_sampling': True,
+    'phase1_alpha': 1.5,
+    'phase1_exclusion_weight': None,
+    'use_on_the_fly_sampling': False,
+    'n_candidates': 48,
+    'n_negatives_phase1': 24,
+    'phase1_easy_start': 0.7,
+    'phase1_easy_end': 0.2,
+    'phase1_semi_start': 0.2,
+    'phase1_semi_end': 0.4,
+}
 
-    @pytest.mark.unit
-    def test_valid_config_ratios(self):
-        '''Valid ratio configs should pass validation.'''
-        cfg = StreamingConfig(
-            phase1_easy_start=0.60,
-            phase1_easy_end=0.30,
-            phase1_semi_start=0.30,
-            phase1_semi_end=0.40,
-        )
-        # Should not raise
-        assert cfg.phase1_easy_start == 0.60
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ('key', 'value'), list(RETIRED_STREAMING_KEYS.items()), ids=list(RETIRED_STREAMING_KEYS)
+)
+def test_hgcn_streaming_config_refuses_the_retired_sampling_keys(key, value):
+    '''No HGCN run carries a sampling setting that nothing reads.'''
 
-    @pytest.mark.unit
-    def test_invalid_start_ratios_sum(self):
-        '''Start ratios summing > 1.0 should fail validation.'''
-        with pytest.raises(ValueError, match='phase1_easy_start.*phase1_semi_start.*<= 1.0'):
-            StreamingConfig(
-                phase1_easy_start=0.70,
-                phase1_semi_start=0.40,  # Sum = 1.1 > 1.0
-            )
+    with pytest.raises(ValidationError) as excinfo:
+        StreamingConfig(**{key: value})
 
-    @pytest.mark.unit
-    def test_invalid_end_ratios_sum(self):
-        '''End ratios summing > 1.0 should fail validation.'''
-        with pytest.raises(ValueError, match='phase1_easy_end.*phase1_semi_end.*<= 1.0'):
-            StreamingConfig(
-                phase1_easy_end=0.50,
-                phase1_semi_end=0.60,  # Sum = 1.1 > 1.0
-            )
-
-    @pytest.mark.unit
-    def test_n_negatives_phase1_cannot_exceed_candidates(self):
-        '''n_negatives_phase1 > n_candidates should fail validation.'''
-        with pytest.raises(ValueError, match='n_negatives_phase1.*n_candidates'):
-            StreamingConfig(
-                n_candidates=24,
-                n_negatives_phase1=48,  # More than candidates
-            )
+    assert _error_locs_and_types(excinfo) == [((key, ), 'extra_forbidden')]
 
 # -------------------------------------------------------------------------------------------------
 # Trainer settings (spec 4.2 and 4.5)

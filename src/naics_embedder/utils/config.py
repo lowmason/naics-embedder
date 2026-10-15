@@ -84,9 +84,7 @@ class DirConfig(BaseModel):
     checkpoint_dir: str = Field(
         default='./checkpoints', description='Directory for model checkpoints'
     )
-    conf_dir: str = Field(default='./conf', description='Directory for config files')
     data_dir: str = Field(default='./data', description='Directory containing data files')
-    docs_dir: str = Field(default='./docs', description='Directory containing data files')
     log_dir: str = Field(default='./logs', description='Directory for logs')
     output_dir: str = Field(default='./outputs', description='Directory for training outputs')
 
@@ -242,59 +240,6 @@ class DownloadConfig(BaseModel):
 
         return cls(**data)
 
-class RelationsConfig(BaseModel):
-    '''Configuration for computing pairwise relations.'''
-
-    model_config = ConfigDict(extra='forbid')
-
-    input_parquet: str = Field(
-        default='./data/naics_descriptions.parquet', description='Input descriptions parquet file'
-    )
-    output_parquet: str = Field(
-        default='./data/naics_relations.parquet', description='Output relations parquet file'
-    )
-    relation_matrix_parquet: str = Field(
-        default='./data/naics_relation_matrix.parquet',
-        description='Output relation matrix parquet file',
-    )
-
-    relation_id: Dict[str, int] = Field(
-        default={
-            'child': 1,
-            'sibling': 2,
-            'grandchild': 3,
-            'great-grandchild': 4,
-            'nephew/niece': 5,
-            'great-great-grandchild': 6,
-            'cousin': 7,
-            'grand-nephew/niece': 8,
-            'grand-grand-nephew/niece': 9,
-            'cousin_1_times_removed': 10,
-            'second_cousin': 11,
-            'cousin_2_times_removed': 12,
-            'second_cousin_1_times_removed': 13,
-            'third_cousin': 14,
-        },
-        description='Mapping of relation names to IDs',
-    )
-
-    @classmethod
-    def from_yaml(cls, yaml_path: str) -> 'RelationsConfig':
-        '''Load configuration from YAML file.'''
-
-        yaml_file = Path(yaml_path)
-        if not yaml_file.exists():
-            logger.warning(f'Config file not found: {yaml_path}, using defaults')
-            return cls()
-
-        with open(yaml_file, 'r') as f:
-            data = yaml.safe_load(f)
-
-        if data is None:
-            data = {}
-
-        return cls(**data)
-
 class DistancesConfig(BaseModel):
     '''Configuration for computing pairwise distances.'''
 
@@ -327,59 +272,6 @@ class DistancesConfig(BaseModel):
             data = {}
 
         return cls(**data)
-
-class TripletsConfig(BaseModel):
-    '''Configuration for generating training triplets.'''
-
-    model_config = ConfigDict(extra='forbid')
-
-    descriptions_parquet: str = Field(
-        default='./data/naics_descriptions.parquet', description='Input descriptions parquet file'
-    )
-    distances_parquet: str = Field(
-        default='./data/naics_distances.parquet', description='Input distances parquet file'
-    )
-    relations_parquet: str = Field(
-        default='./data/naics_relations.parquet', description='Input relations parquet file'
-    )
-    output_parquet: str = Field(
-        default='./data/naics_training_pairs', description='Output directory for training pairs'
-    )
-
-    @classmethod
-    def from_yaml(cls, yaml_path: str) -> 'TripletsConfig':
-        '''Load configuration from YAML file.'''
-
-        yaml_file = Path(yaml_path)
-        if not yaml_file.exists():
-            logger.warning(f'Config file not found: {yaml_path}, using defaults')
-            return cls()
-
-        with open(yaml_file, 'r') as f:
-            data = yaml.safe_load(f)
-
-        if data is None:
-            data = {}
-
-        return cls(**data)
-
-class DataConfig(BaseModel):
-    '''Data configuration.'''
-
-    model_config = ConfigDict(extra='forbid')
-
-    download: DownloadConfig = Field(
-        default_factory=DownloadConfig, description='Download configuration'
-    )
-    relations: RelationsConfig = Field(
-        default_factory=RelationsConfig, description='Relations configuration'
-    )
-    distances: DistancesConfig = Field(
-        default_factory=DistancesConfig, description='Distances configuration'
-    )
-    triplets: TripletsConfig = Field(
-        default_factory=TripletsConfig, description='Triplets configuration'
-    )
 
 class SupervisionBuildConfig(BaseModel):
     '''Inputs and parameters for building one immutable Stage-3 supervision bundle.'''
@@ -720,91 +612,6 @@ class StreamingConfig(BaseModel):
         default=24, gt=0, description='Maximum number of negatives per positive'
     )
 
-    # Phase 1 sampling parameters
-    use_phase1_sampling: bool = Field(
-        default=True,
-        description=(
-            'Use Phase 1 tree-distance based sampling '
-            '(inverse weighting and sibling masking)'
-        ),
-    )
-    phase1_alpha: float = Field(
-        default=1.5,
-        gt=0.0,
-        description='Exponent for inverse tree distance weighting: P(n) ∝ 1 / D_tree(a, n)^α',
-    )
-    phase1_exclusion_weight: Optional[float] = Field(
-        default=None,
-        gt=0.0,
-        description=(
-            'Legacy constant sampling weight for excluded codes, which training rejects: an '
-            'explicit exclusion is never a negative.'
-        ),
-    )
-
-    # On-the-fly sampling with oversampling
-    use_on_the_fly_sampling: bool = Field(
-        default=False,
-        description='Use on-the-fly negative sampling instead of pre-computed cache',
-    )
-    n_candidates: int = Field(
-        default=48,
-        gt=0,
-        description='Total candidate negatives to sample (for Phase 2+ HNM pool)',
-    )
-    n_negatives_phase1: int = Field(
-        default=24,
-        gt=0,
-        description='Number of negatives used in Phase 1 loss (selected from candidates)',
-    )
-
-    # Phase 1 difficulty curriculum (linear annealing)
-    # Hard ratio is derived as 1 - easy - semi to guarantee sum = 1.0
-    phase1_easy_start: float = Field(
-        default=0.70,
-        ge=0.0,
-        le=1.0,
-        description='Easy negative ratio at start of Phase 1 (d >= 6)',
-    )
-    phase1_easy_end: float = Field(
-        default=0.20,
-        ge=0.0,
-        le=1.0,
-        description='Easy negative ratio at end of Phase 1',
-    )
-    phase1_semi_start: float = Field(
-        default=0.20,
-        ge=0.0,
-        le=1.0,
-        description='Semi-hard negative ratio at start of Phase 1 (d = 4-5)',
-    )
-    phase1_semi_end: float = Field(
-        default=0.40,
-        ge=0.0,
-        le=1.0,
-        description='Semi-hard negative ratio at end of Phase 1',
-    )
-
-    @model_validator(mode='after')
-    def validate_difficulty_ratios(self) -> 'StreamingConfig':
-        '''Ensure easy + semi <= 1.0 at both start and end (hard is derived).'''
-        if self.phase1_easy_start + self.phase1_semi_start > 1.0:
-            raise ValueError(
-                f'phase1_easy_start ({self.phase1_easy_start}) + '
-                f'phase1_semi_start ({self.phase1_semi_start}) must be <= 1.0'
-            )
-        if self.phase1_easy_end + self.phase1_semi_end > 1.0:
-            raise ValueError(
-                f'phase1_easy_end ({self.phase1_easy_end}) + '
-                f'phase1_semi_end ({self.phase1_semi_end}) must be <= 1.0'
-            )
-        if self.n_negatives_phase1 > self.n_candidates:
-            raise ValueError(
-                f'n_negatives_phase1 ({self.n_negatives_phase1}) must be <= '
-                f'n_candidates ({self.n_candidates})'
-            )
-        return self
-
     @model_validator(mode='after')
     def fit_the_trained_window(self) -> 'StreamingConfig':
         '''Refuse a max_length beyond the backbone's trained window (Req 9).'''
@@ -816,8 +623,8 @@ class TextStreamingConfig(BaseModel):
     '''
     The text stage's streaming keys: the descriptions, the tokenizer and the window (P22).
 
-    The sampling keys and the legacy paths left with the old objective (spec 4.5); HGCN's cache
-    keeps them in ``StreamingConfig``.
+    The sampling keys and the legacy paths left with the old objective (spec 4.5); HGCN's
+    ``StreamingConfig`` keeps the paths, n_negatives and seed its cache reads.
     '''
 
     model_config = ConfigDict(extra='forbid')
@@ -1371,7 +1178,6 @@ class Config(BaseModel):
     )
     seed: int = Field(default=42, ge=0, description='Random seed for reproducibility')
     dirs: DirConfig = Field(default_factory=DirConfig, description='File system paths')
-    data: DataConfig = Field(default_factory=DataConfig, description='Data configuration')
     data_loader: DataLoaderConfig = Field(
         default_factory=DataLoaderConfig, description='Data loading configuration'
     )

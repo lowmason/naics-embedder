@@ -41,7 +41,9 @@ training:
 The complete config also supplies LoRA/MoE settings and tokenization/description paths.
 `manifest_path: null` is a valid pre-generation state; `train` then refuses at the mandatory
 bundle gate and names the command to generate a bundle. The objective is `req11-v1`, and
-retired loss, curvature, mining, curriculum and streaming-path overrides are rejected.
+retired loss, curvature, mining, curriculum and streaming-path overrides are rejected, as are
+the unread `data` section and `dirs.conf_dir` and `dirs.docs_dir`, so a run config saved before
+their removal must drop them.
 
 CUDA uses the configured `bf16-mixed` backbone precision. Fusion, projection, head, geometry and
 losses remain float32; CPU and MPS use `32-true`. Text training uses one device. The learned
