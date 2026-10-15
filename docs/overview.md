@@ -189,8 +189,7 @@ stands.
 | Graph refinement | `graph_model/hgcn.py`, `graph_model/curriculum/` |
 
 The text model has three mixins: `LossMixin` for MoE balancing, `LoggingMixin` for epoch health,
-and `OptimizerMixin` for AdamW, warmup, plateau and scale clamping. Geometry utility operations
-also have a `torch.compile` implementation for the callers that use it.
+and `OptimizerMixin` for AdamW, warmup, plateau and scale clamping.
 
 ```bash
 uv run naics-embedder tools visualize --summary checkpoints/reference/epoch_summary.jsonl
