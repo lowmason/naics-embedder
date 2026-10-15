@@ -149,8 +149,8 @@ ignore patterns (for example `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.ipynb_
 and an optional rsync path.
 
 `.gitignore` gains `.remote/` and `outputs/remote/`. Without them, pulled results would be pushed
-back up as untracked "code" (§7.3) and could be committed by accident; `outputs/` already holds
-tracked files, including a TensorBoard event file from a Lambda host.
+back up as untracked "code" (§7.3) and could be committed by accident; `outputs/` once held
+tracked files, including a TensorBoard event file from a Lambda host, until a later cleanup.
 
 ## 7. Command behavior
 
