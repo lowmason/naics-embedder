@@ -205,6 +205,12 @@ class TestWarningFilters:
             # Should compile without error
             re.compile(message)
 
+    def test_no_filter_hides_an_inductor_warning(self):
+        '''Nothing calls torch.compile, so no filter is kept for Inductor's warnings.'''
+        for message, _, _, rationale in _WARNING_FILTERS:
+            assert 'Online softmax' not in message
+            assert 'Inductor' not in rationale
+
 # -------------------------------------------------------------------------------------------------
 # Integration tests
 # -------------------------------------------------------------------------------------------------
