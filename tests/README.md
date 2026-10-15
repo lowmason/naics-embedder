@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **101 unit** test files and **2 integration** files, with **3,194 collected
+The suite contains **102 unit** test files and **2 integration** files, with **3,198 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -14,7 +14,7 @@ real selection campaign. Hugging Face fixture dependencies are resolved locally.
 
 ```text
 tests/
-├── unit/                         # 101 unit test files
+├── unit/                         # 102 unit test files
 ├── integration/
 │   ├── test_reference_training.py # tiny-backbone Trainer workflows
 │   └── test_remote_workflow.py    # GNU-rsync workflow qualification
