@@ -5,14 +5,22 @@ Each entry had no caller: the torch.compile utilities (compilation was never ena
 decorator returned its function unchanged), and the general evaluation runner with the two metric
 classes only it used (it measured Euclidean distance whatever the geometry), and the HGCN
 curriculum analyzer (it read a history file nothing writes). A second pass removed the HGCN
-curriculum controller's history export, which nothing called, and the evaluator's flat
-similarity matrix, which only tests called. Git history keeps them.
+curriculum controller's history export, which nothing called, the evaluator's flat similarity
+matrix, which only tests called, and the notebook dev dependencies, which nothing has used since
+the scratch notebook left the repository. Git history keeps them.
 '''
 
 import importlib
 import importlib.util
+from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10; pytest brings tomli there
+    import tomli as tomllib
 
 # A bare module path must not be importable; 'module:attribute' must not be an attribute of it,
 # and 'module:Owner.attribute' must not be an attribute of Owner
@@ -73,3 +81,16 @@ def test_the_audited_dead_code_is_deleted(path):
     for part in owners:
         owner = getattr(owner, part)
     assert not hasattr(owner, name)
+
+# The notebook tooling the scratch notebook needed; nothing tracked uses it now
+REMOVED_DEV_DEPENDENCIES = ['jupyter', 'nbformat', 'nbclient']
+
+@pytest.mark.unit
+@pytest.mark.parametrize('name', REMOVED_DEV_DEPENDENCIES)
+def test_the_audited_dev_dependencies_are_removed(name):
+    '''No notebook tooling returns to the dev group without a notebook that uses it.'''
+
+    pyproject = Path(__file__).resolve().parents[2] / 'pyproject.toml'
+    dev = tomllib.loads(pyproject.read_text())['dependency-groups']['dev']
+
+    assert name not in {Requirement(requirement).name for requirement in dev}
