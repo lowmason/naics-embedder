@@ -26,6 +26,7 @@ def _matrix(pairs: Sequence[float | int], dtype: torch.dtype = torch.float64) ->
 def test_motivating_ties(metric, structural_distance_matrices):
     prediction, target = structural_distance_matrices
     result = metric.spearman_correlation(prediction, target)
+    assert set(result) == {'correlation', 'n_pairs', 'n_total', 'definition', 'status', 'reason'}
     assert result['correlation'].item() == pytest.approx(0.87831006565368, abs=1e-7)
     assert result['n_total'] == result['n_pairs'] == 6
     assert result['definition'] == 'structural-spearman-v1'
@@ -198,7 +199,12 @@ def test_nonfinite_off_diagonal_cannot_be_filtered_out(
 ):
     matrices = list(structural_distance_matrices)
     matrices[side][position] = value
-    with pytest.raises(public_metrics.StructuralMetricInputError, match='finite'):
+    name = ('embedding_distances', 'tree_distances')[side]
+    # The error names the matrix that holds the non-finite value
+    with pytest.raises(
+        public_metrics.StructuralMetricInputError,
+        match=f'{name} off-diagonal values must be finite'
+    ):
         metric.spearman_correlation(*matrices, min_distance=1000.0)
 
 @pytest.mark.parametrize('size', [0, 1, 2])

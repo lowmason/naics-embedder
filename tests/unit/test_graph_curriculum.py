@@ -1,11 +1,9 @@
 '''
 Unit tests for graph_model curriculum learning components.
 
-Tests the curriculum controller, event bus, sampling strategies,
-adaptive loss functions, and monitoring utilities.
+Tests the curriculum controller, event bus, sampling strategies and adaptive loss functions.
 '''
 
-import json
 from typing import Set, Tuple
 
 import pytest
@@ -17,8 +15,6 @@ from naics_embedder.graph_model.curriculum import (
     ConfidenceTracker,
     # Controller
     ControllerConfig,
-    # Monitoring
-    CurriculumAnalyzer,
     CurriculumController,
     # Event Bus
     CurriculumEvent,
@@ -611,131 +607,6 @@ class TestCurriculumLossModule:
 
             assert loss >= 0
             assert not torch.isnan(loss)
-
-# -------------------------------------------------------------------------------------------------
-# Monitoring Tests
-# -------------------------------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestCurriculumAnalyzer:
-    '''Test suite for curriculum training analyzer.'''
-
-    @pytest.fixture
-    def sample_history(self):
-        '''Sample training history for testing.'''
-        return [
-            {
-                'epoch': 0,
-                'train_loss': 1.0,
-                'val_loss': 1.1,
-                'mrr': 0.1,
-                'phase': 'PHASE_1_ANCHORING'
-            },
-            {
-                'epoch': 1,
-                'train_loss': 0.8,
-                'val_loss': 0.9,
-                'mrr': 0.2,
-                'phase': 'PHASE_1_ANCHORING'
-            },
-            {
-                'epoch': 2,
-                'train_loss': 0.6,
-                'val_loss': 0.7,
-                'mrr': 0.3,
-                'phase': 'PHASE_2_EXPANSION'
-            },
-            {
-                'epoch': 3,
-                'train_loss': 0.5,
-                'val_loss': 0.6,
-                'mrr': 0.4,
-                'phase': 'PHASE_2_EXPANSION'
-            },
-            {
-                'epoch': 4,
-                'train_loss': 0.4,
-                'val_loss': 0.5,
-                'mrr': 0.5,
-                'phase': 'PHASE_3_DISCRIMINATION',
-            },
-        ]
-
-    def test_load_history(self, sample_history, tmp_path):
-        '''Test loading history from JSON file.'''
-        history_path = tmp_path / 'history.json'
-        with open(history_path, 'w') as f:
-            json.dump(sample_history, f)
-
-        analyzer = CurriculumAnalyzer(str(history_path))
-
-        assert len(analyzer._history) == 5
-
-    def test_phase_summary(self, sample_history):
-        '''Test phase summary computation.'''
-        analyzer = CurriculumAnalyzer()
-        analyzer.load_from_controller_history(sample_history)
-
-        summary = analyzer.get_phase_summary()
-
-        assert 'PHASE_1_ANCHORING' in summary
-        assert 'PHASE_2_EXPANSION' in summary
-        assert summary['PHASE_1_ANCHORING'].duration_epochs == 2
-
-    def test_phase_transitions(self, sample_history):
-        '''Test phase transition detection.'''
-        analyzer = CurriculumAnalyzer()
-        analyzer.load_from_controller_history(sample_history)
-
-        transitions = analyzer.get_phase_transitions()
-
-        # Should have 3 transitions (start + 2 advances)
-        assert len(transitions) == 3
-
-    def test_metrics_timeseries(self, sample_history):
-        '''Test metrics time series extraction.'''
-        analyzer = CurriculumAnalyzer()
-        analyzer.load_from_controller_history(sample_history)
-
-        metrics = analyzer.get_metrics_timeseries()
-
-        assert 'epoch' in metrics
-        assert 'train_loss' in metrics
-        assert 'val_loss' in metrics
-        assert len(metrics['epoch']) == 5
-
-    def test_rollback_detection(self):
-        '''Test rollback event detection.'''
-        history = [
-            {
-                'epoch': 0,
-                'train_loss': 1.0,
-                'val_loss': 1.0,
-                'phase': 'PHASE_1_ANCHORING'
-            },
-            {
-                'epoch': 1,
-                'train_loss': 0.5,
-                'val_loss': 0.5,
-                'phase': 'PHASE_2_EXPANSION'
-            },
-            {
-                'epoch': 2,
-                'train_loss': 0.3,
-                'val_loss': 0.8,
-                'phase': 'PHASE_1_ANCHORING',
-                'rollback': True,
-                'generalization_gap': 0.5,
-            },
-        ]
-
-        analyzer = CurriculumAnalyzer()
-        analyzer.load_from_controller_history(history)
-
-        rollbacks = analyzer.get_rollback_events()
-
-        assert len(rollbacks) == 1
-        assert rollbacks[0]['epoch'] == 2
 
 # -------------------------------------------------------------------------------------------------
 # Integration Tests

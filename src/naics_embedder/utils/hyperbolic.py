@@ -9,7 +9,6 @@ This module provides:
   - Curvature management with phase-aware clamping
   - Manifold validation checks
   - Projection utilities for ensuring embeddings stay on hyperboloid
-  - Optional torch.compile support for fused operations
 
 The Lorentz model represents hyperbolic space on a hyperboloid:
   L^n_c = {x ∈ R^{n+1} : ⟨x, x⟩_L = -1/c, x_0 > 0}
@@ -26,22 +25,6 @@ import torch.nn as nn
 from torch import Tensor
 
 logger = logging.getLogger(__name__)
-
-# Import compiled operations (available when torch.compile is enabled)
-try:
-    from naics_embedder.utils.compile import maybe_compile
-
-    _COMPILE_AVAILABLE = True
-except ImportError:
-    _COMPILE_AVAILABLE = False
-
-    def maybe_compile(*args, **kwargs):  # type: ignore[misc]
-        '''Fallback decorator when compile module not available.'''
-
-        def decorator(fn):
-            return fn
-
-        return decorator
 
 # -------------------------------------------------------------------------------------------------
 # Curvature Management
@@ -140,19 +123,17 @@ class CurvatureManager(nn.Module):
         self._is_learnable = state['is_learnable']
 
 # -------------------------------------------------------------------------------------------------
-# Lorentz Operations (Extended) - with optional torch.compile support
+# Lorentz Operations (Extended)
 # -------------------------------------------------------------------------------------------------
 
-# Core operations as standalone functions for compilation
-@maybe_compile(mode='reduce-overhead')
+# Core operations as standalone functions
 def _minkowski_dot_core(x: Tensor, y: Tensor) -> Tensor:
     '''Minkowski inner product core computation.'''
     xy = x * y
     return torch.sum(xy[..., 1:], dim=-1) - xy[..., 0]
 
-@maybe_compile(mode='reduce-overhead')
 def _exp_map_zero_core(v_spatial: Tensor, sqrt_c: Tensor) -> Tensor:
-    '''Exponential map core computation - highly fusible.'''
+    '''Exponential map core computation.'''
     norm_v = torch.norm(v_spatial, p=2, dim=-1, keepdim=True)
     norm_v = torch.clamp(norm_v, min=1e-8)
     theta = torch.clamp(sqrt_c * norm_v, max=40.0)
@@ -161,9 +142,8 @@ def _exp_map_zero_core(v_spatial: Tensor, sqrt_c: Tensor) -> Tensor:
     x_spatial = (sinh_term / norm_v) * v_spatial
     return torch.cat([x0, x_spatial], dim=-1)
 
-@maybe_compile(mode='reduce-overhead')
 def _log_map_zero_core(x0: Tensor, x_spatial: Tensor, sqrt_c: Tensor) -> Tensor:
-    '''Logarithmic map core computation - highly fusible.'''
+    '''Logarithmic map core computation.'''
     theta = torch.acosh(torch.clamp(sqrt_c * x0, min=1.0 + 1e-5))
     sinh_theta = torch.sinh(theta)
     sinh_theta = torch.clamp(sinh_theta, min=1e-8)
@@ -173,15 +153,13 @@ def _log_map_zero_core(x0: Tensor, x_spatial: Tensor, sqrt_c: Tensor) -> Tensor:
     v_time = torch.zeros_like(x0)
     return torch.cat([v_time, v_spatial], dim=-1)
 
-@maybe_compile(mode='reduce-overhead')
 def _distance_core(dot: Tensor, sqrt_c: Tensor) -> Tensor:
-    '''Distance core computation - highly fusible.'''
+    '''Distance core computation.'''
     arccosh_arg = torch.clamp(-dot, min=1.0)
     return sqrt_c * torch.acosh(arccosh_arg)
 
-@maybe_compile(mode='reduce-overhead')
 def _project_to_hyperboloid_core(spatial: Tensor, c_inv: float) -> Tensor:
-    '''Projection core computation - highly fusible.'''
+    '''Projection core computation.'''
     spatial_norm_sq = torch.sum(spatial**2, dim=-1, keepdim=True)
     x0_new = torch.sqrt(spatial_norm_sq + c_inv)
     return torch.cat([x0_new, spatial], dim=-1)
@@ -191,9 +169,6 @@ class LorentzManifold:
     Extended Lorentz manifold operations with validation and projection.
 
     All operations maintain the Lorentz constraint: ⟨x, x⟩_L = -1/c
-
-    When torch.compile is enabled (PyTorch 2.0+), core operations are compiled
-    for better throughput through kernel fusion.
     '''
 
     @staticmethod

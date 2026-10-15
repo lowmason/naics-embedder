@@ -36,12 +36,6 @@ from naics_embedder.graph_model.curriculum.event_bus import (
     get_event_bus,
     reset_event_bus,
 )
-from naics_embedder.graph_model.curriculum.monitoring import (
-    CurriculumAnalyzer,
-    PhaseMetrics,
-    generate_report,
-    plot_curriculum_training,
-)
 from naics_embedder.graph_model.curriculum.preprocess_curriculum import (
     compute_difficulty_thresholds,
     compute_node_scores,
@@ -94,9 +88,4 @@ __all__ = [
     'CurriculumLossModule',
     'adaptive_triplet_loss',
     'compute_adaptive_margin',
-    # Monitoring
-    'CurriculumAnalyzer',
-    'PhaseMetrics',
-    'generate_report',
-    'plot_curriculum_training',
 ]

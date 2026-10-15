@@ -15,9 +15,7 @@ from naics_embedder.utils.utilities import (
 def test_make_directories_creates_all(tmp_path):
     cfg = DirConfig(
         checkpoint_dir=str(tmp_path / 'ckpts'),
-        conf_dir=str(tmp_path / 'conf'),
         data_dir=str(tmp_path / 'data'),
-        docs_dir=str(tmp_path / 'docs'),
         log_dir=str(tmp_path / 'logs'),
         output_dir=str(tmp_path / 'outputs'),
     )

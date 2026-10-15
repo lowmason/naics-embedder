@@ -1,7 +1,6 @@
 # -------------------------------------------------------------------------------------------------
 # Hyperbolic Geometry Utilities
 # Shared module for hyperbolic embeddings, distances, and manifold operations
-# With optional torch.compile support for fused operations
 # -------------------------------------------------------------------------------------------------
 
 import math
@@ -9,22 +8,6 @@ from typing import NamedTuple, Tuple
 
 import torch
 import torch.nn as nn
-
-# Import compile utilities
-try:
-    from naics_embedder.utils.compile import maybe_compile
-
-    _COMPILE_AVAILABLE = True
-except ImportError:
-    _COMPILE_AVAILABLE = False
-
-    def maybe_compile(*args, **kwargs):  # type: ignore[misc]
-        '''Fallback decorator when compile module not available.'''
-
-        def decorator(fn):
-            return fn
-
-        return decorator
 
 # -------------------------------------------------------------------------------------------------
 # The geometry head and the polar distance (spec 4.2)
@@ -261,14 +244,13 @@ def compute_hyperbolic_radii(embeddings: torch.Tensor) -> torch.Tensor:
     return embeddings[:, 0]
 
 # -------------------------------------------------------------------------------------------------
-# Compiled Lorentz Operations Core Functions
+# Lorentz Operations Core Functions
 # -------------------------------------------------------------------------------------------------
 
-@maybe_compile(mode='reduce-overhead')
 def _log_map_zero_ops_compiled(
     x0: torch.Tensor, x_spatial: torch.Tensor, sqrt_c: torch.Tensor
 ) -> torch.Tensor:
-    '''Core logarithmic map computation for LorentzOps - highly fusible.'''
+    '''Core logarithmic map computation for LorentzOps.'''
     theta = torch.acosh(torch.clamp(sqrt_c * x0, min=1.0 + 1e-5))
     sinh_theta = torch.sinh(theta)
     sinh_theta = torch.clamp(sinh_theta, min=1e-8)
@@ -278,9 +260,8 @@ def _log_map_zero_ops_compiled(
     v_time = torch.zeros_like(x0)
     return torch.cat([v_time, v_spatial], dim=1)
 
-@maybe_compile(mode='reduce-overhead')
 def _exp_map_zero_ops_compiled(v_spatial: torch.Tensor, sqrt_c: torch.Tensor) -> torch.Tensor:
-    '''Core exponential map computation for LorentzOps - highly fusible.'''
+    '''Core exponential map computation for LorentzOps.'''
     norm_v = torch.norm(v_spatial, p=2, dim=1, keepdim=True)
     norm_v = torch.clamp(norm_v, min=1e-8)
     theta = torch.clamp(sqrt_c * norm_v, max=40.0)
@@ -289,11 +270,10 @@ def _exp_map_zero_ops_compiled(v_spatial: torch.Tensor, sqrt_c: torch.Tensor) ->
     x_spatial = (sinh_term / norm_v) * v_spatial
     return torch.cat([x0, x_spatial], dim=1)
 
-@maybe_compile(mode='reduce-overhead')
 def _lorentz_distance_ops_compiled(
     uv_time: torch.Tensor, uv_spatial_sum: torch.Tensor, sqrt_c: torch.Tensor
 ) -> torch.Tensor:
-    '''Core Lorentz distance computation for LorentzOps - highly fusible.'''
+    '''Core Lorentz distance computation for LorentzOps.'''
     dot_product = uv_spatial_sum - uv_time
     arccosh_arg = torch.clamp(-dot_product, min=1.0)
     return sqrt_c * torch.acosh(arccosh_arg)
@@ -306,9 +286,6 @@ class LorentzOps:
     '''
     Static utility class for Lorentz model operations.
     Provides functions for mapping between hyperboloid and tangent space, and computing distances.
-
-    When torch.compile is enabled (PyTorch 2.0+), core operations are compiled
-    for better throughput through kernel fusion.
     '''
 
     @staticmethod
@@ -318,8 +295,6 @@ class LorentzOps:
 
         Maps a point on the Lorentz hyperboloid to the tangent space at the origin.
         Inverse of exp_map_zero.
-
-        Uses compiled operations when torch.compile is enabled.
 
         Args:
             x_hyp: Point on hyperboloid, shape (batch_size, embedding_dim+1)
@@ -342,8 +317,6 @@ class LorentzOps:
         Maps a tangent vector at the origin to a point on the Lorentz hyperboloid.
         The output satisfies the Lorentz constraint: ||x_spatial||^2 - x0^2 = -1/c
 
-        Uses compiled operations when torch.compile is enabled.
-
         Args:
             x_tan: Tangent vector, shape (batch_size, embedding_dim+1)
             c: Curvature parameter (default: 1.0)
@@ -359,8 +332,6 @@ class LorentzOps:
     def lorentz_distance(u: torch.Tensor, v: torch.Tensor, c: float = 1.0) -> torch.Tensor:
         '''
         Compute Lorentzian distance between two points on the hyperboloid.
-
-        Uses compiled operations when torch.compile is enabled.
 
         Args:
             u: First point on hyperboloid, shape (batch_size, embedding_dim+1)
