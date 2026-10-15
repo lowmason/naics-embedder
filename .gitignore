@@ -58,7 +58,8 @@ coverage.xml
 venv/
 ENV/
 env/
-.env/
+# No trailing slash: this covers a .env/ environment and a dotenv secrets file alike
+.env
 
 # Mypy cache
 .mypy_cache/
@@ -76,14 +77,22 @@ archive/
 /data/
 site/
 /reports/
-/README_files/
+# Quarto render libraries, at any depth
+README_files/
+report_files/
 *.parquet
 *.cache
     
-# Checkpoints and logs
+# Checkpoints, logs and run outputs
 checkpoints/
 logs/
 lightning_logs/
+# TensorBoard versions under dirs.output_dir; graph-stage and feeder outputs
+/outputs/
+/output/
+
+# Subagent-driven-development reports
+/.sdd/
 
 # Notebooks
 .ipynb_checkpoints
@@ -100,6 +109,7 @@ Thumbs.db
 scratch.ipynb
 .vscode/
 
-# Remote session state and pulled results
+# Remote session state and pulled results. /outputs/ above subsumes outputs/remote/; the remote
+# workflow spec names this rule, so it stays.
 .remote/
 outputs/remote/
