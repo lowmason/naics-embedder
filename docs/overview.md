@@ -141,10 +141,8 @@ observations (`fewer_than_two_observations`), both vectors constant
 constant (`constant_target`). Defined results have `status='defined'` and `reason=None`.
 An unexpected non-finite SciPy result for otherwise defined inputs raises `RuntimeError`.
 
-The general evaluation runner returns the complete result under `structural_spearman_v1`:
-`correlation`, `n_pairs`, `n_total`, `definition`, `status`, and `reason`. Training artifacts
-serialize undefined correlation as JSON `null`; Lightning omits that numeric scalar but logs
-the pair counts.
+HGCN's training artifacts serialize undefined correlation as JSON `null`; Lightning omits that
+numeric scalar but logs the pair counts.
 
 All unversioned historical fields (`spearman`, `spearman_correlation`,
 `val/spearman_correlation`, `val_spearman_correlation`) identify

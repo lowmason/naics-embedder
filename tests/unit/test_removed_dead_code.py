@@ -2,7 +2,9 @@
 Dead code the 2026-10-15 technical-debt audit deleted stays deleted.
 
 Each entry had no caller: the torch.compile utilities (compilation was never enabled, so every
-decorator returned its function unchanged). Git history keeps them.
+decorator returned its function unchanged), and the general evaluation runner with the two metric
+classes only it used (it measured Euclidean distance whatever the geometry). Git history keeps
+them.
 '''
 
 import importlib
@@ -31,6 +33,13 @@ DELETIONS = [
     'naics_embedder.text_model.moe:_COMPILE_AVAILABLE',
     'naics_embedder.utils.hyperbolic:maybe_compile',
     'naics_embedder.utils.hyperbolic:_COMPILE_AVAILABLE',
+    # The general evaluation runner and the metric classes only it used
+    'naics_embedder.metrics.runner',
+    'naics_embedder.metrics:NAICSEvaluationRunner',
+    'naics_embedder.metrics:RetrievalMetrics',
+    'naics_embedder.metrics:EmbeddingStatistics',
+    'naics_embedder.metrics.core:RetrievalMetrics',
+    'naics_embedder.metrics.core:EmbeddingStatistics',
 ]
 
 @pytest.mark.unit
