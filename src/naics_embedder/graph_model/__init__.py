@@ -19,8 +19,6 @@ from naics_embedder.graph_model.curriculum import (
     AdaptiveLossConfig,
     # Controller
     ControllerConfig,
-    # Monitoring
-    CurriculumAnalyzer,
     CurriculumController,
     # Event Bus
     CurriculumEvent,
@@ -31,7 +29,6 @@ from naics_embedder.graph_model.curriculum import (
     CurriculumSamplingConfig,
     EventBus,
     NextAction,
-    generate_report,
     get_event_bus,
     # Preprocessing
     preprocess_curriculum_data,
@@ -79,7 +76,4 @@ __all__ = [
     # Loss
     'AdaptiveLossConfig',
     'CurriculumLossModule',
-    # Monitoring
-    'CurriculumAnalyzer',
-    'generate_report',
 ]

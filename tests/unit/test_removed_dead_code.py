@@ -3,8 +3,8 @@ Dead code the 2026-10-15 technical-debt audit deleted stays deleted.
 
 Each entry had no caller: the torch.compile utilities (compilation was never enabled, so every
 decorator returned its function unchanged), and the general evaluation runner with the two metric
-classes only it used (it measured Euclidean distance whatever the geometry). Git history keeps
-them.
+classes only it used (it measured Euclidean distance whatever the geometry), and the HGCN
+curriculum analyzer (it read a history file nothing writes). Git history keeps them.
 '''
 
 import importlib
@@ -40,6 +40,14 @@ DELETIONS = [
     'naics_embedder.metrics:EmbeddingStatistics',
     'naics_embedder.metrics.core:RetrievalMetrics',
     'naics_embedder.metrics.core:EmbeddingStatistics',
+    # The HGCN curriculum analyzer: nothing writes the history it reads
+    'naics_embedder.graph_model.curriculum.monitoring',
+    'naics_embedder.graph_model.curriculum:CurriculumAnalyzer',
+    'naics_embedder.graph_model.curriculum:PhaseMetrics',
+    'naics_embedder.graph_model.curriculum:generate_report',
+    'naics_embedder.graph_model.curriculum:plot_curriculum_training',
+    'naics_embedder.graph_model:CurriculumAnalyzer',
+    'naics_embedder.graph_model:generate_report',
 ]
 
 @pytest.mark.unit
