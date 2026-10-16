@@ -39,11 +39,11 @@ training:
 ```
 
 The complete config also supplies LoRA/MoE settings and tokenization/description paths.
-`manifest_path: null` is a valid pre-generation state; `train` then refuses at the mandatory
-bundle gate and names the command to generate a bundle. The objective is `req11-v1`, and
-retired loss, curvature, mining, curriculum and streaming-path overrides are rejected, as are
-the unread `data` section and `dirs.conf_dir` and `dirs.docs_dir`, so a run config saved before
-their removal must drop them.
+`manifest_path: null` is the committed state, and a valid pre-generation one; with no manifest,
+`train` refuses at the mandatory bundle gate and names the command to generate a bundle. The
+objective is `req11-v1`, and retired loss, curvature, mining, curriculum and streaming-path
+overrides are rejected, as are the unread `data` section and `dirs.conf_dir` and `dirs.docs_dir`, so
+a run config saved before their removal must drop them.
 
 CUDA uses the configured `bf16-mixed` backbone precision. Fusion, projection, head, geometry and
 losses remain float32; CPU and MPS use `32-true`. Text training uses one device. The learned
@@ -54,6 +54,29 @@ unread; the outcome monitor runs at each epoch end without a validation loader.
 contract, seed, experiment directory and 21 run settings, including effective precision and
 budget. Old objective checkpoints cannot migrate weights. See
 [exact resume](../text_training.md#exact-resume).
+
+## This Machine's Manifests
+
+The bundle manifest is a machine path, so it is set in the gitignored `conf/local.yaml` rather
+than in tracked YAML. `conf/local.example.yaml` shows the form:
+
+```yaml
+config:
+  supervision:
+    manifest_path: data/supervision/stage3-supervision-v2/<bundle-id>/manifest.json
+graph:
+  supervision_manifest_path: data/supervision/stage3-supervision-v2/<bundle-id>/manifest.json
+```
+
+Each section is named for the tracked file it overrides, `conf/config.yaml` or `conf/graph.yaml`.
+These two keys are the only ones allowed, and each must be a repo-relative path under `data/`. Any
+other key would be a setting the Mac records and a remote instance never sees, so it is refused, as
+is a path that is absolute, outside `data/` or not in the normal form `data supervision` prints.
+`read_local_config` validates the file. `apply_local_config` applies it at the entry points
+(`train`, the `tools` commands, `remote` and HGCN's `main`), after the tracked YAML and before
+`key=value` overrides. Library callers that load a YAML themselves read only that file.
+`NAICS_EMBEDDER_LOCAL_CONFIG=off` disables the override, and any other value names the file to read
+instead, relative to the checkout root.
 
 ## Reference
 

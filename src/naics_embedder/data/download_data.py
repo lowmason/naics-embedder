@@ -24,7 +24,7 @@ from naics_embedder.panels.index_roles import (
 )
 from naics_embedder.supervision.artifacts import sha256_file, validate_index_role_table
 from naics_embedder.supervision.schema import IndexRole
-from naics_embedder.utils.config import DownloadConfig, load_config
+from naics_embedder.utils.config import DownloadConfig, load_config, read_local_config
 from naics_embedder.utils.naics_hierarchy import naics_parent_code
 from naics_embedder.utils.utilities import download_with_retry as _download_with_retry
 from naics_embedder.utils.utilities import make_directories
@@ -675,7 +675,8 @@ def verify_text_channels(descriptions: pl.DataFrame) -> Dict[str, int]:
 # Guard the descriptions file a supervision bundle pins
 # -------------------------------------------------------------------------------------------------
 
-# Where shipped configs name a supervision bundle: (config file, key path)
+# Where shipped configs name a supervision bundle: (config file, key path). conf/local.yaml's section
+# for each is the file's stem, so ('config', 'supervision', 'manifest_path') overrides the first.
 PINNING_CONFIGS: Tuple[Tuple[Path, Tuple[str, ...]], ...] = (
     (Path('conf/config.yaml'), ('supervision', 'manifest_path')),
     (Path('conf/graph.yaml'), ('supervision_manifest_path', )),
@@ -687,16 +688,19 @@ def pinned_description_fingerprints(
     '''
     The ``description_fingerprint`` of each bundle a config names, by manifest path.
 
-    Configs, keys and manifests that do not exist are skipped: they pin nothing.
+    Each config names the manifest a run would read: the gitignored ``conf/local.yaml``'s value
+    where it sets one (``read_local_config``), otherwise the tracked file's. Configs, keys and
+    manifests that do not exist are skipped: they pin nothing.
     '''
 
+    local = read_local_config().values
     fingerprints: Dict[str, str] = {}
     for config_path, keys in pinning_configs:
-        if not Path(config_path).is_file():
-            continue
-        value = yaml.safe_load(Path(config_path).read_text())
-        for key in keys:
-            value = value.get(key) if isinstance(value, dict) else None
+        value = local.get('.'.join((Path(config_path).stem, *keys)))
+        if value is None and Path(config_path).is_file():
+            value = yaml.safe_load(Path(config_path).read_text())
+            for key in keys:
+                value = value.get(key) if isinstance(value, dict) else None
         if not value:
             continue
         manifest_path = Path(value)

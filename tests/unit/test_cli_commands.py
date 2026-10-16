@@ -117,6 +117,8 @@ def test_data_supervision_prints_the_manifest_path(monkeypatch, runner, tmp_path
 
     assert result.exit_code == 0
     assert str(manifest) in result.output
+    # The machine path goes in the gitignored override, never the tracked config (audit row 1)
+    assert 'config.supervision.manifest_path in conf/local.yaml' in result.output
     assert configs[0].contract_version == 'stage3-supervision-v2'
     assert configs[0].relation_id['cross_sector'] == 99
 

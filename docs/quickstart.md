@@ -20,14 +20,17 @@ uv run naics-embedder --help
 uv run naics-embedder data all
 ```
 
-This preprocesses NAICS text and builds the `stage3-supervision-v2` bundle. It prints
-`Supervision manifest: <path>`. Set that exact immutable path as `supervision.manifest_path`.
-The bundle gate runs before model or data-loader construction and cannot be skipped.
+This preprocesses NAICS text and builds the `stage3-supervision-v2` bundle. It prints `Supervision
+manifest: <path>`. Copy `conf/local.example.yaml` to `conf/local.yaml`, which is gitignored, and set
+that exact path there as `config.supervision.manifest_path`, and as
+`graph.supervision_manifest_path` for HGCN. Commands read it after `conf/config.yaml` and before
+`key=value` overrides, and `tools config` shows the manifest it set. The bundle gate runs before
+model or data-loader construction and cannot be skipped.
 
 ## Train the Reference Configuration
 
 ```bash
-uv run naics-embedder train --config conf/config.yaml   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --config conf/config.yaml
 ```
 
 The defaults are `experiment_name=reference`, dimension 16, masked-mean fusion, radius bound
@@ -37,14 +40,14 @@ Trainer uses one device. Fusion, projection, geometry and losses stay float32 un
 For a fresh experiment, set a new name before changing settings:
 
 ```bash
-uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5
 ```
 
 A fresh start refuses a directory that already contains checkpoints. A resume requires the
 same bundle, encoder, preprocessing, seed, settings and experiment directory:
 
 ```bash
-uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --ckpt-path last
 ```
 
 Resume only `last` to continue the latest state. A run that early stopping ended exits 1 with
@@ -76,8 +79,8 @@ Use the checkpoint named by the monitor's earliest highest MRR, rather than assu
 is the selected one. This example uses `epoch=001.ckpt`:
 
 ```bash
-uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
-uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet
+uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json
 ```
 
 Export writes the arm's coordinates, bounded tangents for the default hyperbolic arm, and their

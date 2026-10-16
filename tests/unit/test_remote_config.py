@@ -1,10 +1,11 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from naics_embedder.remote.config import effective_config, load_remote_config, relative_path
-from naics_embedder.utils.config import RemoteConfig
+from naics_embedder.utils.config import LOCAL_CONFIG_ENV, RemoteConfig
 
 def test_defaults():
     cfg = load_remote_config(Path('conf/remote.yaml'))
@@ -75,3 +76,29 @@ def test_remote_repo_has_relative_canonical_inputs(remote_repo):
                                                                              ).as_posix()
     assert (remote_repo.root / cfg.data_loader.streaming.descriptions_parquet).is_file()
     assert (remote_repo.root / 'AGENTS.md').read_text() == 'Fixture repository\n'
+
+def test_effective_config_reads_the_local_override_at_root_not_the_cwd(tmp_path, monkeypatch):
+    '''Audit row 1: conf/local.yaml under the workflow root, below last-wins overrides.'''
+    root = tmp_path / 'repo'
+    (root / 'conf').mkdir(parents=True)
+    (root / 'conf/config.yaml').write_text('seed: 1\n')
+    cwd = tmp_path / 'cwd'
+    (cwd / 'conf').mkdir(parents=True)
+    for directory, name in ((root, 'root'), (cwd, 'cwd')):
+        (directory / 'conf/local.yaml').write_text(
+            yaml.safe_dump({'config': {
+                'supervision': {
+                    'manifest_path': f'data/{name}/m.json'
+                }
+            }})
+        )
+    monkeypatch.chdir(cwd)
+    monkeypatch.delenv(LOCAL_CONFIG_ENV)
+
+    def manifest(*overrides):
+        return effective_config(root, 'conf/config.yaml', list(overrides)).supervision.manifest_path
+
+    assert manifest() == 'data/root/m.json'
+    assert manifest('supervision.manifest_path=data/cli/m.json') == 'data/cli/m.json'
+    (root / 'conf/local.yaml').unlink()
+    assert manifest() is None

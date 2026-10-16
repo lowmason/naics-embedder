@@ -84,6 +84,7 @@ from naics_embedder.utils.config import (
     DownloadConfig,
     OutcomePanelConfig,
     RegressorPanelConfig,
+    apply_local_config,
     load_config,
 )
 from naics_embedder.utils.console import configure_logging
@@ -918,14 +919,15 @@ def diagnostics_command(
 
 def _run_config(config_file: str, overrides: Optional[List[str]]) -> Config:
     '''
-    The run's config as ``train`` resolves it: the YAML file, then ``key=value`` overrides.
+    The run's config as ``train`` resolves it: the YAML file, then ``conf/local.yaml``, then
+    ``key=value`` overrides.
 
     Raises:
         ValueError: If an override has no ``=``. ``train`` skips one with a warning, but a logged
             read must run on exactly the config it names (P18).
     '''
 
-    cfg = Config.from_yaml(config_file)
+    cfg = apply_local_config(Config.from_yaml(config_file))
     override_dict, invalid = parse_config_overrides(overrides)
     if invalid:
         raise ValueError(f'overrides take the form key=value, not {invalid}')

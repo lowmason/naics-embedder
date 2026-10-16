@@ -94,6 +94,10 @@ lightning_logs/
 # Subagent-driven-development reports
 /.sdd/
 
+# This machine's supervision manifests (conf/local.example.yaml shows the form). The rule lives
+# here because .gitignore files are themselves ignored below, so a conf/.gitignore would be lost.
+/conf/local.yaml
+
 # Notebooks
 .ipynb_checkpoints
 

@@ -1,0 +1,16 @@
+# This machine's supervision manifests. Copy this file to conf/local.yaml, which is gitignored,
+# and set the path `naics-embedder data supervision` printed. Each path is repo-relative under
+# data/. Nothing else may be set here: every other setting belongs in the tracked conf/config.yaml
+# or conf/graph.yaml, which a remote run reads too. train, tools and remote read conf/local.yaml
+# after the tracked YAML and before command-line key=value overrides; remote launch passes the
+# manifest to the instance explicitly. NAICS_EMBEDDER_LOCAL_CONFIG=off ignores the file, and any
+# other value names a file to read in its place.
+
+# Overrides conf/config.yaml: text training, tools and remote
+config:
+  supervision:
+    manifest_path: data/supervision/stage3-supervision-v2/<bundle-id>/manifest.json
+
+# Overrides conf/graph.yaml: HGCN
+graph:
+  supervision_manifest_path: data/supervision/stage3-supervision-v2/<bundle-id>/manifest.json

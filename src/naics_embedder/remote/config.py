@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from naics_embedder.utils.config import Config, RemoteConfig
+from naics_embedder.utils.config import Config, RemoteConfig, apply_local_config
 from naics_embedder.utils.training import parse_config_overrides
 
 # -------------------------------------------------------------------------------------------------
@@ -33,9 +33,15 @@ def load_remote_config(path: Path) -> RemoteConfig:
     return RemoteConfig.model_validate({} if data is None else data)
 
 def effective_config(root: Path, path: str, overrides: list[str]) -> Config:
-    '''Resolve the pushed training config and apply existing last-wins override parsing.'''
+    '''
+    Resolve the pushed training config and apply existing last-wins override parsing.
+
+    The checkout's own ``conf/local.yaml`` (under ``root``, not the working directory) sits between
+    the YAML and the overrides. It is gitignored, so it is never pushed: the launch argv names its
+    manifest explicitly.
+    '''
     config_path = root / relative_path(root, path)
-    cfg = Config.from_yaml(str(config_path))
+    cfg = apply_local_config(Config.from_yaml(str(config_path)), root)
     values, invalid = parse_config_overrides(overrides)
     if invalid:
         raise ValueError(f'invalid config override(s): {invalid!r}; expected key=value')

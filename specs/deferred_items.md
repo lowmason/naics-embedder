@@ -575,6 +575,13 @@
       The held originals stay unpushed, and 2d1f045 is a configuration pin, not a code fix. The
       finding still qualifies only the recorded private sources; native readiness for a public
       release still needs its own qualification.
+      → held configuration moved (2026-10-16, audit row 1): the manifest pins aa8ebd6
+      (conf/config.yaml) and 3fc580a (conf/graph.yaml) now live in the gitignored
+      `conf/local.yaml`. It may set only those two manifests, each repo-relative under `data/`,
+      and is never pushed. 2d1f045's `qcew_dir` pin is dropped, because the public default
+      `~/Downloads/Data/QCEW` holds slices identical under `qcew_sha256`. After this lands, local
+      main follows origin/main, and these and the other held SHAs that completed plans and
+      findings cite stay reachable locally under `refs/held/*` in the primary clone, never pushed.
 
 ## 12-geometry-by-dimension — 2026-10-11
 - [ ] Review M2 (Phase 1 final review): `build_head` and `head_of`
@@ -650,3 +657,17 @@
       by value (`_check_log_records`, src/naics_embedder/decision/decide.py), outside the
       strictness item's scope. Size: quick-fix. Done when: each has a focused test, and a ruling
       is recorded on `_check_log_records`' by-value comparison.
+
+## tech-debt-audit — 2026-10-16
+- [ ] HGCN legacy-input fallback (audit row 1): with no graph supervision manifest,
+      `resolve_graph_config`
+      (src/naics_embedder/graph_model/curriculum/preprocess_curriculum.py:117-118) returns the
+      config unchanged. HGCN then reads the legacy `./data/naics_relations.parquet`,
+      `./data/naics_training_pairs.parquet` and `./data/naics_distance_matrix.parquet` defaults,
+      which `data all` no longer writes, and says nothing, where text training refuses at its gate.
+      The manifest now lives only in the gitignored `conf/local.yaml`, so a checkout without one
+      (a fresh clone, or `NAICS_EMBEDDER_LOCAL_CONFIG=off`) falls back silently. Deferred to keep
+      HGCN behaviour out of the override's change; the graph stage is parked. Size: quick-fix.
+      Done when: HGCN with no manifest either refuses, naming `conf/local.yaml`, or logs that it
+      reads legacy inputs, with a test, and docs/hgcn_training.md says which. Revisit if: the
+      graph stage resumes or HGCN is run again.
