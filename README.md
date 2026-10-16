@@ -75,18 +75,21 @@ git clone https://github.com/lowmason/naics-embedder.git
 cd naics-embedder
 uv sync
 uv run naics-embedder data all
-uv run naics-embedder train --config conf/config.yaml   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --config conf/config.yaml
 ```
 
-`data all` prints the immutable manifest path. The mandatory gate validates the bundle before
-model or data-loader construction. `--skip-validation` only skips advisory checks. Retired
-`data relations`, `data distances` and `data triplets` commands build nothing and exit 1.
+`data all` prints the immutable manifest path. Put it in the gitignored `conf/local.yaml`
+(`conf/local.example.yaml` shows the form), which names this machine's two manifests and nothing
+else; commands read it after `conf/config.yaml` and before `key=value` overrides. The mandatory gate
+validates the bundle before model or data-loader construction. `--skip-validation` only skips
+advisory checks. Retired `data relations`, `data distances` and `data triplets` commands build
+nothing and exit 1.
 
 CUDA uses `bf16-mixed` for the backbone; fusion, projection, geometry and losses remain float32.
 CPU and MPS use `32-true`. The text Trainer uses one device.
 
 ```bash
-uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --ckpt-path last
 uv run naics-embedder tools visualize   --summary checkpoints/reference/epoch_summary.jsonl
 ```
 
@@ -105,8 +108,8 @@ restored epoch.
 Export the earliest highest-MRR checkpoint identified by the monitor. This example uses epoch 1:
 
 ```bash
-uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
-uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet
+uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json
 ```
 
 The table has `code`, `index`, `level`, and the arm's coordinates `e0` through `e{d-1}` (bounded
@@ -137,7 +140,7 @@ See [`tools growth-margins`](docs/usage.md#tools-growth-margins).
 ## Graph Refinement and Structural Diagnostics
 
 HGCN retains its four-phase graph curriculum, triplet objective and curvature utilities. Set
-its bundle manifest in `conf/graph.yaml`, then run:
+its bundle manifest as `graph.supervision_manifest_path` in `conf/local.yaml`, then run:
 
 ```bash
 uv run python -m naics_embedder.graph_model.hgcn
@@ -167,7 +170,7 @@ uv run ruff check src/ tests/
 uv run mkdocs build --strict
 ```
 
-The suite collects 3,270 tests in 104 unit files and two integration files. Actual skip counts
+The suite collects 3,330 tests in 105 unit files and two integration files. Actual skip counts
 depend on local data and hardware capabilities, including MPS. Coverage is measured separately,
 not inferred from collection counts. See [tests/README.md](tests/README.md) for test contracts and
 [CLAUDE.md](CLAUDE.md) for project conventions.

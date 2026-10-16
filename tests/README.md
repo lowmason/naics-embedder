@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **104 unit** test files and **2 integration** files, with **3,270 collected
+The suite contains **105 unit** test files and **2 integration** files, with **3,330 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -10,11 +10,16 @@ Tests use immutable fixture bundles and tiny backbones. Training/panel outputs b
 `tmp_path`; verification does not read real sealed splits, train a real NAICS model or run a
 real selection campaign. Hugging Face fixture dependencies are resolved locally.
 
+`conftest.py` sets `NAICS_EMBEDDER_LOCAL_CONFIG=off` in `pytest_configure`, before any fixture
+runs. No test, CLI subprocess or worker therefore reads a developer's gitignored
+`conf/local.yaml`. `test_local_config.py` and the entry-point tests that cover the override turn
+it back on with `monkeypatch` for a temporary checkout.
+
 ## Test Structure
 
 ```text
 tests/
-├── unit/                         # 104 unit test files
+├── unit/                         # 105 unit test files
 ├── integration/
 │   ├── test_reference_training.py # tiny-backbone Trainer workflows
 │   └── test_remote_workflow.py    # GNU-rsync workflow qualification

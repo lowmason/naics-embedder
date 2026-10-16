@@ -7,12 +7,18 @@ Graph refinement is a separate stage; see [HGCN training](hgcn_training.md).
 
 ## Quick Start
 
-Build the immutable bundle and pass the exact manifest path it prints:
+Build the immutable bundle, then put the exact manifest path it prints in the gitignored
+`conf/local.yaml` as `config.supervision.manifest_path` (`conf/local.example.yaml` shows the
+form):
 
 ```bash
 uv run naics-embedder data all
-uv run naics-embedder train --config conf/config.yaml   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --config conf/config.yaml
 ```
+
+`conf/local.yaml` holds only this machine's two manifests, each repo-relative under `data/`.
+`train` reads it after the tracked YAML and before `key=value` overrides, so an override still
+wins.
 
 The defaults are experiment `reference`, dimension 16, masked-mean fusion, radius bound 8,
 128 queries per step, one warmup epoch and a 40-epoch budget. CUDA uses `bf16-mixed` for the
@@ -188,7 +194,7 @@ are recorded.
 Continue only the latest checkpoint of the same run:
 
 ```bash
-uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --ckpt-path last
 ```
 
 The guards check the experiment directory, bundle, encoder, preprocessing, seed and all
@@ -223,8 +229,8 @@ points on the CPU in float64, unit-curvature Lorentz points in the hyperbolic ar
 exported from another checkpoint or preprocessing pin is refused.
 
 ```bash
-uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
-uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet
+uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json
 ```
 
 `epoch=001.ckpt` is an example; substitute the selected filename. The radius report is a CPU
@@ -260,8 +266,7 @@ uv run naics-embedder tools sweep --runs 'checkpoints/reference-seed-{seed}' \
   --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --seed 6 --seed 7 --seed 8 --seed 9 --seed 10 \
   --text-only data/reference/text_only.parquet --store ~/naics-artifacts \
   --output ~/naics-artifacts/records/stage7/reference.json --purpose 'reference campaign validation' \
-  --name reference --accelerator cuda \
-  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+  --name reference --accelerator cuda
 uv run naics-embedder tools margins \
   --reference ~/naics-artifacts/records/stage7/reference.json --multiple 3 \
   --name reference-margins --store ~/naics-artifacts \
@@ -311,13 +316,14 @@ launch require NTP and native BF16 on logical CUDA device 0 with identical CUDA 
 one training device. No precision fallback or workload-fit claim follows from GPU metadata.
 
 Real-instance qualification remains post-merge work on a new experiment, never the finished
-`plan10_smoke`. Plan 10 Task 18 onward runs in order in a fresh primary-checkout local-main
-session after merge. Replay only the two held config commits locally, verify the actual diff,
-and stop on conflicts or retired keys. Keep those commits private. Freeze `uv.lock` from first
-campaign launch through last decision, train ten reference seeds and fix δ = 3 SD before
-selection. Training/within-run monitoring run on Lambda; exports, QCEW/regressor reads, stores,
-margins and decisions run on the Mac. Remote selection logs stay separate; sealed splits stay
-closed. Plan 10 and Stage 7 remain open until Phase 2's final gates.
+`plan10_smoke`. Plan 10 Task 18 onward runs in order in a fresh primary-checkout local-main session
+after merge. The checkout's gitignored `conf/local.yaml` names the manifests, so no private config
+commit is replayed; the held config SHAs that completed plans cite stay reachable locally under
+`refs/held/*`, never pushed. Freeze `uv.lock` from first campaign launch through last decision,
+train ten reference seeds and fix δ = 3 SD before selection. Training/within-run monitoring run on
+Lambda; exports, QCEW/regressor reads, stores, margins and decisions run on the Mac. Remote
+selection logs stay separate; sealed splits stay closed. Plan 10 and Stage 7 remain open until Phase
+2's final gates.
 
 The `uv.lock` freeze held through Stage 8's decision and was released when the representation
 split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on

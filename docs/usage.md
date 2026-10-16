@@ -50,7 +50,8 @@ last and the bundle directory is published atomically.
 `data/naics_redirections.parquet` (the last two become required bundle members), and the
 backbone's tokenizer in the local Hugging Face cache  
 **Generates:** `data/supervision/stage3-supervision-v2/<bundle-id>/` (prints
-`Supervision manifest: <path>`; set `supervision.manifest_path` to it before training)
+`Supervision manifest: <path>`; before training, set it as `config.supervision.manifest_path` in
+the gitignored `conf/local.yaml`, which `conf/local.example.yaml` shows)
 
 ```bash
 uv run naics-embedder data supervision
@@ -257,7 +258,7 @@ coordinates, and table fingerprint.
 Use the monitor's selected checkpoint; epoch 1 is an example here:
 
 ```bash
-uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools export-table --checkpoint checkpoints/reference/epoch=001.ckpt   --output data/reference/table.parquet
 ```
 
 - `--checkpoint PATH`, `--output PATH` are required.
@@ -271,7 +272,7 @@ from that checkpoint. The read logs table fingerprint and checkpoint hash. Prove
 the checkpoint and preprocessing pins. The test split stays sealed; there is no `--split`.
 
 ```bash
-uv run naics-embedder tools outcome-panel --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --purpose 'selected checkpoint validation'   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools outcome-panel --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --purpose 'selected checkpoint validation'
 ```
 
 - `--checkpoint PATH`, `--table PATH`, `--purpose TEXT` are required.
@@ -301,8 +302,7 @@ uv run naics-embedder tools sweep --runs 'checkpoints/reference-seed-{seed}' \
   --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --seed 6 --seed 7 --seed 8 --seed 9 --seed 10 \
   --text-only data/reference/text_only.parquet --store ~/naics-artifacts \
   --output ~/naics-artifacts/records/stage7/reference.json --purpose 'reference campaign validation' \
-  --name reference --accelerator cuda \
-  supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+  --name reference --accelerator cuda
 ```
 
 - `--runs TEXT` is required and must contain `{seed}`.
@@ -331,7 +331,7 @@ arm's: a flat arm's report names its geometry, records `radius` as null and chec
 code-to-code terms and both scales.
 
 ```bash
-uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder tools radius-report --checkpoint checkpoints/reference/epoch=001.ckpt   --table data/reference/table.parquet --output data/reference/radius_report.json
 ```
 
 - `--checkpoint PATH`, `--table PATH` are required and must have matching provenance.
@@ -507,7 +507,7 @@ validation monitor's `val/outcome_mrr` selects the earliest best checkpoint and 
 scheduling and early stopping.
 
 ```bash
-uv run naics-embedder train --config conf/config.yaml   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --config conf/config.yaml
 ```
 
 - `--config PATH` defaults to `conf/config.yaml`.
@@ -518,6 +518,12 @@ uv run naics-embedder train --config conf/config.yaml   supervision.manifest_pat
 - `--skip-validation` skips advisory data/cache checks. The immutable supervision gate always runs.
 - `KEY=VALUE ...` overrides configuration, such as `data_loader.queries_per_step=64` or
   `training.learning_rate=1e-5`. A fresh run needs a distinct experiment name.
+
+The configuration is the YAML file, then the gitignored `conf/local.yaml` in the working
+directory, then the overrides. `conf/local.yaml` sets only this machine's supervision manifests
+(`config.supervision.manifest_path`, and `graph.supervision_manifest_path` for HGCN), each a
+repo-relative path under `data/`; any other key is refused. `NAICS_EMBEDDER_LOCAL_CONFIG=off`
+ignores it.
 
 Defaults are experiment `reference`, dimension 16, masked mean, radius bound 8 and 128 queries
 per step. CUDA uses `bf16-mixed` for the backbone while fusion, projection, head, distances and
@@ -535,7 +541,7 @@ through the resumed epoch and then continue. A run that early stopping ended exi
 must treat the early-stopping message as finished rather than retrying it.
 
 ```bash
-uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train --ckpt-path last
 ```
 
 See [exact resume](text_training.md#exact-resume) for artifacts and guards. The former sequential

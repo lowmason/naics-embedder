@@ -18,7 +18,7 @@ and Stage 12 is one sealed opening per judged artifact. The economic artifact's 
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
-Python 3.12. The source tree has **117 Python files**; tests have **104 unit** files and two
+Python 3.12. The source tree has **117 Python files**; tests have **105 unit** files and two
 integration files. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
@@ -88,13 +88,14 @@ src/naics_embedder/
 └── utils/                     # config, training, input-window and geometry utilities
 
 tests/
-├── unit/                      # 104 unit test files
+├── unit/                      # 105 unit test files
 ├── integration/               # test_reference_training.py, test_remote_workflow.py
 ├── fixtures/                  # tiny models, bundles, panels and runs
 └── conftest.py
 
 conf/config.yaml               # reference text configuration
 conf/graph.yaml                # separate HGCN configuration
+conf/local.example.yaml        # form of the gitignored conf/local.yaml: this machine's manifests
 conf/data/                     # frozen panel pins, roles, summaries and held-out groups
 docs/                          # guides and MkDocs API pages
 scripts/format_code.sh         # Ruff fixes/imports, then YAPF layout
@@ -250,13 +251,14 @@ have no economic record yet.
 
 ### Remote Workflow and Phase 2 Boundary
 
-Five `remote` CLI adapters call `RemoteWorkflow`: up/train/sync/finish/status. Transport config
-is separate in `conf/remote.yaml`; later operations use the complete persisted session config.
-Help never bootstraps or reads state/config. Canonical inputs travel explicitly and are never
-rebuilt on an instance; committed `conf/config.yaml` keeps its manifest null. Every kept
-checkpoint, last and both histories travel together. Exact continuation only uses last under
-the same absolute checkpoint path/user, settings/seed and LoRA/active-MoE controls. Empty/new
-fresh directories pass; finished runs skip; budgets and checkpoints are never rewritten.
+Five `remote` CLI adapters call `RemoteWorkflow`: up/train/sync/finish/status. Transport config is
+separate in `conf/remote.yaml`; later operations use the complete persisted session config. Help
+never bootstraps or reads state/config. Canonical inputs travel explicitly and are never rebuilt on
+an instance; committed `conf/config.yaml` keeps its manifest null, and the Mac's gitignored
+`conf/local.yaml` names it. That file is never pushed: launch passes the manifest explicitly. Every
+kept checkpoint, last and both histories travel together. Exact continuation only uses last under
+the same absolute checkpoint path/user, settings/seed and LoRA/active-MoE controls. Empty/new fresh
+directories pass; finished runs skip; budgets and checkpoints are never rewritten.
 
 Bootstrap and immediate launch require NTP and native BF16 on logical CUDA 0 using
 `including_emulation=False`, identical CUDA visibility and one device. No GPU whitelist, VRAM
@@ -270,9 +272,10 @@ Launch rechecks it, and the wrappers run with `HF_HUB_OFFLINE=1`: nothing downlo
 See [remote workflow](docs/remote_workflow.md) and [remote API](docs/api/remote.md). The real
 Lambda/Mac qualification remains pending after merge on a new experiment, never `plan10_smoke`.
 Plan 10 Phase 1 evidence/counts remain historical, including its queued lint truth; Task 18 and
-Phase 2 are not executed by these fixtures. In a fresh post-merge session, use primary local
-main, replay only the two held private config commits locally, verify the actual diff and stop
-on conflicts/extra commits/retired keys. Never push them. Execute Task 18 onward in order,
+Phase 2 are not executed by these fixtures. A fresh post-merge session on the primary checkout
+sets the manifests in its gitignored `conf/local.yaml`; no private config commit is replayed or
+held. Held config SHAs that completed plans and findings cite stay reachable locally under
+`refs/held/*` in the primary clone; never push them. Execute Task 18 onward in order,
 freeze uv.lock from first campaign launch through last decision, use ten seeds and δ = 3 SD
 before selection, and never repeat the four Phase 1 exit reads in the seven-record Mac log.
 Exports, QCEW, stores and decisions stay on the Mac; remote selection logs stay separate and
@@ -299,8 +302,8 @@ use a separate environment to check that version rather than replacing `.venv`.
 
 ```bash
 uv run naics-embedder data all
-uv run naics-embedder train   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
-uv run naics-embedder train --ckpt-path last   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train
+uv run naics-embedder train --ckpt-path last
 uv run naics-embedder tools config
 uv run naics-embedder tools visualize --summary checkpoints/reference/epoch_summary.jsonl
 uv run naics-embedder tools sweep --help
@@ -308,9 +311,15 @@ uv run naics-embedder tools radius-report --help
 uv run naics-embedder tools diagnostics --help
 ```
 
-`data supervision` prints the exact manifest path. Retired relations/distances/triplets commands
-build nothing and exit 1. The manifest gate cannot be skipped. HGCN reads `conf/graph.yaml` and
-runs with `uv run python -m naics_embedder.graph_model.hgcn`; set its manifest separately.
+`data supervision` prints the exact manifest path. Put it in the gitignored `conf/local.yaml`
+(copy `conf/local.example.yaml`): `config.supervision.manifest_path` for training, tools and
+remote, and `graph.supervision_manifest_path` for HGCN. It may set only those two keys, each a
+repo-relative path under `data/`. Commands read it after the tracked YAML and before `key=value`
+overrides; `tools config` marks a manifest it set. `NAICS_EMBEDDER_LOCAL_CONFIG=off` ignores the
+file and any other value names a file to read instead; the test suite sets `off`. Retired
+relations/distances/triplets commands build nothing and exit 1. The manifest gate cannot be
+skipped. HGCN reads `conf/graph.yaml`, then the override's graph manifest, and runs with
+`uv run python -m naics_embedder.graph_model.hgcn`.
 
 ### Running Tests
 
@@ -321,7 +330,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **3,270 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **3,330 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -472,11 +481,13 @@ settings are compared on exact resume and campaign preflight.
 Use Pydantic models in `utils/config.py` and keys that the current code reads. For a fresh run:
 
 ```bash
-uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5   supervision.manifest_path=/absolute/path/to/<bundle-id>/manifest.json
+uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5
 ```
 
 Do not reintroduce removed objective/mining/curvature settings or bypass bundle validation.
 `tools config` validates the YAML over defaults and displays the run inputs and settings.
+`conf/local.yaml` is not a settings channel: it sets only the two supervision manifests, and
+refuses any other key, because a remote instance never sees it.
 
 ### Debug Training or Add Metrics
 
@@ -494,7 +505,7 @@ evaluation currently uses curvature 1; a non-unit-curvature correction is a sepa
 
 ## Testing and Validation
 
-There are 104 unit files and two integration files. Important current seams include:
+There are 105 unit files and two integration files. Important current seams include:
 
 - `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
   and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and
@@ -510,13 +521,17 @@ There are 104 unit files and two integration files. Important current seams incl
 - `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates'
   records and pairing, eligibility, the tie order, margin-first refusals and the economic
   decision record (Req 24).
+- `test_local_config.py`: `conf/local.yaml`'s two keys and `data/` paths, its place between the
+  tracked YAML and overrides, its root and env var, and the graph config's explicit fields.
 - `integration/test_reference_training.py`: tiny-backbone Trainer runs, earliest-best selection,
   schedule/early stopping, health records and exact resume.
 - Graph, panel, resampling and decision tests cover their separate interfaces.
 
-Keep generated fixture outputs under `tmp_path`. Use reference fixture bundles instead of real
-data. Run meaningful target tests and the full suite before claiming completion. Measure coverage
-with pytest-cov when needed; test counts alone do not establish it.
+Keep generated fixture outputs under `tmp_path`. Use reference fixture bundles instead of real data.
+`tests/conftest.py` sets `NAICS_EMBEDDER_LOCAL_CONFIG=off` before any fixture runs, so no test reads
+a developer's `conf/local.yaml`; `test_local_config.py` turns it on in a tmp checkout. Run
+meaningful target tests and the full suite before claiming completion. Measure coverage with
+pytest-cov when needed; test counts alone do not establish it.
 
 ## CI/CD and Documentation
 
@@ -582,7 +597,8 @@ git push -u origin claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U
 
 Prefer editing an existing module when it owns the behavior. Create a module for a distinct
 responsibility, with tests at its interface. Configuration belongs in `conf/config.yaml` and
-`utils/config.py`; panels use `conf/data/`, and HGCN uses `conf/graph.yaml`.
+`utils/config.py`; panels use `conf/data/`, and HGCN uses `conf/graph.yaml`. This machine's two
+supervision manifests go in the gitignored `conf/local.yaml`, never in tracked YAML.
 
 Keep model changes in the shared encoder/head/objective, epoch orchestration in `naics_model.py`,
 monitor/cache in `monitor.py`, and campaign preflight in `checkpoint_runner.py`. Health artifacts

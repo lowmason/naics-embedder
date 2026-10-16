@@ -169,9 +169,10 @@ for the candidates' decision.
       Rollout note, item 4; U13.
       Gap closed: Req 24 (the recorded margin).
       Consumes: Stage 2's reference-only read and margin record, and Stage 1's growth panel, merged
-      to origin/main and synced into local main, where the read runs: the held `chore(local)`
-      commit is what points `qcew_dir` at the verified QCEW slices, whose hashes
-      `conf/data/regressor_panel.yaml` pins. That file keeps `outcome: level`, and no real growth
+      to origin/main and synced into local main, where the read runs. `qcew_dir` keeps its public
+      default `~/Downloads/Data/QCEW`, where the read finds the QCEW slices and verifies each
+      against `qcew_sha256` in `conf/data/regressor_panel.yaml`; no held commit points it there
+      (audit row 1, 2026-10-16). That file keeps `outcome: level`, and no real growth
       read or opening has happened (plan 13, Handoff:
       `specs/plans/completed/13-growth-outcome-and-seals.md:3020`; Resolved at resume,
       2026-10-12). The main

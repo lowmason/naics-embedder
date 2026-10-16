@@ -27,16 +27,24 @@ put `rsync_path: /opt/homebrew/bin/rsync` in a transport YAML and select it befo
 uv run --locked naics-embedder remote --remote-config conf/remote-local.yaml up --host ubuntu@INSTANCE_IP
 ```
 
-That example requires the training config to name the canonical manifest. The committed
-`conf/config.yaml` keeps its manifest null. Both `up` and `train` accept `--config PATH` (default
-`conf/config.yaml`) and trailing `key=value` tokens. Training YAML paths must be repo-relative
-and present in the pushed checkout. YAML is applied over model defaults; overrides apply in
-order, with the last repeated key winning. Missing files and unknown or malformed keys refuse.
-The CLI forwards argument values literally; overrides are never arbitrary shell commands.
+That example requires the effective training config to name the canonical manifest. The
+committed `conf/config.yaml` keeps its manifest null; the Mac names it in the gitignored
+`conf/local.yaml` under the checkout root (`config.supervision.manifest_path`, a repo-relative
+path under `data/`; `conf/local.example.yaml` shows the form). Both `up` and `train` accept
+`--config PATH` (default `conf/config.yaml`) and trailing `key=value` tokens. Training YAML paths
+must be repo-relative and present in the pushed checkout. YAML is applied over model defaults,
+then `conf/local.yaml`, then the overrides in order, with the last repeated key winning. Missing
+files and unknown or malformed keys refuse, and so does any `conf/local.yaml` key other than the
+two manifests. The CLI forwards argument values literally; overrides are never arbitrary shell
+commands.
 
-Build canonical inputs once on the Mac through the data workflow, then use the exact manifest
-path it prints. Do not rebuild them on an instance. The descriptions parquet and the full
-validated bundle travel at identical repo-relative `data/` paths. Their fingerprints must match
+`conf/local.yaml` is ignored by Git, so it is never pushed and an instance never reads it. The
+launch argv names the verified manifest explicitly instead, so a run records the same
+repo-relative manifest string on both hosts.
+
+Build canonical inputs once on the Mac through the data workflow, then put the exact manifest path
+it prints in `conf/local.yaml`. Do not rebuild them on an instance. The descriptions parquet and the
+full validated bundle travel at identical repo-relative `data/` paths. Their fingerprints must match
 on both hosts. A changed parquet or bundle requires a fresh run.
 
 ## Offline Model Cache
@@ -62,7 +70,7 @@ verify these cache and process gates; local tests do not certify an instance.
 These are operator examples, not commands executed by implementation tests:
 
 ```bash
-uv run --locked naics-embedder remote up --host ubuntu@INSTANCE_IP supervision.manifest_path=data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/manifest.json
+uv run --locked naics-embedder remote up --host ubuntu@INSTANCE_IP
 uv run --locked naics-embedder remote train seed=1 experiment_name=stage7-reference-s1
 uv run --locked naics-embedder remote sync --once
 uv run --locked naics-embedder remote status
@@ -70,13 +78,14 @@ uv run --locked naics-embedder remote finish
 ```
 
 `up`'s overrides prepare inputs; they do not become implicit model overrides for later commands.
-`train` resolves the current YAML and its own overrides. For the second command above, the current
-local config must name the same manifest, or the manifest override must also be supplied to
-`train`. A legitimate config/input change requires another `up` before training. Launch validates
-that code, config and canonical inputs still match the successful ready snapshot.
-The final launch argv appends the verified repo-relative manifest, literal absolute checkpoint
-base, recorded accelerator/effective precision and one device after user overrides. Conflicting
-reserved path overrides refuse; these authoritative arguments do not change saved run identity.
+`train` resolves the current YAML, `conf/local.yaml` and its own overrides. Both commands above read
+the manifest from `conf/local.yaml`. A `supervision.manifest_path=...` override given to `up`
+instead must also be supplied to `train`. A legitimate config/input change requires another `up`
+before training. Launch validates that code, config and canonical inputs still match the successful
+ready snapshot. The final launch argv appends the verified repo-relative manifest, literal absolute
+checkpoint base, recorded accelerator/effective precision and one device after user overrides.
+Conflicting reserved path overrides refuse; these authoritative arguments do not change saved run
+identity.
 
 | Command | Options | Result |
 |---|---|---|
@@ -205,10 +214,10 @@ saved budget, or use a campaign seed as the qualification experiment. This is pe
 work; fixture checks do not mark it passed.
 
 Plan 10 Phase 2 starts in a fresh GPT-6.1 Medium session after merge, inline from the primary
-checkout `/Users/lowell/Projects/naics-embedder` on local `main`. Fetch and verify the landed paths,
-then replay only the two held private config/graph-config commits locally onto current
-`origin/main`. Verify the actual diff and stop on conflicts, extra commits or restored retired
-keys; never push those commits. The earlier simulated Phase 1 replay is not proof of this replay.
+checkout `/Users/lowell/Projects/naics-embedder` on local `main`. Fetch and verify the landed
+paths. The checkout's gitignored `conf/local.yaml` names the manifests; no private config commit
+is replayed or held. The held config SHAs that completed plans and findings cite stay reachable
+locally under `refs/held/*` in the primary clone; never push them.
 
 Execute Task 18 onward in order. Preserve the seven existing selection-log records and finished
 smoke/evidence; do not repeat Phase 1 exit reads. Freeze `uv.lock` from the first campaign launch
