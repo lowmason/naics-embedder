@@ -18,7 +18,7 @@ and Stage 12 is one sealed opening per judged artifact. The economic artifact's 
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
-Python 3.12. The source tree has **116 Python files**; tests have **102 unit** files and two
+Python 3.12. The source tree has **117 Python files**; tests have **104 unit** files and two
 integration files. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
@@ -88,7 +88,7 @@ src/naics_embedder/
 └── utils/                     # config, training, input-window and geometry utilities
 
 tests/
-├── unit/                      # 102 unit test files
+├── unit/                      # 104 unit test files
 ├── integration/               # test_reference_training.py, test_remote_workflow.py
 ├── fixtures/                  # tiny models, bundles, panels and runs
 └── conftest.py
@@ -263,6 +263,9 @@ Bootstrap and immediate launch require NTP and native BF16 on logical CUDA 0 usi
 threshold, workload-fit inference or precision fallback. Status GPU evidence is observational.
 Only safe=true finish prints `Safe to terminate`; abandon records possible loss and stays unsafe.
 Mac tampering, pending promotions, active training and unhandled edits withhold readiness.
+A CUDA `up` copies the Mac's cached Hub snapshots into `.remote/model-cache/hub` and verifies
+their SHA-256 inventory on both hosts (`remote/model_cache.py`; MiniLM's revision is pinned).
+Launch rechecks it, and the wrappers run with `HF_HUB_OFFLINE=1`: nothing downloads or repairs.
 
 See [remote workflow](docs/remote_workflow.md) and [remote API](docs/api/remote.md). The real
 Lambda/Mac qualification remains pending after merge on a new experiment, never `plan10_smoke`.
@@ -318,7 +321,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **3,206 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **3,270 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -491,7 +494,7 @@ evaluation currently uses curvature 1; a non-unit-curvature correction is a sepa
 
 ## Testing and Validation
 
-There are 102 unit files and two integration files. Important current seams include:
+There are 104 unit files and two integration files. Important current seams include:
 
 - `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
   and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and
