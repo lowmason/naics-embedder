@@ -406,7 +406,8 @@ def require_valid_supervision_bundle(cfg: Config) -> ValidatedSupervisionBundle:
             'Repaired Stage-3 training requires supervision.manifest_path',
             remediation=[
                 'Run: uv run naics-embedder data supervision',
-                'Set supervision.manifest_path to the printed immutable manifest path',
+                'Set config.supervision.manifest_path in conf/local.yaml to the printed '
+                'immutable manifest path',
             ],
         )
     bundle = load_validated_bundle(

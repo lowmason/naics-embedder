@@ -32,7 +32,7 @@ from naics_embedder.metrics import (
     compute_validation_metrics,
 )
 from naics_embedder.text_model.hyperbolic import LorentzOps
-from naics_embedder.utils.config import GraphConfig
+from naics_embedder.utils.config import GraphConfig, apply_local_config
 from naics_embedder.utils.distance_matrix import load_distance_submatrix
 from naics_embedder.utils.naics_hierarchy import NaicsHierarchy, load_naics_hierarchy
 from naics_embedder.utils.utilities import (
@@ -1288,7 +1288,8 @@ def save_outputs(
 
 def main(config_file: str = 'conf/graph.yaml') -> None:
     '''Main entry point for single-stage HGCN training via PyTorch Lightning.'''
-    base_cfg = resolve_graph_config(GraphConfig.from_yaml(config_file))
+    # This machine's manifest from gitignored conf/local.yaml, before the bundle resolves paths
+    base_cfg = resolve_graph_config(apply_local_config(GraphConfig.from_yaml(config_file)))
     outdir = setup_directory(base_cfg.output_dir)
 
     print('=' * 80)

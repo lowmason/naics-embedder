@@ -43,6 +43,7 @@ from naics_embedder.utils.config import (
     CheckpointLoadMode,
     Config,
     OutcomePanelConfig,
+    apply_local_config,
     load_config,
 )
 from naics_embedder.utils.console import configure_logging
@@ -458,6 +459,8 @@ def train(
         # Load configuration
         logger.info('Loading configuration...')
         cfg = Config.from_yaml(config_file)
+        # This machine's manifest, from gitignored conf/local.yaml, under any override below
+        cfg = apply_local_config(cfg)
 
         # Apply command-line overrides using centralized parsing
         if overrides:

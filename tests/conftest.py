@@ -6,6 +6,7 @@ data processing, and model components.
 '''
 
 import logging
+import os
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -14,6 +15,7 @@ import pytest
 import torch
 
 from naics_embedder.panels import window_summaries
+from naics_embedder.utils.config import LOCAL_CONFIG_ENV
 
 pytest_plugins = (
     'tests.fixtures.naics_sources',
@@ -65,6 +67,9 @@ def pytest_configure(config):
         'real_window_summaries: reads the committed window-summaries pins; the dummy-pin seam '
         'stays off',
     )
+    # No test reads the developer's conf/local.yaml. Set before any fixture runs, and an env var so
+    # CLI and worker subprocesses inherit it; overlay tests setenv or delenv it themselves.
+    os.environ[LOCAL_CONFIG_ENV] = 'off'
 
 @pytest.fixture(autouse=True)
 def dummy_window_summaries(request, monkeypatch):

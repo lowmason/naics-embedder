@@ -3,13 +3,21 @@
 import json
 import shlex
 import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
+import yaml
 
+from naics_embedder.remote.code_manifest import code_entries
+from naics_embedder.remote.config import effective_config
 from naics_embedder.remote.launch import training_argv
 from naics_embedder.remote.session import read_state
 from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.utils.config import LOCAL_CONFIG_ENV
 from tests.fixtures.remote import write_offline_cache
+
+REPO = Path(__file__).resolve().parents[2]
 
 def fresh(env):
     shutil.rmtree(env.directory)
@@ -673,3 +681,41 @@ def test_failed_replacement_up_retains_inherited_integrity(remote_launch_fixture
         env.workflow.up('replacement', 'conf/config.yaml', [], force=True)
     assert path.read_text() == 'altered A log'
     assert not any(call[0] == 'push' for call in env.transport.calls)
+
+def test_an_ignored_local_override_is_not_pushed_but_its_manifest_is_launched(
+    remote_launch_fixture, monkeypatch
+):
+    '''Audit row 1: conf/local.yaml never reaches the instance; the argv names its manifest.'''
+    env = remote_launch_fixture
+    manifest = env.cfg.supervision.manifest_path
+    env.cfg.override({
+        'supervision.manifest_path': None
+    }).to_yaml(str(env.root / 'conf/config.yaml'))
+    (env.root / 'conf/local.yaml').write_text(
+        yaml.safe_dump({'config': {
+            'supervision': {
+                'manifest_path': manifest
+            }
+        }})
+    )
+    monkeypatch.delenv(LOCAL_CONFIG_ENV)
+    # Without the shipped rule the untracked override would be pushed
+    assert 'conf/local.yaml' in {entry.path for entry in code_entries(env.root)}
+    # The pattern that ignores conf/local.yaml in this repository, as Git reports it
+    shown = subprocess.run(
+        ['git', '-C', str(REPO), 'check-ignore', '-v', 'conf/local.yaml'],
+        capture_output=True,
+        text=True,
+        check=True
+    ).stdout
+    rule = shown.split('\t')[0].split(':', 2)[2]
+    with (env.root / '.gitignore').open('a') as stream:
+        stream.write(rule + '\n')
+
+    entries = {entry.path for entry in code_entries(env.root)}
+    cfg = effective_config(env.root, 'conf/config.yaml', [])
+    argv = training_argv(cfg, 'conf/config.yaml', [], env.inputs, env.info, False)
+
+    assert 'conf/local.yaml' not in entries and 'conf/config.yaml' in entries
+    assert cfg.supervision.manifest_path == manifest
+    assert 'supervision.manifest_path=' + manifest in argv

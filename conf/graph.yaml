@@ -6,7 +6,8 @@ encodings_parquet: ./output/hyperbolic_projection/encodings.parquet
 # curriculum difficulty thresholds are all read from this one validated bundle. Explicit
 # relations_parquet / training_pairs_path / distance_matrix_parquet / difficulty_thresholds_path
 # values must then point into the same bundle (mixing is rejected). HGCN does not read
-# supervision.manifest_path from conf/config.yaml; set this one too.
+# supervision.manifest_path from conf/config.yaml; set this one too, under graph: in the gitignored
+# conf/local.yaml (conf/local.example.yaml shows the form).
 # Without a manifest the legacy defaults apply:
 #   relations_parquet: ./data/naics_relations.parquet
 #   training_pairs_path: ./data/naics_training_pairs.parquet

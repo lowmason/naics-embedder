@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from naics_embedder.utils.config import Config
+from naics_embedder.utils.config import Config, apply_local_config, read_local_config
 from naics_embedder.utils.training import FULL_PRECISION, run_settings
 
 console = Console()
@@ -24,6 +24,8 @@ def show_current_config(config_path: Union[str, Path] = './conf/config.yaml') ->
 
     The file is validated as ``Config`` over the defaults, so every value shown is one a run reads,
     and a file that sets a key the configuration no longer has is refused, not shown (spec 4.5).
+    The working directory's gitignored ``conf/local.yaml`` then applies, as ``train`` applies it,
+    and the manifest it sets is marked as coming from there.
     The panel lists the run's name, seed and inputs, then the settings every run records
     (``run_settings``, P21), with the configured accelerator and the precision rule (P31).
 
@@ -32,7 +34,8 @@ def show_current_config(config_path: Union[str, Path] = './conf/config.yaml') ->
 
     Returns:
         True when the configuration was displayed. False when an error was printed instead: the
-        file is missing, or ``Config`` refuses it. ``tools config`` then exits 1.
+        file is missing, ``Config`` refuses it, or ``conf/local.yaml`` is refused. ``tools config``
+        then exits 1.
     '''
 
     config_path_obj = Path(config_path)
@@ -50,6 +53,17 @@ def show_current_config(config_path: Union[str, Path] = './conf/config.yaml') ->
         console.print(str(error), markup=False, highlight=False)
         return False
 
+    try:
+        local = read_local_config()
+        cfg = apply_local_config(cfg, local=local)
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        console.print('[bold red]Error:[/bold red] not a valid local override:')
+        console.print(str(error), markup=False, highlight=False)
+        return False
+    manifest = escape(str(cfg.supervision.manifest_path))
+    if 'config.supervision.manifest_path' in local.values:
+        manifest += f' (from {escape(str(local.source))})'
+
     trainer = cfg.training.trainer
     # A run trains at the configured precision on CUDA, and at full precision elsewhere (P31)
     precision = f'{trainer.precision} on CUDA, {FULL_PRECISION} elsewhere'
@@ -60,7 +74,7 @@ def show_current_config(config_path: Union[str, Path] = './conf/config.yaml') ->
         '[cyan]Run:[/cyan]',
         f'  • [bold]experiment_name:[/bold] {escape(cfg.experiment_name)}',
         f'  • [bold]seed:[/bold] {cfg.seed}',
-        f'  • [bold]supervision.manifest_path:[/bold] {escape(str(cfg.supervision.manifest_path))}',
+        f'  • [bold]supervision.manifest_path:[/bold] {manifest}',
         '  • [bold]descriptions_parquet:[/bold] '
         f'{escape(cfg.data_loader.streaming.descriptions_parquet)}\n',
         '[cyan]Run settings:[/cyan]',

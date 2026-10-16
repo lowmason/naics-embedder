@@ -9,7 +9,7 @@ import pytest
 
 from naics_embedder.data import download_data
 from naics_embedder.data.redirections import REDIRECTIONS_SCHEMA
-from naics_embedder.utils.config import DownloadConfig
+from naics_embedder.utils.config import LOCAL_CONFIG_ENV, DownloadConfig
 from tests.fixtures.naics_sources import EXCLUSIONS, TITLES
 
 ENTRY_SCHEMA = {'entry_id': pl.Int64, 'code': pl.Utf8, 'text': pl.Utf8}
@@ -569,3 +569,68 @@ def test_preprocess_refuses_what_a_shipped_config_pins(preprocess_cfg, pinned_by
     download_data.download_preprocess_data(preprocess_cfg, force=True)
     assert output.read_bytes() != b'descriptions'
     assert Path(preprocess_cfg.index_roles_parquet).is_file()
+
+def _write_manifest(path: Path, descriptions: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({'description_fingerprint': hashlib.sha256(descriptions).hexdigest()})
+    )
+
+@pytest.mark.unit
+@pytest.mark.parametrize('pinned_by', ['config', 'graph'])
+def test_preprocess_refuses_what_the_local_override_pins(preprocess_cfg, monkeypatch, pinned_by):
+    '''Audit row 1: the tracked configs name no bundle, and gitignored conf/local.yaml does.'''
+
+    monkeypatch.delenv(LOCAL_CONFIG_ENV)
+    output = Path(preprocess_cfg.output_parquet)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b'descriptions')
+    manifest = 'data/bundle/manifest.json'
+    _write_manifest(Path(manifest), b'descriptions')
+    Path('conf/config.yaml').write_text('supervision:\n  manifest_path: null\n')
+    Path('conf/graph.yaml').write_text('supervision_manifest_path: null\n')
+    local = {
+        'config': {
+            'config': {
+                'supervision': {
+                    'manifest_path': manifest
+                }
+            }
+        },
+        'graph': {
+            'graph': {
+                'supervision_manifest_path': manifest
+            }
+        },
+    }[pinned_by]
+    # JSON is YAML
+    Path('conf/local.yaml').write_text(json.dumps(local))
+
+    with pytest.raises(FileExistsError, match='pins'):
+        download_data.download_preprocess_data(preprocess_cfg)
+    assert output.read_bytes() == b'descriptions'
+    assert not Path(preprocess_cfg.index_roles_parquet).exists()
+
+@pytest.mark.unit
+def test_the_local_override_replaces_the_tracked_pin(tmp_path, monkeypatch):
+    '''The guard reads the manifest a run would use, not the tracked file's.'''
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(LOCAL_CONFIG_ENV)
+    _write_manifest(Path('data/tracked/manifest.json'), b'tracked')
+    _write_manifest(Path('data/local/manifest.json'), b'local')
+    Path('conf').mkdir()
+    Path('conf/config.yaml').write_text(
+        'supervision:\n  manifest_path: data/tracked/manifest.json\n'
+    )
+    Path('conf/local.yaml').write_text(
+        json.dumps({'config': {
+            'supervision': {
+                'manifest_path': 'data/local/manifest.json'
+            }
+        }})
+    )
+
+    assert download_data.pinned_description_fingerprints() == {
+        'data/local/manifest.json': hashlib.sha256(b'local').hexdigest()
+    }

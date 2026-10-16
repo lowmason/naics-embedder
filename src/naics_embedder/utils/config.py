@@ -5,9 +5,10 @@
 import ast
 import logging
 import math
+import os
 from enum import Enum
 from fractions import Fraction
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Literal, Optional, Type, TypeVar, Union
 
 import yaml
@@ -71,6 +72,150 @@ def load_config(config_class: Type[T], yaml_path: Union[str, Path]) -> T:
     logger.info(f'Loaded config from {yaml_path}')
 
     return config_class(**data)
+
+# -------------------------------------------------------------------------------------------------
+# This machine's paths: the gitignored conf/local.yaml
+# -------------------------------------------------------------------------------------------------
+
+# Under the checkout root. Gitignored, so it never reaches a commit or a remote instance.
+LOCAL_CONFIG = 'conf/local.yaml'
+# 'off' reads no override; any other value names the file to read instead, relative to the root
+LOCAL_CONFIG_ENV = 'NAICS_EMBEDDER_LOCAL_CONFIG'
+# The only keys it may set. Each section is the stem of the tracked file it overrides
+# (conf/<section>.yaml). Any other key would be a setting the Mac records and an instance never sees.
+LOCAL_CONFIG_KEYS = ('config.supervision.manifest_path', 'graph.supervision_manifest_path')
+
+C = TypeVar('C', 'Config', 'GraphConfig')
+
+class LocalConfig(BaseModel):
+    '''What ``conf/local.yaml`` sets, by dotted key, and the file as named (None when unread).'''
+
+    model_config = ConfigDict(frozen=True)
+
+    source: Optional[str] = None
+    values: Dict[str, str] = Field(default_factory=dict)
+
+def _flatten(data: Dict[Any, Any], prefix: str = '') -> Dict[str, Any]:
+    '''Every leaf of a nested mapping by dotted key; an empty mapping sets nothing.'''
+
+    flat: Dict[str, Any] = {}
+    for key, value in data.items():
+        name = f'{prefix}{key}'
+        if isinstance(value, dict):
+            flat.update(_flatten(value, name + '.'))
+        else:
+            flat[name] = value
+    return flat
+
+def _under_data(source: str, key: str, value: Any) -> str:
+    '''``value`` unchanged if it is a repo-relative path under ``data/``.'''
+
+    path = PurePosixPath(value) if isinstance(value, str) else None
+    if (
+        path is None or path.is_absolute() or '\\' in value or '..' in path.parts or len(
+            path.parts
+        ) < 2 or path.parts[0] != 'data'
+    ):
+        raise ValueError(
+            f'{source}: {key} must be a repo-relative path under data/, as `naics-embedder data '
+            f'supervision` prints it, not {value!r}'
+        )
+    return value
+
+def read_local_config(root: Union[str, Path] = '.') -> LocalConfig:
+    '''
+    The supervision manifests this machine's ``conf/local.yaml`` sets.
+
+    ``NAICS_EMBEDDER_LOCAL_CONFIG=off`` reads nothing. Any other value names the file to read in
+    its place, relative to ``root``, and that file must exist. Unset, ``<root>/conf/local.yaml`` is
+    read if it exists. The file may set only ``LOCAL_CONFIG_KEYS``, each a repo-relative path under
+    ``data/``. A remote launch then names the same manifest string the Mac recorded.
+
+    Args:
+        root: The checkout root: the working directory for a command, the workflow root for remote.
+
+    Returns:
+        The values set, by dotted key. Empty when the override is off or absent.
+
+    Raises:
+        FileNotFoundError: If ``NAICS_EMBEDDER_LOCAL_CONFIG`` names a missing file.
+        ValueError: If the file sets any other key, or a manifest outside ``data/``.
+        yaml.YAMLError: If the file is not YAML.
+    '''
+
+    named = os.environ.get(LOCAL_CONFIG_ENV, '')
+    if named == 'off':
+        return LocalConfig()
+    source = named or LOCAL_CONFIG
+    path = Path(source).expanduser()
+    if not path.is_absolute():
+        path = Path(root) / path
+    if not path.is_file():
+        if named:
+            raise FileNotFoundError(f'{LOCAL_CONFIG_ENV} names a missing file: {named}')
+        return LocalConfig()
+
+    data = yaml.safe_load(path.read_text())
+    allowed = ' and '.join(LOCAL_CONFIG_KEYS)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError(f'{source} may set only {allowed}, in a YAML mapping')
+    values = _flatten(data)
+    others = sorted(set(values) - set(LOCAL_CONFIG_KEYS))
+    if others:
+        raise ValueError(
+            f'{source} may set only {allowed}, not {", ".join(others)}: every other setting '
+            'belongs in the tracked config, which a remote run reads too'
+        )
+    return LocalConfig(
+        source=source,
+        values={
+            key: _under_data(source, key, value)
+            for key, value in values.items()
+        },
+    )
+
+def apply_local_config(
+    cfg: C, root: Union[str, Path] = '.', *, local: Optional[LocalConfig] = None
+) -> C:
+    '''
+    ``cfg`` with the supervision manifest ``conf/local.yaml`` sets for it, if any.
+
+    Entry points apply it after the tracked YAML and before command-line overrides. Library and
+    test callers that load a YAML themselves read that file alone. Only the graph manifest joins a
+    graph config's explicitly set fields: ``resolve_graph_config`` checks the explicit legacy
+    paths against the bundle, so the config is never rebuilt from a dump.
+
+    Args:
+        cfg: A text ``Config`` or a ``GraphConfig``, as loaded from its tracked YAML.
+        root: The checkout root, as for ``read_local_config``.
+        local: The override already read, if the caller has it; otherwise it is read here.
+
+    Returns:
+        ``cfg`` itself when the override sets nothing for it, otherwise a copy.
+
+    Raises:
+        TypeError: If ``cfg`` is neither config.
+        FileNotFoundError: As ``read_local_config``.
+        ValueError: As ``read_local_config``.
+        yaml.YAMLError: As ``read_local_config``.
+    '''
+
+    if not isinstance(cfg, (Config, GraphConfig)):
+        raise TypeError(f'conf/local.yaml overrides Config or GraphConfig, not {type(cfg)}')
+    local = read_local_config(root) if local is None else local
+    if isinstance(cfg, GraphConfig):
+        value = local.values.get('graph.supervision_manifest_path')
+        if value is None:
+            return cfg
+        logger.info(f'{local.source} sets supervision_manifest_path: {value}')
+        return cfg.model_copy(update={'supervision_manifest_path': value})
+    value = local.values.get('config.supervision.manifest_path')
+    if value is None:
+        return cfg
+    logger.info(f'{local.source} sets supervision.manifest_path: {value}')
+    return cfg.override({'supervision.manifest_path': value})
 
 # -------------------------------------------------------------------------------------------------
 # Directory Configuration

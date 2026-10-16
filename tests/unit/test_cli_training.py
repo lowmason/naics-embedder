@@ -30,7 +30,7 @@ from naics_embedder.text_model.dataloader.datamodule import (
 from naics_embedder.text_model.export import code_token_config
 from naics_embedder.text_model.monitor import MONITOR_RECORDS, OutcomeMonitor
 from naics_embedder.utils import training as utils_training
-from naics_embedder.utils.config import Config, OutcomePanelConfig
+from naics_embedder.utils.config import LOCAL_CONFIG_ENV, Config, OutcomePanelConfig
 from naics_embedder.utils.training import CheckpointInfo, HardwareInfo
 from naics_embedder.utils.validation import ValidationError, ValidationResult
 from tests.fixtures.shared_encoder import PRE_STAGE_7_REFUSAL
@@ -611,6 +611,28 @@ def test_the_datamodule_receives_the_token_cache_the_seed_and_the_bundle(trainin
         'supervision_contract_version': cfg.supervision.contract_version,
         'supervision_bundle': training_env.bundle,
     }
+
+@pytest.mark.unit
+@pytest.mark.parametrize('cli', [False, True])
+def test_train_reads_the_local_override_below_the_command_line(
+    training_env, tmp_path, monkeypatch, cli
+):
+    '''Audit row 1: conf/local.yaml replaces the YAML's manifest, and an override replaces it.'''
+
+    checkout = tmp_path / 'checkout'
+    (checkout / 'conf').mkdir(parents=True)
+    (checkout / 'conf/local.yaml').write_text(
+        'config:\n  supervision:\n    manifest_path: data/local/manifest.json\n'
+    )
+    monkeypatch.chdir(checkout)
+    monkeypatch.delenv(LOCAL_CONFIG_ENV)
+    overrides = ['supervision.manifest_path=data/cli/manifest.json'] if cli else None
+
+    training.train(skip_validation=True, overrides=overrides)
+
+    datamodule = training_env.trainer.fit_calls[0]['datamodule']
+    expected = 'data/cli/manifest.json' if cli else 'data/local/manifest.json'
+    assert datamodule.kwargs['supervision_manifest_path'] == expected
 
 @pytest.mark.unit
 def test_the_configured_datamodule_builds_on_a_real_bundle(reference_manifest, reference_bundle):

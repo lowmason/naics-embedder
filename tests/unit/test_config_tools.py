@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from naics_embedder.cli.commands import tools as tools_cli
 from naics_embedder.tools.config_tools import load_config, show_current_config
 from naics_embedder.utils import training as utils_training
-from naics_embedder.utils.config import Config
+from naics_embedder.utils.config import LOCAL_CONFIG_ENV, Config
 
 SHIPPED_CONFIG = 'conf/config.yaml'
 
@@ -185,6 +185,40 @@ class TestShowCurrentConfig:
         assert 'Config file not found' in output
         assert str(missing) in output
 
+    def test_show_config_marks_the_manifest_conf_local_yaml_sets(
+        self, config_file, tmp_path, monkeypatch, capsys
+    ):
+        '''The configuration a run would use includes the gitignored override, and says so.'''
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv(LOCAL_CONFIG_ENV)
+        assert show_current_config(config_file) is True
+        assert '(from conf/local.yaml)' not in capsys.readouterr().out
+
+        (tmp_path / 'conf/local.yaml').write_text(
+            yaml.dump({'config': {
+                'supervision': {
+                    'manifest_path': 'data/b/m.json'
+                }
+            }})
+        )
+
+        assert show_current_config(config_file) is True
+        output = capsys.readouterr().out
+        assert 'supervision.manifest_path: data/b/m.json (from conf/local.yaml)' in output
+
+    def test_show_config_refuses_a_bad_local_override(
+        self, config_file, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv(LOCAL_CONFIG_ENV)
+        (tmp_path / 'conf/local.yaml').write_text(yaml.dump({'config': {'seed': 1}}))
+
+        assert show_current_config(config_file) is False
+
+        output = click.unstyle(capsys.readouterr().out).replace('\n', '')
+        assert 'may set only' in output
+        assert 'Run settings:' not in output
+
     def test_show_config_uses_rich_formatting(self, config_file, capsys):
         '''Test that rich formatting is used (panel/colors).'''
         show_current_config(config_file)
@@ -303,6 +337,18 @@ class TestToolsConfigCommand:
         assert result.exit_code == 1
         assert 'Config file not found' in _plain(result)
         assert str(missing) in _plain(result)
+
+    def test_a_bad_local_override_exits_1_with_the_error(self, runner, tmp_path, monkeypatch):
+        (tmp_path / 'conf').mkdir()
+        (tmp_path / 'conf/config.yaml').write_text('seed: 1\n')
+        (tmp_path / 'conf/local.yaml').write_text('qcew_dir: data/QCEW\n')
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv(LOCAL_CONFIG_ENV)
+
+        result = runner.invoke(tools_cli.app, ['config', '--config', 'conf/config.yaml'])
+
+        assert result.exit_code == 1
+        assert 'may set only' in _plain(result)
 
     def test_the_shipped_config_is_shown_and_exits_0(self, runner):
         result = runner.invoke(tools_cli.app, ['config', '--config', SHIPPED_CONFIG])

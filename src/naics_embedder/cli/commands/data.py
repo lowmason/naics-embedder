@@ -296,8 +296,9 @@ def _build_supervision_bundle() -> Path:
     manifest_path = generate_supervision_bundle(cfg)
     typer.echo(f'Supervision manifest: {manifest_path}')
     typer.echo(
-        'Set supervision.manifest_path to this immutable manifest before repaired Stage-3 '
-        'training.'
+        'Set config.supervision.manifest_path in conf/local.yaml to this immutable manifest '
+        'before repaired Stage-3 training, and graph.supervision_manifest_path for HGCN; '
+        'conf/local.example.yaml shows the form.'
     )
     return manifest_path
 
