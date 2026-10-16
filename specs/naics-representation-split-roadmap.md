@@ -49,9 +49,10 @@ panel read, selection-log read or opening ran during this resume. Stage 2 routes
 writing-plans; the next plan number is 14.
 
 **Resume after Stage 2 (2026-10-16).** Stage 2's stamp is authoritative: plan 14, merged as PR
-#144 (a7aa0c3). Stage 3 was re-validated at origin/main d4f8ddc, where the spec is still 0a39042's.
-Plan 14's Handoff (`specs/plans/completed/14-economic-decision-tooling.md:6483`) is the shipped
-section, not the draft at `:6334` inside its completion step, and Stage 3's entry now cites it.
+#144 (a7aa0c3). Stage 3 was re-validated at origin/main d4f8ddc, where the spec is still 0a39042's;
+the line citations this resume adds are to d4f8ddc. Plan 14's Handoff
+(`specs/plans/completed/14-economic-decision-tooling.md:6483`) is the shipped section, not the
+draft at `:6334` inside its completion step, and Stage 3's entry now cites it.
 From a7aa0c3 to d4f8ddc, nothing changed under `panels/` or `decision/`, nor in
 `conf/data/regressor_panel.yaml` or `conf/data/decision.yaml`; `utils/config.py` changed, but in
 no field those two configs declare. `cli/commands/tools.py` now applies `conf/local.yaml` to the
@@ -220,8 +221,8 @@ for the candidates' decision.
       selection-log records. The candidates' spec reads both.
       Exit: The margin record exists with r = 0.05 and one δ per growth panel; the selection log
       gained only the two growth validation reads of one run, which log the comparators plan
-      14's Handoff lists per regime and neither `embedding` nor `text_only`, since nothing
-      refuses a second run and the margins are fixed once (plan 14, Handoff; Resolved at resume,
+      14's Handoff lists per regime and neither `embedding` nor `text_only`; nothing refuses a
+      second run, so the margins are fixed once (plan 14, Handoff; Resolved at resume,
       2026-10-16); no outer set was opened; the finding cites the record's sha256, the platform
       and the lock, and the origin/main commit the read ran at, from which a candidate can
       rebuild that lock after `uv.lock` moves, as it did after Stage 2 (639ce07; found at resume;
