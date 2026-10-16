@@ -56,7 +56,7 @@ def show_current_config(config_path: Union[str, Path] = './conf/config.yaml') ->
     try:
         local = read_local_config()
         cfg = apply_local_config(cfg, local=local)
-    except (OSError, ValueError, yaml.YAMLError) as error:
+    except (OSError, ValueError) as error:
         console.print('[bold red]Error:[/bold red] not a valid local override:')
         console.print(str(error), markup=False, highlight=False)
         return False

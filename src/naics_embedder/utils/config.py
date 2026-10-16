@@ -108,14 +108,18 @@ def _flatten(data: Dict[Any, Any], prefix: str = '') -> Dict[str, Any]:
     return flat
 
 def _under_data(source: str, key: str, value: Any) -> str:
-    '''``value`` unchanged if it is a repo-relative path under ``data/``.'''
+    '''
+    ``value`` unchanged if it is a repo-relative path under ``data/``, in the normal form
+    ``data supervision`` prints (no ``./``, ``//`` or ``/./``), so recorded strings stay identical.
+    '''
 
-    path = PurePosixPath(value) if isinstance(value, str) else None
-    if (
-        path is None or path.is_absolute() or '\\' in value or '..' in path.parts or len(
-            path.parts
-        ) < 2 or path.parts[0] != 'data'
-    ):
+    valid = False
+    if isinstance(value, str):
+        path = PurePosixPath(value)
+        # Normal form also rules out an absolute path, whose first part is '/', not 'data'
+        valid = path.as_posix() == value and path.parts[:1] == ('data', )
+        valid = valid and len(path.parts) > 1 and '..' not in path.parts and '\\' not in value
+    if not valid:
         raise ValueError(
             f'{source}: {key} must be a repo-relative path under data/, as `naics-embedder data '
             f'supervision` prints it, not {value!r}'
@@ -139,8 +143,8 @@ def read_local_config(root: Union[str, Path] = '.') -> LocalConfig:
 
     Raises:
         FileNotFoundError: If ``NAICS_EMBEDDER_LOCAL_CONFIG`` names a missing file.
-        ValueError: If the file sets any other key, or a manifest outside ``data/``.
-        yaml.YAMLError: If the file is not YAML.
+        ValueError: If the file is not YAML, sets any other key, or sets a manifest outside
+            ``data/`` or not in normal form.
     '''
 
     named = os.environ.get(LOCAL_CONFIG_ENV, '')
@@ -155,7 +159,10 @@ def read_local_config(root: Union[str, Path] = '.') -> LocalConfig:
             raise FileNotFoundError(f'{LOCAL_CONFIG_ENV} names a missing file: {named}')
         return LocalConfig()
 
-    data = yaml.safe_load(path.read_text())
+    try:
+        data = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as error:
+        raise ValueError(f'{source} is not valid YAML: {error}') from error
     allowed = ' and '.join(LOCAL_CONFIG_KEYS)
     if data is None:
         data = {}
@@ -199,7 +206,6 @@ def apply_local_config(
         TypeError: If ``cfg`` is neither config.
         FileNotFoundError: As ``read_local_config``.
         ValueError: As ``read_local_config``.
-        yaml.YAMLError: As ``read_local_config``.
     '''
 
     if not isinstance(cfg, (Config, GraphConfig)):

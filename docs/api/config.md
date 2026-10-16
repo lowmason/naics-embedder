@@ -69,13 +69,14 @@ graph:
 ```
 
 Each section is named for the tracked file it overrides, `conf/config.yaml` or `conf/graph.yaml`.
-These two keys are the only ones allowed, and each must be a repo-relative path under `data/`.
-Any other key would be a setting the Mac records and a remote instance never sees, so it is
-refused, as is an absolute or non-`data/` path. `read_local_config` validates the file.
-`apply_local_config` applies it at the entry points (`train`, the `tools` commands, `remote` and
-HGCN's `main`), after the tracked YAML and before `key=value` overrides. Library callers that
-load a YAML themselves read only that file. `NAICS_EMBEDDER_LOCAL_CONFIG=off` disables the
-override, and any other value names the file to read instead, relative to the checkout root.
+These two keys are the only ones allowed, and each must be a repo-relative path under `data/`. Any
+other key would be a setting the Mac records and a remote instance never sees, so it is refused, as
+is a path that is absolute, outside `data/` or not in the normal form `data supervision` prints.
+`read_local_config` validates the file. `apply_local_config` applies it at the entry points
+(`train`, the `tools` commands, `remote` and HGCN's `main`), after the tracked YAML and before
+`key=value` overrides. Library callers that load a YAML themselves read only that file.
+`NAICS_EMBEDDER_LOCAL_CONFIG=off` disables the override, and any other value names the file to read
+instead, relative to the checkout root.
 
 ## Reference
 

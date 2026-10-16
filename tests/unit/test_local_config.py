@@ -217,6 +217,13 @@ def test_any_other_key_is_refused(checkout, content):
         read_local_config(checkout)
 
 @pytest.mark.unit
+def test_malformed_yaml_is_a_value_error_naming_the_file(checkout):
+    (checkout / 'conf/local.yaml').write_text('config: [not valid')
+
+    with pytest.raises(ValueError, match='conf/local.yaml is not valid YAML'):
+        read_local_config(checkout)
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     'value',
     [
@@ -226,6 +233,9 @@ def test_any_other_key_is_refused(checkout, content):
         'data/../outputs/manifest.json',
         'outputs/b/manifest.json',
         'data\\b\\manifest.json',
+        './data/b/manifest.json',
+        'data//b/manifest.json',
+        'data/./b/manifest.json',
         'data',
         '',
         1,
@@ -255,7 +265,7 @@ def test_a_manifest_outside_data_is_refused(checkout, section, value):
         read_local_config(checkout)
 
 @pytest.mark.unit
-@pytest.mark.parametrize('value', ['data/b/manifest.json', './data/b/manifest.json'])
+@pytest.mark.parametrize('value', ['data/b/manifest.json', 'data/supervision/v2/id/manifest.json'])
 def test_a_manifest_under_data_is_kept_as_written(checkout, value):
     (checkout / 'conf/local.yaml').write_text(local_yaml(text=value, graph=value))
 
