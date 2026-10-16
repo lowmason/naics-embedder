@@ -170,7 +170,7 @@ uv run ruff check src/ tests/
 uv run mkdocs build --strict
 ```
 
-The suite collects 3,337 tests in 105 unit files and two integration files. Actual skip counts
+The suite collects 3,342 tests in 105 unit files and two integration files. Actual skip counts
 depend on local data and hardware capabilities, including MPS. Coverage is measured separately,
 not inferred from collection counts. See [tests/README.md](tests/README.md) for test contracts and
 [CLAUDE.md](CLAUDE.md) for project conventions.

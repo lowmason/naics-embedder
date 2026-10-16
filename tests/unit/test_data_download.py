@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Set, cast
@@ -532,6 +533,49 @@ def test_preprocess_refuses_a_held_out_query_that_matches_training_text(preproce
     with pytest.raises(ValueError, match='held-out queries match training text'):
         download_data.download_preprocess_data(preprocess_cfg)
     # Every check runs before any file is written
+    assert not Path(preprocess_cfg.output_parquet).exists()
+    assert not Path(preprocess_cfg.index_roles_parquet).exists()
+    assert not Path(preprocess_cfg.redirections_parquet).exists()
+
+def _repeat_first_row(frame):
+    return pl.concat([frame, frame.head(1)])
+
+@pytest.mark.unit
+@pytest.mark.parametrize('joined', ['titles', 'descriptions', 'exclusions', 'examples'])
+def test_preprocess_refuses_a_code_repeated_in_a_joined_frame(
+    preprocess_cfg, monkeypatch, naics_sources, joined
+):
+    # Each frame is one row per code by construction, so only the titles file can repeat a code;
+    # the other three are repeated where their builders return, to pin each join's cardinality
+    if joined == 'titles':
+        sources = replace(naics_sources, titles=_repeat_first_row(naics_sources.titles))
+        monkeypatch.setattr(download_data, 'load_naics_sources', lambda cfg: sources)
+    elif joined == 'descriptions':
+        build_descriptions = download_data._get_descriptions_2
+        monkeypatch.setattr(
+            download_data, '_get_descriptions_2', lambda *a: _repeat_first_row(
+                build_descriptions(*a)
+            )
+        )
+    elif joined == 'exclusions':
+        build_exclusions = download_data.exclusion_channel
+        monkeypatch.setattr(
+            download_data, 'exclusion_channel', lambda table: _repeat_first_row(
+                build_exclusions(table)
+            )
+        )
+    else:
+        build_examples = download_data._get_examples
+
+        def repeating_examples(*args):
+            examples, starts = build_examples(*args)
+            return _repeat_first_row(examples), starts
+
+        monkeypatch.setattr(download_data, '_get_examples', repeating_examples)
+
+    with pytest.raises(pl.exceptions.ComputeError, match='1:1 validation'):
+        download_data.download_preprocess_data(preprocess_cfg)
+    # The join refuses before any file is written
     assert not Path(preprocess_cfg.output_parquet).exists()
     assert not Path(preprocess_cfg.index_roles_parquet).exists()
     assert not Path(preprocess_cfg.redirections_parquet).exists()

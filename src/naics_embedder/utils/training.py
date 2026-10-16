@@ -728,7 +728,7 @@ def save_training_summary(
         >>> print(f'Summary saved to: {paths}')
     '''
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     import yaml
 
@@ -738,7 +738,7 @@ def save_training_summary(
     summary = {
         'training_run': {
             'experiment': config.experiment_name,
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'completed': True,
             'early_stopped': result.early_stopped,
             'stopped_epoch': result.stopped_epoch,

@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -294,6 +295,31 @@ def test_save_training_summary_writes_files(tmp_path):
     assert summary['results']['best_score'] == 0.42
     assert 'best_loss' not in summary['results']
     assert summary['metrics'] == {'best_val_outcome_mrr': 0.42}
+
+@pytest.mark.unit
+def test_save_training_summary_stamps_timezone_aware_utc(tmp_path):
+    result = TrainingResult(
+        best_checkpoint_path='epoch=003.ckpt',
+        last_checkpoint_path='last.ckpt',
+        config_path='config.yaml',
+        best_score=0.42,
+        stopped_epoch=-1,
+        early_stopped=False,
+        metrics={},
+    )
+    hw = HardwareInfo(accelerator='cpu', precision='32-true', num_devices=1)
+
+    before = datetime.now(timezone.utc)
+    paths = save_training_summary(result, Config(), hw, tmp_path, format='both')
+    after = datetime.now(timezone.utc)
+
+    stamp = json.loads(Path(paths['json']).read_text())['training_run']['timestamp']
+    recorded = datetime.fromisoformat(stamp)
+    # Aware, at offset zero, and the moment of the call: local time with an offset tacked on, or
+    # the naive local time this once wrote, would fail one of these
+    assert recorded.utcoffset() == timedelta(0)
+    assert before <= recorded <= after
+    assert yaml.safe_load(Path(paths['yaml']).read_text())['training_run']['timestamp'] == stamp
 
 # -------------------------------------------------------------------------------------------------
 # One accelerator and precision rule, and the run's settings (P21, P31)

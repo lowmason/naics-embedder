@@ -214,7 +214,7 @@ saved budget, or use a campaign seed as the qualification experiment. This is pe
 work; fixture checks do not mark it passed.
 
 Plan 10 Phase 2 starts in a fresh GPT-6.1 Medium session after merge, inline from the primary
-checkout `/Users/lowell/Projects/naics-embedder` on local `main`. Fetch and verify the landed
+checkout on local `main`. Fetch and verify the landed
 paths. The checkout's gitignored `conf/local.yaml` names the manifests; no private config commit
 is replayed or held. The held config SHAs that completed plans and findings cite stay reachable
 locally under `refs/held/*` in the primary clone; never push them.
