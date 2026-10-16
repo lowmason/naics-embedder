@@ -58,9 +58,13 @@ no field those two configs declare. `cli/commands/tools.py` now applies `conf/lo
 run config, which `tools growth-margins` never loads: it takes the codebook by `--codebook`. The
 Handoff's "Merging into local main" bullet is superseded: local main has followed origin/main
 since 2026-10-16, no held commit edits the panel config, and a66549c already re-pointed Stage 3's
-Consumes at `qcew_dir`'s public default. The rows of Reqs 18, 23 and 24, which Stage 2 closed in
-part, stay as entry-time evidence. No panel read, selection-log read or opening ran during this
-resume. Stage 3 routes to writing-plans; the next plan number is 15.
+Consumes at `qcew_dir`'s public default. Two shipped facts that no Handoff bullet names were put
+to the user at the resume's Ask and approved; each is marked "found at resume" in Stage 3's
+entry. They are `uv.lock`'s move after Stage 2 (639ce07, dev dependencies only) and the codebook
+pin, whose comment in `conf/data/regressor_panel.yaml` still names bundle 18403d29. The rows of
+Reqs 18, 23 and 24, which Stage 2 closed in part, stay as entry-time evidence. No panel read,
+selection-log read or opening ran during this resume. Stage 3 routes to writing-plans; the next
+plan number is 15.
 
 ## Gap analysis
 
@@ -194,14 +198,16 @@ for the candidates' decision.
       absolute `--lock` and `--log`: both resolve against the working directory, and a worktree's
       log goes with the worktree (plan 14, Handoff:
       `specs/plans/completed/14-economic-decision-tooling.md:6483`; Resolved at resume,
-      2026-10-16). The main checkout's selection log (`logs/selection_log.jsonl`, gitignored and
-      append-only), which this stage is the first to read: an opening of either level regime
-      under `deddfd4c…` already seals that regime's growth split, and
-      `SelectionLog.openings(seal_names(regime), fingerprint)` lists any (plan 13, Handoff;
-      Resolved at resume, 2026-10-12); margin first is not checked against the log, so it must
-      hold no `growth_seen` or `growth_heldout` read before this one (plan 14, Handoff; Resolved
-      at resume, 2026-10-16). An artifact store outside any worktree, as embedding roadmap Stages
-      7–8 kept theirs; the user's approval, asked when the stage starts.
+      2026-10-16). Its `--codebook` is bundle 301cce28's, whose codes keep the pinned
+      `codebook_codes_sha256` (`specs/naics-embedding-roadmap.md:116-118`), though the pin's
+      comment still names bundle 18403d29 (found at resume; Resolved at resume, 2026-10-16). The
+      main checkout's selection log (`logs/selection_log.jsonl`, gitignored and append-only), which
+      this stage is the first to read: an opening of either level regime under `deddfd4c…` already
+      seals that regime's growth split, and `SelectionLog.openings(seal_names(regime), fingerprint)`
+      lists any (plan 13, Handoff; Resolved at resume, 2026-10-12); margin first is not checked
+      against the log, so it must hold no `growth_seen` or `growth_heldout` read before this one
+      (plan 14, Handoff; Resolved at resume, 2026-10-16). An artifact store outside any worktree,
+      as embedding roadmap Stages 7–8 kept theirs; the user's approval, asked when the stage starts.
       Produces: The economic margin record, holding δ for `growth_seen` and `growth_heldout` and,
       in its read's environment, the platform, Python and `uv.lock` sha256 it was read under.
       Every candidate read must share them, since `decide` pairs only bit-identical reference
@@ -217,9 +223,11 @@ for the candidates' decision.
       14's Handoff lists per regime and neither `embedding` nor `text_only`, since nothing
       refuses a second run and the margins are fixed once (plan 14, Handoff; Resolved at resume,
       2026-10-16); no outer set was opened; the finding cites the record's sha256, the platform
-      and the lock, states that the log held no growth read before the margin read (plan 14,
-      Handoff; Resolved at resume, 2026-10-16), and lists the existing openings that check
-      found, or says it found none (plan 13, Handoff; Resolved at resume, 2026-10-12).
+      and the lock, and the origin/main commit the read ran at, from which a candidate can
+      rebuild that lock after `uv.lock` moves, as it did after Stage 2 (639ce07; found at resume;
+      Resolved at resume, 2026-10-16), states that the log held no growth read before the margin
+      read (plan 14, Handoff; Resolved at resume, 2026-10-16), and lists the existing openings
+      that check found, or says it found none (plan 13, Handoff; Resolved at resume, 2026-10-12).
       ROUTING: writing-plans
 
 ## Stage-spec stamp
