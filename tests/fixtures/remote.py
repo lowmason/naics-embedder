@@ -868,3 +868,24 @@ def local_workflow(remote_repo, tmp_path, monkeypatch, gnu_rsync, minilm_tokeniz
         gnu_rsync=gnu_rsync,
         json=json
     )
+
+def write_offline_cache(root: Path) -> dict:
+    '''Small byte-valid cache for worker launch contracts; no model loading occurs.'''
+    from naics_embedder.remote.model_cache import CACHE_PATH, MINILM, MINILM_REVISION
+    from naics_embedder.supervision.artifacts import sha256_file
+    model = root / CACHE_PATH / ('models--' + MINILM.replace('/', '--'))
+    (model / 'refs').mkdir(parents=True)
+    (model / 'refs/main').write_text(MINILM_REVISION)
+    snapshot = model / 'snapshots' / MINILM_REVISION
+    snapshot.mkdir(parents=True)
+    (snapshot / 'config.json').write_text('{}')
+    (snapshot / 'model.safetensors').write_text('fixture weights')
+    return {
+        'revisions': {
+            MINILM: MINILM_REVISION
+        },
+        'hashes': {
+            path.relative_to(root).as_posix(): sha256_file(path)
+            for path in model.rglob('*') if path.is_file()
+        }
+    }

@@ -555,6 +555,8 @@
       limitation; the private PID/exec and wrapper fixes did not widen it. Size: plan. Revisit if:
       the remote stop lifecycle is hardened or this race is reproduced; pin the verified pane ID and
       recheck ownership at the send boundary with refusal tests before claiming race-free shutdown.
+      → the private PID/exec and wrapper fixes (b94ecf3) are public as `bd546ea` (2026-10-16);
+      the race itself stays open.
 - [ ] Public native-qualification reconciliation (Phase 2 source boundary): the actual campaign
       source b94ecf3 and Mac-read source 2d1f045 include approved local-only corrections to
       remote/model_cache.py, canonical.py, loop.py, worker.py, launch.py and workflow.py. Public
@@ -566,6 +568,13 @@
       → plan 12 (Stage 8): the campaign source also carries `4a1a3f2`, a further local-only
       correction to remote/sync.py (a final pull verifies its baseline once, not once per file);
       the public base lacks it too. The finding qualifies only the recorded private sources.
+      → partly done (2026-10-16): every local-only code correction is now public. Three are
+      `git cherry-pick -x` copies on origin/main 83f9b27: d7927a5 as `6406c72` (model_cache.py,
+      launch.py, workflow.py, worker.py), 5ce248f as `b4dc15e` (canonical.py) and b94ecf3 as
+      `bd546ea` (loop.py, worker.py). `4a1a3f2` landed as `1643b67` (lowmason/naics-embedder#135).
+      The held originals stay unpushed, and 2d1f045 is a configuration pin, not a code fix. The
+      finding still qualifies only the recorded private sources; native readiness for a public
+      release still needs its own qualification.
 
 ## 12-geometry-by-dimension — 2026-10-11
 - [ ] Review M2 (Phase 1 final review): `build_head` and `head_of`
@@ -598,6 +607,9 @@
       → partly done: the public fix and its regression test merged as
       lowmason/naics-embedder#135 (2026-10-11), so the public base now has the fix. Profiling
       the residual growth stays open and undiagnosed.
+      → correction (2026-10-16): the note above that `4a1a3f2` is unpushed and missing from the
+      public base is stale. The fix is public as `1643b67`, a copy of `4a1a3f2`; only the held
+      original stays local.
 
 ## 14-economic-decision-tooling — 2026-10-13
 - [ ] Trained economic candidates (plan 14, deferred by the owner to the candidates' spec):
