@@ -4,10 +4,11 @@
 > reconcile step; route each unticked stage per its ROUTING line; never plan
 > this document wholesale.
 
-**Status: APPROVED (2026-10-12); resumed once on 2026-10-12.** Derived in an interactive session.
-The user answered the derivation's two questions (Decisions, below) and approved the three-stage
-partition at the human checkpoint. Stage 1 is complete, and the resume after it re-validated
-Stages 2 and 3 (below). Stage 2 is next, via writing-plans.
+**Status: APPROVED (2026-10-12); resumed twice, on 2026-10-12 and 2026-10-16.** Derived in an
+interactive session. The user answered the derivation's two questions (Decisions, below) and
+approved the three-stage partition at the human checkpoint. Stages 1 and 2 are complete, and the
+resume after each re-validated the stages after it (below). Stage 3 is next, via writing-plans,
+with the user's approval when it starts.
 
 **Basis.** Source spec `specs/naics-representation-split.md` at 0a39042, unchanged through
 origin/main 5ef7e7b (PR #137). Evidence was read at origin/main 5ef7e7b, and line citations are
@@ -46,6 +47,25 @@ into `CLAUDE.md` and the panel config's comment, and the fixture panel's growth 
 verdict stands, and the rows of Reqs 20–22, which Stage 1 closed, stay as entry-time evidence. No
 panel read, selection-log read or opening ran during this resume. Stage 2 routes to
 writing-plans; the next plan number is 14.
+
+**Resume after Stage 2 (2026-10-16).** Stage 2's stamp is authoritative: plan 14, merged as PR
+#144 (a7aa0c3). Stage 3 was re-validated at origin/main d4f8ddc, where the spec is still 0a39042's;
+the line citations this resume adds are to d4f8ddc. Plan 14's Handoff
+(`specs/plans/completed/14-economic-decision-tooling.md:6483`) is the shipped section, not the
+draft at `:6334` inside its completion step, and Stage 3's entry now cites it.
+From a7aa0c3 to d4f8ddc, nothing changed under `panels/` or `decision/`, nor in
+`conf/data/regressor_panel.yaml` or `conf/data/decision.yaml`; `utils/config.py` changed, but in
+no field those two configs declare. `cli/commands/tools.py` now applies `conf/local.yaml` to the
+run config, which `tools growth-margins` never loads: it takes the codebook by `--codebook`. The
+Handoff's "Merging into local main" bullet is superseded: local main has followed origin/main
+since 2026-10-16, no held commit edits the panel config, and a66549c already re-pointed Stage 3's
+Consumes at `qcew_dir`'s public default. Two shipped facts that no Handoff bullet names were put
+to the user at the resume's Ask and approved; each is marked "found at resume" in Stage 3's
+entry. They are `uv.lock`'s move after Stage 2 (639ce07, dev dependencies only) and the codebook
+pin, whose comment in `conf/data/regressor_panel.yaml` still names bundle 18403d29. The rows of
+Reqs 18, 23 and 24, which Stage 2 closed in part, stay as entry-time evidence. No panel read,
+selection-log read or opening ran during this resume. Stage 3 routes to writing-plans; the next
+plan number is 15.
 
 ## Gap analysis
 
@@ -172,26 +192,43 @@ for the candidates' decision.
       to origin/main and synced into local main, where the read runs. `qcew_dir` keeps its public
       default `~/Downloads/Data/QCEW`, where the read finds the QCEW slices and verifies each
       against `qcew_sha256` in `conf/data/regressor_panel.yaml`; no held commit points it there
-      (audit row 1, 2026-10-16). That file keeps `outcome: level`, and no real growth
-      read or opening has happened (plan 13, Handoff:
+      (audit row 1, 2026-10-16). That file keeps `outcome: level`, and no real growth read or
+      opening has happened (plan 13, Handoff:
       `specs/plans/completed/13-growth-outcome-and-seals.md:3020`; Resolved at resume,
-      2026-10-12). The main
-      checkout's selection log (`logs/selection_log.jsonl`, gitignored and append-only), which
-      this stage is the first to read: an opening of either level regime under `deddfd4c…`
-      already seals that regime's growth split, and
-      `SelectionLog.openings(seal_names(regime), fingerprint)` lists any (plan 13, Handoff;
-      Resolved at resume, 2026-10-12); an artifact store outside any worktree, as embedding
-      roadmap Stages 7–8 kept theirs; the user's approval, asked when the stage starts.
-      Produces: The economic margin record, stored with its sha256, holding δ for `growth_seen`
-      and `growth_heldout` and naming the platform and `uv.lock` sha256 it was read under, which
-      every candidate read must share, since `decide` pairs only bit-identical rows; a written
-      finding that records it with the read's selection-log records. The candidates' spec reads
-      both.
+      2026-10-12). The read is `tools growth-margins`, run from the main checkout's root or with
+      absolute `--lock` and `--log`: both resolve against the working directory, and a worktree's
+      log goes with the worktree (plan 14, Handoff:
+      `specs/plans/completed/14-economic-decision-tooling.md:6483`; Resolved at resume,
+      2026-10-16). Its `--codebook` is bundle 301cce28's, whose codes keep the pinned
+      `codebook_codes_sha256` (`specs/naics-embedding-roadmap.md:116-118`), though the pin's
+      comment still names bundle 18403d29 (found at resume; Resolved at resume, 2026-10-16). The
+      main checkout's selection log (`logs/selection_log.jsonl`, gitignored and append-only), which
+      this stage is the first to read: an opening of either level regime under `deddfd4c…` already
+      seals that regime's growth split, and `SelectionLog.openings(seal_names(regime), fingerprint)`
+      lists any (plan 13, Handoff; Resolved at resume, 2026-10-12); margin first is not checked
+      against the log, so it must hold no `growth_seen` or `growth_heldout` read before this one
+      (plan 14, Handoff; Resolved at resume, 2026-10-16). An artifact store outside any worktree,
+      as embedding roadmap Stages 7–8 kept theirs; the user's approval, asked when the stage starts.
+      Produces: The economic margin record, holding δ for `growth_seen` and `growth_heldout` and,
+      in its read's environment, the platform, Python and `uv.lock` sha256 it was read under.
+      Every candidate read must share them, since `decide` pairs only bit-identical reference
+      predictions; bit identity was verified on fixtures only, and BLAS threading is the first
+      suspect if real reads fail to pair (plan 14, Handoff; Resolved at resume, 2026-10-16). The
+      command writes the record once, to `--output`, and the read's predictions and scores to
+      `--store`; it neither stores the record nor prints its sha256, so this stage stores it
+      outside any worktree and records its sha256 with `shasum -a 256` (plan 14, Handoff;
+      Resolved at resume, 2026-10-16). A written finding that records it with the read's
+      selection-log records. The candidates' spec reads both.
       Exit: The margin record exists with r = 0.05 and one δ per growth panel; the selection log
-      gained only growth validation reads that computed neither `embedding` nor `text_only`, and
-      no outer set was opened; the finding cites the record's sha256, the platform and the lock,
-      and lists the existing openings that check found, or says it found none (plan 13, Handoff;
-      Resolved at resume, 2026-10-12).
+      gained only the two growth validation reads of one run, which log the comparators plan
+      14's Handoff lists per regime and neither `embedding` nor `text_only`; nothing refuses a
+      second run, so the margins are fixed once (plan 14, Handoff; Resolved at resume,
+      2026-10-16); no outer set was opened; the finding cites the record's sha256, the platform
+      and the lock, and the origin/main commit the read ran at, from which a candidate can
+      rebuild that lock after `uv.lock` moves, as it did after Stage 2 (639ce07; found at resume;
+      Resolved at resume, 2026-10-16), states that the log held no growth read before the margin
+      read (plan 14, Handoff; Resolved at resume, 2026-10-16), and lists the existing openings
+      that check found, or says it found none (plan 13, Handoff; Resolved at resume, 2026-10-12).
       ROUTING: writing-plans
 
 ## Stage-spec stamp
