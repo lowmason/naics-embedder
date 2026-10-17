@@ -36,6 +36,7 @@ records what it did.
   two records after an unchanged prefix.
 - **The finding (Task 5).** `specs/findings/growth-margins.md`: the inputs, the commit, the
   environment, δ for each panel, the record and its sha256, and the log's state before and after.
+  One sentence in `CLAUDE.md` says the margins are fixed and the command must not run again (O6).
 
 **Tech Stack:** uv 0.13 (`uv run --locked --no-sync`), the `naics-embedder` CLI, Python 3.12
 scripts over the package's own APIs (`SelectionLog`, `read_record`, `check_relative_margins`),
@@ -185,6 +186,10 @@ They carry O-numbers, because bare D-numbers are the embedding roadmap's. Do not
 - **O5** (owner, brief, 2026-10-16; a standing rule): MAIN's `logs/selection_log.jsonl` is
   append-only, and local `main` follows `origin/main` by guarded fast-forward syncs. Applied in:
   Global Constraints; Task 1 Step 1.
+- **O6** (owner, plan review, 2026-10-17): Task 5 also adds one sentence to `CLAUDE.md` saying
+  the growth margins are fixed, with the finding's path, and that `tools growth-margins` must
+  never run again. Nothing refuses a second run, and `CLAUDE.md` is what a new session reads
+  first. Applied in: Task 5 Step 2; File structure; P7.
 
 This plan's choices, for the owner's review at the plan PR:
 
@@ -207,8 +212,9 @@ This plan's choices, for the owner's review at the plan PR:
   stays open. Applied in: Task 4 Step 2.
 - **P6:** the finding copies the margin record and the read's two log records verbatim, and the
   pre-read openings, if any. Applied in: Task 5.
-- **P7:** no edit outside `specs/`. The stale comment beside `codebook_codes_sha256` stays: it is
-  not in Stage 3's Produces or Exit, and the read loads that file. Applied in: File structure.
+- **P7:** no edit outside `specs/` but O6's sentence in `CLAUDE.md`. The stale comment beside
+  `codebook_codes_sha256` stays: it is not in Stage 3's Produces or Exit, and the read loads that
+  file. Applied in: File structure.
 - **P8:** inline execution (executing-plans). The read needs the user in the loop at two gates,
   and a subagent cannot ask them. Applied in: Execution.
 
@@ -275,11 +281,13 @@ Stop, report, and wait for your human partner when any of these happens:
 | Action | Path | Task | Responsibility |
 |---|---|---|---|
 | Create | `specs/findings/growth-margins.md` | 5 | The finding: inputs, commit, environment, δ, the record's sha256, the log before and after |
+| Modify | `CLAUDE.md` | 5 | One sentence: the growth margins are fixed; never run `tools growth-margins` again (O6) |
 | Modify | `specs/naics-representation-split-roadmap.md` | Plan completion | Tick Stage 3 and add its stamp |
 | Modify | `specs/plans/15-growth-margin-read.md` | Plan completion | Markup, status line and Handoff; then `git mv` to `specs/plans/completed/` |
 | Read | `specs/deferred_items.md` | Plan completion | The ticking pass: no open item names Stage 3, so nothing is ticked; append only if the gate defers |
 
-No source, test, config, docs or lock file changes. `CLAUDE.md` is not edited (P7).
+No source, test, config, docs or lock file changes. `CLAUDE.md` gains only O6's sentence (P7).
+`AGENTS.md` is a symlink to `CLAUDE.md` and needs no edit of its own.
 
 ## Pre-flight (controller, inline, before Task 1)
 
@@ -910,10 +918,12 @@ Copy Steps 1–4's outputs into the ledger.
 
 **Files:**
 - Create: `specs/findings/growth-margins.md`
+- Modify: `CLAUDE.md` (one sentence, O6)
 
 **Interfaces:**
 - Consumes: the ledger's values from Tasks 1–4 and the files in `/tmp/naics_plan15/`.
-- Produces: the finding, which Plan completion's stamp and the candidates' spec cite.
+- Produces: the finding, which Plan completion's stamp and the candidates' spec cite; the
+  `CLAUDE.md` sentence that keeps a later session from running the read again.
 
 - [ ] **Step 1: Write the finding**
 
@@ -1060,7 +1070,29 @@ inputs can be checked.
 ```
 ````
 
-- [ ] **Step 2: Check the finding's lines**
+- [ ] **Step 2: The `CLAUDE.md` sentence (O6)**
+
+In `WORKTREE/CLAUDE.md`, section "Reference Campaign and Verification", the paragraph that opens
+"The economic decision (Req 24, `decision/economic.py`)" ends with these two lines:
+
+```text
+over the reference is eligible; with none, the reference stands. A trained candidate's seeds
+have no economic record yet.
+```
+
+Replace them, with the Edit tool, by these four, putting the finding's date in for `{{DATE}}`:
+
+```text
+over the reference is eligible; with none, the reference stands. A trained candidate's seeds
+have no economic record yet. The growth margins were fixed once, on {{DATE}}
+(`specs/findings/growth-margins.md`). Never run `tools growth-margins` again: nothing refuses a
+second run, and every economic candidate is decided against that record.
+```
+
+Edit nothing else in `CLAUDE.md`. If the two lines are not there, because `origin/main` changed
+the paragraph since this plan was written, stop and ask.
+
+- [ ] **Step 3: Check the finding's and `CLAUDE.md`'s lines**
 
 Write `/tmp/naics_plan15/widths.py` with the Write tool:
 
@@ -1085,18 +1117,21 @@ sys.exit(1 if over else 0)
 
 ```bash
 python3 /tmp/naics_plan15/widths.py specs/findings/growth-margins.md; echo "exit=$?"
-grep -n -F '{{' specs/findings/growth-margins.md; echo "tokens=$?"
+python3 /tmp/naics_plan15/widths.py CLAUDE.md; echo "exit=$?"
+grep -n -F '{{' specs/findings/growth-margins.md CLAUDE.md; echo "tokens=$?"
+git diff --stat -- CLAUDE.md
 ```
 
-Expected: `0 lines over 100` and `exit=0`; no line printed and `tokens=1`, so no `{{…}}` is left.
-JSON never contains `{{`, so a hit is always an unfilled token.
+Expected: `0 lines over 100` and `exit=0`, twice; no line printed and `tokens=1`, so no `{{…}}` is
+left. JSON never contains `{{`, so a hit is always an unfilled token. The diff stat shows
+`CLAUDE.md` with 3 insertions and 1 deletion.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 pwd
-git add specs/findings/growth-margins.md
-git commit -m "docs(findings): record the growth margins from the reference-only read" -m "Stage 3 of the representation-split roadmap (plan 15)." -m "Co-Authored-By: <the executing model> <noreply@anthropic.com>"
+git add specs/findings/growth-margins.md CLAUDE.md
+git commit -m "docs(findings): record the growth margins from the reference-only read" -m "Stage 3 of the representation-split roadmap (plan 15). CLAUDE.md now says the margins are fixed and tools growth-margins must not run again." -m "Co-Authored-By: <the executing model> <noreply@anthropic.com>"
 ```
 
 `pwd` prints WORKTREE.
