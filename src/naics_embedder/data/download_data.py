@@ -610,11 +610,13 @@ def build_descriptions(
         codes,
     )
 
+    # Every frame is one row per code, so a repeated code fans rows out here and must stop the
+    # build before ``data preprocess`` writes a parquet
     # yapf: disable
     return (
-        titles.join(descriptions, how='inner', on='code')
-        .join(exclusions, how='left', on='code')
-        .join(examples, how='left', on='code')
+        titles.join(descriptions, how='inner', on='code', validate='1:1')
+        .join(exclusions, how='left', on='code', validate='1:1')
+        .join(examples, how='left', on='code', validate='1:1')
         .select(
             index=pl.col('index'),
             level=pl.col('level'),
