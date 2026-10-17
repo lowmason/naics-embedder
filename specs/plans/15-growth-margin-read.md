@@ -263,7 +263,8 @@ Stop, report, and wait for your human partner when any of these happens:
 - `uv.lock` differs from the plan-time value, or `uv sync --locked --check` fails after the sync.
 - The record's path exists, or the store is not writable.
 - A QCEW slice's or the codebook's check fails (Task 2).
-- The log check exits non-zero: a growth read already exists, or a record lacks a field (Task 2).
+- The log check exits non-zero: the log does not end with a newline, a record lacks a field, or a
+  growth read already exists (Task 2).
 - The log changed between Task 2 and Task 3 Step 3, or MAIN's HEAD is not `origin/main` there.
 - `tools growth-margins` exits non-zero (Task 3 Step 5 says what to check first).
 - Any check in Task 4 fails.
@@ -537,8 +538,10 @@ Plan 15, Task 2: the main checkout's selection log before the margin read, read 
 
 Prints the log's physical line count and sha256, a tally of its records, every record that is
 not a validation read, each regressor regime's openings under the held-out draw (Req 22) and the
-growth reads. Exits 1 if a record lacks a field the margin read's own lookup reads, or if any
-growth read exists: the margin read must be the log's first growth read (Req 24).
+growth reads. Exits 1 if the log does not end with a newline (the read's first record would join
+its last line, and the read's own log lookup would fail after both reads were logged), if a
+record lacks a field that lookup reads, or if any growth read exists: the margin read must be
+the log's first growth read (Req 24).
 '''
 
 import hashlib
@@ -566,10 +569,12 @@ fingerprint = load_config(RegressorPanelConfig, PANEL_CONFIG).heldout_groups_sha
 raw = path.read_bytes()
 log = SelectionLog(path)
 records = log.records()
-newline = raw.endswith(b'\n')
+newline = not raw or raw.endswith(b'\n')
 print(f'log {path}')
 print(f'lines {len(raw.splitlines())}, records {len(records)}, ends with a newline: {newline}')
 print(f'sha256 {hashlib.sha256(raw).hexdigest()}')
+if not newline:
+    sys.exit(1)
 
 malformed = [r for r in records if not FIELDS <= set(r) or not isinstance(r.get('detail'), dict)]
 print(f'records missing a field: {len(malformed)}')
@@ -613,8 +618,8 @@ them. An opening of a regime's split already seals its growth split (Req 22), wh
 stop a validation read; Gate B tells the user.
 
 If the exit is 1, stop and ask. A growth read before the margin read breaks margin first
-(Req 24), and a record missing `detail` would crash the read's own log lookup after it had
-appended its reads.
+(Req 24). A missing final newline, or a record missing `detail`, would crash the read's own log
+lookup after it had appended its reads. Never add the newline yourself: the log is append-only.
 
 - [ ] **Step 5: Ledger**
 
@@ -1171,7 +1176,8 @@ every question is answered.
 
 - [ ] **Step 3: Mark up this plan**
 
-- Tick every completed step (`- [x]`).
+- Tick every completed step (`- [x]`). Leave the `- [ ]` boxes inside Global Constraints'
+  quotations as they are: they quote the roadmap and the spec verbatim.
 - Under each step that deviated, add a one-line `> Deviation: …` note.
 - Annotate each skipped step with `> Skipped: <why> → deferred`.
 - Add the status line under the title: `**Status: COMPLETE (<date>)** — executed via
