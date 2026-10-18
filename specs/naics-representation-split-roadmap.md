@@ -182,7 +182,7 @@ for the candidates' decision.
       > Stage 3 consumes.
       > Next: resume the roadmap.
 
-- [ ] Stage 3: The growth margin read
+- [x] Stage 3: The growth margin read
       Objective: With the user's approval at the time, run the reference-only growth read on real
       data on the Mac and record δ for both growth panels before any candidate exists.
       Spec: Req 24 (Margin); Verification "Margin first, reference only", "Outer sets closed";
@@ -230,6 +230,9 @@ for the candidates' decision.
       read (plan 14, Handoff; Resolved at resume, 2026-10-16), and lists the existing openings
       that check found, or says it found none (plan 13, Handoff; Resolved at resume, 2026-10-12).
       ROUTING: writing-plans
+      > Stage 3: COMPLETE (2026-10-17) — implemented by plan 15
+      > (specs/plans/completed/15-growth-margin-read.md).
+      > Next: resume the roadmap.
 
 ## Stage-spec stamp
 
