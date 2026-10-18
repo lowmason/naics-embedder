@@ -248,9 +248,10 @@ and no outer set was opened.
   4f86a0b2f3bde358bd08a1f3f17f1b4c59ee261ee4e5409ac83615deaa1f37d0, named `growth-margins`, with
   δ = 0.00015933956325255588 on `growth_seen` and 0.0001619577593991326 on `growth_heldout`.
   `tools decide --margins` takes it.
-- **Fixed once.** Nothing refuses a second `tools growth-margins` run. Never run it again: a
-  second run would log a second margin read, and a candidate read before a record's `fixed_at`
-  is refused under it.
+- **Fixed once.** Never run `tools growth-margins` again. The command refuses an `--output` that
+  already exists (`_require_new_record`), so the identical command fails while the record stays
+  in place: never move or delete it. A run to another `--output` is not refused; it would log a
+  second margin read, and a candidate read before a record's `fixed_at` is refused under it.
 - **Where candidates read.** `decide` pairs a candidate only where the reference's predictions are
   bit-identical to this read's. Read candidates on the Mac, at the `uv.lock`
   (6de4fbdcde8a2e944c7a9daed21f09f8a01ed479052179994ba4b0d488fef948) that
