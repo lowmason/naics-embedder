@@ -579,5 +579,6 @@ uv run --locked naics-embedder remote train --help
 ```
 
 A finished resume skips successfully; refusals exit 1. Only a verified safe finish prints
-`Safe to terminate`. Real-instance qualification is pending until the post-merge new-experiment
-checks run; local fixture tests do not qualify the image or complete Stage 7.
+`Safe to terminate`. Local fixture tests do not qualify an image: real-instance qualification is
+a [new-experiment run](remote_workflow.md#post-merge-qualification), which Plan 10's Phase 2 did
+for the recorded private source and a public release or later campaign repeats.
