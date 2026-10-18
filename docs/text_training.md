@@ -315,14 +315,16 @@ instances; finished runs skip, and a saved epoch budget cannot be extended. Boot
 launch require NTP and native BF16 on logical CUDA device 0 with identical CUDA visibility and
 one training device. No precision fallback or workload-fit claim follows from GPU metadata.
 
-Real-instance qualification remains post-merge work on a new experiment, never the finished
-`plan10_smoke`. Plan 10 Task 18 onward runs in order in a fresh primary-checkout local-main session
-after merge. The checkout's gitignored `conf/local.yaml` names the manifests, so no private config
-commit is replayed; the held config SHAs that completed plans cite stay reachable locally under
-`refs/held/*`, never pushed. Train ten reference seeds and fix δ = 3 SD before selection.
-Training/within-run monitoring run on Lambda; exports, QCEW/regressor reads, stores, margins and
-decisions run on the Mac. Remote selection logs stay separate; sealed splits stay closed. Plan 10
-and Stage 7 remain open until Phase 2's final gates.
+Plan 10's Phase 2 (Task 18 onward) is finished history. Real-instance qualification ran on a new
+experiment before seed 1, never the finished `plan10_smoke`, and the ten-seed Lambda campaign fixed
+δ = 3 SD; both are recorded in `specs/findings/reference-configuration.md`. Stage 7 is stamped
+COMPLETE (2026-10-07) in `specs/naics-embedding-roadmap.md`, and Plan 10 is under
+`specs/plans/completed/`. The qualification covers the recorded private source; a public release or
+a later campaign qualifies on its own new experiment. The checkout's gitignored `conf/local.yaml`
+names the manifests, so no private config commit is replayed; the held config SHAs that completed
+plans cite stay reachable locally under `refs/held/*`, never pushed. Training/within-run
+monitoring run on Lambda; exports, QCEW/regressor reads, stores, margins and decisions run on the
+Mac. Remote selection logs stay separate; sealed splits stay closed.
 
 The `uv.lock` freeze held through Stage 8's decision and was released when the representation
 split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on

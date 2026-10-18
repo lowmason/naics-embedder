@@ -5,10 +5,12 @@ and verify termination readiness. Run them on the Mac from the checkout that own
 inputs. The user launches and terminates Lambda instances. These commands use SSH and GNU rsync;
 they do not launch instances or perform campaign decisions.
 
-The implementation has local fixture tests. Real Lambda image behavior, tmux, Mac caffeinate,
-and two-instance continuation still require the [post-merge qualification](#post-merge-qualification)
-below before relying on the tool. This guide does not report that qualification passed or that
-Plan 10 Phase 2 or Stage 7 is complete.
+The implementation has local fixture tests, which do not certify an instance. Real Lambda image
+behavior, tmux, Mac caffeinate, and two-instance continuation need the
+[post-merge qualification](#post-merge-qualification) below. Plan 10's Phase 2 ran it before its
+campaign, on the recorded private source, and Stage 7 is complete; a public release or later
+campaign repeats it on its own source. The result is recorded in
+`specs/findings/reference-configuration.md`, not in this guide.
 
 ## Prerequisites and Configuration
 
@@ -210,21 +212,20 @@ and cross-instance continuation before relying on them. Use a **new dedicated ex
 an unchanged larger epoch budget, interrupt after a completed epoch while unfinished, finish A,
 then restore/resume on B under the same user/absolute path. Verify next-epoch continuation,
 history preservation, all kept files and matching hashes. Never relaunch `plan10_smoke`, alter a
-saved budget, or use a campaign seed as the qualification experiment. This is pending operational
-work; fixture checks do not mark it passed.
+saved budget, or use a campaign seed as the qualification experiment. Fixture checks never mark
+it passed. Plan 10's Phase 2 ran this procedure before seed 1 on the recorded private source; a
+public release or later campaign runs it again on its own source, as the open item in
+`specs/deferred_items.md` records.
 
-Plan 10 Phase 2 starts in a fresh GPT-6.1 Medium session after merge, inline from the primary
-checkout on local `main`. Fetch and verify the landed
-paths. The checkout's gitignored `conf/local.yaml` names the manifests; no private config commit
-is replayed or held. The held config SHAs that completed plans and findings cite stay reachable
+The checkout's gitignored `conf/local.yaml` names the manifests; no private config commit is
+replayed or held. The held config SHAs that completed plans and findings cite stay reachable
 locally under `refs/held/*` in the primary clone; never push them.
 
-Execute Task 18 onward in order. Preserve the seven existing selection-log records and finished
-smoke/evidence; do not repeat Phase 1 exit reads. Freeze `uv.lock` from the first campaign launch
-through the last decision using these margins. Train ten reference seeds and fix each panel's
-δ = 3 SD on the Mac before configuration selection. Plan 10 retirement and Stage 7 completion
-wait for Phase 2's final gates. See [text training](text_training.md#reference-campaign) and
-[remote API](api/remote.md).
+Plan 10's Phase 2 (Task 18 onward) is finished history. It trained ten reference seeds on Lambda
+and fixed each panel's δ = 3 SD on the Mac before configuration selection
+(`specs/findings/reference-configuration.md`). Stage 7 is stamped COMPLETE (2026-10-07) in
+`specs/naics-embedding-roadmap.md`, and Plan 10 is under `specs/plans/completed/`. See
+[text training](text_training.md#reference-campaign) and [remote API](api/remote.md).
 
 The `uv.lock` freeze held through Stage 8's decision and was released when the representation
 split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on

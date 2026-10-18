@@ -271,17 +271,20 @@ A CUDA `up` copies the Mac's cached Hub snapshots into `.remote/model-cache/hub`
 their SHA-256 inventory on both hosts (`remote/model_cache.py`; MiniLM's revision is pinned).
 Launch rechecks it, and the wrappers run with `HF_HUB_OFFLINE=1`: nothing downloads or repairs.
 
-See [remote workflow](docs/remote_workflow.md) and [remote API](docs/api/remote.md). The real
-Lambda/Mac qualification remains pending after merge on a new experiment, never `plan10_smoke`.
-Plan 10 Phase 1 evidence/counts remain historical, including its queued lint truth; Task 18 and
-Phase 2 are not executed by these fixtures. A fresh post-merge session on the primary checkout
-sets the manifests in its gitignored `conf/local.yaml`; no private config commit is replayed or
-held. Held config SHAs that completed plans and findings cite stay reachable locally under
-`refs/held/*` in the primary clone; never push them. Execute Task 18 onward in order, use ten
-seeds and δ = 3 SD before selection, and never repeat the four Phase 1 exit reads in the
-seven-record Mac log. Exports, QCEW, stores and decisions stay on the Mac; remote selection logs
-stay separate and sealed test/outer splits stay closed. Plan 10 retirement and Stage 7
-completion wait for Phase 2.
+See [remote workflow](docs/remote_workflow.md) and [remote API](docs/api/remote.md). Plan 10's
+Phase 2 (Task 18 onward) is finished history. Its qualification experiment, ten-seed Lambda
+campaign and Mac reads fixed the reference configuration and δ = 3 SD
+(`specs/findings/reference-configuration.md`); Stage 7 is stamped COMPLETE (2026-10-07) in
+`specs/naics-embedding-roadmap.md`, and Plan 10 is under `specs/plans/completed/`. Phase 1
+evidence/counts remain historical, including its queued lint truth. That qualification covers the
+recorded private source only: native readiness for a public release or a later campaign needs its
+own qualification on a new experiment, never `plan10_smoke`, and stays an open item in
+`specs/deferred_items.md`. These fixtures execute no real Lambda campaign. A session on the
+primary checkout sets the manifests in its gitignored `conf/local.yaml`; no private config commit
+is replayed or held. Held config SHAs that completed plans and findings cite stay reachable
+locally under `refs/held/*` in the primary clone; never push them. Exports, QCEW, stores and
+decisions stay on the Mac; remote selection logs stay separate and sealed test/outer splits stay
+closed.
 
 The `uv.lock` freeze held from Plan 10's first campaign launch through Stage 8's decision and was
 released when `specs/naics-representation-split.md` merged (Req 19). `decide` pairs reads only on
