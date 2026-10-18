@@ -247,7 +247,9 @@ decision from a relative margin record. It refuses a candidate whose reference p
 differ from the margin read's bit for bit, or that read before the margins. Superiority is
 1 − 0.05/n: 97.5 % over the two growth panels, 98⅓ % over D8's three. Only a candidate adopted
 over the reference is eligible; with none, the reference stands. A trained candidate's seeds
-have no economic record yet.
+have no economic record yet. The growth margins were fixed once, on 2026-10-17
+(`specs/findings/growth-margins.md`). Never run `tools growth-margins` again: nothing refuses a
+second run, and every economic candidate is decided against that record.
 
 ### Remote Workflow and Phase 2 Boundary
 

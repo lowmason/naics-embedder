@@ -1,5 +1,7 @@
 # Growth Margin Read Implementation Plan
 
+**Status: COMPLETE (2026-10-17)** — executed via executing-plans; nothing deferred
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -291,7 +293,9 @@ No source, test, config, docs or lock file changes. `CLAUDE.md` gains only O6's 
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
+
+> Deviation: PR #152 was still open at the first gate check; once the user merged it, the gate re-ran as MERGED (30aeff6) and the branch was cut from origin/main.
 
 Run, from WORKTREE:
 
@@ -310,7 +314,7 @@ git log --oneline -1
 
 Record the `origin/main` SHA as BASE in the ledger.
 
-- [ ] **Step 2: Parallel work**
+- [x] **Step 2: Parallel work**
 
 ```bash
 git -c core.fsmonitor=false worktree list
@@ -322,7 +326,7 @@ Expected: no open PR's files and no listed commit touch those paths, apart from 
 merge. Otherwise stop and ask (Stop-and-ask). Worktrees under `~/Projects/copilot-worktrees/`
 are review tooling, not sessions.
 
-- [ ] **Step 3: The level pins, in this lock's environment**
+- [x] **Step 3: The level pins, in this lock's environment**
 
 Two level pins (`CAPTURED_HERE`, `tests/unit/test_regressor_panel.py`) hold only on macOS arm64
 with the lock's numpy, polars and Accelerate. Run them, and the growth and economic tests, in a
@@ -338,7 +342,7 @@ Expected: `exit=0`, and no skip reason reading "pinned where captured, on macOS 
 `test_level_predictions_are_the_captured_ones_bit_for_bit` passed. A failure or that skip means
 the environment changed since the pins were captured: stop and ask.
 
-- [ ] **Step 4: Start the ledger and the scratch directory**
+- [x] **Step 4: Start the ledger and the scratch directory**
 
 ```bash
 mkdir -p logs /tmp/naics_plan15
@@ -360,7 +364,7 @@ Nothing in this task reads real data.
 - Produces: MAIN on `main` at `origin/main`, its `.venv` synced to `uv.lock`; LOCK_SHA; the
   environment receipt (Step 3); the record's path confirmed free.
 
-- [ ] **Step 1: Fast-forward MAIN with the guard**
+- [x] **Step 1: Fast-forward MAIN with the guard**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && git branch --show-current
@@ -388,7 +392,7 @@ cd /Users/lowell/Projects/naics-embedder && git rev-parse HEAD origin/main
 Expected: a fast-forward (or "Already up to date"), then two equal SHAs, BASE or later. If any
 check fails, stop and ask: never merge, rebase or reset MAIN to make it pass.
 
-- [ ] **Step 2: Sync MAIN's environment to the lock**
+- [x] **Step 2: Sync MAIN's environment to the lock**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && git diff --quiet HEAD -- uv.lock; echo "exit=$?"
@@ -402,7 +406,7 @@ Expected: `exit=0`; `6de4fbdcde8a2e944c7a9daed21f09f8a01ed479052179994ba4b0d488f
 `uv.lock` moved after this plan was written: stop and tell the user what changed
 (`git log --oneline 8aed0a6..origin/main -- uv.lock`) before going on.
 
-- [ ] **Step 3: The environment receipt**
+- [x] **Step 3: The environment receipt**
 
 The record names the platform, Python and the lock's sha256. This receipt adds what it does not
 (P4). Write `/tmp/naics_plan15/env.py` with the Write tool:
@@ -443,7 +447,7 @@ Expected, at plan time: `platform macOS-26.6.2-arm64-arm-64bit`, `python 3.12.12
 Pairing compares predictions, not environments (`check_reference_pairing`). If a thread
 variable is set, unset it in the shell that runs the read (Task 3), and note it here.
 
-- [ ] **Step 4: The outputs**
+- [x] **Step 4: The outputs**
 
 ```bash
 test ! -e /Users/lowell/naics-artifacts/records/economic/growth_margins.json; echo "absent=$?"
@@ -456,7 +460,7 @@ Expected: `absent=0`; `writable=0`; free space in gigabytes (the read stores two
 files); `stage7` and `stage8` and no `economic`. If `economic/` exists, stop and ask: something
 may already have read growth.
 
-- [ ] **Step 5: Ledger**
+- [x] **Step 5: Ledger**
 
 Copy Steps 1–4's outputs into the ledger.
 
@@ -470,7 +474,7 @@ Copy Steps 1–4's outputs into the ledger.
   sha256; the log's tally, its records other than validation reads, and each regime's existing
   openings, for Gate B and the finding.
 
-- [ ] **Step 1: Ask for Gate A**
+- [x] **Step 1: Ask for Gate A**
 
 Send the user this, and wait for a clear yes:
 
@@ -481,7 +485,7 @@ Send the user this, and wait for a clear yes:
 > reads). Nothing is written. The margin read itself waits for a second go, after I show you what
 > these checks find.
 
-- [ ] **Step 2: The QCEW slices**
+- [x] **Step 2: The QCEW slices**
 
 ```bash
 shasum -a 256 /Users/lowell/Downloads/Data/QCEW/2022_US000_annual.csv /Users/lowell/Downloads/Data/QCEW/2023_US000_annual.csv /Users/lowell/Downloads/Data/QCEW/2024_US000_annual.csv /Users/lowell/Downloads/Data/QCEW/2025_US000_annual.csv
@@ -498,7 +502,7 @@ fe9ffe874f6e657f6bb1558971965ce6acc015ace45d831ed32c90d97097aee9  …/2023_US000
 
 The read verifies them itself; this check finds a mismatch before anything is logged.
 
-- [ ] **Step 3: The codebook (O1)**
+- [x] **Step 3: The codebook (O1)**
 
 Write `/tmp/naics_plan15/codebook.py` with the Write tool:
 
@@ -536,7 +540,7 @@ deddfd4c395ca2ea8164e4425a4fdfff4e564360d20467d5a76163504cbb8ac4`, `outcome leve
 as CODEBOOK_SHA and the manifest's as MANIFEST_SHA. `outcome level` is right: the read sets
 growth in memory.
 
-- [ ] **Step 4: The log**
+- [x] **Step 4: The log**
 
 Write `/tmp/naics_plan15/log_state.py` with the Write tool:
 
@@ -629,7 +633,7 @@ If the exit is 1, stop and ask. A growth read before the margin read breaks marg
 (Req 24). A missing final newline, or a record missing `detail`, would crash the read's own log
 lookup after it had appended its reads. Never add the newline yourself: the log is append-only.
 
-- [ ] **Step 5: Ledger**
+- [x] **Step 5: Ledger**
 
 Copy Steps 2–4's outputs into the ledger, with LINES_BEFORE, SHA_BEFORE, CODEBOOK_SHA and
 MANIFEST_SHA.
@@ -645,7 +649,7 @@ record and the store's objects.
   `/Users/lowell/naics-artifacts/records/economic/growth_margins.json`; the command's output in
   `/tmp/naics_plan15/read.txt`.
 
-- [ ] **Step 1: Pin the commit (O2)**
+- [x] **Step 1: Pin the commit (O2)**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && git -c core.fsmonitor=false fetch origin
@@ -659,7 +663,7 @@ Record the SHA as READ_COMMIT. If the two SHAs differ, `origin/main` moved since
 Task 1 Steps 1–2, tell the user what the new commits touch (a touch of a Stop-and-ask path stops
 here), and come back to this step.
 
-- [ ] **Step 2: Ask for Gate B**
+- [x] **Step 2: Ask for Gate B**
 
 Send the user this, filled from the ledger, and wait for a clear go:
 
@@ -677,7 +681,7 @@ Send the user this, filled from the ledger, and wait for a clear go:
 >
 > Go?
 
-- [ ] **Step 3: Re-check the log immediately before the read**
+- [x] **Step 3: Re-check the log immediately before the read**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && uv run --locked --no-sync python /tmp/naics_plan15/log_state.py /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl > /tmp/naics_plan15/log_gate_b.txt; echo "exit=$?"
@@ -687,7 +691,7 @@ diff /tmp/naics_plan15/log_before.txt /tmp/naics_plan15/log_gate_b.txt; echo "di
 Expected: `exit=0` and `diff=0`. The log is as Task 2 found it. Otherwise something wrote to it
 in between: stop and ask, and do not run the read.
 
-- [ ] **Step 4: The read**
+- [x] **Step 4: The read**
 
 Run it with the Bash tool's `run_in_background: true`, since it may take minutes, and wait for
 its completion notice. Do not poll, and do not start anything else that touches MAIN meanwhile.
@@ -706,7 +710,7 @@ cd /Users/lowell/Projects/naics-embedder && pwd && HF_HUB_OFFLINE=1 COLUMNS=200 
 
 Then: `cat /tmp/naics_plan15/read.txt`.
 
-- [ ] **Step 5: If the exit is not 0**
+- [x] **Step 5: If the exit is not 0**
 
 Check the log before anything else:
 
@@ -723,7 +727,7 @@ cd /Users/lowell/Projects/naics-embedder && wc -l < logs/selection_log.jsonl && 
   Stop and show the user the appended lines (`tail -n +$((LINES_BEFORE + 1))` of the log).
   Never re-run: a second run would log a second run's reads (Exit).
 
-- [ ] **Step 6: If the exit is 0**
+- [x] **Step 6: If the exit is 0**
 
 Expected in `/tmp/naics_plan15/read.txt`, after the log lines:
 
@@ -754,7 +758,7 @@ Read only: nothing here reads a panel or appends to the log.
 - Produces: RECORD_SHA; the verified values; LINES_AFTER and SHA_AFTER; the read's two log lines,
   for the finding.
 
-- [ ] **Step 1: The record's sha256**
+- [x] **Step 1: The record's sha256**
 
 ```bash
 shasum -a 256 /Users/lowell/naics-artifacts/records/economic/growth_margins.json
@@ -762,7 +766,9 @@ shasum -a 256 /Users/lowell/naics-artifacts/records/economic/growth_margins.json
 
 Record it as RECORD_SHA.
 
-- [ ] **Step 2: Check the record and the log**
+- [x] **Step 2: Check the record and the log**
+
+> Deviation: verify.py was written and import-smoke-tested before Gate A (no data read), so a stale name could not surface after the read.
 
 Write `/tmp/naics_plan15/verify.py` with the Write tool:
 
@@ -890,7 +896,7 @@ Substitute LINES_BEFORE and SHA_BEFORE from the ledger. Expected: `exit=0`, `all
 then the values. Record `log lines` as LINES_AFTER (LINES_BEFORE + 2) and its sha256 as
 SHA_AFTER. Any `FAILED:` line, or a traceback, means stop and ask. Never re-run the read.
 
-- [ ] **Step 3: The read's two log lines, verbatim**
+- [x] **Step 3: The read's two log lines, verbatim**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && tail -n 2 logs/selection_log.jsonl > /tmp/naics_plan15/margin_reads.jsonl
@@ -901,7 +907,7 @@ cp /Users/lowell/naics-artifacts/records/economic/growth_margins.json /tmp/naics
 Step 2 has shown these are the read's two records. The copy in `/tmp` is only for Task 5's Write
 tool, and is deleted with the scratch directory.
 
-- [ ] **Step 4: MAIN is clean and unmoved**
+- [x] **Step 4: MAIN is clean and unmoved**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && git -c core.fsmonitor=false status --porcelain; echo "exit=$?"
@@ -910,7 +916,7 @@ cd /Users/lowell/Projects/naics-embedder && git rev-parse HEAD
 
 Expected: no file lines, `exit=0`, READ_COMMIT.
 
-- [ ] **Step 5: Ledger**
+- [x] **Step 5: Ledger**
 
 Copy Steps 1–4's outputs into the ledger.
 
@@ -925,7 +931,9 @@ Copy Steps 1–4's outputs into the ledger.
 - Produces: the finding, which Plan completion's stamp and the candidates' spec cite; the
   `CLAUDE.md` sentence that keeps a later session from running the read again.
 
-- [ ] **Step 1: Write the finding**
+- [x] **Step 1: Write the finding**
+
+> Deviation: section 2 adds a UTC note for fixed_at, and section 4's "Fixed once" bullet was reworded after review (9c24dba): the same command is refused only while the record exists.
 
 Write `WORKTREE/specs/findings/growth-margins.md` with the Write tool, from this skeleton. Each
 `{{…}}` is a value from the ledger or an instruction: replace it, braces included. Take the MSEs
@@ -1070,7 +1078,7 @@ inputs can be checked.
 ```
 ````
 
-- [ ] **Step 2: The `CLAUDE.md` sentence (O6)**
+- [x] **Step 2: The `CLAUDE.md` sentence (O6)**
 
 In `WORKTREE/CLAUDE.md`, section "Reference Campaign and Verification", the paragraph that opens
 "The economic decision (Req 24, `decision/economic.py`)" ends with these two lines:
@@ -1092,7 +1100,9 @@ second run, and every economic candidate is decided against that record.
 Edit nothing else in `CLAUDE.md`. If the two lines are not there, because `origin/main` changed
 the paragraph since this plan was written, stop and ask.
 
-- [ ] **Step 3: Check the finding's and `CLAUDE.md`'s lines**
+- [x] **Step 3: Check the finding's and `CLAUDE.md`'s lines**
+
+> Deviation: the width check flagged one 105-character line in the finding on its first run; it was re-wrapped before the commit.
 
 Write `/tmp/naics_plan15/widths.py` with the Write tool:
 
@@ -1126,7 +1136,7 @@ Expected: `0 lines over 100` and `exit=0`, twice; no line printed and `tokens=1`
 left. JSON never contains `{{`, so a hit is always an unfilled token. The diff stat shows
 `CLAUDE.md` with 3 insertions and 1 deletion.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 pwd
@@ -1138,7 +1148,7 @@ git commit -m "docs(findings): record the growth margins from the reference-only
 
 ## Final verification (controller, inline)
 
-- [ ] **Step 1: The Exit**
+- [x] **Step 1: The Exit**
 
 Check each clause of Stage 3's Exit (Global Constraints), citing the ledger:
 
@@ -1151,7 +1161,7 @@ Check each clause of Stage 3's Exit (Global Constraints), citing the ledger:
   log held no growth read before the margin read; and lists the existing openings or says there
   were none (Task 5).
 
-- [ ] **Step 2: The checks**
+- [x] **Step 2: The checks**
 
 ```bash
 uv run --locked --no-sync ruff check src/ tests/; echo "exit=$?"
@@ -1166,7 +1176,9 @@ is green (Verification "Checks"). Record the collected and passed counts; skips 
 machine. Run the full suite with `run_in_background: true` if it nears the Bash tool's two-minute
 limit.
 
-- [ ] **Step 3: Review**
+- [x] **Step 3: Review**
+
+> Deviation: the code-reviewer found no Critical or Important issue and one Minor was fixed (9c24dba); Codex reviewed 7dd18c5, before that docs-only fix.
 
 Dispatch the code-reviewer agent on `git diff BASE...HEAD`, with this plan, the roadmap's Stage 3
 entry, Req 24 and the ledger. Ask it to check every value in the finding against the ledger and
@@ -1189,7 +1201,7 @@ run the roadmap's Completion audit, do not move the roadmap, and do not retire
 runs that audit. The plan's file name follows its stage, not the spec, so the skill's
 spec-name match does not apply.
 
-- [ ] **Step 1: Parallel sessions**
+- [x] **Step 1: Parallel sessions**
 
 `specs/naics-representation-split-roadmap.md` and `specs/deferred_items.md` are shared.
 
@@ -1202,14 +1214,14 @@ gh pr list --repo lowmason/naics-embedder --state open --json number,title,files
 If either shows a change to those files, hold Steps 4–6 and give the user the exact text of each
 edit.
 
-- [ ] **Step 2: The resolve-before-defer gate**
+- [x] **Step 2: The resolve-before-defer gate**
 
 Collect the leftovers: plan steps skipped or descoped, and review findings not fixed. Ask the
 user, as one batched set of questions, about those that need their input; implement those an
 answer unblocks, then restart this protocol; defer the rest. The partition is final only once
 every question is answered.
 
-- [ ] **Step 3: Mark up this plan**
+- [x] **Step 3: Mark up this plan**
 
 - Tick every completed step (`- [x]`). Leave the `- [ ]` boxes inside Global Constraints'
   quotations as they are: they quote the roadmap and the spec verbatim.
@@ -1219,20 +1231,20 @@ every question is answered.
   executing-plans; nothing deferred`, or `…; deferred items in specs/deferred_items.md` if the
   gate deferred any.
 
-- [ ] **Step 4: The deferred items**
+- [x] **Step 4: The deferred items**
 
 In `specs/deferred_items.md`, tick nothing: no open item names Stage 3, and Task 4's one-off
 scores check is not the stored-scores item's fix (P5). If the gate deferred anything, append a
 `## 15-growth-margin-read — <date>` section in the file's item schema (self-contained, with
 `Size:` and `Done when:` or `Revisit if:`). Otherwise append nothing.
 
-- [ ] **Step 5: The Handoff section**
+- [x] **Step 5: The Handoff section**
 
 Append a level-2 section to the end of this plan, titled "Handoff to later stages", whose body is
 the single line `None: last stage.` It is the plan's only such section, so a later resume cites
 it without a draft to tell it from. The candidates' spec, which is not a stage, reads the finding.
 
-- [ ] **Step 6: The roadmap stamp**
+- [x] **Step 6: The roadmap stamp**
 
 In `specs/naics-representation-split-roadmap.md`, Stage 3's entry:
 
@@ -1247,7 +1259,7 @@ In `specs/naics-representation-split-roadmap.md`, Stage 3's entry:
 
 Edit nothing else in the roadmap: its status line and the later re-validation are the resume's.
 
-- [ ] **Step 7: Backlog triage**
+- [x] **Step 7: Backlog triage**
 
 ```bash
 uv run --no-project --python 3.13 python /Users/lowell/.claude/skills/writing-plans/scripts/deferred_stats.py
@@ -1258,7 +1270,7 @@ open items or any aged tail, run steps 1–4 of the skill's Triage rubric
 (`references/deferred-backlog.md`) and present the proposal. It is read-only; `/deferred` acts
 on a selection.
 
-- [ ] **Step 8: Retire the plan**
+- [x] **Step 8: Retire the plan**
 
 ```bash
 pwd
@@ -1332,3 +1344,7 @@ claude --model sonnet
 ```
 
 Start it on this file, `specs/plans/15-growth-margin-read.md`, once its PR has merged.
+
+## Handoff to later stages
+
+None: last stage.
