@@ -3,6 +3,14 @@
 > For agentic workers: REQUIRED NEXT SKILL: derive-roadmap — do not plan
 > this spec directly and do not split it into per-subsystem plans.
 
+**Status (2026-10-18).** Its roadmap is complete and retired
+(`specs/completed/naics-representation-split-roadmap.md`, Completion audit). The economic
+candidates and the text→code artifact come next, each in its own spec (Rollout note). The
+candidates' spec carries four items: Verification's "Economic decision record" on real candidates
+and "Outer sets closed" through the economic opening, Req 23's limit on how a candidate is built,
+and Req 19's graph-stage question, due now that the first economic panel exists. Trained
+candidates wait for it in `specs/deferred_items.md`, under `14-economic-decision-tooling`.
+
 The single shared NAICS embedding is replaced by three artifacts over the same 2,125 NAICS 2022
 codes. Each is judged only on evidence for its own use:
 

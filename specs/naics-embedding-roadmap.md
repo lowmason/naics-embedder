@@ -21,8 +21,9 @@ commit (1d2240c, 2026-10-04) re-validated Stages 7–12, and the sixth resume re
 analysis and routed plan 9's deferred entries (below). The seventh resume reconciled Stages 8–12
 with completed Plan 10 and the post-merge handoffs (below). The eighth reconciled Stage 8 and
 recorded the representation split, user adjudication Q3: Stage 9 is held, Stages 10–11 are
-parked and Stage 12 is one sealed opening per judged artifact (below). No stage here routes now;
-the economic artifact's stages are in `specs/naics-representation-split-roadmap.md`.
+parked and Stage 12 is one sealed opening per judged artifact (below). No stage here routes now.
+The economic artifact's roadmap is complete
+(`specs/completed/naics-representation-split-roadmap.md`).
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
