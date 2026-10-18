@@ -319,11 +319,10 @@ Real-instance qualification remains post-merge work on a new experiment, never t
 `plan10_smoke`. Plan 10 Task 18 onward runs in order in a fresh primary-checkout local-main session
 after merge. The checkout's gitignored `conf/local.yaml` names the manifests, so no private config
 commit is replayed; the held config SHAs that completed plans cite stay reachable locally under
-`refs/held/*`, never pushed. Freeze `uv.lock` from first campaign launch through last decision,
-train ten reference seeds and fix δ = 3 SD before selection. Training/within-run monitoring run on
-Lambda; exports, QCEW/regressor reads, stores, margins and decisions run on the Mac. Remote
-selection logs stay separate; sealed splits stay closed. Plan 10 and Stage 7 remain open until Phase
-2's final gates.
+`refs/held/*`, never pushed. Train ten reference seeds and fix δ = 3 SD before selection.
+Training/within-run monitoring run on Lambda; exports, QCEW/regressor reads, stores, margins and
+decisions run on the Mac. Remote selection logs stay separate; sealed splits stay closed. Plan 10
+and Stage 7 remain open until Phase 2's final gates.
 
 The `uv.lock` freeze held through Stage 8's decision and was released when the representation
 split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on

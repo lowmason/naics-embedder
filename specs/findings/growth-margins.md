@@ -1,7 +1,7 @@
 # Growth margins: finding
 
 **Status: FINAL (2026-10-17).** Split roadmap Stage 3
-(`specs/naics-representation-split-roadmap.md`), implemented by plan 15
+(`specs/completed/naics-representation-split-roadmap.md`), implemented by plan 15
 (`specs/plans/completed/15-growth-margin-read.md`).
 
 The reference `covariates+ancestors` was read alone, on the Mac, on both growth panels' level-6

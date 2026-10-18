@@ -4,11 +4,13 @@
 > reconcile step; route each unticked stage per its ROUTING line; never plan
 > this document wholesale.
 
-**Status: APPROVED (2026-10-12); resumed twice, on 2026-10-12 and 2026-10-16.** Derived in an
-interactive session. The user answered the derivation's two questions (Decisions, below) and
-approved the three-stage partition at the human checkpoint. Stages 1 and 2 are complete, and the
-resume after each re-validated the stages after it (below). Stage 3 is next, via writing-plans,
-with the user's approval when it starts.
+**Status: COMPLETE (2026-10-18) — 3 of 3 stages complete; retired.** Approved on 2026-10-12 and
+resumed three times, on 2026-10-12, 2026-10-16 and 2026-10-18. Derived in an interactive session.
+The user answered the derivation's two questions (Decisions, below) and approved the three-stage
+partition at the human checkpoint. The first two resumes re-validated the stages after the one
+just completed (below). The third found all three complete, ran the Completion audit (below) and,
+with the user's approval, moved this file to `specs/completed/`. Nothing here routes now: the
+economic candidates and the text→code artifact each get their own spec (spec, Rollout note).
 
 **Basis.** Source spec `specs/naics-representation-split.md` at 0a39042, unchanged through
 origin/main 5ef7e7b (PR #137). Evidence was read at origin/main 5ef7e7b, and line citations are
@@ -66,6 +68,14 @@ pin, whose comment in `conf/data/regressor_panel.yaml` still names bundle 18403d
 Reqs 18, 23 and 24, which Stage 2 closed in part, stay as entry-time evidence. No panel read,
 selection-log read or opening ran during this resume. Stage 3 routes to writing-plans; the next
 plan number is 15.
+
+**Resume after Stage 3 (2026-10-18).** Stage 3's stamp is authoritative: plan 15, whose plan
+merged as PR #152 (30aeff6) and whose read, finding and completion merged as PR #153 (50dcfc7).
+The finding is `specs/findings/growth-margins.md`. Plan 15's Handoff reads "None: last stage", so
+no entry is amended. With every stage ticked, this resume ran the Completion audit (below) at
+origin/main 50dcfc7, where the spec is still 0a39042's; the audit's line citations are to
+50dcfc7. The Gap analysis stays the entry-time snapshot. No panel read, selection-log read or
+opening ran during this resume, and `tools growth-margins` did not run.
 
 ## Gap analysis
 
@@ -261,3 +271,65 @@ reviewed when it merged. Parking is a first-class exit: remaining stages append 
 `specs/deferred_items.md` as self-contained items, and this file moves to `specs/completed/`
 marked `PARKED (date) — N of 3 stages complete`. The spec stays in `specs/` while the candidates'
 and text→code specs cite it.
+
+### Audit (2026-10-18)
+
+Run at the resume after Stage 3, at origin/main 50dcfc7. Plans 13–15 shipped as PRs #139 and #140,
+#143 and #144, and #152 and #153. A Deviation note is cited where one bears on a verdict; the
+plans' other notes record process only.
+
+| Req | Verdict | Evidence | Note |
+|---|---|---|---|
+| 18 | implemented-as-specified | Stage 2, plan 14. The economic decision reads `growth_seen` and `growth_heldout` only (`decision/economic.py:98`, `:537-657`), against its own reference (`:101`), its own margins (finding: growth-margins §2) and its own opening (embedding roadmap Stage 12, `specs/naics-embedding-roadmap.md:1091-1098`). The hierarchy is the bundle's codebook, whose codes the panel config pins (`codebook_codes_sha256`) | The text→code half is its own spec's (Out of scope). D8's three-panel decision (`decision/scores.py:30`) stays as Stage 8's record. The economic deliverable waits for the candidates' decision. |
+| 19 | implemented-differently | At derivation (Decisions; PR #138): Stage 9 held (`specs/naics-embedding-roadmap.md:938`, `:972-973`), Stages 10–11 parked (`:975`, `:1006-1008`, `:1010`, `:1038-1039`), Stage 12 one opening per artifact (`:1041`, `:1091-1098`); `CLAUDE.md:5-17`, `:286-289`; `uv.lock` has moved since the release (639ce07) | Spec: the freeze is released when the spec merges, and CLAUDE.md records it. Each live copy records the release, but `CLAUDE.md:281` and `docs/text_training.md:322` still state the freeze in Plan 10's campaign instructions. Stage 10's question returns once the economic panels exist (`:1006-1008`), and the first one now does. Both exit below. |
+| 20 | implemented-as-specified | Stage 1, plan 13. Growth is the one economic panel (`panels/qcew_rows.py:61-68`, `:252-260`); the margin read is on it (finding: growth-margins) | Uses 2–5 have no panel (Out of scope; U5). The codes are the bundle's NAICS 2022 codebook. |
+| 21 | implemented-as-specified | Stage 1, plan 13. `outcome`, `level` by default (`utils/config.py:592-594`; `conf/data/regressor_panel.yaml:19`); growth rows (`panels/qcew_rows.py:215-260`); read names (`panels/regressor.py:85-96`). Tests: `test_every_rows_features_are_dated_before_its_outcome` and `test_a_growth_rows_outcome_is_the_log_change_in_employment_from_the_same_cells` (`tests/unit/test_regressor_qcew_rows.py:105`, `:136`); the level pins and `test_growth_keeps_level_modes_partition_and_draw` (`tests/unit/test_regressor_panel.py:1077-1125`, `:1155`) | Plan 13's review fix 5bfe756 also refuses growth in `tools sweep` before any seed is checked (Deviation). Two of the level pins (`CAPTURED_HERE`, `:1043`) run on macOS arm64 only; three run everywhere. |
+| 22 | implemented-as-specified | Stage 1, plan 13. `seal_names` (`panels/regressor.py:195-203`); `require_openable` (`:746-764`); `test_an_opening_under_either_outcome_seals_the_split_for_both` (`tests/unit/test_regressor_panel.py:469`) | The draw fingerprint is `deddfd4c…` under both outcomes. Before the margin read, the real log held no opening of either regime (finding: growth-margins §3). |
+| 23 | implemented-differently | Stage 2, plan 14. A candidate's table provenance is kept verbatim (`decision/records.py:386-396`); `EconomicRun` has no seed, checkpoint or monitor field (`:398-423`); `read_deterministic_arm` is the Python API only (`decision/economic.py:250-332`) | Spec: a candidate may be trained or deterministic, built from text and the tree only. Code: deterministic candidates only, and the tooling checks that a provenance describes its table, not what it names (plan 14, P8). Deviations: "Trained candidates deferred (P7; O6)", "No command reads a candidate (O3)". Deferred: `specs/deferred_items.md:622`. |
+| 24 | implemented-differently | Stage 2, plan 14: `superiority_level` (`decision/rule.py:29-50`); `reference_comparators` (`panels/regressor.py:184-193`); `fix_relative_margins` (`decision/economic.py:179-244`); `RelativeMarginRecord` (`decision/records.py:351`); `decide_economic` (`decision/economic.py:537-657`); `tools growth-margins` and `tools decide` (`cli/commands/tools.py:562`, `:674-731`). Stage 3, plan 15: the margins, fixed once (finding: growth-margins §2; the record's sha256 is `4f86a0b2…`) | Spec: a trained candidate brings at least 5 seeds. Code: the decision reads single-replicate candidates only, the Req 23 deferral. Margin first is checked over the records `decide` is given, not the log; the finding checked the log (§3). Nothing refuses a second `tools growth-margins` run to a new `--output` (finding §4). Open review Minors: `specs/deferred_items.md:633`, `:640`, `:650`; discharged: `:529`, `:538`. |
+
+No in-code-but-not-in-spec row: `read_environment` and `check_reference_pairing`
+(`decision/economic.py:114`, `:414`) serve Req 24's exact pairing, and none was found beyond the
+rows above in `panels/` or `decision/`.
+
+**Verification, re-checked.**
+
+- **Split recorded:** met at derivation (the Req 19 row); `specs/naics-embedding.md` last changed
+  at d9126ce.
+- **Freeze released on merge:** met. PR #137 changed only the spec, and `CLAUDE.md:286-289`
+  records the release; the Req 19 row's residue exits below.
+- **Levels unchanged:** met by Stage 1's pins (the Req 21 row), two of them on macOS arm64 only.
+- **Growth rows:** met by the Req 21 row's tests.
+- **One seal per split:** met by the Req 22 row's test, which also logs the reopening's reason.
+- **Margin first, reference only:** met on fixtures (`tests/unit/test_decision_economic.py:115`,
+  `:621`, `:638`, `:653`) and on real data: the log held no growth read before the margin read,
+  whose two reads logged neither `embedding` nor `text_only` (finding: growth-margins §3).
+- **Rule by panel count:** met (`tests/unit/test_decision_rule.py:45`, `:55`). The record holds
+  1 − 0.05/3, which `tools decide` prints as "98.33 %" (plan 14's Deviation, P1).
+- **Deterministic arms:** met (`tests/unit/test_decision_economic.py:240`).
+- **Economic decision record:** met on fixtures (`tests/unit/test_decision_economic.py:551`). On
+  real candidates it passes to the candidates' spec.
+- **Outer sets closed:** met to date. After the margin read the log held 159 records, all
+  validation reads, and no opening of either regime (finding: growth-margins §3). Through the
+  economic artifact's opening (embedding roadmap Stage 12) it passes to the candidates' spec.
+- **Checks:** met at 50dcfc7. CI's lint, docs and test jobs passed, the tests under Python 3.10
+  and 3.12, with 3,342 collected and 3,329 passed and 13 skipped on Linux.
+
+**Exits.** The user approved each at the resume's Ask (2026-10-18).
+
+- **Trained candidates (Reqs 23–24)** are a conscious deferral, not a new stage: the owner's
+  ruling O6 (plan 14, 2026-10-12) deferred them to the candidates' spec, under
+  `specs/deferred_items.md:622`. Why: what a trained economic candidate is, and how its checkpoint
+  is selected, are that spec's to decide (Out of scope, "Building the economic candidates"), and
+  its record follows from them. No candidate exists, so nothing here waits on it.
+- **The candidates' spec** carries the three Verification items observable only once candidates
+  exist: "Economic decision record" on real candidates, Req 23's limit on how a candidate is
+  built, and "Outer sets closed" through the economic opening. It also carries the graph stage's
+  question (Req 19), due now that the first economic panel exists, with the flat-arm note of
+  embedding roadmap Stage 10. The spec's status line names all four. None keeps this file live.
+- **Req 19's residue** is closed with this audit: the freeze clause is gone from Plan 10's campaign
+  instructions in `CLAUDE.md` and `docs/text_training.md`, and the release paragraph below each
+  keeps the freeze's history.
+
+This file then moved to `specs/completed/`. The optional Describe-mode re-derivation (derive-roadmap
+§6) did not run.

@@ -13,8 +13,8 @@ geometry and radial structure. An optional HGCN stage refines the parent–child
 own objective and curriculum.
 
 In `specs/naics-embedding-roadmap.md`, Stage 9 is held, the graph stage (Stages 10–11) is parked
-and Stage 12 is one sealed opening per judged artifact. The economic artifact's stages are in
-`specs/naics-representation-split-roadmap.md`.
+and Stage 12 is one sealed opening per judged artifact. The economic artifact's roadmap is complete
+(`specs/completed/naics-representation-split-roadmap.md`); its candidates get their own spec.
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
@@ -277,11 +277,11 @@ Plan 10 Phase 1 evidence/counts remain historical, including its queued lint tru
 Phase 2 are not executed by these fixtures. A fresh post-merge session on the primary checkout
 sets the manifests in its gitignored `conf/local.yaml`; no private config commit is replayed or
 held. Held config SHAs that completed plans and findings cite stay reachable locally under
-`refs/held/*` in the primary clone; never push them. Execute Task 18 onward in order,
-freeze uv.lock from first campaign launch through last decision, use ten seeds and δ = 3 SD
-before selection, and never repeat the four Phase 1 exit reads in the seven-record Mac log.
-Exports, QCEW, stores and decisions stay on the Mac; remote selection logs stay separate and
-sealed test/outer splits stay closed. Plan 10 retirement and Stage 7 completion wait for Phase 2.
+`refs/held/*` in the primary clone; never push them. Execute Task 18 onward in order, use ten
+seeds and δ = 3 SD before selection, and never repeat the four Phase 1 exit reads in the
+seven-record Mac log. Exports, QCEW, stores and decisions stay on the Mac; remote selection logs
+stay separate and sealed test/outer splits stay closed. Plan 10 retirement and Stage 7
+completion wait for Phase 2.
 
 The `uv.lock` freeze held from Plan 10's first campaign launch through Stage 8's decision and was
 released when `specs/naics-representation-split.md` merged (Req 19). `decide` pairs reads only on
