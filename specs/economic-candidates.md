@@ -226,7 +226,9 @@ entries. The check refuses an entry that its builder does not write, and an inpu
 
 - the bundle's codebook, descriptions or window-fitting summaries
 - the backbone and its revision
-- a text-model checkpoint whose contract names bundle 301cce28
+- a text-model checkpoint whose contract has `bundle_id` 301cce28-539c-42ea-8781-496bbdcf511c
+  and `contract_version` stage3-supervision-v2 (verified locally: the contracts in one Stage 7
+  and one Stage 8 export provenance)
 - the shared text-only table
 
 A provenance that names a QCEW file, a panel, the selection log or an unknown entry is refused
