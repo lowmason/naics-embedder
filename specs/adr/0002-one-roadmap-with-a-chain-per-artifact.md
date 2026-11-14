@@ -10,10 +10,10 @@
 
 `specs/naics-artifact-redesign.md` (Q4, approved as U31) routes to derive-roadmap, and the user
 chose "New spec + roadmap" (U26). derive-roadmap names a roadmap after its spec's filename, so this
-one will be `specs/naics-artifact-redesign-roadmap.md`. It sequences stages by dependency. A stage
-routes when its `Consumes` are met, and a stage entry has fixed fields with no track field. This
-record decides how the redesign's work is grouped, before that derivation. Evidence is read at
-origin/main 7fdc170.
+one will be `specs/naics-artifact-redesign-roadmap.md`. It sequences stages by dependency, and the
+next stage it hands off is the first unticked one whose `Consumes` are all met (its §4). A stage
+entry has fixed fields, with no track field. This record decides how the redesign's work is
+grouped, before that derivation. Evidence is read at origin/main 7fdc170.
 
 These facts drive the choice:
 
@@ -33,13 +33,16 @@ These facts drive the choice:
    for relatedness, can stop that pairing.
 5. **The embedding roadmap still holds related stages.** Stage 9 is held, Stages 10–11 are
    parked, and Stage 12 holds one sealed opening per judged artifact. Req 28 places text→code's
-   sealed opening in that Stage 12, and it gives Stage 9's ablations to text→code.
+   sealed opening in that Stage 12, and it gives Stage 9's ablations to text→code. Stage 12's
+   amendment at the eighth resume places the economic opening there too. Req 27 leaves
+   relatedness's opening to its own stage spec.
 
 ## Decision
 
-We will stage the redesign in one roadmap whose stages form one chain per artifact. A stage's
-`Consumes` names only the codebook, tooling already on main and earlier stages of its own
-artifact's chain. A blocked chain therefore never holds back another chain.
+We will stage the redesign in one roadmap whose stages form one chain per artifact. A chain runs
+from its artifact's stage spec to its adoption decision, and each sealed opening stays where the
+spec puts it. A stage's `Consumes` names only the codebook, tooling already on main and earlier
+stages of its own artifact's chain. A blocked chain therefore never holds back another chain.
 
 ## Consequences
 
@@ -55,8 +58,12 @@ artifact's chain. A blocked chain therefore never holds back another chain.
     still pair, for example by running them from a checkout at lock 6de4fbdc.
   - The text→code and economic chains both build on `text_model/` (ADR 0001). A change that one
     chain makes there reaches the other chain's next training run.
-  - Each chain's last step sits in another roadmap, because the embedding roadmap's Stage 12 holds
-    the sealed openings. That stage cannot tick while relatedness is parked.
+  - The text→code and economic openings sit in another roadmap, the embedding roadmap's Stage 12.
+    If the relatedness stage spec puts its opening there too, that stage cannot tick while
+    relatedness is parked.
+  - derive-roadmap counts an input as met unless a Handoff or a stamp shows it missing. A gate in
+    embedding-data has neither, so each resume checks those gates by hand. Otherwise it can hand
+    off a stage that cannot run yet.
   - The roadmap carries three chains that move at different speeds, so each resume re-checks
     every chain.
 - **Neutral / follow-on:**
@@ -87,5 +94,6 @@ them. Revisit it with a superseding ADR if:
 
 - one chain comes to need another chain's output, for example if relatedness becomes an economic
   candidate (Req 29, Later);
-- the embedding roadmap's Stage 12 blocks a chain's sealed opening;
+- the embedding roadmap's Stage 12 holds back text→code's or the economic sealed opening, for
+  example while it waits for another artifact;
 - embedding-data's owner does not amend R8.4, so the relatedness chain parks.

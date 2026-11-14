@@ -42,8 +42,10 @@ These facts drive the choice:
 ## Decision
 
 We will keep the layered layout. Each artifact is a set of modules across the existing layers.
-Each stage spec puts its new code in the layer that owns that function: a model under
-`text_model/` or `graph_model/`, a panel under `panels/`, and a decision under `decision/`.
+Each stage spec puts its new code in the layer that owns that function: a model in the model layer
+that fits its method, a panel under `panels/`, and a decision under `decision/`. The model layers
+today are `text_model/` and `graph_model/`. A method that fits neither gets a new model layer
+beside them.
 
 ## Consequences
 
