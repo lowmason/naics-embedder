@@ -1,8 +1,8 @@
 # 0001. Keep the layered package layout for the three artifacts
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-14)
 - **Date:** 2026-11-14
-- **Deciders:** the project owner (acceptance pending)
+- **Deciders:** the project owner ("Accept both", 2026-11-14)
 - **Blast radius:** naics-embedder only: `src/naics_embedder/`, `tests/` and `docs/api/`
 
 ## Context

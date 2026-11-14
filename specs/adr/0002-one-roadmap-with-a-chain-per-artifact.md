@@ -1,8 +1,8 @@
 # 0002. Stage the redesign in one roadmap, with one independent chain per artifact
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-14)
 - **Date:** 2026-11-14
-- **Deciders:** the project owner (acceptance pending)
+- **Deciders:** the project owner ("Accept both", 2026-11-14)
 - **Blast radius:** naics-embedder `specs/`: the redesign's roadmap and the embedding roadmap's
   pointers. embedding-data supplies gates only.
 
