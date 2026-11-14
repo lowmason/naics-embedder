@@ -3,9 +3,9 @@
 > For agentic workers: REQUIRED NEXT SKILL: derive-roadmap — do not plan
 > this spec directly and do not split it into per-subsystem plans.
 
-**Status (2026-11-14).** Draft for the user's review. It records user adjudication Q4, which
-redefines the three artifacts of `naics-representation-split.md` (Q3). That spec is not edited.
-Supersessions lists each clause this spec replaces.
+**Status: APPROVED (2026-11-14, U31).** It records user adjudication Q4, which redefines the
+three artifacts of `naics-representation-split.md` (Q3). That spec is not edited. Supersessions
+lists each clause this spec replaces.
 
 Three artifacts serve the bundle's 2,125 NAICS 2022 codes. Each is judged only on evidence for its
 own use:
@@ -56,6 +56,7 @@ question, the ruling is the chosen option's label.
 | U28 | Who writes the scoring of ITA text–code pairs (metrics, shortlist ranks, and any split)? | "Text→code spec (Recommended)" |
 | U29 | Must naics-embedder wait for embedding-data's full build and its V9 cell-count gate before scoring on any embedding-data table? | "Per family (Recommended)" |
 | U30 | What must the relatedness embedding beat on the families it never trained on? | "Tree and text (Recommended)" |
+| U31 | Do you approve the committed spec? | "Approve the spec" |
 
 U27–U30 answered the questions a builder check raised after the draft was written. Reqs 26–28
 state what each chosen option means.
