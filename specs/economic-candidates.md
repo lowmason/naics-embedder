@@ -4,7 +4,8 @@
 > fresh session. Do not read a real growth panel while planning or executing it.
 
 **Status: DRAFT (2026-11-14).** Written in a brainstorming session and awaiting the user's
-approval.
+approval. A builder check found nothing left for the user. Its four notes are folded into §4.4,
+§4.5, §4.8 and §4.1.
 
 **Roadmap:** `specs/naics-artifact-redesign-roadmap.md`, Stage 1 (ROUTING: brainstorming). Source
 specs: `specs/naics-artifact-redesign.md` (Q4) Req 29, and `specs/naics-representation-split.md`
@@ -133,6 +134,8 @@ result would make that choice unfair, so the list closes before the first read.
   so it cannot be confused with the economic reference `covariates+ancestors` (my call).
 - **Record paths** in the list are relative to the store root, which is a command option. The
   tracked file names no `/Users/` path.
+- **Pins.** The list pins each source record's sha256, and each built table's sha256 once Stage 1
+  has built it (my call). A rebuilt table with other bytes is then refused.
 - **Multiplicity.** With 18 candidates, one could pass the reference by chance. The decision rule
   does not correct for that (split Req 24, unchanged). The economic sealed opening is the check
   against it.
@@ -203,10 +206,11 @@ The deferred item's "Done when" is the target (`specs/deferred_items.md:622`).
   - `check_reference_pairing` checks every run: the reference's predictions in each run equal the
     margin read's bit for bit.
 - **Margin first.** It covers each run's growth reads. A trained seed's monitor reads are outcome
-  reads from training, made before the margins by design, and they are not growth reads (split
-  Req 24: "no candidate's growth error exists before δ is recorded"). Today's
-  `check_margins_first` also times monitor reads, as D8 needs. The economic path must not refuse a
-  trained seed for its monitor reads (my reading of Req 24).
+  reads from training, and they are not growth reads (split Req 24: "no candidate's growth error
+  exists before δ is recorded"). Today's `check_margins_first` also times monitor reads, as D8
+  needs. The economic path must not refuse a trained seed for its monitor reads. U32 requires
+  this: the margins were fixed at 2026-10-18T00:43Z, after every monitor read of the 50 trained
+  tables, so a check that timed them would refuse every trained candidate.
 - **The decision.** `decide_economic` already draws seeds nested inside groups for a side with
   several runs. It reads the trained candidates through that loop, under the 5-seed floor.
 - **The frozen list.** The decision takes the committed list, records its sha256, and refuses a
@@ -227,8 +231,12 @@ entries. The check refuses an entry that its builder does not write, and an inpu
 
 A provenance that names a QCEW file, a panel, the selection log or an unknown entry is refused
 (test). The export provenance of the 50 trained tables names a checkpoint, the descriptions, the
-summaries and the backbone, with the contract (verified locally:
-`checkpoints/stage8-euclidean-d16-s1/arm_table_epoch=039_provenance.json` in the main checkout).
+summaries and the backbone, with the contract. It has two known versions, and the rule accepts
+both (verified locally: the 50 files in the main checkout's `checkpoints/`):
+
+- Stage 7's ten files have no `geometry` entry. They were written before 48ff710 added it.
+- Stage 8's forty files have the same entries plus `geometry`.
+
 How the check knows each builder is left to the builder of this stage.
 
 ### 4.6 The read command and its dry run
@@ -275,9 +283,11 @@ Stage 3's reads pair only where the reference predicts bit for bit as in the mar
 - **`uv.lock` does not change.** Every method here uses packages that are already locked: numpy,
   scipy, scikit-learn and torch (verified locally: `uv.lock` at b4f8c9d, sha256 `6de4fbdc…`). If a
   change to the lock seems needed, stop and ask the user. No change keeps the reads pairing.
-- **The reference's code path does not change.** This stage does not edit `panels/regressor.py`
-  or `panels/qcew_rows.py`. If it must, it first pins the fixture growth reference's predictions
-  and shows them unchanged.
+- **The reference's code path does not change.** The reference's predictions run through
+  `panels/regressor.py`, `panels/qcew_rows.py`, `panels/regressor_splits.py` and
+  `panels/ridge.py`. This stage edits none of them. If it must, it first pins the fixture growth
+  reference's predictions and shows them unchanged. Nothing in `src/` or `uv.lock` has changed
+  since the margin read (verified locally: `git diff 30aeff6..b4f8c9d -- src/ uv.lock` is empty).
 - **The predictions are bound to their table** (`specs/deferred_items.md:640`). Its trigger is
   met: this stage reads tables it does not build, and it rewrites the economic run. A record
   whose predictions belong to another table is refused (test). The reference comparison still
@@ -331,8 +341,9 @@ Stage 3's reads pair only where the reference predicts bit for bit as in the mar
       selection log has the same sha256 before and after.
 - [ ] **Nothing real was read.** No growth read ran. No margin record was written, and
       `tools growth-margins` did not run.
-- [ ] **Pinned path.** `uv.lock` is unchanged (sha256 `6de4fbdc…`). `panels/regressor.py` and
-      `panels/qcew_rows.py` are unchanged against b4f8c9d.
+- [ ] **Pinned path.** `uv.lock` is unchanged (sha256 `6de4fbdc…`). `panels/regressor.py`,
+      `panels/qcew_rows.py`, `panels/regressor_splits.py` and `panels/ridge.py` are unchanged
+      against b4f8c9d.
 - [ ] **Checks.** The full suite, Ruff, the read-only style gate and the strict docs build pass.
 
 ## 7. Deferred items this touches
