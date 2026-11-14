@@ -1,9 +1,10 @@
 # NAICS Hyperbolic Embedding System
 
 The project serves three artifacts over the 2,125 North American Industry Classification System
-(NAICS) 2022 codes, each judged only on evidence for its own use (user adjudication Q3, recorded
-in the repository's `specs/naics-representation-split.md`): the hierarchy itself, text→code
-retrieval, and low-dimensional economic coordinates for downstream models.
+(NAICS) 2022 codes, each judged only on evidence for its own use (user adjudication Q4, recorded
+in the repository's `specs/naics-artifact-redesign.md`): industry relatedness, text→code
+retrieval, and low-dimensional economic coordinates for downstream models. The NAICS tree is the
+codebook that all three use.
 
 The trained text model learns a shared space for NAICS codes and activity queries. One
 LoRA-adapted transformer reads marked text fields, masked fusion combines each code's present

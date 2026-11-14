@@ -2,19 +2,30 @@
 
 ## Project Overview
 
-NAICS Embedder serves three artifacts over the bundle's 2,125 NAICS 2022 codes, each judged only
-on evidence for its own use (user adjudication Q3, `specs/naics-representation-split.md`): the
-hierarchy, which is the codebook's tree itself; text→code retrieval, judged on the outcome panel;
-and low-dimensional economic coordinates for downstream models, judged on economic panels, the
-first being national employment growth. The trained text model places classification codes and
-activity queries in one space. One LoRA-adapted text backbone, masked fusion and one projection
-feed a live radius/direction head. The text objective jointly learns task retrieval, code
-geometry and radial structure. An optional HGCN stage refines the parent–child graph with its
-own objective and curriculum.
+NAICS Embedder serves three artifacts over the bundle's 2,125 NAICS 2022 codes. Each is judged
+only on evidence for its own use (user adjudication Q4, `specs/naics-artifact-redesign.md`, which
+redefines the artifacts of Q3's `specs/naics-representation-split.md`):
 
-In `specs/naics-embedding-roadmap.md`, Stage 9 is held, the graph stage (Stages 10–11) is parked
-and Stage 12 is one sealed opening per judged artifact. The economic artifact's roadmap is complete
-(`specs/completed/naics-representation-split-roadmap.md`); its candidates get their own spec.
+- **Relatedness:** one embedding of how industries relate in practice, trained on the tree's
+  edges and on embedding-data's observed-relation families, and judged on families it never
+  trained on.
+- **Text→code:** retrieval of a ranked shortlist of six-digit codes for an owner's own
+  description of an establishment, judged on ITA employer-written descriptions.
+- **Economic:** low-dimensional coordinates for downstream models, judged on economic panels, the
+  first being national employment growth.
+
+The NAICS tree is not an artifact. It is the codebook that all three use. The trained text model
+places classification codes and activity queries in one space. One LoRA-adapted text backbone,
+masked fusion and one projection feed a live radius/direction head. The text objective jointly
+learns task retrieval, code geometry and radial structure. An optional HGCN stage refines the
+parent–child graph with its own objective and curriculum.
+
+The redesign's stages are in `specs/naics-artifact-redesign-roadmap.md`, one chain per artifact
+(`specs/adr/0002-one-roadmap-with-a-chain-per-artifact.md`). Stages that read embedding-data
+tables are held until that repository's gates open. In `specs/naics-embedding-roadmap.md`, Stage 9
+is held, the graph stage (Stages 10–11) is parked and Stage 12 is one sealed opening per judged
+artifact. The economic artifact's first roadmap is complete
+(`specs/completed/naics-representation-split-roadmap.md`).
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to

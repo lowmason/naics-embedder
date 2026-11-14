@@ -6,9 +6,10 @@
 
 
 The project serves three artifacts over the 2,125 NAICS 2022 codes, each judged only on evidence
-for its own use (user adjudication Q3,
-[specs/naics-representation-split.md](specs/naics-representation-split.md)): the hierarchy
-itself, text→code retrieval, and low-dimensional economic coordinates for downstream models.
+for its own use (user adjudication Q4,
+[specs/naics-artifact-redesign.md](specs/naics-artifact-redesign.md)): industry relatedness,
+text→code retrieval, and low-dimensional economic coordinates for downstream models. The NAICS
+tree is the codebook that all three use.
 The trained text model places NAICS codes and activity queries in one space. One LoRA-adapted
 transformer reads marked fields; masked fusion and one linear projection produce live direction
 and radius. Text training optimizes query decoding, code geometry and radius
