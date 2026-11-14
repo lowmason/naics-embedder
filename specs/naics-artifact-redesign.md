@@ -307,7 +307,8 @@ Unchanged:
 
 ## Rollout note
 
-Dependencies run in this order. The staging itself belongs to derive-roadmap.
+Dependencies run in this order. The staging itself belongs to derive-roadmap. ADR 0001
+(`specs/adr/`) records where each artifact's code lives, and ADR 0002 how the stages group.
 
 1. **Record Q4.** Update CLAUDE.md's overview, the embedding roadmap's pointer, and Stage 12's
    text→code opening (Supersessions). Docs only.
