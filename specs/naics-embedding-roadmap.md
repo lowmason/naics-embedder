@@ -5,9 +5,9 @@
 > this document wholesale.
 
 **Status: APPROVED (2026-09-23); resumed three times on 2026-09-24, once on 2026-10-03, twice
-on 2026-10-04, once on 2026-10-07 and once on 2026-10-12.** Derived in a session that could not
-ask questions, then the six open questions were answered interactively and the eleven-stage
-partition approved at the human checkpoint
+on 2026-10-04, once on 2026-10-07, once on 2026-10-12 and once on 2026-11-14.** Derived in a
+session that could not ask questions, then the six open questions were answered interactively
+and the eleven-stage partition approved at the human checkpoint
 (decisions D1–D6 below). Stages 1–8 and 6b are complete. The first resume re-validated Stages 2–11
 against Stage 1 and recorded D7 and D8; the second re-validated Stages 3–11 against Stage 2,
 recorded D9 and added Stage 12 (below); the third re-validated Stages 4–12 against Stage 3 and
@@ -21,8 +21,11 @@ commit (1d2240c, 2026-10-04) re-validated Stages 7–12, and the sixth resume re
 analysis and routed plan 9's deferred entries (below). The seventh resume reconciled Stages 8–12
 with completed Plan 10 and the post-merge handoffs (below). The eighth reconciled Stage 8 and
 recorded the representation split, user adjudication Q3: Stage 9 is held, Stages 10–11 are
-parked and Stage 12 is one sealed opening per judged artifact (below). No stage here routes now;
-the economic artifact's stages are done (`specs/completed/naics-representation-split-roadmap.md`).
+parked and Stage 12 is one sealed opening per judged artifact (below). The ninth recorded the
+artifact redesign, user adjudication Q4 (`specs/naics-artifact-redesign.md`): the artifacts are
+relatedness, text→code and economic, and the tree is their codebook (below). No stage here routes
+now. The redesign's stages are in `specs/naics-artifact-redesign-roadmap.md`, and the economic
+artifact's first stages are done (`specs/completed/naics-representation-split-roadmap.md`).
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
@@ -259,6 +262,26 @@ read, not edited. The Gap analysis was not re-read: its rows stay the entry-time
 the Completion audit reads the Supersessions table. No stage here routes now: the economic
 artifact's stages are in `specs/naics-representation-split-roadmap.md`, and the text→code
 artifact awaits its own spec.
+
+**Resume for the artifact redesign (2026-11-14).** No stage here has completed since the eighth
+resume, so no stamp or Handoff is new. Before this resume, user adjudication Q4 redefined the
+three artifacts (`specs/naics-artifact-redesign.md`, merged as PR #156, beaee8f). Relatedness
+replaces the hierarchy, and the tree becomes the codebook that all three use (Req 25). Text→code
+is judged on ITA employer-written descriptions, split into a validation part and a sealed part
+(Req 28). The economic artifact is unchanged (Req 29). This resume records Q4, with the user's
+approval at the redesign's derivation (`specs/naics-artifact-redesign-roadmap.md`, Decisions):
+
+- Stage 9 stays held. Its questions are the redesign roadmap's Stage 5, selected on the ITA
+  validation part (Req 28).
+- Stages 10–11 stay parked. The relatedness artifact does not revive them (Req 27). Their question
+  goes to the economic candidates, the redesign roadmap's Stage 1.
+- Stage 12 stays one sealed opening per judged artifact. Text→code's opening reads the ITA sealed
+  part once, and relatedness's goes where its own stage spec puts it (amended in its entry).
+- The Completion audit also reads the redesign spec's Supersessions table.
+
+The deferred entries that the eighth resume routed to Stages 9–11 follow the same moves (redesign
+roadmap, Deferred items). `specs/deferred_items.md` was read, not edited. The Gap analysis was
+not re-read. No panel read, selection-log read or opening ran during this resume.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -971,6 +994,9 @@ differs from its own.
       ROUTING: brainstorming
       Stage 9: HELD (2026-10-12) — user adjudication Q3 (`specs/naics-representation-split.md`,
       Req 19): its questions move to the text→code artifact's spec (eighth resume).
+      Ninth resume (2026-11-14): its questions are Stage 5 of
+      `specs/naics-artifact-redesign-roadmap.md`, selected on the ITA validation part
+      (`specs/naics-artifact-redesign.md`, Req 28).
 
 - [ ] Stage 10: Graph-stage decision experiment (PARKED)
       Objective: Run arms A–E on the selected text stage and decide whether the graph stage
@@ -1006,6 +1032,9 @@ differs from its own.
       Stage 10: PARKED (2026-10-12) — user adjudication Q3 (`specs/naics-representation-split.md`,
       Req 19); Q2 stands. Its question returns once the economic panels exist, with the HGCN
       feeder's refusal of a flat arm (P10) (eighth resume).
+      Ninth resume (2026-11-14): its question goes to the economic candidates, Stage 1 of
+      `specs/naics-artifact-redesign-roadmap.md`. The relatedness artifact does not revive this
+      stage (`specs/naics-artifact-redesign.md`, Req 27).
 
 - [ ] Stage 11: Graph-stage outcome: repairs or removal (PARKED)
       Objective: If Stage 10 kept the graph stage, apply Req 17's repairs; if it dropped the
@@ -1096,6 +1125,14 @@ differs from its own.
       panels exists. Req 1's two estimands give way to each artifact's own panels
       (Supersessions). The fields above describe the shared table's opening and are read per
       artifact.
+      Amended at the ninth resume (2026-11-14), under user adjudication Q4
+      (`specs/naics-artifact-redesign.md`, Supersessions). The tree is the codebook, not an
+      artifact, so the hierarchy clause above lapses. Text→code's opening reads the ITA sealed
+      part once (Req 28), not the outcome test split through `OutcomePanel.open_test`. Its stage
+      spec decides whether the outcome test split also opens, for the report. Relatedness's
+      opening goes where its own stage spec puts it (Req 27). If that is here, this stage cannot
+      tick while relatedness is parked (`specs/adr/0002-one-roadmap-with-a-chain-per-artifact.md`).
+      The economic opening is unchanged.
 
 ## Stage-spec stamp
 
@@ -1125,4 +1162,6 @@ self-contained items, and this file moves to `specs/completed/` marked
 `PARKED (date) — N of M stages complete`, retiring the methodology and review files with it.
 Since the eighth resume (2026-10-12) the audit reads the Supersessions table of
 `specs/naics-representation-split.md`: what it supersedes is audited as superseded, Req 14 goes
-with the text→code artifact's spec, and Reqs 15 and 17 wait with the parked graph stage.
+with the text→code artifact's spec, and Reqs 15 and 17 wait with the parked graph stage. Since
+the ninth resume (2026-11-14) it also reads the Supersessions table of
+`specs/naics-artifact-redesign.md`, whose stages are in `specs/naics-artifact-redesign-roadmap.md`.
