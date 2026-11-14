@@ -52,12 +52,13 @@ question, the ruling is the chosen option's label.
 | U24 | What text will people feed type 2, and what do they do with the code it returns? | "ITA's employer-written descriptions are the closest to what I am imaging. Such as, what is my NAICS code for the establishment (later, subsidiary or firm) that I own?" |
 | U25 | Should ITA text train type 2, or only judge it? | "Judge only first" |
 | U26 | How should the redesign be recorded? | "New spec + roadmap" |
-| U27 | Where should text→code's development decisions (checkpoint selection, choosing among candidates) read? | "Split ITA (Recommended)": a validation part for development decisions, grouped by normalized description, and a sealed part read once at text→code's opening |
-| U28 | Who writes the scoring of ITA text–code pairs (metrics, shortlist ranks, and any split)? | "Text→code spec (Recommended)": text→code's stage spec writes it, and embedding-data's successor spec points to it |
-| U29 | Must naics-embedder wait for embedding-data's full build and its V9 cell-count gate before scoring on any embedding-data table? | "Per family (Recommended)": each family is gated when it is built, before naics-embedder reads it |
-| U30 | What must the relatedness embedding beat on the families it never trained on? | "Tree and text (Recommended)": the better of the tree's own distance and the frozen text-only table (roadmap D9) |
+| U27 | Where should text→code's development decisions (checkpoint selection, choosing among candidates) read? | "Split ITA (Recommended)" |
+| U28 | Who writes the scoring of ITA text–code pairs (metrics, shortlist ranks, and any split)? | "Text→code spec (Recommended)" |
+| U29 | Must naics-embedder wait for embedding-data's full build and its V9 cell-count gate before scoring on any embedding-data table? | "Per family (Recommended)" |
+| U30 | What must the relatedness embedding beat on the families it never trained on? | "Tree and text (Recommended)" |
 
-U27–U30 answered the questions a builder check raised after the draft was written.
+U27–U30 answered the questions a builder check raised after the draft was written. Reqs 26–28
+state what each chosen option means.
 
 **Proposals the user did not correct.** Each was stated in the session as a proposal, and the user
 went on without correcting it.
@@ -139,7 +140,7 @@ artifact table with the table above.
 
 ### The relatedness artifact
 
-**Req 27 — One blended embedding of industry relatedness (U17–U22).**
+**Req 27 — One blended embedding of industry relatedness (U17–U22, U30).**
 
 - **What.** One embedding of the 2,125 codes, at the industry level (U19, U22). Firm graphs stay
   with the users who hold them.
@@ -167,8 +168,8 @@ artifact table with the table above.
   - The stage waits only for the families its spec names to be built and gated, not for all of
     embedding-data's roadmap.
   - The embedding-data brainstorm on the deferred uses does not gate it.
-  - If R8.4 is never amended, the stage stays parked. Trained on the tree alone, the embedding has
-    nothing the reference lacks.
+  - If R8.4 is never amended, the stage stays parked. Its purpose is to add observed relations.
+    Without them it would repeat the economic candidates' work on text and the tree.
 - **Output.** Flat (U22): cosine similarity and averaging over subsidiaries both assume a flat
   space. The stage spec chooses the method. GraphSAGE is the user's named example (U17).
 - **Not the parked graph stage.** The relatedness artifact does not revive the embedding roadmap's
@@ -182,7 +183,7 @@ artifact table with the table above.
 
 ### The text→code artifact
 
-**Req 28 — Retrieval for an owner's own description (U17, U24, U25).**
+**Req 28 — Retrieval for an owner's own description (U17, U24, U25, U27, U28).**
 
 - **Use.** An owner describes an establishment in their own words and asks for its NAICS code
   (U24). Subsidiaries and firms come later, in their own spec (P6). A firm can span industries, so
@@ -212,8 +213,9 @@ artifact table with the table above.
   - Coverage follows OSHA's filing rules, so some industries are thin or missing.
 - **The outcome panel stays** (my call). It still selects trained economic candidates' checkpoints
   (split Req 23). For text→code it is reported beside the ITA scores and no longer decides.
-  Text→code's sealed opening (embedding roadmap Stage 12) reads the ITA sealed part, not the
-  outcome test split.
+  At text→code's sealed opening (embedding roadmap Stage 12), the read that decides is the ITA
+  sealed part. Text→code's stage spec decides whether the outcome test split is also opened, for
+  the report.
 - **Owner gate.** Selection on the ITA validation part waits for the owner's change to Stage 10's
   anti-goal (Req 26).
 - **Later.** If the measured gap between Census phrases and owner text is large, a later spec may
@@ -251,7 +253,7 @@ artifact table with the table above.
 |---|---|---|
 | Split Req 18's hierarchy row: the tree as an artifact, "Exact, with nothing trained", judged on "Nothing" | The tree as the codebook (Req 25), and the relatedness artifact (Req 27) | All |
 | Split Req 18's text→code row: judged on "The outcome panel only" | ITA text–code pairs, split into validation and sealed parts (Req 28). The outcome panel is reported and keeps selecting economic checkpoints | Text→code |
-| Embedding roadmap Stage 12's text→code opening of "the outcome test split" | The ITA sealed part (Req 28) | Text→code |
+| Embedding roadmap Stage 12: text→code's decision on the outcome panel's sealed test split (`OutcomePanel.open_test`) | A decision on the ITA sealed part (Req 28) | Text→code |
 | Split Planned sources: the path `~/Projects/estab-data`, and "This spec reads none of them" | `~/Projects/embedding-data`, read by the relatedness artifact (Req 27) and text→code (Req 28) | Relatedness, text→code |
 | Split Out of scope: "The planned sources above" | The same | Relatedness, text→code |
 
