@@ -60,8 +60,9 @@ the main checkout, `/Users/lowell/Projects/naics-embedder`. STORE is `~/naics-ar
   unchanged (§4.3, §6 "Stage 8 unchanged").
 - **Text and tree only.** A candidate reads only the codebook's text and its tree. No builder or
   test fixture reads a QCEW file, a panel or the selection log (§4.5; split Req 23).
-- **No `/Users/` path in a tracked file.** The frozen list names record paths relative to the
-  store root and run directories relative to a runs root (§4.1).
+- **No `/Users/` path in a tracked config or source file.** The frozen list names record paths
+  relative to the store root and run directories relative to a runs root (§4.1). This plan and
+  its Task 10 commands name MAIN's paths, as plan 15 did.
 - **The sealed splits stay closed.** No outcome test split or growth outer set opens.
 - **Style.** Single quotes, YAPF layout, semantic section dividers, one blank line after imports.
   Format touched Python files with `./scripts/format_code.sh <files>`. Never run `ruff format`.
@@ -114,7 +115,10 @@ for the owner's review at plan review:
 - **P5** (plan, 2026-11-14): a trained economic arm names its source record (`source`, an
   `ArtifactRef` that the store verifies). Its check runs `check_arm` on the source and requires
   each run's evidence to equal the source seed run's, so `_check_monitor_records` is reused
-  unchanged. Applied in: Tasks 1, 6.
+  unchanged. Verified 2026-11-14, read-only: today's `check_arm` passes on all nine real source
+  records, every seed names its training run, and each names text-only table `f4fb4f574f88…`.
+  The margin record passes `check_relative_margins`, and its stored scores equal a rescore
+  (8,547 rows, maximum relative difference 0.0). Applied in: Tasks 1, 6.
 - **P6** (plan, 2026-11-14): the propagation pairs come from the list's kinds: each smoothed
   candidate and the one text-only candidate at its dimension. They are never parsed from names.
   Applied in: Tasks 3, 7.
@@ -950,7 +954,10 @@ git commit -m "feat(decision): bind economic reads to their table and decide ove
       text_only_table=text_only)`, with five seeds 0–4. It writes the record to
       `<store>/records/<name>.json`. It writes each seed's table and `export_provenance` under
       `<runs_root>/<name>-s<seed>/`. It returns the trained row and the runs root.
-    - `list_for` also writes trained rows for arms with a `source`, taken from the source.
+    - `list_for` also writes trained rows for arms with a `source`. `record` and
+      `record_sha256` are `arm.source`'s path and sha256. `arm` and `seeds` come from the
+      loaded source record. `run_directory` is `f'{source.spec.name}-s{{seed}}'`, the layout
+      that `trained_source` writes (an `ArmRecord` holds no run-directory pattern).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1349,18 +1356,19 @@ git add conf/data/economic_candidates.yaml tests/unit/test_economic_candidates.p
 git commit -m "chore(conf): pin the nine built economic candidate tables"
 ```
 
-- [ ] **Step 5: Dry-run all 18 candidates (in the background; it hashes about 5 GB)**
+- [ ] **Step 5: Dry-run all 18 candidates**
 
-Run, with `run_in_background`, one `tools economic-read --dry-run` per list name, with:
-- `--codebook <the Step 2 codebook>`
-- `--margins ~/naics-artifacts/records/economic/growth_margins.json`
-- `--store ~/naics-artifacts` and `--text-only <the Step 2 table>`
-- `--runs-root /Users/lowell/Projects/naics-embedder/checkpoints`
-- `--log /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl`
-- `--lock WT/uv.lock` and `--output /tmp/plan16-dry/<name>.json`
+  The trained checks hash about 5 GB of checkpoints. The pre-check of the nine records took
+  seconds on this Mac. Run one `tools economic-read --dry-run` per list name, with:
+  - `--codebook <the Step 2 codebook>`
+  - `--margins ~/naics-artifacts/records/economic/growth_margins.json`
+  - `--store ~/naics-artifacts` and `--text-only <the Step 2 table>`
+  - `--runs-root /Users/lowell/Projects/naics-embedder/checkpoints`
+  - `--log /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl`
+  - `--lock WT/uv.lock` and `--output /tmp/plan16-dry/<name>.json`
 
-The loop prints `<name> exit=<code>` after each run.
-Expected: 18 lines with `exit=0`, and each run prints `Dry run: every check passed`.
+  The loop prints `<name> exit=<code>` after each run.
+  Expected: 18 lines with `exit=0`, and each run prints `Dry run: every check passed`.
 
 - [ ] **Step 6: Verify nothing real was read or written**
 
