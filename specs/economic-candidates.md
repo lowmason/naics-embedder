@@ -3,9 +3,8 @@
 > For agentic workers: REQUIRED NEXT SKILL: writing-plans — plan this spec as plan 16 in a
 > fresh session. Do not read a real growth panel while planning or executing it.
 
-**Status: DRAFT (2026-11-14).** Written in a brainstorming session and awaiting the user's
-approval. A builder check found nothing left for the user. Its four notes are folded into §4.4,
-§4.5, §4.8 and §4.1.
+**Status: APPROVED (2026-11-14, U35).** Written in a brainstorming session. A builder check
+found nothing left for the user. Its four notes are folded into §4.4, §4.5, §4.8 and §4.1.
 
 **Roadmap:** `specs/naics-artifact-redesign-roadmap.md`, Stage 1 (ROUTING: brainstorming). Source
 specs: `specs/naics-artifact-redesign.md` (Q4) Req 29, and `specs/naics-representation-split.md`
@@ -13,8 +12,9 @@ specs: `specs/naics-artifact-redesign.md` (Q4) Req 29, and `specs/naics-represen
 `src/naics_embedder/` unless they start with `conf/`, `tests/`, `specs/` or `docs/`, or name a
 top-level file. `~/naics-artifacts` is the Mac's artifact store.
 
-**Next skill after approval:** `writing-plans` (plan 16) in a fresh session. Stage 3 then reads
-the candidates on the Mac with the user's approval at the time.
+**Next skill after approval:** `writing-plans` (plan 16) in a fresh Opus session, with this file
+as the handoff. Execution then runs on Sonnet in its own fresh session. Stage 3 later reads the
+candidates on the Mac with the user's approval at the time.
 
 **Design provenance.** A brainstorming session with the user on 2026-11-14. The inputs read were
 the two source specs, ADRs 0001 and 0002, the finding `growth-margins.md`, plan 14's Deviations
@@ -37,6 +37,7 @@ three specs.
 | U32 | Which candidates should Stage 1 cover: deterministic only, or deterministic plus the 50 existing trained tables? | "Deterministic + trained" |
 | U33 | Does this candidate list look right? It was played back as five proposals. (1) 9 deterministic candidates: text-only, tree and tree-smoothed text-only, each at d = 8, 16 and 32, with smoothing weights fixed in the spec and the graph stage left parked. (2) 9 trained arms read as they are, with their Stage 7/8 selection evidence. (3) The list frozen in the spec. (4) The tree candidate naming MiniLM's text-only table for the reported comparator. (5) A provenance rule that refuses QCEW or any panel | "Looks right" |
 | U34 | How should the trained arms enter: import the Stage 7/8 records, or read the run directories again? | "Import the records" |
+| U35 | Do you approve the committed spec? | "Approve the spec" |
 
 ## 1. Purpose
 
