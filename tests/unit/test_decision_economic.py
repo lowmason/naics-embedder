@@ -18,6 +18,7 @@ import polars as pl
 import pytest
 from pydantic import ValidationError
 
+from naics_embedder.decision.decide import check_arm
 from naics_embedder.decision.economic import (
     GROWTH_PANELS,
     REFERENCE_COMPARATOR,
@@ -28,6 +29,7 @@ from naics_embedder.decision.economic import (
     read_deterministic_arm,
 )
 from naics_embedder.decision.records import (
+    ArmRecord,
     EconomicArmRecord,
     EconomicDecisionRecord,
     RelativeMarginRecord,
@@ -46,7 +48,7 @@ from naics_embedder.panels.regressor import (
 )
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
-from tests.fixtures.decision import write_text_only
+from tests.fixtures.decision import spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import candidate_spec, write_candidate
 from tests.fixtures.regressor_panel import CODEBOOK, HELDOUT_GROUPS, SETTINGS, coordinate_table
 
@@ -303,31 +305,6 @@ def test_a_candidate_reads_its_own_text_only_table_at_its_dimension(
         _read(candidate, growth_panel, text_only, margins, store, lock, arm_spec=wide)
     assert log.records() == margins.read.log_records
 
-@pytest.mark.parametrize(
-    'field, value',
-    [
-        ('checkpoint', {
-            'path': 'objects/a',
-            'sha256': 'a' * 64,
-            'bytes': 1
-        }),
-        ('training_run', 'tree-training-0'),
-        ('monitor_records', []),
-    ],
-)
-def test_an_imported_run_with_a_checkpoint_or_monitor_reads_does_not_load(
-    arm, tmp_path, field, value
-):
-    '''Req 24: a deterministic candidate is recorded without checkpoint or monitor reads.'''
-
-    data = json.loads(arm.model_dump_json())
-    data['runs'][0][field] = value
-    path = tmp_path / 'imported.json'
-    path.write_text(json.dumps(data))
-
-    with pytest.raises(ValidationError, match=f'runs\\.0\\.{field}\\n  Extra inputs'):
-        read_record(path, EconomicArmRecord)
-
 @pytest.mark.parametrize('run_id', ['', '   '], ids=['empty', 'blank'])
 def test_an_imported_run_with_a_blank_run_id_does_not_load(arm, tmp_path, run_id):
     '''A run's id names its selection-log records, so an id of spaces names nothing.'''
@@ -406,6 +383,71 @@ def test_the_pairing_check_alone_refuses_an_arm_without_exactly_one_run(arm, mar
             f'not {count} runs$'
         ):
             check_reference_pairing(margins, record, store)
+
+# -------------------------------------------------------------------------------------------------
+# Records (§4.3, §4.4: the backbone-less spec and a trained candidate's selection evidence)
+# -------------------------------------------------------------------------------------------------
+
+def test_a_stage_8_record_loads_and_dumps_unchanged(tmp_path):
+    '''§4.3: ArmSpec's change keeps Stage 8's records loading and validating unchanged.'''
+    store = ArtifactStore(tmp_path / 'store')
+    arm = synthetic_arm(
+        store,
+        tmp_path,
+        spec('euclidean-d16', dimension=16, geometry='euclidean'), {},
+        monitor_mrrs=(0.1, 0.3, 0.2)
+    )
+    text = arm.model_dump_json(indent=2)
+    assert ArmRecord.model_validate_json(text).model_dump_json(indent=2) == text
+    check_arm(ArmRecord.model_validate_json(text), store, 5)
+
+NO_BACKBONE = dict.fromkeys(
+    ('backbone', 'backbone_revision', 'descriptions_sha256', 'summaries_sha256', 'max_length')
+)
+
+def test_a_spec_reads_its_backbone_or_no_backbone():
+    tree = spec('tree-d3', dimension=3, geometry='euclidean', **NO_BACKBONE)
+    assert not tree.reads_backbone
+    assert spec('text-only-d3').reads_backbone
+    for partial in ({'backbone': None}, {'max_length': None}, {'descriptions_sha256': None}):
+        with pytest.raises(ValidationError, match='reads its backbone or no backbone'):
+            spec('partial', **partial)
+
+def test_a_trained_run_with_its_selection_evidence_loads(arm, tmp_path):
+    '''Replaces test_an_imported_run_with_a_checkpoint_or_monitor_reads_does_not_load: the
+    fields exist now, and check_economic_arm refuses them on a deterministic run (Task 5).'''
+    data = json.loads(arm.model_dump_json())
+    data['runs'][0].update(
+        seed=1,
+        checkpoint={
+            'path': 'objects/a',
+            'sha256': 'a' * 64,
+            'bytes': 1
+        },
+        training_run='t-1',
+        checkpoint_epoch=2,
+        monitor_records=[{
+            'mrr': 0.5,
+            'read': {}
+        }]
+    )
+    data['source'] = {'path': 'records/x.json', 'sha256': 'b' * 64, 'bytes': 1}
+    (tmp_path / 'trained.json').write_text(json.dumps(data))
+    loaded = read_record(tmp_path / 'trained.json', EconomicArmRecord)
+    assert (loaded.runs[0].training_run, loaded.runs[0].checkpoint_epoch) == ('t-1', 2)
+    assert loaded.source.path == 'records/x.json'
+
+@pytest.mark.parametrize(
+    'field, value', [
+        ('checkpoint_epoch', 1.0), ('checkpoint_epoch', '1'), ('seed', 1.0), ('training_run', '  ')
+    ]
+)
+def test_imported_evidence_identities_are_strict(arm, tmp_path, field, value):
+    data = json.loads(arm.model_dump_json())
+    data['runs'][0][field] = value
+    (tmp_path / 'x.json').write_text(json.dumps(data))
+    with pytest.raises(ValidationError, match=f'runs\\.0\\.{field}'):
+        read_record(tmp_path / 'x.json', EconomicArmRecord)
 
 # -------------------------------------------------------------------------------------------------
 # The economic decision (Verification "Economic decision record", "Margin first, reference only")

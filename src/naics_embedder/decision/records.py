@@ -18,9 +18,11 @@ The economic decision (Req 24) has kinds of its own:
 
 - **Relative margin record.** Each growth panel's δ, r times the reference comparator's
   validation MSE, from a margin read that reads no candidate.
-- **Economic arm record.** A deterministic candidate's single replicate: its table and that
-  table's provenance (Req 23), read once on each growth panel, with no checkpoint or monitor
-  reads.
+- **Economic arm record.** A candidate's replicates, read once each on each growth panel. A
+  deterministic candidate is a single replicate: its table and that table's provenance (Req 23),
+  with no seed, checkpoint or monitor reads. A trained candidate's runs carry the seed and the
+  selection evidence of the imported Stage 7/8 seed run, and the record names that arm record
+  (spec 4.4).
 - **Economic decision record.** Its candidates and margins, each candidate's comparison with the
   reference ``covariates+ancestors`` with its 95 % non-inferiority and 97.5 % superiority
   intervals, the candidates adopted over the reference, the non-dominated set and tie order among
@@ -38,7 +40,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 Geometry = Literal['euclidean', 'spherical', 'hyperbolic']
 RecordType = TypeVar('RecordType', bound=BaseModel)
@@ -82,11 +84,18 @@ class ArmSpec(_Record):
     '''
     A configuration, with what the tie order and D9 read.
 
+    The five fields D9 reads are one unit. A configuration that reads a backbone sets
+    ``backbone``, ``descriptions_sha256`` and ``max_length``. A candidate that reads none, such as
+    the tree candidate (Req 23), sets all five to null and says so in its record. Each field is
+    still a required key, so the JSON shape of a Stage 8 record does not change.
+
     Attributes:
         components: Stages or post-processing steps: Req 5's "fewer components".
         backbone, backbone_revision, descriptions_sha256, summaries_sha256, max_length: What
             the arm's encoder reads, which its text-only table and each seed's table must match
-            (D9). ``summaries_sha256`` is null for a backbone with no pinned summaries.
+            (D9). ``backbone_revision`` and ``summaries_sha256`` are null for a backbone with no
+            pinned revision or summaries. All five are null for a candidate that reads no
+            backbone.
         settings: The configuration's own settings, recorded as given.
     '''
 
@@ -94,12 +103,32 @@ class ArmSpec(_Record):
     components: int = Field(ge=1)
     dimension: int = Field(ge=1)
     geometry: Geometry
-    backbone: str
+    backbone: Optional[str]
     backbone_revision: Optional[str]
-    descriptions_sha256: str
+    descriptions_sha256: Optional[str]
     summaries_sha256: Optional[str]
-    max_length: int = Field(ge=1)
+    max_length: Optional[int] = Field(ge=1)
     settings: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode='after')
+    def _reads_its_backbone_or_no_backbone(self) -> 'ArmSpec':
+        reads = (self.backbone, self.descriptions_sha256, self.max_length)
+        reads_none = all(
+            value is None for value in (*reads, self.backbone_revision, self.summaries_sha256)
+        )
+        if not (reads_none or all(value is not None for value in reads)):
+            raise ValueError(
+                f'{self.name}: a spec reads its backbone or no backbone: backbone, '
+                f'descriptions_sha256 and max_length are all set, or all five of backbone, '
+                f'backbone_revision, descriptions_sha256, summaries_sha256 and max_length are null'
+            )
+        return self
+
+    @property
+    def reads_backbone(self) -> bool:
+        '''Whether the configuration reads a text backbone.'''
+
+        return self.backbone is not None
 
 class PanelSet(_Record):
     '''
@@ -399,11 +428,14 @@ class EconomicRun(_Record):
     '''
     One replicate of an economic candidate: its table, read once on each growth panel.
 
-    A deterministic candidate is a single replicate (Req 24), so a run has no seed, and no field
-    for a checkpoint or monitor reads: an imported run that names one does not load.
+    A deterministic candidate is a single replicate (Req 24), so its run has no seed and none of
+    the four selection fields. A trained candidate's run carries its seed and those four, copied
+    from its Stage 7/8 seed run (spec 4.4): the training run, the checkpoint and its epoch, and
+    the monitor reads that selected it. An imported run's identities are strict: a seed or an
+    epoch is an integer, and a training run of spaces names none.
 
     Attributes:
-        seed: None: a deterministic candidate has no seed.
+        seed: The seed of a trained candidate's run; None for a deterministic candidate.
         run_id: Names the run in its selection-log records.
         table: The candidate's 2,125-code table, in the export form.
         provenance: The table's provenance.
@@ -411,6 +443,11 @@ class EconomicRun(_Record):
         predictions: Both growth panels' level-6 validation predictions.
         statistics: Each growth panel's decision statistic.
         log_records: The selection-log records of the run's reads.
+        checkpoint: A trained candidate's selected checkpoint; None for a deterministic one.
+        training_run: The id of the training run the checkpoint is from.
+        checkpoint_epoch: The checkpoint's epoch: the earliest with the highest monitor MRR.
+        monitor_records: The training run's ``monitor_reads.jsonl`` records, as
+            ``SeedRun.monitor_records`` holds them; empty for a deterministic candidate.
     '''
 
     seed: Optional[StrictInt] = None
@@ -421,6 +458,10 @@ class EconomicRun(_Record):
     predictions: ArtifactRef
     statistics: Dict[str, float]
     log_records: List[Dict[str, Any]]
+    checkpoint: Optional[ArtifactRef] = None
+    training_run: Optional[str] = Field(default=None, min_length=1, pattern=r'\S')
+    checkpoint_epoch: Optional[StrictInt] = Field(default=None, ge=0)
+    monitor_records: List[Dict[str, Any]] = Field(default_factory=list)
 
 class EconomicArmRecord(_Record):
     '''
@@ -433,6 +474,8 @@ class EconomicArmRecord(_Record):
         panels: The growth panel it read.
         environment: Where it was read.
         runs: Its replicates: one, for a deterministic candidate (Req 24).
+        source: The imported Stage 7/8 arm record of a trained candidate, by its path under the
+            store root; None for a deterministic candidate.
     '''
 
     kind: Literal['economic_arm'] = 'economic_arm'
@@ -442,6 +485,7 @@ class EconomicArmRecord(_Record):
     panels: GrowthPanelSet
     environment: ReadEnvironment
     runs: List[EconomicRun]
+    source: Optional[ArtifactRef] = None
     created_at: datetime
 
 # -------------------------------------------------------------------------------------------------
