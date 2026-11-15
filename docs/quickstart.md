@@ -1,7 +1,9 @@
 # Quickstart Guide
 
-Install the project with `uv`, then prepare one immutable supervision bundle. The commands
-below are operator examples; training and panel reads require the generated artifacts.
+Install the project with `uv`, then prepare one immutable supervision bundle. The commands below
+are operator examples. Training and panel reads need the generated artifacts. This guide trains
+the text model, the current model for text→code (type 2). No step here builds the relatedness
+type (type 1), which is not implemented.
 
 ## Installation
 
@@ -90,10 +92,14 @@ terms' and scales' gradients. A failed criterion produces a report and exits 1.
 
 ## Compare Configurations
 
-The [reference campaign](text_training.md#reference-campaign) trains seeds 1–10, checks every
-run before the first decision read, writes a three-panel arm record with `tools sweep`, and fixes
-margins with `tools margins --multiple 3` before candidate reads. Panel test splits stay sealed.
-The economic artifact is decided on its own growth panels: fix their margins with
-[`tools growth-margins`](usage.md#tools-growth-margins) before any candidate is read, then
-compare candidates with the reference `covariates+ancestors` through `tools decide`.
-For all options, see [CLI usage](usage.md) or `uv run naics-embedder tools --help`.
+The [reference campaign](text_training.md#reference-campaign) is complete. It trained seeds 1–10,
+checked every run before the first decision read, wrote a three-panel arm record with
+`tools sweep`, and fixed margins with `tools margins --multiple 3` before any candidate read.
+Panel test splits stay sealed.
+
+The economic type (type 3) is decided on its own growth panels against the reference
+`covariates+ancestors`. Its margins were fixed once, on 2026-10-17
+([`tools growth-margins`](usage.md#tools-growth-margins)). Do not run `tools growth-margins`
+again. `tools economic-read` reads one frozen candidate, and `tools decide` makes the decision.
+That decision has not run yet. For all options, see [CLI usage](usage.md) or
+`uv run naics-embedder tools --help`.

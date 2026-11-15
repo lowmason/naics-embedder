@@ -1,5 +1,5 @@
 site_name: naics-embedder
-site_description: Hyperbolic contrastive learning and HGCN refinement for NAICS taxonomy
+site_description: Three types of NAICS 2022 embedding (relatedness, text-to-code and economic), with what is built and what is not
 site_author: Lowell Mason
 site_url: https://lowmason.github.io/naics-embedder/
 repo_name: lowmason/naics-embedder

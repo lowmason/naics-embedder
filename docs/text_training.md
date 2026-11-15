@@ -1,9 +1,16 @@
 # Text Training Guide
 
-The reference text model learns query retrieval, code geometry and live radii together. It uses
-one shared LoRA backbone, one fusion/projection path, two streams per epoch and the three terms
-of objective `req11-v1`. The outcome validation panel's MRR selects the earliest best checkpoint.
-Graph refinement is a separate stage; see [HGCN training](hgcn_training.md).
+The text model learns query retrieval, code geometry and live radii together. It uses one shared
+LoRA backbone, one fusion and projection path, two streams per epoch and the three terms of
+objective `req11-v1`. The outcome validation panel's MRR (mean reciprocal rank) selects the
+earliest best checkpoint.
+
+!!! note "Status"
+    The text model is the current model for text→code (type 2). Its trained arms are also nine
+    of the economic candidates (type 3). Under the new design, ITA validation reads will select
+    and judge type 2, and the outcome panel will only report. No ITA panel exists yet, so this
+    guide describes selection on the outcome panel. The graph refinement stage is parked. See
+    [HGCN training](hgcn_training.md).
 
 ## Quick Start
 
@@ -45,10 +52,15 @@ normalized away or capped at a fixed norm of 2.
 
 ## Geometry Arms
 
-`model.geometry` names one of Req 12's three arms: `hyperbolic` (the default and the Stage 7
-reference), `euclidean` or `spherical`. Every arm shares the backbone, fusion, projection, task
-term and code-to-code term. Only the head, its distances and its export form differ, and the
-radial term exists only in the hyperbolic arm.
+`model.geometry` names one of the three arms of the geometry comparison (Req 12): `hyperbolic`
+(the default and the Stage 7 reference), `euclidean` or `spherical`. Stage 8 compared the three
+geometries at d = 8, 16 and 32 and adopted `euclidean-d16` over the other eight cells
+(`specs/findings/geometry-by-dimension.md`). That decision stands as history and defines no
+deliverable under the new design. The default stays `hyperbolic` at d = 16.
+
+Every arm shares the backbone, fusion, projection, task term and code-to-code term. Only the
+head, its distances and its export form differ, and the radial term exists only in the
+hyperbolic arm.
 
 | Arm | Point | Training distance | Decoding distance | Export |
 | --- | --- | --- | --- | --- |
@@ -247,11 +259,15 @@ coincident tangents must have zero float32 training distance; their float64 read
 reported separately. A noncoincident pair whose read distance rounds to zero fails.
 Largest-radius manifold error must be at most `1e-9 * x0**2`.
 
-`tools diagnostics` separately reports Req 6's structural measures, with no thresholds and no
-checkpoint or arm selection. HGCN keeps its graph curriculum and structural logging; see
+`tools diagnostics` separately reports the structural measures of Req 6, with no thresholds and no
+checkpoint or arm selection. The parked HGCN stage keeps its graph curriculum and structural
+logging. See
 [Structural Spearman v1](overview.md#structural-spearman-v1) for that metric's contract.
 
 ## Reference Campaign
+
+This campaign is complete. It ran for Stage 7 (complete on 2026-10-07) and its margins served
+Stage 8 (complete on 2026-10-11). The commands below record how it ran.
 
 Train reference seeds 1–10 on CUDA with `bf16-mixed`, then bring the complete run directories
 to the Mac for decision reads. Use a distinct directory per seed and keep the config identical
@@ -289,10 +305,11 @@ panels: outcome, regressor seen, and regressor held-out at level 6. The arm reco
 monitor reads, checkpoint epoch and training-run id as well as decision reads. A decision arm
 requires at least five complete seeds; this reference campaign uses ten.
 
-Fix margins before any candidate arm's monitor or decision read. Candidate arm records and
-reference records are compared by `tools decide` under Req 5's paired two-stage bootstrap and
+Fix margins before any candidate arm's monitor or decision read. `tools decide` compares
+candidate arm records with the reference records under Req 5's paired two-stage bootstrap and
 tie order. The test splits stay sealed. Radius verification and structural diagnostics describe
-the trained model; the three panels decide whether an arm is adopted.
+the trained model. In the earlier design, the three panels decided whether an arm was adopted.
+In the new design, each type is decided on its own panels.
 
 ## Troubleshooting
 

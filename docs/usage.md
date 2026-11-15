@@ -382,10 +382,14 @@ comparator and reads `covariates`, `ancestors` and `covariates+ancestors`. It co
 reference `covariates+ancestors`. The panel reads growth whatever the regressor config's
 `outcome` says, which stays `level` for `tools regressor-panel` and `tools sweep`.
 
-Run it once, before any candidate is read on growth: a decision refuses a candidate read before
-its margins were fixed. The record names the platform, Python and `uv.lock` sha256 the read ran
-under. A decision pairs only bit-identical reference predictions, so every candidate read must
-run on the same platform and lock.
+!!! warning "Already run"
+    This read ran once, on 2026-10-17 (`specs/findings/growth-margins.md`). Do not run it again.
+    Nothing refuses a second run, and every economic candidate is decided against that record.
+
+It had to run before any candidate was read on growth, because a decision refuses a candidate
+read from before its margins were fixed. The record names the platform, Python and `uv.lock`
+sha256 the read ran under. A decision pairs only bit-identical reference predictions, so every
+candidate read must run on the same platform and lock.
 
 **Generates:** the relative margin record (JSON), with the read's selection-log records, and its
 predictions and scores in the store
