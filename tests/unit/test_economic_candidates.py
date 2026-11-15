@@ -769,6 +769,28 @@ def test_the_fixture_tree_provenance_is_the_tree_builders_entries(tree_content, 
     assert tree_content['codes'] == len(CODEBOOK)
     assert tree_content['eigenvalues'] == [1.0] * 4
 
+def test_the_export_entries_are_the_fifteen_that_stage_7_and_8_write():
+    assert EXPORT_ENTRIES == frozenset(
+        {
+            'backbone',
+            'checkpoint',
+            'codes',
+            'contract',
+            'coordinates',
+            'descriptions',
+            'dimension',
+            'generated_at',
+            'library_versions',
+            'matrix_fingerprint',
+            'max_length',
+            'revision',
+            'summaries',
+            'table_sha256',
+            'tokenizer',
+        }
+    )
+    assert EXPORT_ENTRIES_WITH_GEOMETRY == EXPORT_ENTRIES | {'geometry'}
+
 def test_the_fixture_exports_hold_the_two_known_versions_entries(
     table, arm_spec, checkpoint, export_content
 ):
