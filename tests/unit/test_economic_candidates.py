@@ -191,6 +191,7 @@ BAD_SHAS = {
             _trained(run_directory='s{seed}/'), id='trained: a run_directory with a last /'
         ),
         pytest.param(_trained(table_sha256='b' * 64), id='trained: a table_sha256'),
+        pytest.param(_deterministic('tree', seeds=[1, 2, 3, 4, 5]), id='deterministic: seeds'),
         pytest.param(_deterministic('tree', dimension=0), id='dimension 0'),
         pytest.param(_deterministic('tree', components=0), id='components 0'),
         pytest.param(_deterministic('tree', name=''), id='a blank name'),
