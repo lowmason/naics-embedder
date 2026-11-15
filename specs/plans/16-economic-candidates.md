@@ -1,5 +1,7 @@
 # Economic Candidates Implementation Plan
 
+**Status: COMPLETE (2026-11-15)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -185,7 +187,7 @@ The plan's own choices, approved by O1:
   - `EconomicArmRecord.source: Optional[ArtifactRef] = None`, after `runs`: the imported Stage
     7/8 arm record of a trained candidate, by its path under the store root.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_a_stage_8_record_loads_and_dumps_unchanged(tmp_path):
@@ -231,21 +233,21 @@ def test_imported_evidence_identities_are_strict(arm, tmp_path, field, value):
         read_record(tmp_path / 'x.json', EconomicArmRecord)
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision_economic.py -k "stage_8_record or reads_its_backbone or selection_evidence_loads or evidence_identities" -q`
 Expected: FAIL. The partial specs load, the evidence fields are "Extra inputs", and the tree spec
 fails validation.
 
-- [ ] **Step 3: Implement the record changes listed under Interfaces**
+- [x] **Step 3: Implement the record changes listed under Interfaces**
 
-- [ ] **Step 4: Delete `test_an_imported_run_with_a_checkpoint_or_monitor_reads_does_not_load`**
+- [x] **Step 4: Delete `test_an_imported_run_with_a_checkpoint_or_monitor_reads_does_not_load`**
 
   Its claim moves to Task 5's `test_a_deterministic_run_with_selection_evidence_is_refused`.
   Then run `uv run pytest tests/unit/test_decision*.py -q`.
   Expected: all PASS, the D8 files with no edit.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/naics_embedder/decision/records.py tests/unit/test_decision_economic.py
@@ -307,7 +309,7 @@ git commit -m "feat(decision): allow backbone-less specs and trained evidence in
     Path`. It writes `code_id` (Int32, 0…) and `code` in the given order, as bundle 301cce28's
     codebook holds them.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 CHAIN = ('11', '111', '1111')           # D* = [[0,1,2],[1,0,1],[2,1,0]]; B's spectrum 2, 0, 0
@@ -374,22 +376,22 @@ def test_a_code_whose_ancestor_is_missing_is_refused():
   - `test_a_builder_writes_no_table_over_an_existing_one`: `FileExistsError`, and the old bytes
     stay.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_tree_model.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'naics_embedder.tree_model'`.
 
-- [ ] **Step 3: Implement `tree_model/` as listed under Interfaces**
+- [x] **Step 3: Implement `tree_model/` as listed under Interfaces**
 
   The package docstring cites ADR 0001's rule for a method that fits neither `text_model/` nor
   `graph_model/`. `tree_model` imports nothing from `decision/`.
 
-- [ ] **Step 4: Run them to verify they pass**
+- [x] **Step 4: Run them to verify they pass**
 
 Run: `uv run pytest tests/unit/test_tree_model.py -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/naics_embedder/tree_model tests/unit/test_tree_model.py tests/fixtures/economic.py
@@ -441,7 +443,7 @@ git commit -m "feat(tree_model): build the text-only, tree and smoothed economic
       geometry or components differ from the entry's.
   - `ECONOMIC_CANDIDATES = 'conf/data/economic_candidates.yaml'`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 SPEC_ROWS = [  # §4.1's table, in its order: (name, kind, dimension, components, geometry)
@@ -508,12 +510,12 @@ def test_the_propagation_pairs_are_each_smoothed_candidate_and_its_text_only_twi
     take the text-only fields. Trained is the source spec under the entry's name. A source with
     another dimension raises `ValueError`.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_economic_candidates.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'naics_embedder.decision.candidates'`.
 
-- [ ] **Step 3: Write `conf/data/economic_candidates.yaml`**
+- [x] **Step 3: Write `conf/data/economic_candidates.yaml`**
 
   Block style, the 18 entries in `SPEC_ROWS` order. Every deterministic entry has
   `table_sha256: null`, and Task 10 pins them. The header and the first entry of each kind:
@@ -553,14 +555,14 @@ candidates:
     run_directory: stage7-reference-s{seed}
 ```
 
-- [ ] **Step 4: Implement `decision/candidates.py` as listed under Interfaces (no trained import yet)**
+- [x] **Step 4: Implement `decision/candidates.py` as listed under Interfaces (no trained import yet)**
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_economic_candidates.py -q`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision/candidates.py conf/data/economic_candidates.yaml tests/unit/test_economic_candidates.py
@@ -620,7 +622,7 @@ git commit -m "feat(decision): freeze the economic candidate list"
       `EXPORT_ENTRIES` (plus `geometry` unless `geometry=False`), naming `CONTRACT` and the
       checkpoint's sha256.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   `test_each_builders_provenance_passes_the_rule`, parametrized over the three kinds: build with
   `build_candidate` over `write_codebook` and `write_text_only(codes=CODEBOOK)`, then call
@@ -665,14 +667,15 @@ def test_a_provenance_outside_text_and_tree_is_refused(tree_content, tree_entry,
     `bundle_id`, another `contract_version`, an extra `qcew` key, or a missing `tokenizer`.
   - `test_an_export_provenance_is_refused_for_a_deterministic_entry`.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_economic_candidates.py -k provenance -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'naics_embedder.decision.provenance'`.
 
-- [ ] **Step 3: Implement `decision/provenance.py` and the fixture changes listed under Interfaces**
+- [x] **Step 3: Implement `decision/provenance.py` and the fixture changes listed under Interfaces**
+  > Deviation: the brief's "change no existing assertion" was wrong for one assertion: `test_decision_economic.py` expected `inputs == {'codebook': 'the fixture codebook'}`, and the new `write_candidate` makes it `{'codebook': CODEBOOK_INPUT}` (ledger ruling, Task 4). The export rule stays shape-only for checkpoint, descriptions and summaries, and Task 6's `check_seed_table` enforces their identity.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/unit/test_economic_candidates.py tests/unit/test_tree_model.py -q`
 Expected: PASS.
@@ -680,7 +683,7 @@ Run: `uv run pytest tests/unit/test_decision*.py tests/unit/test_cli_commands.py
 Expected: PASS. No check applies the rule yet, and `write_candidate`'s new entries change no
 existing assertion.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/naics_embedder/decision/provenance.py tests/fixtures/economic.py tests/unit/test_economic_candidates.py
@@ -784,7 +787,7 @@ git commit -m "feat(decision): accept a candidate's provenance only from text an
   - The test module's `candidates` fixture (the factory) keeps its name. Name a
     `CandidateList` local `frozen`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_a_text_only_candidates_embedding_predicts_as_its_text_only_comparator(
@@ -850,26 +853,27 @@ def test_the_decision_reads_exactly_the_frozen_lists_candidates(
   - In `test_cli_commands.py`, `test_decide_refuses_candidates_with_d8_margins`: exit 1 with
     `applies only to the economic decision`, and no record written.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision_economic.py tests/unit/test_cli_commands.py -k "economic or decide" -q`
 Expected: the new tests FAIL. `check_economic_arm` takes 2 positional arguments, the predictions
 carry no binding column, stored scores are never compared, and `decide_economic` has no
 `candidates`.
 
-- [ ] **Step 3: Implement the changes listed under Interfaces, then apply the rewrites by design**
+- [x] **Step 3: Implement the changes listed under Interfaces, then apply the rewrites by design**
+  > Deviation: the last assertion of `test_a_single_replicate_record_validates_and_pairs_with_the_reference` selects the margin read's columns first, as spec :296 says (ledger ruling, Task 5). The plan's Rewrites list missed it.
 
-- [ ] **Step 4: Run the economic, D8 and CLI tests**
+- [x] **Step 4: Run the economic, D8 and CLI tests**
 
 Run: `uv run pytest tests/unit/test_decision*.py tests/unit/test_economic_candidates.py tests/unit/test_cli_commands.py -q`
 Expected: PASS, with the D8 files unedited.
 
-- [ ] **Step 5: Confirm the reference path is untouched**
+- [x] **Step 5: Confirm the reference path is untouched**
 
 Run: `git diff --quiet b4f8c9d -- src/naics_embedder/panels/regressor.py src/naics_embedder/panels/qcew_rows.py src/naics_embedder/panels/regressor_splits.py src/naics_embedder/panels/ridge.py; echo exit=$?`
 Expected: `exit=0`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/naics_embedder/decision src/naics_embedder/cli/commands/tools.py tests/fixtures/economic.py tests/unit/test_decision_economic.py tests/unit/test_cli_commands.py
@@ -964,7 +968,7 @@ git commit -m "feat(decision): bind economic reads to their table and decide ove
       loaded source record. `run_directory` is `f'{source.spec.name}-s{{seed}}'`, the layout
       that `trained_source` writes (an `ArmRecord` holds no run-directory pattern).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   In `test_decision_economic.py`, request `trained` before `margins`, so its monitor reads
   precede the margins as Stage 7/8's do. A test asserts that order:
@@ -1023,20 +1027,21 @@ def test_a_trained_candidate_is_read_once_per_seed_on_each_growth_panel(
   - `test_import_refuses_a_source_run_without_selection_evidence` (`synthetic_arm` with no
     `monitor_mrrs`).
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision_economic.py tests/unit/test_economic_candidates.py -k "trained or import or d8_still" -q`
 Expected: FAIL with `ImportError` for `naics_embedder.decision.trained`, `read_trained_arm` and
 `trained_source`.
 
-- [ ] **Step 3: Implement the `decide.py` switch, the fixtures, the import and the trained read, as listed under Interfaces**
+- [x] **Step 3: Implement the `decide.py` switch, the fixtures, the import and the trained read, as listed under Interfaces**
+  > Deviation: `check_economic_arm`'s trained branch also requires the arm's seeds to equal its list row's (ledger ruling, Task 6). The plan's `test_d8_still_times_a_trained_runs_monitor_reads` expected `monitor read of epoch`, but D8's early-read message is `read at ..., before the margins were fixed`, so two tests pin both paths (ledger ruling, Task 6). After the final review, the gate also runs D9 (`provenance_fields`, `check_seed_table`) on each trained run's stored export provenance (commit fa6f2a4; ledger ruling, final review).
 
-- [ ] **Step 4: Run the decision and CLI tests**
+- [x] **Step 4: Run the decision and CLI tests**
 
 Run: `uv run pytest tests/unit/test_decision*.py tests/unit/test_economic_candidates.py tests/unit/test_cli_commands.py -q`
 Expected: PASS, with the D8 files unedited.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/naics_embedder/decision tests/fixtures tests/unit/test_decision_economic.py tests/unit/test_economic_candidates.py
@@ -1065,7 +1070,7 @@ git commit -m "feat(decision): import and read trained economic candidates with 
   - `tools decide`, economic output: after the comparisons, one line per propagation comparison:
     `Propagation: <smoothed> over <twin>: adopted|not adopted`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   - `test_the_decision_records_each_propagation_comparison`. A `smoothed-d3` candidate built by
     `build_candidate('smoothed', …)` is scaled 0.5, and its `text-only-d3` twin is scaled 1.0.
@@ -1092,21 +1097,21 @@ git commit -m "feat(decision): import and read trained economic candidates with 
       record`.
     - Match on `click.unstyle(result.output).replace('\n', '')` (Rich wraps at 80 on CI).
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_decision_economic.py tests/unit/test_cli_commands.py -k "propagation or resampled_inside or deterministic_and_a_trained or chosen_candidate or not_a_margin" -q`
 Expected: the propagation tests FAIL with `AttributeError: … 'propagation'`. The resampling,
 both-kinds, adopted-path and `_margin_kind` tests may already pass. They pin behavior that
 Tasks 5–6 kept and that the deferred item asked to be tested.
 
-- [ ] **Step 3: Implement the propagation report, its record field and its output line**
+- [x] **Step 3: Implement the propagation report, its record field and its output line**
 
-- [ ] **Step 4: Run the decision and CLI tests**
+- [x] **Step 4: Run the decision and CLI tests**
 
 Run: `uv run pytest tests/unit/test_decision*.py tests/unit/test_economic_candidates.py tests/unit/test_cli_commands.py -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/naics_embedder/decision src/naics_embedder/cli/commands/tools.py tests/unit/test_decision_economic.py tests/unit/test_cli_commands.py
@@ -1164,7 +1169,7 @@ git commit -m "feat(decision): report propagation and decide over deterministic 
        path and the log path.
     - Failures (`OSError`, `ValueError`) print `Economic read failed:` and exit 1.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   Reuse the `growth_panel` fixture (a fake `load_regressor_panel`) and `_growth_margins`. A
   module-level helper `_economic_inputs(tmp_path, store)` writes these and returns their paths:
@@ -1217,23 +1222,24 @@ def test_economic_read_dry_run_loads_no_panel_and_leaves_the_log_untouched(
     - Then `tools decide --arm … --arm … --candidates <a list of those two>` exits 0.
     - The record has 1 and 5 runs, and the output contains `Chosen:`.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py -k economic -q`
 Expected: FAIL with `No such command 'economic-read'` (and `economic-build`).
 
-- [ ] **Step 3: Implement the two commands as listed under Interfaces**
+- [x] **Step 3: Implement the two commands as listed under Interfaces**
+  > Deviation: `load_candidate_list` wraps a YAML parse error as `CandidateListYAMLError`, a `ValueError`, so all three commands that call it refuse a broken list file with one message (ledger ruling, Task 5). `--dry-run` stops after the checks the command lists: the table's width, its panel-code coverage, the panel's identity against the margins and a deterministic candidate's D9 comparison run only in the real read, before its first logged read.
 
   Each command's docstring has an `Example:` block, as `growth-margins` has.
 
-- [ ] **Step 4: Run the CLI tests, then check the Rich wrapping as CI does**
+- [x] **Step 4: Run the CLI tests, then check the Rich wrapping as CI does**
 
 Run: `uv run pytest tests/unit/test_cli_commands.py -q`
 Expected: PASS.
 Run: `COLUMNS=80 uv run pytest tests/unit/test_cli_commands.py -k "economic or decide" -q --basetemp=/tmp/p16-cli-basetemp-xxxxxxxx`
 Expected: PASS. Then remove that `--basetemp` directory.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/naics_embedder/cli/commands/tools.py tests/unit/test_cli_commands.py
@@ -1257,12 +1263,13 @@ git commit -m "feat(cli): add tools economic-build and economic-read with a dry 
 **Interfaces:**
 - Consumes: the docstrings of Tasks 2–8.
 
-- [ ] **Step 1: Write the API page and nav entry**
+- [x] **Step 1: Write the API page and nav entry**
 
   `docs/api/tree_model.md`: `# Tree Model API`, one sentence on the three builders (§4.2), and
   `::: naics_embedder.tree_model.scaling`, `.smoothing` and `.builders`.
 
-- [ ] **Step 2: Write the usage sections**
+- [x] **Step 2: Write the usage sections**
+  > Deviation: the `economic-read` example in `docs/usage.md` names `/path/to/naics-embedder` for the main checkout, not a home-directory path (final review).
 
   - Each section gives the command's purpose and an example. The read's example shows the
     worktree form: every path absolute into MAIN, and `--log MAIN/logs/selection_log.jsonl`.
@@ -1271,7 +1278,7 @@ git commit -m "feat(cli): add tools economic-build and economic-read with a dry 
   - State that a real read appends two growth validation reads per run to `--log`, or to the
     regressor config's log.
 
-- [ ] **Step 3: Update `CLAUDE.md`**
+- [x] **Step 3: Update `CLAUDE.md`**
 
   - **The economic decision paragraph.** Replace "read_deterministic_arm (no command yet)" and
     "A trained candidate's seeds have no economic record yet". They become: `tools economic-read`
@@ -1285,7 +1292,7 @@ git commit -m "feat(cli): add tools economic-build and economic-read with a dry 
     `uv run pytest --collect-only -q -q | tail -1`. Update the source, unit and test counts to
     the printed numbers.
 
-- [ ] **Step 4: Run the gates**
+- [x] **Step 4: Run the gates**
 
 Run: `uv run ruff check src/ tests/`
 Expected: `All checks passed!`
@@ -1299,7 +1306,7 @@ Expected: all pass, with skips only for local data or hardware. No failure.
 Run: `shasum -a 256 uv.lock`
 Expected: `6de4fbdcde8a2e944c7a9daed21f09f8a01ed479052179994ba4b0d488fef948  uv.lock`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs CLAUDE.md
@@ -1318,7 +1325,7 @@ panel and no QCEW file, and it logs nothing (§4.6). WT is this worktree's absol
 - Modify: `conf/data/economic_candidates.yaml` (nine `table_sha256` pins),
   `tests/unit/test_economic_candidates.py` (require every pin)
 
-- [ ] **Step 1: Pin the environment and the log (P1)**
+- [x] **Step 1: Pin the environment and the log (P1)**
 
 Run, from WT:
 - `uv sync --locked`
@@ -1331,7 +1338,7 @@ Run, from WT:
 - `ls ~/naics-artifacts/candidates 2>&1`. Expected: `No such file or directory`. If the
   directory exists, stop and show the user what it holds. Never overwrite it.
 
-- [ ] **Step 2: Build the nine tables**
+- [x] **Step 2: Build the nine tables**
 
 Run:
 
@@ -1343,12 +1350,12 @@ Expected: exit 0, and nine lines, each with a name, a path under
 `~/naics-artifacts/candidates/economic/` and a sha256. The three `tree-dN` cuts pass, at gaps
 1,779.1/1,631.5, 970.08/961.94 and 398.63/396.16 (§4.2).
 
-- [ ] **Step 3: Rebuild into scratch and compare**
+- [x] **Step 3: Rebuild into scratch and compare**
 
   Run the same command with `--store /tmp/plan16-rebuild`. Expected: nine sha256 values
   identical to Step 2's. Then `rm -rf /tmp/plan16-rebuild`.
 
-- [ ] **Step 4: Pin the tables and require every pin**
+- [x] **Step 4: Pin the tables and require every pin**
 
   Write Step 2's nine sha256 values into the list's `table_sha256` fields. In
   `test_the_committed_list_is_the_specs_eighteen_candidates`, add: every deterministic entry's
@@ -1361,7 +1368,7 @@ git add conf/data/economic_candidates.yaml tests/unit/test_economic_candidates.p
 git commit -m "chore(conf): pin the nine built economic candidate tables"
 ```
 
-- [ ] **Step 5: Dry-run all 18 candidates**
+- [x] **Step 5: Dry-run all 18 candidates**
 
   The trained checks hash about 5 GB of checkpoints. The pre-check of the nine records took
   seconds on this Mac. Run one `tools economic-read --dry-run` per list name, with:
@@ -1375,7 +1382,7 @@ git commit -m "chore(conf): pin the nine built economic candidate tables"
   The loop prints `<name> exit=<code>` after each run.
   Expected: 18 lines with `exit=0`, and each run prints `Dry run: every check passed`.
 
-- [ ] **Step 6: Verify nothing real was read or written**
+- [x] **Step 6: Verify nothing real was read or written**
 
 Run:
 - `shasum -a 256 uv.lock /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl ~/naics-artifacts/records/economic/growth_margins.json`.
@@ -1406,3 +1413,68 @@ Run:
 | §6 verification items | 1–10 (each test names its item) |
 | §7 deferred `:622` (trained), `:633` (stored scores), `:640` (binding), `:650` (subset) | 6–8; 5; 5; 5 and 7 |
 | §8 docs | 9 |
+
+---
+
+## Handoff to later stages
+
+- **Stage 3 (Economic — decision read).** It consumes the following, as built.
+  - **The frozen list.** `conf/data/economic_candidates.yaml`, loaded by `load_candidate_list`
+    (`decision/candidates.py`): 18 candidates, nine deterministic and nine trained. `decide_economic`
+    takes it, records its sha256 and refuses any other candidate set. `tools decide --candidates`
+    defaults to this file (spec §4.1, §4.4).
+  - **The nine real tables.** Built on 2026-11-15 by `tools economic-build` under
+    `~/naics-artifacts/candidates/economic/<name>.parquet`, each with `<name>_provenance.json`. A
+    second build on this Mac wrote the same bytes. The list pins each table (spec §4.2):
+
+    | Candidate | sha256 |
+    |---|---|
+    | `text-only-d8` | `474393b2ad3aee41540491c37f285fd37176b311176d386ac0b06848a5d6f0cb` |
+    | `text-only-d16` | `8ed9ea4f396f93c6425bfbb591c85b8b96573cd8e443e32cfba8be2e2f8c7fdb` |
+    | `text-only-d32` | `b15508a7ade357620d0cfcca944e291b32fb873fee37af197792afecc8937570` |
+    | `tree-d8` | `b2da0e6656b4ffd6f5f22c0382084d876b6965752109a1c5caed922786326115` |
+    | `tree-d16` | `b54b8d3b725ed3195c9be77b78e9c8b6c08768c2a5bdbd0e6525b8d6c800e4d7` |
+    | `tree-d32` | `e8e4d011f4d6a19d5a1554211c712c271162c454cedfa576335a094280d713d2` |
+    | `smoothed-d8` | `c73b2c405e99a0e613048dbe76ddb5ed38a118ce784aa96405f3e3e12e778e90` |
+    | `smoothed-d16` | `064ee668ec55344f1eef143abf0ea67194cef1279a710f32ce2ebc06d78e2f67` |
+    | `smoothed-d32` | `e1c7341488ba3efc6752a198b7517b91fc66f2fde39637d7a1ac6ed2118bb6ea` |
+
+  - **The read command.** `tools economic-read --candidate NAME` (options and an example in
+    `docs/usage.md`). It reads one candidate on `growth_seen` and `growth_heldout` and writes its
+    economic arm record. A trained candidate is imported from its Stage 7/8 arm record in the store
+    (pinned by sha256) and its seeds' run directories under `--runs-root`, then read once per seed:
+    5 seeds, and 10 for `hyperbolic-d16` (spec §4.6).
+  - **The decision output.** `tools decide` prints one `Propagation:` line for each smoothed
+    candidate and its text-only twin, and chooses nothing by it (spec §4.7). The answer to split
+    Req 19 is Stage 3's finding.
+  - **Differs from the roadmap's `Produces`.** A trained candidate has no new record before Stage 3
+    reads it: the Stage 7/8 arm records are imported at the read. The roadmap's `Consumes` cites
+    `read_deterministic_arm` (`decision/economic.py:250`), `decide_economic` (`:537`) and an
+    `EconomicRun` with no seed field. All three changed, so use the names, not the lines.
+  - **Traps and refusals found in execution.**
+    - A real read must run under `uv.lock` 6de4fbdc on macOS arm64 with Python 3.12.12, from the
+      main checkout or with absolute `--log` and `--lock` (spec §4.8). The worktree's `uv.lock`
+      and the main checkout's have the same sha256.
+    - A real read appends two growth validation reads for each run to the log: 10 for a 5-seed
+      candidate and 20 for `hyperbolic-d16`. It needs the owner's approval when Stage 3 starts.
+    - A dry run is not a full check. It stops before the panel loads. The panel's identity against
+      the margins, the table's panel-code coverage and width, and a deterministic candidate's D9
+      comparison run only in the real read, and each refuses before its first logged read. The
+      `--dry-run` help text, the command docstring and the printed line still say "every check"
+      (deferred, below).
+    - A deterministic row must pin its table before `economic-read` accepts it. All nine do. A
+      failed or partial `economic-build` leaves its tables on disk, and a rebuild refuses with
+      `exists` until they are deleted by hand.
+    - The decision gate runs D9 (`check_seed_table`) on each trained run's stored export
+      provenance. It does not pin a deterministic candidate's text-only provenance file, so a
+      hand-built record could store another provenance for the same table bytes (deferred, below).
+    - `tools growth-margins` must not run again. The decision reads the 2026-10-17 margin record,
+      sha256 `4f86a0b2f3bde358bd08a1f3f17f1b4c59ee261ee4e5409ac83615deaa1f37d0`.
+  - **Verified without a panel read (Task 10).** All 18 `tools economic-read --dry-run` runs
+    exited 0 and printed `Dry run: every check passed`. The sha256 values before and after the
+    dry runs are equal: `uv.lock` `6de4fbdc…f948`, the main checkout's
+    `logs/selection_log.jsonl` `51aef240…2a41` and `growth_margins.json` `4f86a0b2…37d0`.
+    `~/naics-artifacts/records/economic` holds only `growth_margins.json`.
+  - **Deferred into Stage 3.** Pin the text-only table's provenance file in the list before the
+    first real read: `specs/deferred_items.md`, § 16-economic-candidates. It changes the list's
+    sha256, so the list is re-recorded.

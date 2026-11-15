@@ -619,7 +619,7 @@
       original stays local.
 
 ## 14-economic-decision-tooling — 2026-10-13
-- [ ] Trained economic candidates (plan 14, deferred by the owner to the candidates' spec):
+- [x] Trained economic candidates (plan 14, deferred by the owner to the candidates' spec):
       src/naics_embedder/decision/economic.py records and decides deterministic candidates
       only. `EconomicRun` (decision/records.py) has no checkpoint, training run, epoch or
       monitor-record field, and `check_economic_arm` requires one run with no seed. Req 24 gives
@@ -630,14 +630,16 @@
       P9). Size: plan. Done when: an economic arm record holds a trained candidate's seeds with
       their checkpoints' selection evidence, `decide_economic` resamples those seeds nested
       inside the groups under the 5-seed floor, and a command reads a candidate, with tests.
-- [ ] Economic stored-scores check (plan 14 final review, Minor, triaged defer):
+      → done 2026-11-15 (plan 16)
+- [x] Economic stored-scores check (plan 14 final review, Minor, triaged defer):
       `check_economic_arm` resolves `EconomicRun.scores`, and `check_relative_margins` never
       resolves `ReferenceRead.scores` (src/naics_embedder/decision/economic.py). Only the stored
       predictions are rescored, so a record can name a stale or missing scores file and still
       validate; the decision's outcome is unaffected. Size: quick-fix. Done when: both checks
       resolve the stored scores and compare them with the rescore within `STATISTIC_TOLERANCE`,
       or their docstrings say stored scores are informational, with a test.
-- [ ] Economic predictions-to-table binding (plan 14 final review, Minor, triaged defer):
+      → done 2026-11-15 (plan 16)
+- [x] Economic predictions-to-table binding (plan 14 final review, Minor, triaged defer):
       the stored predictions carry no run id or table fingerprint (`PREDICTION_COLUMNS`,
       src/naics_embedder/panels/regressor.py), so an imported `EconomicArmRecord` could pair one
       candidate's log records, table and provenance with another's predictions and recomputed
@@ -647,7 +649,8 @@
       candidates rewrite `EconomicRun`. Done when: a record's predictions are bound to its table
       (the arm's matrix fingerprint stored with them, or a re-read spot check) and a mismatched
       pair is refused, with a test.
-- [ ] Economic decision test gaps (plan 14 final review, Minors, triaged defer): enforced but
+      → done 2026-11-15 (plan 16)
+- [x] Economic decision test gaps (plan 14 final review, Minors, triaged defer): enforced but
       untested: `_same` on non-seed identities, `StrictInt` refusing `1.0` and `'1'`, a logged
       `dimension` of 3.0 or `level` of true on the economic path, `RelativeMarginRecord.margin()`
       with no delta, the `GROWTH_PANELS` literal, `check_economic_arm`'s statistics-edit and
@@ -657,6 +660,7 @@
       by value (`_check_log_records`, src/naics_embedder/decision/decide.py), outside the
       strictness item's scope. Size: quick-fix. Done when: each has a focused test, and a ruling
       is recorded on `_check_log_records`' by-value comparison.
+      → done 2026-11-15 (plan 16): the gaps in the functions plan 16 rewrote (the statistics-edit and key-set refusals, the logged read identities, the CLI's adopted path and `_margin_kind`) → item: 16-economic-candidates (the remaining gaps)
 
 ## tech-debt-audit — 2026-10-16
 - [ ] HGCN legacy-input fallback (audit row 1): with no graph supervision manifest,
@@ -671,3 +675,43 @@
       Done when: HGCN with no manifest either refuses, naming `conf/local.yaml`, or logs that it
       reads legacy inputs, with a test, and docs/hgcn_training.md says which. Revisit if: the
       graph stage resumes or HGCN is run again.
+
+## 16-economic-candidates — 2026-11-15
+- [ ] The `--dry-run` text of `tools economic-read` overstates the dry run (final review, Declined
+      to judge; both seats judged it harmless to an operator, the controller ruled defer): the
+      option's help text and the command's docstring in `src/naics_embedder/cli/commands/tools.py`
+      say every check runs before the panel loads, and the printed line says `Dry run: every check
+      passed for <name>`. The dry run stops before the panel loads, so the panel's identity against
+      the margins, the table's panel-code coverage and width, and a deterministic candidate's D9
+      comparison run only in the real read (`docs/usage.md` and `CLAUDE.md` say so). A Task 8 test
+      pins the printed line. See specs/plans/completed/16-economic-candidates.md. Size: quick-fix.
+      Done when: the help text, the docstring and the printed line say which checks the dry run
+      runs, and the test that pins the line is updated.
+- [ ] Pin the shared text-only table's provenance file in the frozen list (plan 16 execution,
+      controller ruling): `conf/data/economic_candidates.yaml` pins the text-only table's bytes
+      (`text_only_sha256`) but not its provenance file, so a hand-built deterministic record could
+      store another provenance for the same bytes and pass the D9 comparison when its spec names
+      the same values (`_check_shared_text_only`, src/naics_embedder/decision/economic.py). No tool
+      writes such a record. Changing the list changes its sha256, which `decide_economic` records,
+      so this goes in before Stage 3's first real read. See
+      specs/plans/completed/16-economic-candidates.md (Handoff). Size: plan. Done when: the list
+      pins the provenance file's sha256, the gate refuses a record whose stored text-only
+      provenance differs from it, with a test, and the list's sha256 is recorded again before the
+      first real candidate read.
+- [ ] Remaining economic decision test gaps (the rest of plan 14's item "Economic decision test
+      gaps", which plan 16 closed in part): plan 16 tests the statistics-edit and key-set
+      refusals, the logged read identities, the CLI's adopted path and `_margin_kind` on a
+      non-margin file. The tests it added do not show these: `RelativeMarginRecord.margin()` with
+      no delta, the `GROWTH_PANELS` literal, duplicate margins panels, a margin-read log record
+      whose run id differs, mixed D8 and relative inputs to `tools decide`, `StrictInt` refusing
+      `'1'`, and a ruling on `_check_log_records`' by-value comparison
+      (src/naics_embedder/decision/decide.py). See specs/plans/completed/14-economic-decision-tooling.md.
+      Size: quick-fix. Done when: each gap that tests/unit/test_decision_economic.py and
+      tests/unit/test_cli_commands.py still do not cover has a focused test, and the ruling on
+      `_check_log_records` is recorded.
+- [ ] The front-door docs lag the code (plan 16 Task 9 review, outside the plan's file list):
+      `README.md:174` and `tests/README.md:5` and `:22` still state 3,342 tests and 105 unit
+      files, and `CLAUDE.md` states 4,086 tests and 107 unit files. `README.md`,
+      `docs/quickstart.md` and `docs/overview.md` do not name `tools economic-build`,
+      `tools economic-read` or `tools decide --candidates`. Size: quick-fix. Done when: the counts
+      match `CLAUDE.md`'s and each page that lists the `tools` commands names the three.
