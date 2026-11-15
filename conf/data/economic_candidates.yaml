@@ -1,0 +1,160 @@
+# The economic candidates (specs/completed/economic-candidates.md §4.1; U33), frozen before
+# Stage 3's first read: the decision reads exactly these (decision/candidates.py).
+#
+# - codebook_sha256, text_only_sha256: what every deterministic builder reads, bundle 301cce28's
+#   naics_codebook.parquet and the shared MiniLM text-only table (§4.3).
+# - checkpoint_contract: the contract a trained table's export provenance must name (§4.5).
+# - A trained candidate's record is its Stage 7/8 arm record under the artifact store's root,
+#   pinned by its sha256; run_directory is each seed's run directory under the runs root, which
+#   holds that seed's export provenance.
+# - A deterministic candidate's table_sha256 pins its built table, as Stage 1 built it.
+codebook_sha256: 0f9e61343e673540e1e18ecc5581618be099c5d79531b68153496bf982d6e96d
+text_only_sha256: f4fb4f574f880c940ee8cf44c7f86615638e59f113b527d0b86973cd45ba32ff
+checkpoint_contract:
+  bundle_id: 301cce28-539c-42ea-8781-496bbdcf511c
+  contract_version: stage3-supervision-v2
+candidates:
+  - name: text-only-d8
+    kind: text-only
+    dimension: 8
+    components: 1
+    geometry: euclidean
+    table_sha256: 474393b2ad3aee41540491c37f285fd37176b311176d386ac0b06848a5d6f0cb
+  - name: text-only-d16
+    kind: text-only
+    dimension: 16
+    components: 1
+    geometry: euclidean
+    table_sha256: 8ed9ea4f396f93c6425bfbb591c85b8b96573cd8e443e32cfba8be2e2f8c7fdb
+  - name: text-only-d32
+    kind: text-only
+    dimension: 32
+    components: 1
+    geometry: euclidean
+    table_sha256: b15508a7ade357620d0cfcca944e291b32fb873fee37af197792afecc8937570
+  - name: tree-d8
+    kind: tree
+    dimension: 8
+    components: 1
+    geometry: euclidean
+    table_sha256: b2da0e6656b4ffd6f5f22c0382084d876b6965752109a1c5caed922786326115
+  - name: tree-d16
+    kind: tree
+    dimension: 16
+    components: 1
+    geometry: euclidean
+    table_sha256: b54b8d3b725ed3195c9be77b78e9c8b6c08768c2a5bdbd0e6525b8d6c800e4d7
+  - name: tree-d32
+    kind: tree
+    dimension: 32
+    components: 1
+    geometry: euclidean
+    table_sha256: e8e4d011f4d6a19d5a1554211c712c271162c454cedfa576335a094280d713d2
+  - name: smoothed-d8
+    kind: smoothed
+    dimension: 8
+    components: 2
+    geometry: euclidean
+    table_sha256: c73b2c405e99a0e613048dbe76ddb5ed38a118ce784aa96405f3e3e12e778e90
+  - name: smoothed-d16
+    kind: smoothed
+    dimension: 16
+    components: 2
+    geometry: euclidean
+    table_sha256: 064ee668ec55344f1eef143abf0ea67194cef1279a710f32ce2ebc06d78e2f67
+  - name: smoothed-d32
+    kind: smoothed
+    dimension: 32
+    components: 2
+    geometry: euclidean
+    table_sha256: e1c7341488ba3efc6752a198b7517b91fc66f2fde39637d7a1ac6ed2118bb6ea
+  - name: hyperbolic-d16
+    kind: trained
+    dimension: 16
+    components: 1
+    geometry: hyperbolic
+    record: records/stage7/reference.json
+    record_sha256: c885b9c5dc18b6be03670d0cb5a71db3974917da8f719e0dbb1f1ef5eec2d1a2
+    arm: reference
+    seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    run_directory: stage7-reference-s{seed}
+  - name: euclidean-d8
+    kind: trained
+    dimension: 8
+    components: 1
+    geometry: euclidean
+    record: records/stage8/euclidean-d8.json
+    record_sha256: 103367f0f8f9270567ef2acfff1bd5a870aece94f4e66d75c51390eeba758dbb
+    arm: euclidean-d8
+    seeds: [1, 2, 3, 4, 5]
+    run_directory: stage8-euclidean-d8-s{seed}
+  - name: euclidean-d16
+    kind: trained
+    dimension: 16
+    components: 1
+    geometry: euclidean
+    record: records/stage8/euclidean-d16.json
+    record_sha256: 3d5a80d5a3ac5466e10b019773fa09a21e2ad0592af32d7b22273fea3e1bab2c
+    arm: euclidean-d16
+    seeds: [1, 2, 3, 4, 5]
+    run_directory: stage8-euclidean-d16-s{seed}
+  - name: euclidean-d32
+    kind: trained
+    dimension: 32
+    components: 1
+    geometry: euclidean
+    record: records/stage8/euclidean-d32.json
+    record_sha256: cf4edd78d3cd195470fa2d5325e791e1e52209c7dbb0249ee2dc39bc713bf2c0
+    arm: euclidean-d32
+    seeds: [1, 2, 3, 4, 5]
+    run_directory: stage8-euclidean-d32-s{seed}
+  - name: hyperbolic-d8
+    kind: trained
+    dimension: 8
+    components: 1
+    geometry: hyperbolic
+    record: records/stage8/hyperbolic-d8.json
+    record_sha256: 53a7b32959f9b7b281b7127772631d2a57573b10762ac5ba05ae164b0fa08ecd
+    arm: hyperbolic-d8
+    seeds: [1, 2, 3, 4, 5]
+    run_directory: stage8-hyperbolic-d8-s{seed}
+  - name: hyperbolic-d32
+    kind: trained
+    dimension: 32
+    components: 1
+    geometry: hyperbolic
+    record: records/stage8/hyperbolic-d32.json
+    record_sha256: 927c3fd96fec78b31d456d0fa88d2c1d8b133cc9da0707cc82f63a92aec36016
+    arm: hyperbolic-d32
+    seeds: [1, 2, 3, 4, 5]
+    run_directory: stage8-hyperbolic-d32-s{seed}
+  - name: spherical-d8
+    kind: trained
+    dimension: 8
+    components: 1
+    geometry: spherical
+    record: records/stage8/spherical-d8.json
+    record_sha256: ce739fa9b73ad2538fc0c973c2f0e64eec453be3f77ee78534748a6b288a87df
+    arm: spherical-d8
+    seeds: [1, 2, 3, 4, 5]
+    run_directory: stage8-spherical-d8-s{seed}
+  - name: spherical-d16
+    kind: trained
+    dimension: 16
+    components: 1
+    geometry: spherical
+    record: records/stage8/spherical-d16.json
+    record_sha256: 28fec47082c3fe82e9d2c23b397c4ccf9a6af7cc2df22d5f1531cfa891c95c01
+    arm: spherical-d16
+    seeds: [1, 2, 3, 4, 5]
+    run_directory: stage8-spherical-d16-s{seed}
+  - name: spherical-d32
+    kind: trained
+    dimension: 32
+    components: 1
+    geometry: spherical
+    record: records/stage8/spherical-d32.json
+    record_sha256: 194d2ea6a9420cf6c16574891ff21832b5bbae25dd4cbfe8fa8158fe6eeaa679
+    arm: spherical-d32
+    seeds: [1, 2, 3, 4, 5]
+    run_directory: stage8-spherical-d32-s{seed}

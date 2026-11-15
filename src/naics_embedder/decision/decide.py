@@ -403,7 +403,11 @@ def read_time(record: Any, name: str) -> datetime:
     return parsed
 
 def check_margins_first(
-    arms: Sequence[Any], fixed_at: datetime, *, exempt: Collection[str] = ()
+    arms: Sequence[Any],
+    fixed_at: datetime,
+    *,
+    exempt: Collection[str] = (),
+    monitor_reads: bool = True,
 ) -> None:
     '''
     Require every run but the ``exempt`` ones to read after the margins were fixed at ``fixed_at``:
@@ -412,9 +416,15 @@ def check_margins_first(
 
     Run it after ``check_arm``, which requires each monitor record to name its epoch.
 
+    Args:
+        monitor_reads: Whether a trained run's monitor reads are timed too, as D8 needs. With
+            false, only each run's ``log_records`` are: the economic decision's growth reads,
+            beside which a trained seed's monitor reads are outcome reads from training (spec
+            economic-candidates 4.4).
+
     Raises:
-        ValueError: If ``fixed_at`` or a read's time is missing or names no timezone, so that
-            the two cannot be compared, or if a run read before ``fixed_at``.
+        ValueError: If ``fixed_at`` or a timed read's time is missing or names no timezone, so
+            that the two cannot be compared, or if a run read before ``fixed_at``.
     '''
 
     if fixed_at.utcoffset() is None:
@@ -429,12 +439,13 @@ def check_margins_first(
                 read_time(record, f'{name}: its {record.get("panel")} read')
                 for record in run.log_records
             ]
-            reads.extend(
-                read_time(
-                    record['read'],
-                    f'{name}: its monitor read of epoch {record["read"]["detail"]["epoch"]}'
-                ) for record in getattr(run, 'monitor_records', ())
-            )
+            if monitor_reads:
+                reads.extend(
+                    read_time(
+                        record['read'],
+                        f'{name}: its monitor read of epoch {record["read"]["detail"]["epoch"]}'
+                    ) for record in getattr(run, 'monitor_records', ())
+                )
             first = min(reads)
             if first < fixed_at:
                 raise ValueError(

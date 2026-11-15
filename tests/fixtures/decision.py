@@ -201,13 +201,13 @@ def write_export_provenance(table_path: Path, arm_spec: ArmSpec, **entries) -> P
     path.write_text(json.dumps(provenance, indent=2) + '\n')
     return path
 
-def _table(directory: Path, name: str, seed: int, dimension: int) -> Path:
-    '''An arm's code table in the export form.'''
+def _table(directory: Path, name: str, seed: int, dimension: int, codes: Sequence[str]) -> Path:
+    '''An arm's code table over ``codes``, in the export form.'''
 
-    values = np.random.default_rng([seed, len(name)]).normal(size=(len(CODES), dimension))
+    values = np.random.default_rng([seed, len(name)]).normal(size=(len(codes), dimension))
     schema = {f'e{index}': pl.Float64 for index in range(dimension)}
     table = pl.DataFrame({
-        'code': list(CODES)
+        'code': list(codes)
     }).hstack(pl.DataFrame(values, schema=schema, orient='row'))
     path = directory / f'{name}-{seed}.parquet'
     table.write_parquet(path)
@@ -289,13 +289,14 @@ def synthetic_arm(
     offsets: Sequence[float] = SEED_OFFSETS,
     text_only_table: Optional[Path] = None,
     monitor_mrrs: Optional[Sequence[float]] = None,
+    codes: Sequence[str] = CODES,
 ) -> ArmRecord:
     '''
     An arm record whose seeds score ``synthetic_scores``, read now.
 
     With ``monitor_mrrs``, every seed is a trained run: it names its training run and carries one
     monitor record per epoch, read now, with those MRRs, and its checkpoint is from the earliest
-    epoch with the highest.
+    epoch with the highest. Each seed's table covers ``codes``, the synthetic panels' by default.
     '''
 
     directory = Path(directory) / arm_spec.name
@@ -306,7 +307,7 @@ def synthetic_arm(
         run_id = f'{arm_spec.name}/seed-{seed}'
         checkpoint = directory / f'checkpoint-{seed}.ckpt'
         checkpoint.write_bytes(f'{arm_spec.name} {seed}'.encode())
-        table = store.put_table(_table(directory, arm_spec.name, seed, arm_spec.dimension))
+        table = store.put_table(_table(directory, arm_spec.name, seed, arm_spec.dimension, codes))
         scores = synthetic_scores(effects, offset * SIGMA)
         time = datetime.now(timezone.utc).isoformat()
         trained: Dict = {}

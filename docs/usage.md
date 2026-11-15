@@ -407,6 +407,148 @@ uv run naics-embedder tools growth-margins --codebook PATH/naics_codebook.parque
 - `--log PATH` - Selection log (default: the regressor config's)
 - `--lock PATH` - The `uv.lock` the read runs under, which the record names (default: `uv.lock`)
 
+### `tools economic-build`
+
+Build the frozen list's deterministic candidates' tables. The list is
+`conf/data/economic_candidates.yaml`. It names nine deterministic candidates: `text-only`, `tree`
+and `smoothed`, each at d = 8, 16 and 32 (for example `tree-d16`). A build reads the codebook's
+text and tree and the shared text-only table. It reads no panel and no QCEW file.
+
+Each table goes to `<store>/candidates/economic/<name>.parquet` in the export form, with its
+provenance beside it. The command prints each table's name, path and sha256.
+
+Before it writes anything, the command checks four points:
+
+1. The codebook's sha256 equals the list's pin.
+2. The text-only table's sha256 equals the list's pin.
+3. Every named candidate is deterministic. A trained candidate is imported by
+   [`tools economic-read`](#tools-economic-read).
+4. No named candidate has a table or a provenance file already. A candidate is built once.
+
+A candidate named twice with `--candidate` is built once. A list row pins its table with
+`table_sha256`, and a row with `table_sha256: null` pins none. If a row pins a table and the built
+table has another sha256, the command exits 1 with `differs from its pin`. The table stays on
+disk, and any read refuses it.
+
+A deterministic row must pin its built table's sha256 in `conf/data/economic_candidates.yaml`
+before `tools economic-read` accepts it. Use the sha256 that this command prints.
+
+**Generates:** `<name>.parquet` and `<name>_provenance.json` for each candidate, under
+`<store>/candidates/economic/`
+
+```bash
+uv run naics-embedder tools economic-build --codebook PATH/naics_codebook.parquet \
+  --text-only PATH/text_only.parquet --store ~/naics-artifacts
+```
+
+**Options:**
+
+- `--codebook PATH` - The codebook the list pins: the `naics_codebook.parquet` of bundle 301cce28
+- `--text-only PATH` - The shared text-only table the list pins (`tools text-only-table`)
+- `--store PATH` - The artifact store's root
+- `--candidates PATH` - The frozen candidate list (default: `conf/data/economic_candidates.yaml`)
+- `--candidate NAME` - A deterministic candidate to build, by its name on the list (repeatable;
+  default: every deterministic candidate, in the list's order)
+
+### `tools economic-read`
+
+Read one candidate of the frozen list on both growth validation splits, `growth_seen` and
+`growth_heldout`, and write its economic arm record. A deterministic candidate is one replicate
+(`naics_embedder.decision.economic.read_deterministic_arm`). A trained candidate is an arm that
+Stage 7 or Stage 8 trained and read. The command imports it from that arm's record and its seeds'
+run directories, and reads it once per seed.
+
+The command runs these checks before it loads the panel. The order is:
+
+1. `--output` is a new record.
+2. The list loads and names the candidate.
+3. `--margins` is a relative margin record from `tools growth-margins`, and it passes its own
+   checks.
+4. The candidate's inputs pass, as listed below.
+5. `--lock` names a file.
+
+The inputs in step 4 depend on the candidate:
+
+- A deterministic candidate: its list row pins its built table, and its stored table matches that
+  pin. Its provenance describes that table and comes from text and tree only. `--text-only`
+  matches the list's pin.
+- A trained candidate: its import passes. The import runs `check_arm` on the source record. It
+  checks each seed's export provenance and checkpoint sha256. It also checks the identity of the
+  descriptions, the summaries and the window.
+
+A deterministic row must pin its built table's sha256 in `conf/data/economic_candidates.yaml`
+before `tools economic-read` accepts it. Use the sha256 that `tools economic-build` prints.
+`tools economic-read` refuses a row with `table_sha256: null`.
+
+`--dry-run` stops after these checks and prints this line:
+
+```text
+Dry run: every check passed for <name>; no panel was loaded and nothing was logged
+```
+
+The dry run loads no panel and reads no QCEW file. It creates no selection log and appends to
+none.
+
+The dry run does not run every check of the read. Some checks need the loaded panel, or run
+inside the read after the panel loads. They wait for the real read:
+
+- The panel's data and fit settings are those of the panel that the margins read.
+- The table covers every code of the panel.
+- The table's width equals the spec's dimension.
+- For a deterministic candidate that reads a backbone, the text-only table was built from what the
+  spec reads (the D9 comparison). A `tree` candidate reads no backbone, so it has no such check.
+
+A trained candidate already passes the D9 comparison in the dry run. Its import runs `check_arm`
+on the source record, and that check makes the comparison. Every check in that list refuses
+before the first logged read, so a refusal there changes no log.
+
+A real read loads the growth panel at level 6, whatever the regressor config's `outcome` says.
+It appends two growth validation reads per run to `--log`, or to the regressor config's log if
+`--log` is not set. One read is for `growth_seen` and one is for `growth_heldout`.
+
+Run it from the main checkout's root, or pass `--log` and `--lock` as absolute paths, as
+`tools growth-margins` does.
+
+**Generates:** the economic arm record (JSON), the file that `tools decide` reads, with the read's
+selection-log records, and its predictions and scores in the store
+
+Check a candidate with a dry run, then read it. This example uses the worktree form, so every
+path into the main checkout is absolute. `/path/to/naics-embedder` stands for the main checkout's
+root:
+
+```bash
+uv run naics-embedder tools economic-read --candidate tree-d16 \
+  --codebook /path/to/naics-embedder/data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/naics_codebook.parquet \
+  --margins ~/naics-artifacts/records/economic/growth_margins.json \
+  --store ~/naics-artifacts \
+  --text-only /path/to/naics-embedder/checkpoints/plan9_exit/text_only.parquet \
+  --runs-root /path/to/naics-embedder/checkpoints \
+  --log /path/to/naics-embedder/logs/selection_log.jsonl \
+  --lock /path/to/naics-embedder/uv.lock \
+  --output ~/naics-artifacts/records/economic/tree-d16.json --dry-run
+```
+
+The same command without `--dry-run` makes the real read.
+
+**Options:**
+
+- `--candidate NAME` - The candidate to read, by its name on the frozen list
+- `--codebook PATH` - A supervision bundle's `naics_codebook.parquet`
+- `--margins PATH` - The relative margin record (`tools growth-margins`)
+- `--store PATH` - The artifact store: the tables, the trained candidates' source records and the
+  margins
+- `--output PATH` - Where to write the economic arm record; an existing file is refused before
+  any work, never overwritten
+- `--candidates PATH` - The frozen candidate list (default: `conf/data/economic_candidates.yaml`)
+- `--text-only PATH` - The shared text-only table, with its provenance beside it (for a
+  deterministic candidate)
+- `--runs-root PATH` - The directory of the seeds' run directories (for a trained candidate)
+- `--purpose TEXT` - Why the read happens, recorded in the selection log (default: economic
+  candidate read)
+- `--log PATH` - Selection log (default: the regressor config's)
+- `--lock PATH` - The `uv.lock` the read runs under, which the record names (default: `uv.lock`)
+- `--dry-run` - Run the checks listed above, then stop: no panel loads, nothing is logged
+
 ### `tools decide`
 
 Decide among arms under Req 5's rule. With a margin record from `tools margins`, it decides among
@@ -422,18 +564,37 @@ them: fewer components, then lower dimension, then non-hyperbolic geometry, then
 held-out gain over `covariates+ancestors` (roadmap D11): on `regressor_heldout` for D8's decision,
 on `growth_heldout` for the economic decision, where it is the reference. The number of
 replicates and the bootstrap seed come from `conf/data/decision.yaml`, as does the seed floor,
-`min_seeds`, which applies to D8's decision only: the economic decision takes none, because each
-candidate is a single replicate.
+`min_seeds`, which applies to D8's decision only. The economic decision takes none: a
+deterministic candidate is a single replicate, and a trained candidate keeps the seeds of its list
+row, at least five.
 
-**The economic decision.** Its arms are economic arm records: a deterministic candidate's table,
-with the provenance its builder wrote, read once on each growth panel by
-`naics_embedder.decision.economic.read_deterministic_arm`, which has no command yet. Each
-candidate is a single replicate. A trained candidate's seeds have no economic record yet. Each
-candidate is compared with the reference `covariates+ancestors`, whose predictions in the
+**The economic decision.** Its arms are economic arm records from
+[`tools economic-read`](#tools-economic-read), one for each candidate. A deterministic candidate
+is a single replicate: its table, with the provenance its builder wrote, read once on each growth
+panel by `naics_embedder.decision.economic.read_deterministic_arm`. A trained candidate is
+imported from its Stage 7 or Stage 8 arm record. Its seeds must equal the seeds of its row on the
+frozen list.
+
+The decision requires exactly the candidates of the frozen list, given by `--candidates`
+(default: the committed `conf/data/economic_candidates.yaml`). It records the list's sha256.
+`--candidates` applies only to the economic decision. With D8 margins, `tools decide` refuses it
+with `applies only to the economic decision`.
+
+Each candidate is compared with the reference `covariates+ancestors`, whose predictions in the
 margin read its read must reproduce bit for bit. Only a candidate adopted over the reference is
-eligible, and the rule above picks among the eligible; its last tie goes to the higher held-out
+eligible, and the rule above picks among the eligible. Its last tie goes to the higher held-out
 gain over the reference. With none eligible, the reference stands, and there is no economic
 artifact.
+
+The command also prints a propagation report, one line for each smoothed candidate and its
+text-only twin:
+
+```text
+Propagation: <smoothed> over <twin>: adopted
+```
+
+Each line ends with `adopted` or `not adopted`. The report chooses nothing, and a D8 decision
+prints no such line. The record holds the same comparisons.
 
 **Generates:** the decision record (JSON): the arms with their selection-log records and artifact
 references, the margins, every comparison with both intervals, the non-dominated set, the tie
@@ -450,25 +611,29 @@ uv run naics-embedder tools decide \
   --store ~/naics-artifacts --output ~/naics-artifacts/records/stage7/decision.json
 ```
 
-The economic decision, over one candidate:
+The economic decision takes one `--arm` for each of the frozen list's 18 candidates. This example
+shows two of them:
 
 ```bash
 uv run naics-embedder tools decide \
-  --arm ~/naics-artifacts/records/economic/tree.json \
+  --arm ~/naics-artifacts/records/economic/text-only-d8.json \
+  --arm ~/naics-artifacts/records/economic/tree-d16.json \
   --margins ~/naics-artifacts/records/economic/growth_margins.json \
   --name economic --question "Which candidate, if any, is the economic artifact?" \
   --store ~/naics-artifacts --output ~/naics-artifacts/records/economic/decision.json
 ```
 
 **Options:**
-- `--arm PATH` - An arm record, or for the economic decision an economic arm record; repeat for
-  each arm
+- `--arm PATH` - An arm record, or for the economic decision an economic arm record
+  (`tools economic-read`); repeat for each arm
 - `--margins PATH` - The margin record (`tools margins`, or `tools growth-margins` for the
   economic decision)
 - `--name TEXT`, `--question TEXT` - Name the decision and say what it settles
 - `--store PATH` - The artifact store the arm records reference
 - `--output PATH` - Where to write the decision record; an existing file is refused before any
   work, never overwritten
+- `--candidates PATH` - The frozen candidate list the economic decision reads (default:
+  `conf/data/economic_candidates.yaml`). It is refused with D8 margins
 
 ### `tools diagnostics`
 

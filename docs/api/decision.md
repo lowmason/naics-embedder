@@ -33,3 +33,23 @@ reference `covariates+ancestors` (Req 24).
 ## The economic decision
 
 ::: naics_embedder.decision.economic
+
+## The candidate list
+
+The frozen list of the economic candidates (`conf/data/economic_candidates.yaml`). The decision
+requires exactly the candidates it names.
+
+::: naics_embedder.decision.candidates
+
+## Text and tree only
+
+The rule that a candidate's provenance comes from the codebook's text and its tree, and from no
+panel, QCEW file or selection log.
+
+::: naics_embedder.decision.provenance
+
+## Trained candidates
+
+The import of a trained candidate from its Stage 7/8 arm record and run directories.
+
+::: naics_embedder.decision.trained

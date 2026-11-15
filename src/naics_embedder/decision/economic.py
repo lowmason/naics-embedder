@@ -11,15 +11,32 @@ and the decision over the two growth panels.
   those every candidate's read computes, and they pair exactly.
 - **Margins.** δ = r × the reference's validation MSE on each panel (U13), from a margin read that
   reads no candidate, fixed before any candidate is read.
-- **Candidates.** A deterministic candidate, such as the text-only table or a tree embedding, is
-  one replicate: its table, with the provenance its builder wrote, read once on each growth panel
-  the margins read, with no checkpoint or monitor reads (Req 24; Req 23). Its reads pair with
-  the margin read only where the reference predicts bit for bit as it did there.
-- **Decision.** Each candidate against the reference on both panels, at 95 % non-inferiority and
+- **Candidates.** A deterministic candidate (a text-only, tree or smoothed table) is one
+  replicate: one seedless run of its table, with the provenance its builder wrote, read once on
+  each growth panel the margins read, with no source, checkpoint or monitor reads (Req 24;
+  Req 23). Its record must match its row of the frozen list: the row's shape, the table the row
+  pins and the shared text-only table, and its provenance must come from text and tree only
+  (Req 29). A candidate that reads a backbone is checked against the text-only table (D9); the
+  tree candidate reads none (P7). Each stored prediction names its table's ``matrix_fingerprint``
+  in ``BINDING_COLUMN`` (P4), so a record whose predictions belong to another table is refused,
+  and its stored scores must be the rescore of its predictions. Its reads pair with the margin
+  read only where the reference predicts bit for bit as it did there, compared in the margin
+  read's own columns.
+- **Decision.** It reads exactly the frozen list's candidates, and records the list as stored.
+  Each candidate is compared against the reference on both panels, at 95 % non-inferiority and
   97.5 % superiority. Only a candidate adopted over the reference is eligible; among the eligible,
   Req 5's non-dominated set and tie order pick one, the higher held-out gain over the reference
   breaking a last tie (D11). With none eligible, the reference stands. The decision scores each
   read's stored predictions itself, so the values it resamples are those the pairing compared.
+  The record reports, beside the choice, whether each smoothed candidate is adopted over its
+  text-only twin (propagation, spec 4.7). That report chooses nothing.
+- **Trained candidates.** A trained candidate is a Stage 7/8 arm, imported by
+  ``decision.trained.import_trained_candidate``: each of its seeds is read once on each growth
+  panel, and its run carries the seed and the selection evidence of its seed run (spec 4.4). Its
+  record names the source record its list row pins, and must be that record's seed runs, read: the
+  source passes D8's ``check_arm``, so each checkpoint is the earliest highest-MRR epoch of its
+  monitor reads. Those reads are outcome reads from training, not growth reads, so the margin-first
+  check times only each run's growth reads (U32).
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -29,21 +46,33 @@ and the decision over the two growth panels.
 import math
 import platform
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple, Union
+from typing import Any, Dict, List, Sequence, Tuple, Union
 
 import numpy as np
 import polars as pl
 
+from naics_embedder.decision.candidates import (
+    CandidateEntry,
+    CandidateList,
+    economic_spec,
+    load_candidate_list,
+)
 from naics_embedder.decision.decide import (
+    MIN_SEEDS,
     _same,
+    check_arm,
     check_margins_first,
     check_recorded_text_only,
+    check_seed_table,
     check_text_only,
     read_time,
 )
+from naics_embedder.decision.provenance import check_candidate_provenance
 from naics_embedder.decision.records import (
+    ArmRecord,
     ArmSpec,
     ArtifactRef,
     Comparison,
@@ -57,6 +86,11 @@ from naics_embedder.decision.records import (
     ReferenceRead,
     RelativeMargin,
     RelativeMarginRecord,
+    SeedRun,
+    TableProvenance,
+    TableRef,
+    TextOnlyRef,
+    read_record,
 )
 from naics_embedder.decision.resampling import (
     PanelItems,
@@ -80,8 +114,9 @@ from naics_embedder.decision.scores import (
     statistic_means,
     statistic_values,
 )
-from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.decision.store import ArtifactStore, provenance_fields
 from naics_embedder.decision.sweep import _fit_settings, _log_records
+from naics_embedder.decision.trained import TrainedImport
 from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import (
     DECISION_LEVEL,
@@ -106,6 +141,10 @@ GROWTH_STATISTIC_DEFINITIONS = dict.fromkeys(
 )
 # A recomputed statistic agrees with a recorded one to within float summation order
 STATISTIC_TOLERANCE = 1e-12
+# Beside each stored prediction of a candidate's read: its table's matrix_fingerprint (P4)
+BINDING_COLUMN = 'table_fingerprint'
+# What identifies one stored score: the rows a rescore must give again
+SCORE_KEYS = ('panel', 'statistic', 'unit', 'item', 'feature_year')
 
 # -------------------------------------------------------------------------------------------------
 # Reads
@@ -262,10 +301,12 @@ def read_deterministic_arm(
     Read a deterministic candidate once on each growth panel's validation split: a single
     replicate (Req 24), recorded with its table's provenance (Req 23).
 
-    Every check runs before the first read.
+    Every check runs before the first read. Each stored prediction carries the table's
+    ``matrix_fingerprint`` as ``BINDING_COLUMN`` (P4).
 
     Args:
-        spec: The candidate, with what the tie order and D9 read.
+        spec: The candidate, with what the tie order and D9 read. A tree candidate's spec reads
+            no backbone (P7).
         table: Its 2,125-code table in the export form, with its builder's provenance beside it
             (``panels.text_only.provenance_path``).
         regressor_panel: The growth panel the margins read.
@@ -277,9 +318,9 @@ def read_deterministic_arm(
 
     Raises:
         ValueError: If the panel is not the growth panel the margins read, with their data and
-            fit settings; if the provenance does not describe the table; if the text-only table
-            was not built from what the candidate reads (D9); or if the table's width is not the
-            spec's dimension.
+            fit settings; if the provenance does not describe the table; if the candidate reads
+            a backbone and the text-only table was not built from what it reads (D9); or if the
+            table's width is not the spec's dimension.
         FileNotFoundError: If the table has no provenance beside it, or ``lock`` is not a file.
     '''
 
@@ -289,7 +330,8 @@ def read_deterministic_arm(
     environment = read_environment(lock)
     stored, provenance = store.put_candidate(table)
     text_only = store.put_text_only(text_only_table)
-    check_text_only(spec, text_only)
+    if spec.reads_backbone:
+        check_text_only(spec, text_only)
     arm = ArmTables.from_tables(
         pl.read_parquet(store.resolve(stored)), pl.read_parquet(store.resolve(text_only.table))
     )
@@ -302,24 +344,9 @@ def read_deterministic_arm(
 
     run_id = f'{spec.name}/{uuid.uuid4().hex}'
     detail = {'run': run_id, 'arm_name': spec.name}
-    predictions = pl.concat(
-        [
-            regressor_panel.validation(regime, DECISION_LEVEL, arm, purpose, detail=detail)
-            for regime in Regime
-        ]
-    )
-    scores = regressor_scores(predictions, regressor_panel.settings.repeats, GROWTH_PANELS)
     run = EconomicRun(
-        run_id=run_id,
-        table=stored,
+        **_read_table(regressor_panel, arm, stored, detail, purpose, store),
         provenance=provenance,
-        scores=store.put_frame(scores, 'scores.parquet'),
-        predictions=store.put_frame(predictions, 'predictions.parquet'),
-        statistics={
-            panel: panel_statistic(scores, panel, EMBEDDING_COMPARATOR)
-            for panel in GROWTH_PANELS
-        },
-        log_records=_log_records([regressor_panel.log], run_id),
     )
     return EconomicArmRecord(
         spec=spec,
@@ -331,37 +358,387 @@ def read_deterministic_arm(
         created_at=datetime.now(timezone.utc),
     )
 
+def read_trained_arm(
+    trained: TrainedImport,
+    *,
+    regressor_panel: RegressorPanel,
+    margins: RelativeMarginRecord,
+    store: ArtifactStore,
+    purpose: str,
+    lock: Union[str, Path],
+) -> EconomicArmRecord:
+    '''
+    Read each seed of an imported trained candidate once on each growth panel's validation split
+    (Req 24), with the seed and the selection evidence of its Stage 7/8 seed run (spec 4.4).
+
+    Every check runs before the first read: the growth panel the margins read, with their data
+    and fit settings; the environment; the source's text-only table, against its stored
+    provenance and what the spec reads (D9); and, for each seed, its table's width and codes, and
+    its export provenance, which is stored. Then the seeds are read in seed order. Each read names
+    its run, the candidate and the seed, and each stored prediction carries the seed's table's
+    ``matrix_fingerprint`` as ``BINDING_COLUMN`` (P4).
+
+    Args:
+        trained: The candidate, as ``decision.trained.import_trained_candidate`` checked it.
+        regressor_panel: The growth panel the margins read.
+        margins: The margins the candidate will be judged against.
+        store: The store that holds the source's tables, and where the provenance files and the
+            reads' outputs go.
+        purpose: Why the read happens, which the selection log records.
+        lock: The ``uv.lock`` the read runs under, which the record names.
+
+    Raises:
+        ValueError: If the panel is not the growth panel the margins read, with their data and
+            fit settings; if the source's text-only fields are not those of its stored provenance
+            or it was not built from what the spec reads (D9); if a seed's table is not the
+            spec's width or lacks a panel code; or if a seed's provenance no longer describes its
+            table.
+        FileNotFoundError: If ``lock`` or a seed's provenance file is missing.
+    '''
+
+    spec, source = trained.spec, trained.source
+    _require_growth(regressor_panel, spec.name)
+    panels = growth_panel_set(regressor_panel)
+    _require_same_panels(spec.name, panels, margins)
+    environment = read_environment(lock)
+    check_recorded_text_only(spec, source.text_only, store)
+    text_frame = pl.read_parquet(store.resolve(source.text_only.table))
+    seeds: List[Tuple[SeedRun, ArmTables, TableProvenance]] = []
+    for seed_run in sorted(source.runs, key=lambda run: run.seed):
+        arm = ArmTables.from_tables(pl.read_parquet(store.resolve(seed_run.table)), text_frame)
+        if arm.dimension != spec.dimension:
+            raise ValueError(
+                f'{spec.name} seed {seed_run.seed}: the table has dimension {arm.dimension}, not '
+                f"the spec's {spec.dimension}"
+            )
+        regressor_panel.require_arm(arm)
+        stored = store.put(trained.provenance[seed_run.seed])
+        seeds.append((seed_run, arm, store.candidate_provenance(seed_run.table, stored)))
+
+    runs: List[EconomicRun] = []
+    for seed_run, arm, provenance in seeds:
+        run_id = f'{spec.name}/seed-{seed_run.seed}/{uuid.uuid4().hex}'
+        detail = {'run': run_id, 'arm_name': spec.name, 'seed': seed_run.seed}
+        runs.append(
+            EconomicRun(
+                **_read_table(regressor_panel, arm, seed_run.table, detail, purpose, store),
+                seed=seed_run.seed,
+                provenance=provenance,
+                checkpoint=seed_run.checkpoint,
+                training_run=seed_run.training_run,
+                checkpoint_epoch=seed_run.checkpoint_epoch,
+                monitor_records=seed_run.monitor_records,
+            )
+        )
+    return EconomicArmRecord(
+        spec=spec,
+        text_only=source.text_only,
+        store=str(store.root),
+        panels=panels,
+        environment=environment,
+        runs=runs,
+        source=trained.source_ref,
+        created_at=datetime.now(timezone.utc),
+    )
+
+def _read_table(
+    regressor_panel: RegressorPanel,
+    arm: ArmTables,
+    table: TableRef,
+    detail: Dict[str, Any],
+    purpose: str,
+    store: ArtifactStore,
+) -> Dict[str, Any]:
+    '''
+    One table's validation reads on both growth panels, each stored prediction bound to the table
+    (P4): the fields of its ``EconomicRun`` that the reads give. ``detail['run']`` is the run id.
+    '''
+
+    run_id = detail['run']
+    predictions = pl.concat(
+        [
+            regressor_panel.validation(regime, DECISION_LEVEL, arm, purpose, detail=detail)
+            for regime in Regime
+        ]
+    ).with_columns(pl.lit(table.matrix_fingerprint).alias(BINDING_COLUMN))
+    scores = regressor_scores(predictions, regressor_panel.settings.repeats, GROWTH_PANELS)
+    return {
+        'run_id': run_id,
+        'table': table,
+        'scores': store.put_frame(scores, 'scores.parquet'),
+        'predictions': store.put_frame(predictions, 'predictions.parquet'),
+        'statistics': {
+            panel: panel_statistic(scores, panel, EMBEDDING_COMPARATOR)
+            for panel in GROWTH_PANELS
+        },
+        'log_records': _log_records([regressor_panel.log], run_id),
+    }
+
 # -------------------------------------------------------------------------------------------------
 # Checks
 # -------------------------------------------------------------------------------------------------
 
-def check_economic_arm(arm: EconomicArmRecord, store: ArtifactStore) -> None:
+def check_economic_arm(
+    arm: EconomicArmRecord, store: ArtifactStore, candidates: CandidateList
+) -> None:
     '''
-    Require an economic arm record to be a deterministic candidate's single replicate, intact,
-    with its provenance, read once on each growth panel as the decision reads it (Req 24; Req 23).
+    Require an economic arm record to match its candidate's row of the frozen list, intact, with
+    its provenance, read once on each growth panel as the decision reads it (Req 24; Req 23).
+
+    First, the record's dimension, components and geometry are its list row's. A deterministic
+    candidate's checks then run in this order:
+
+    1. Its text-only table: the shared one the list pins, with the recorded fields of its stored
+       provenance. A candidate that reads a backbone is D9-checked against it. The tree candidate
+       reads none, and every other kind reads one (P7).
+    2. Its shape: one seedless run with no source or selection evidence, whose table is the one
+       its row pins.
+
+    A trained candidate's (spec 4.4):
+
+    1. Its source: the record names the source record its row pins, by path and sha256, which
+       loads from the store as an arm record of the row's arm and passes ``check_arm``. Its seeds
+       are the ones the row names.
+    2. Its spec and text-only table: the source's spec under its economic name, and the source's
+       text-only table, which is the shared one the list pins.
+    3. Its shape: each of the source's seeds, once. The source passed ``check_arm``, so these are
+       at least ``MIN_SEEDS`` runs with distinct seeds.
+    4. Its evidence: each run's table, checkpoint, training run, checkpoint epoch and monitor
+       records are its source seed run's, and it names a training run.
+
+    Then each run: its files, its provenance as stored and under the text-and-tree rule (Req 29),
+    its predictions' binding to its table (P4), its statistics and stored scores against the
+    rescore of its predictions, and its growth reads. A trained run's export must also name the
+    run's checkpoint and record what the spec reads: the backbone, revision, descriptions,
+    summaries and window (D9).
+
+    Args:
+        arm: The record.
+        store: The artifact store it references.
+        candidates: The frozen list.
 
     Raises:
         ValueError: On the first problem found.
+        FileNotFoundError: If a file the record or its source references is not in the store.
+    '''
+
+    entry = candidates.entry(arm.spec.name)
+    _check_list_row(arm, entry)
+    if entry.kind == 'trained':
+        _check_trained(arm, entry, candidates, store)
+    else:
+        _check_shared_text_only(arm, entry, candidates, store)
+        _check_deterministic_shape(arm, entry)
+    for run in arm.runs:
+        _check_run(arm, run, entry, candidates, store)
+
+def _check_list_row(arm: EconomicArmRecord, entry: CandidateEntry) -> None:
+    '''Require the record's dimension, components and geometry to be its list row's.'''
+
+    differing = [
+        f'{field} {getattr(arm.spec, field)!r} (the row says {getattr(entry, field)!r})'
+        for field in ('dimension', 'components', 'geometry')
+        if getattr(arm.spec, field) != getattr(entry, field)
+    ]
+    if differing:
+        raise ValueError(
+            f'{arm.spec.name}: the record differs from its frozen-list row in '
+            f'{", ".join(differing)}'
+        )
+
+def _check_shared_text_only(
+    arm: EconomicArmRecord, entry: CandidateEntry, candidates: CandidateList, store: ArtifactStore
+) -> None:
+    '''
+    Require the arm's text-only table to be the one the list pins, its recorded fields those of
+    its stored provenance, and its spec to read a backbone exactly when its kind does (P7).
+
+    D8's ``check_text_only`` runs only for a spec that reads a backbone.
     '''
 
     name = arm.spec.name
-    if len(arm.runs) != 1 or arm.runs[0].seed is not None:
+    _require_shared_text_only(name, arm.text_only, candidates)
+    stored = store.text_only(arm.text_only.table, arm.text_only.provenance)
+    recorded = arm.text_only.model_dump()
+    wrong = sorted(key for key, value in stored.model_dump().items() if value != recorded[key])
+    if wrong:
         raise ValueError(
-            f'{name}: an economic arm is one deterministic replicate with no seed (Req 24), not '
-            f'{len(arm.runs)} runs with seeds {[run.seed for run in arm.runs]}'
+            f"{name}: the record's text-only fields {wrong} differ from its stored provenance"
         )
-    check_recorded_text_only(arm.spec, arm.text_only, store)
+    if arm.spec.reads_backbone:
+        check_text_only(arm.spec, stored)
+    if entry.kind == 'tree' and arm.spec.reads_backbone:
+        raise ValueError(
+            f'{name}: a tree candidate reads no backbone, so its spec names none (P7), not '
+            f'{arm.spec.backbone!r}'
+        )
+    if entry.kind != 'tree' and not arm.spec.reads_backbone:
+        raise ValueError(
+            f"{name}: a {entry.kind} candidate reads the text-only table's backbone, and its "
+            'spec names none'
+        )
+
+def _selection_evidence(run: EconomicRun) -> List[str]:
+    '''The selection fields a run holds; a deterministic run holds none (spec 4.4).'''
+
+    held = [
+        field for field in ('seed', 'checkpoint', 'training_run', 'checkpoint_epoch')
+        if getattr(run, field) is not None
+    ]
+    if run.monitor_records:
+        held.append('monitor_records')
+    return held
+
+def _check_deterministic_shape(arm: EconomicArmRecord, entry: CandidateEntry) -> None:
+    '''
+    Require one seedless run with no source or selection evidence (Req 24), whose table is the
+    one the arm's row pins.
+    '''
+
+    name = arm.spec.name
+    found = [f'{len(arm.runs)} runs'] if len(arm.runs) != 1 else []
+    if arm.source is not None:
+        found.append(f'a source {arm.source.path}')
+    for run in arm.runs:
+        held = _selection_evidence(run)
+        if held:
+            found.append(f'a run with its {", ".join(held)}')
+    if found:
+        raise ValueError(
+            f'{name}: an economic arm is one deterministic replicate for a {entry.kind} '
+            f'candidate, one seedless run with no source or selection evidence (Req 24), not '
+            f'{"; ".join(found)}'
+        )
     (run, ) = arm.runs
+    if entry.table_sha256 is None:
+        raise ValueError(f'{name}: its frozen-list row pins no table, so none can be read for it')
+    if run.table.sha256 != entry.table_sha256:
+        raise ValueError(
+            f'{name}: its table {run.table.sha256} differs from its pin {entry.table_sha256}'
+        )
+
+def _require_shared_text_only(name: str, text_only: TextOnlyRef, candidates: CandidateList) -> None:
+    '''Require the text-only table to be the shared one that the frozen list pins.'''
+
+    sha256 = text_only.table.sha256
+    if sha256 != candidates.text_only_sha256:
+        raise ValueError(
+            f'{name}: its text-only table {sha256[:12]} is not the shared text-only table '
+            f'{candidates.text_only_sha256[:12]} that the frozen list pins'
+        )
+
+# What a trained run copies from its Stage 7/8 seed run (spec 4.4)
+TRAINED_EVIDENCE = ('table', 'checkpoint', 'training_run', 'checkpoint_epoch', 'monitor_records')
+
+def _check_trained(
+    arm: EconomicArmRecord, entry: CandidateEntry, candidates: CandidateList, store: ArtifactStore
+) -> None:
+    '''Require a trained candidate's record to be its pinned source's seed runs (spec 4.4).'''
+
+    name = arm.spec.name
+    source = _trained_source(arm, entry, store)
+    seeds = sorted(run.seed for run in source.runs)
+    if seeds != entry.seeds:
+        raise ValueError(
+            f'{name}: its source holds the seeds {seeds}, and its row names {entry.seeds}'
+        )
+    if arm.spec != economic_spec(entry, source=source.spec):
+        raise ValueError(
+            f"{name}: its spec is not its source arm's, {source.spec.name!r}, under its economic "
+            'name'
+        )
+    if arm.text_only != source.text_only:
+        raise ValueError(f"{name}: its text-only table is not its source arm's")
+    _require_shared_text_only(name, arm.text_only, candidates)
+    _check_trained_shape(arm, source)
+    _check_trained_evidence(arm, source)
+
+def _trained_source(
+    arm: EconomicArmRecord, entry: CandidateEntry, store: ArtifactStore
+) -> ArmRecord:
+    '''The source record the row pins, which the arm names, intact and as D8 checks it.'''
+
+    name = arm.spec.name
+    pin = (entry.record, entry.record_sha256)
+    if arm.source is None or (arm.source.path, arm.source.sha256) != pin:
+        named = 'none' if arm.source is None else f'{arm.source.path} {arm.source.sha256[:12]}'
+        raise ValueError(
+            f'{name}: a trained candidate names the source record its frozen-list row pins, '
+            f'{entry.record} {entry.record_sha256[:12]}, and this record names {named}'
+        )
+    source = read_record(store.resolve(arm.source), ArmRecord)
+    if source.spec.name != entry.arm:
+        raise ValueError(
+            f'{name}: its source record holds the arm {source.spec.name!r}, not {entry.arm!r}'
+        )
+    check_arm(source, store, MIN_SEEDS)
+    return source
+
+def _check_trained_shape(arm: EconomicArmRecord, source: ArmRecord) -> None:
+    '''
+    Require one run for each of the source's seeds (Req 24). The source passed ``check_arm``, so
+    its seeds are at least ``MIN_SEEDS`` distinct integers, and so are the arm's.
+    '''
+
+    seeds = [run.seed for run in arm.runs]
+    expected = sorted(run.seed for run in source.runs)
+    if Counter(seeds) != Counter(expected):
+        raise ValueError(
+            f'{arm.spec.name}: an economic arm is one seedless run or at least {MIN_SEEDS} runs '
+            'with distinct seeds and their selection evidence (Req 24), and a trained candidate '
+            f"reads each of its source's seeds {expected} once, not {seeds}"
+        )
+
+def _check_trained_evidence(arm: EconomicArmRecord, source: ArmRecord) -> None:
+    '''Require each run to hold its source seed run's table and selection evidence.'''
+
+    seed_runs = {run.seed: run for run in source.runs}
+    for run in arm.runs:
+        name = f'{arm.spec.name} seed {run.seed}'
+        seed_run = seed_runs[run.seed]
+        differing = [
+            field for field in TRAINED_EVIDENCE if getattr(run, field) != getattr(seed_run, field)
+        ]
+        if differing:
+            raise ValueError(
+                f"{name}: its table and selection evidence are not its source seed run's: "
+                f'{differing} differ (spec 4.4)'
+            )
+        if run.training_run is None:
+            raise ValueError(
+                f'{name}: it names no training run, so it carries no selection evidence for its '
+                'checkpoint (spec 4.4)'
+            )
+
+def _check_run(
+    arm: EconomicArmRecord,
+    run: EconomicRun,
+    entry: CandidateEntry,
+    candidates: CandidateList,
+    store: ArtifactStore,
+) -> None:
+    '''
+    Require one run to be intact, of text and tree only, bound to its table and its scores. A
+    trained run's export names the run's checkpoint and records what the arm reads (D9).
+    '''
+
+    name = arm.spec.name
     for reference in (run.table, run.scores, run.predictions):
         store.resolve(reference)
     if store.candidate_provenance(run.table, run.provenance.file) != run.provenance:
         raise ValueError(f"{name}: the record's provenance differs from its stored provenance")
-    scores = _rescored(store, run.predictions, arm.panels.fit_settings['repeats'])
+    check_candidate_provenance(run.provenance.content, entry, candidates)
+    if entry.kind == 'trained':
+        _check_export_checkpoint(name, run)
+        _check_export_inputs(arm, run)
+    predictions = store.read_frame(run.predictions)
+    _check_binding(name, run, predictions)
+    scores = regressor_scores(predictions, arm.panels.fit_settings['repeats'], GROWTH_PANELS)
     statistics = {
         panel: panel_statistic(scores, panel, EMBEDDING_COMPARATOR)
         for panel in GROWTH_PANELS
     }
-    if set(run.statistics) != set(statistics) or not all(
+    if set(run.statistics) != set(GROWTH_PANELS) or not all(
         math.isclose(run.statistics[panel], value, rel_tol=STATISTIC_TOLERANCE)
         for panel, value in statistics.items()
     ):
@@ -369,10 +746,75 @@ def check_economic_arm(arm: EconomicArmRecord, store: ArtifactStore) -> None:
             f"{name}: the record's statistics are not those of its stored predictions, "
             f'{statistics}'
         )
+    _check_stored_scores(name, store.read_frame(run.scores), scores)
     _check_growth_reads(arm, run)
 
+def _check_export_checkpoint(name: str, run: EconomicRun) -> None:
+    '''Require a trained run's export provenance, which passed the rule, to name its checkpoint.'''
+
+    named = run.provenance.content['checkpoint']['sha256']
+    if named != run.checkpoint.sha256:
+        raise ValueError(
+            f'{name} seed {run.seed}: its export provenance names another checkpoint, '
+            f"{named[:12]}, than the run's {run.checkpoint.sha256[:12]}"
+        )
+
+def _check_export_inputs(arm: EconomicArmRecord, run: EconomicRun) -> None:
+    '''
+    Require a trained run's stored export provenance to record the backbone, revision,
+    descriptions, summaries and window that the arm reads (D9), as the import requires of the
+    same file (``decision.trained``). The source record pins the arm's spec, not the export.
+    '''
+
+    fields = provenance_fields(
+        run.provenance.content,
+        run.table.sha256,
+        run.table.matrix_fingerprint,
+        f'{arm.spec.name} seed {run.seed}: the stored {run.provenance.file.path}',
+    )
+    check_seed_table(arm.spec, run.seed, fields)
+
+def _check_binding(name: str, run: EconomicRun, predictions: pl.DataFrame) -> None:
+    '''Require every stored prediction to name the run's table, and no other (P4).'''
+
+    bound = []
+    if BINDING_COLUMN in predictions.columns:
+        bound = predictions.get_column(BINDING_COLUMN).unique().to_list()
+    if bound != [run.table.matrix_fingerprint]:
+        raise ValueError(
+            f'{name}: its predictions belong to another table: they name '
+            f'{sorted(bound, key=str)}, not its table {run.table.matrix_fingerprint}'
+        )
+
+def _check_stored_scores(name: str, stored: pl.DataFrame, rescored: pl.DataFrame) -> None:
+    '''
+    Require stored scores to be the rescore of their predictions: the same
+    ``(panel, statistic, unit, item, feature_year)`` rows, each ``value`` within
+    ``STATISTIC_TOLERANCE``.
+
+    Raises:
+        ValueError: If a row is missing, repeated or extra, or a value differs.
+    '''
+
+    keys = list(SCORE_KEYS)
+    stored, rescored = stored.sort(keys), rescored.sort(keys)
+    same = stored.select(keys).equals(rescored.select(keys)) and all(
+        math.isclose(value, again, rel_tol=STATISTIC_TOLERANCE) for value, again in zip(
+            stored.get_column('value').to_list(),
+            rescored.get_column('value').to_list()
+        )
+    )
+    if not same:
+        raise ValueError(
+            f'{name}: the stored scores are not the rescore of the stored predictions, to within '
+            f'{STATISTIC_TOLERANCE}'
+        )
+
 def _check_growth_reads(arm: EconomicArmRecord, run: EconomicRun) -> None:
-    '''Require the run's reads to be its table's validation reads, once on each growth panel.'''
+    '''
+    Require the run's reads to be its table's validation reads, once on each growth panel. A run
+    with a seed has reads that name it.
+    '''
 
     name = arm.spec.name
     panels = sorted(str(record.get('panel')) for record in run.log_records)
@@ -386,6 +828,8 @@ def _check_growth_reads(arm: EconomicArmRecord, run: EconomicRun) -> None:
         'text_only': arm.text_only.table.matrix_fingerprint,
         'dimension': arm.spec.dimension,
     }
+    if run.seed is not None:
+        named['seed'] = run.seed
     for record in run.log_records:
         if record.get('event') != 'read' or record.get('split') != VALIDATION:
             raise ValueError(
@@ -399,11 +843,22 @@ def _check_growth_reads(arm: EconomicArmRecord, run: EconomicRun) -> None:
         if wrong:
             raise ValueError(f'{name}: a {record["panel"]} read names another {wrong}')
 
-def _reference_rows(predictions: pl.DataFrame) -> pl.DataFrame:
-    '''The reference's predictions, one per panel, repeat and row.'''
+def _reference_rows(predictions: pl.DataFrame, columns: Sequence[str]) -> pl.DataFrame:
+    '''
+    The reference's predictions in ``columns``, one per panel, repeat and row.
 
-    return predictions.filter(pl.col('comparator') == REFERENCE_COMPARATOR
-                              ).sort('panel', 'repeat', 'code', 'feature_year')
+    ``columns`` are the margin read's own, so a column stored only with a candidate's predictions,
+    such as ``BINDING_COLUMN``, never enters the comparison (spec 4.8).
+    '''
+
+    # yapf: disable
+    return (
+        predictions
+        .select(columns)
+        .filter(pl.col('comparator') == REFERENCE_COMPARATOR)
+        .sort('panel', 'repeat', 'code', 'feature_year')
+    )
+    # yapf: enable
 
 def _where(environment: ReadEnvironment) -> str:
     return (
@@ -418,27 +873,27 @@ def check_reference_pairing(
     Require the arm to have read the growth panel the margins read, and the reference to predict
     in each of its runs exactly as in the margin read, so its errors pair with δ's (Req 24).
 
-    Only the predictions decide; the environments name where each read ran.
+    Only the predictions decide, in the margin read's own columns; the environments name where
+    each read ran.
 
-    Run it after ``check_economic_arm``, which requires the record to be one intact deterministic
-    replicate. Called alone, it still refuses an arm that does not hold exactly one run, since a
-    loop over no runs would pair nothing.
+    Run it after ``check_economic_arm``, which requires the record to be intact and of its
+    candidate's shape. Called alone, it still refuses an arm with no runs, since a loop over no
+    runs would pair nothing. It compares every run.
 
     Raises:
-        ValueError: If the arm does not hold exactly one run, if the panels, data or fit settings
-            differ, or if the reference's predictions in a run differ from the margin read's.
+        ValueError: If the arm holds no run, if the panels, data or fit settings differ, or if the
+            reference's predictions in a run differ from the margin read's.
     '''
 
     name = arm.spec.name
-    if len(arm.runs) != 1:
-        raise ValueError(
-            f'{name}: an economic arm is one deterministic replicate (Req 24), not '
-            f'{len(arm.runs)} runs'
-        )
+    if not arm.runs:
+        raise ValueError(f'{name}: an economic arm with no runs pairs nothing (Req 24)')
     _require_same_panels(name, arm.panels, margins)
-    reference = _reference_rows(store.read_frame(margins.read.predictions))
+    margin_read = store.read_frame(margins.read.predictions)
+    reference = _reference_rows(margin_read, margin_read.columns)
     for run in arm.runs:
-        if not _reference_rows(store.read_frame(run.predictions)).equals(reference):
+        read = _reference_rows(store.read_frame(run.predictions), margin_read.columns)
+        if not read.equals(reference):
             raise ValueError(
                 f"{name}: its {REFERENCE_COMPARATOR} predictions differ from the margin read's, "
                 f'so its errors do not pair with the reference (Req 24). It was read on '
@@ -458,7 +913,8 @@ def check_relative_margins(margins: RelativeMarginRecord, store: ArtifactStore) 
     Raises:
         ValueError: If the margins name another reference, hold another δ than one per growth
             panel for the reference's statistic, or their read logged or scored a comparator that
-            reads a candidate; or if a δ is not r times the MSE the read's predictions give.
+            reads a candidate; if the read's stored scores are not the rescore of its predictions;
+            or if a δ is not r times the MSE the read's predictions give.
     '''
 
     name = f'the margins {margins.name!r}'
@@ -475,6 +931,7 @@ def check_relative_margins(margins: RelativeMarginRecord, store: ArtifactStore) 
     scores = regressor_scores(
         predictions, margins.read.panels.fit_settings['repeats'], GROWTH_PANELS
     )
+    _check_stored_scores(name, store.read_frame(margins.read.scores), scores)
     for entry in margins.margins:
         mse = panel_statistic(scores, entry.panel, REFERENCE_COMPARATOR)
         scored = math.isclose(entry.reference_mse, mse, rel_tol=STATISTIC_TOLERANCE)
@@ -515,12 +972,15 @@ def check_economic_margins_first(
     Require the margin read to precede the margins, and every candidate read to follow them
     (Req 24: δ is fixed from a reference-only read before any candidate is read).
 
+    A candidate's reads are its runs' growth reads. A trained seed's monitor reads are outcome
+    reads from training, not growth reads, and they are not timed (spec 4.4; U32).
+
     Raises:
-        ValueError: If a read's time or the margins' is missing or names no timezone, or if
-            either order fails.
+        ValueError: If a growth read's time or the margins' is missing or names no timezone, or
+            if either order fails.
     '''
 
-    check_margins_first(arms, margins.fixed_at)
+    check_margins_first(arms, margins.fixed_at, monitor_reads=False)
     name = f'the margins {margins.name!r}'
     for record in margins.read.log_records:
         time = read_time(record, f'{name}: its {record.get("panel")} read')
@@ -541,6 +1001,7 @@ def decide_economic(
     margins: RelativeMarginRecord,
     store: ArtifactStore,
     *,
+    candidates: Union[str, Path],
     replicates: int,
     bootstrap_seed: int,
 ) -> EconomicDecisionRecord:
@@ -549,18 +1010,41 @@ def decide_economic(
     adopted over it, Req 5's non-dominated set and tie order pick one. With none adopted, the
     reference stands and ``chosen`` is None.
 
-    Every check runs before any number is computed: the margins (``check_relative_margins``),
-    each candidate (``check_economic_arm``) and its pairing with the margin read
-    (``check_reference_pairing``), then the order of the reads
+    The decision reads exactly the frozen list's candidates (spec 4.4). The list file is stored
+    first and loaded from the store, so the record names the bytes the decision read.
+
+    The record also reports the propagation comparisons (spec 4.7): each smoothed candidate
+    against its text-only twin, as the list pairs them, on the decision's own draws and δ. They
+    choose nothing.
+
+    Every check runs before any number is computed: the list's names, the margins
+    (``check_relative_margins``), each candidate against its row (``check_economic_arm``) and its
+    pairing with the margin read (``check_reference_pairing``), then the order of the reads
     (``check_economic_margins_first``).
 
+    Args:
+        candidates: The frozen candidate list, normally ``ECONOMIC_CANDIDATES`` under the
+            repository root.
+
     Raises:
-        ValueError: If no candidate is given, two share a name or one is named for the
-            reference, or a check fails.
+        ValueError: If a candidate is not on the list or a list candidate is missing; if no
+            candidate is given, two share a name or one is named for the reference; or if a
+            check fails.
+        FileNotFoundError: If the list is not a file.
         TieUnresolvedError: If the tie order cannot separate the surviving candidates.
     '''
 
     names = [arm.spec.name for arm in arms]
+    stored_list = store.put(candidates)
+    candidate_list = load_candidate_list(store.resolve(stored_list))
+    for arm_name in names:
+        candidate_list.entry(arm_name)
+    missing = [listed for listed in candidate_list.names if listed not in names]
+    if missing:
+        raise ValueError(
+            f'the frozen candidate list names {missing}, which are missing from the decision: it '
+            'reads every candidate on the list'
+        )
     if not names:
         raise ValueError('an economic decision reads at least one candidate')
     if len(set(names)) != len(names) or REFERENCE_COMPARATOR in names:
@@ -570,7 +1054,7 @@ def decide_economic(
         )
     check_relative_margins(margins, store)
     for arm in arms:
-        check_economic_arm(arm, store)
+        check_economic_arm(arm, store, candidate_list)
         check_reference_pairing(margins, arm, store)
     check_economic_margins_first(arms, margins)
     settings = EconomicDecisionSettings(
@@ -625,6 +1109,8 @@ def decide_economic(
         )
 
     comparisons = [against(arm, REFERENCE_COMPARATOR) for arm in names]
+    # A report on the same draws and δ: nothing below reads it, so it chooses nothing (spec 4.7)
+    propagation = [against(smoothed, twin) for smoothed, twin in candidate_list.propagation_pairs()]
     eligible = [comparison.a for comparison in comparisons if comparison.adopted]
     among = [against(a, b) for a in eligible for b in eligible if a != b]
     heldout_gain = {
@@ -654,6 +1140,8 @@ def decide_economic(
         heldout_gain=heldout_gain,
         chosen=order[0] if order else None,
         reports=[_economic_report(arm.spec.name, sides[arm.spec.name][1]) for arm in arms],
+        candidates=stored_list,
+        propagation=propagation,
     )
 
 def _economic_report(arm: str, frames: Sequence[pl.DataFrame]) -> EconomicReport:

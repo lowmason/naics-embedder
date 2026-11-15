@@ -116,7 +116,7 @@ feeder precision (`:496`), metric mutation coverage (`:522`) and the legacy-inpu
 (`:662`). A multi-seed Lambda campaign in Stage 1 or 5 first needs the public native
 qualification (`:560`).
 
-- [ ] Stage 1: Economic — candidates
+- [x] Stage 1: Economic — candidates
       Objective: Build the economic candidates from text and the tree, with a command that reads
       a candidate, and take each one through the economic decision on fixtures.
       Spec: Req 29 (all but the real read), split Req 23 (what a candidate is, and selection on
@@ -141,6 +141,8 @@ qualification (`:560`).
       `growth_heldout` (test). No real growth read ran, and no margin record was written. The
       suite, Ruff, the style gate and the strict docs build pass.
       ROUTING: brainstorming
+      > Stage 1: COMPLETE (2026-11-15) — implemented by plan 16 (specs/plans/completed/16-economic-candidates.md). Its Handoff section names what Stage 3 consumes.
+      > Next: resume the roadmap.
 
 - [ ] Stage 2: Text→code — ITA scoring and split
       Objective: Write text→code's stage spec and build its ITA panel on a fixture: the grouped

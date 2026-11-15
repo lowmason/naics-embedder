@@ -17,6 +17,9 @@ Commands:
     growth-margins: Fix each growth panel's margin from a reference-only read (Req 24).
     decide: Decide among arms over D8's three panels (Req 5), or among economic candidates
         against the reference on the two growth panels (Req 24).
+    economic-build: Build the frozen list's deterministic candidates' tables (spec 4.2).
+    economic-read: Check one economic candidate, then read it on both growth panels, or stop
+        after the checks under ``--dry-run`` (spec 4.6).
     diagnostics: Report Req 6's structural diagnostics over every codebook code.
     export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
     outcome-panel: Score an arm on the outcome panel's validation split (Stage 6).
@@ -37,8 +40,25 @@ import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
+from naics_embedder.decision.candidates import (
+    ECONOMIC_CANDIDATES,
+    CandidateEntry,
+    CandidateList,
+    candidate_table_path,
+    economic_spec,
+    load_candidate_list,
+)
 from naics_embedder.decision.decide import _check_monitor_records, decide, fix_margins
-from naics_embedder.decision.economic import decide_economic, fix_relative_margins
+from naics_embedder.decision.economic import (
+    GROWTH_PANELS,
+    check_relative_margins,
+    decide_economic,
+    fix_relative_margins,
+    read_deterministic_arm,
+    read_environment,
+    read_trained_arm,
+)
+from naics_embedder.decision.provenance import check_candidate_provenance
 from naics_embedder.decision.records import (
     ArmRecord,
     ArmSpec,
@@ -49,8 +69,9 @@ from naics_embedder.decision.records import (
     write_record,
 )
 from naics_embedder.decision.rule import TieUnresolvedError
-from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.decision.store import ArtifactStore, check_provenance, provenance_fields
 from naics_embedder.decision.sweep import run_seed_sweep
+from naics_embedder.decision.trained import import_trained_candidate
 from naics_embedder.metrics.diagnostics import GEOMETRIES, diagnostics_report
 from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
@@ -66,8 +87,14 @@ from naics_embedder.panels.regressor import (
     Regime,
     load_regressor_panel,
     summarize,
+    table_fingerprint,
 )
-from naics_embedder.panels.text_only import build_text_only_table, load_backbone, provenance_path
+from naics_embedder.panels.text_only import (
+    build_text_only_table,
+    load_backbone,
+    provenance_path,
+    text_only_fingerprint,
+)
 from naics_embedder.panels.window_summaries import summaries_identity
 from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle, sha256_file
 from naics_embedder.supervision.schema import IndexRole
@@ -78,6 +105,7 @@ from naics_embedder.text_model.export import code_token_config, export_code_tabl
 from naics_embedder.text_model.radius_report import ANCHOR_GRADIENT_PREFIX, radius_report, term_gradients
 from naics_embedder.tools.config_tools import show_current_config
 from naics_embedder.tools.metrics_tools import visualize_metrics
+from naics_embedder.tree_model.builders import BUILDER_INPUTS, build_candidate
 from naics_embedder.utils.config import (
     Config,
     DecisionConfig,
@@ -696,6 +724,16 @@ def decide_command(
         str,
         typer.Option('--output', help='Where to write the decision record (JSON)'),
     ],
+    candidates: Annotated[
+        Optional[str],
+        typer.Option(
+            '--candidates',
+            help=(
+                'The frozen candidate list the economic decision reads (default: '
+                f'{ECONOMIC_CANDIDATES}); refused with D8 margins'
+            ),
+        ),
+    ] = None,
 ):
     '''
     Decide among arms under Req 5's rule: over D8's three panels with margins from tools margins,
@@ -711,7 +749,11 @@ def decide_command(
 
     The economic decision reads economic arm records, one or more, and compares each candidate
     with the reference ``covariates+ancestors``. Only a candidate adopted over the reference is
-    eligible for the rule among candidates; with none, the reference stands.
+    eligible for the rule among candidates; with none, the reference stands. It reads exactly the
+    candidates of the frozen list (``--candidates``, by default the committed
+    ``conf/data/economic_candidates.yaml``), and its record names the list's sha256. It also
+    reports, one ``Propagation:`` line each, whether a smoothed candidate is adopted over its
+    text-only twin. That report chooses nothing.
 
     Example:
         Decide between a candidate and the reference::
@@ -734,10 +776,16 @@ def decide_command(
                 [read_record(path, EconomicArmRecord) for path in arm],
                 read_record(margins, RelativeMarginRecord),
                 ArtifactStore(store),
+                candidates=ECONOMIC_CANDIDATES if candidates is None else candidates,
                 replicates=cfg.replicates,
                 bootstrap_seed=cfg.bootstrap_seed,
             )
         else:
+            if candidates is not None:
+                raise ValueError(
+                    f'--candidates applies only to the economic decision, and {margins} is a D8 '
+                    'margin record (tools margins)'
+                )
             record = decide(
                 name,
                 question,
@@ -766,6 +814,13 @@ def decide_command(
                 f'against −δ {-panel.margin:.4g}; {superiority} [{upper_low:+.4g}, '
                 f'{upper_high:+.4g}]'
             )
+    # Only the economic decision reports propagation
+    propagation = getattr(record, 'propagation', [])
+    if propagation:
+        console.print()
+    for comparison in propagation:
+        verdict = 'adopted' if comparison.adopted else 'not adopted'
+        console.print(f'Propagation: {comparison.a} over {comparison.b}: {verdict}')
     reference = getattr(record, 'reference', None)
     if reference is not None:
         console.print(f'\nAdopted over the reference: {", ".join(record.eligible) or "none"}')
@@ -775,6 +830,340 @@ def decide_command(
     chosen = record.chosen or f'none; the reference {reference} stands'
     console.print(f'[bold]Chosen: {chosen}[/bold]')
     console.print(f'\nDecision record: {path}\n')
+
+# -------------------------------------------------------------------------------------------------
+# Economic candidates (spec economic-candidates, 4.2 and 4.6)
+# -------------------------------------------------------------------------------------------------
+
+def _require_pin(path: str, pin: str, what: str) -> str:
+    '''
+    The file's sha256, required to be the frozen list's pin.
+
+    Raises:
+        ValueError: If the file's sha256 is not ``pin``.
+        OSError: If the file cannot be read.
+    '''
+
+    digest = sha256_file(Path(path))
+    if digest != pin:
+        raise ValueError(
+            f'{path} is not {what} that the frozen list pins: its sha256 is {digest[:12]}, and '
+            f'the pin is {pin[:12]}'
+        )
+    return digest
+
+@app.command('economic-build')
+def economic_build_command(
+    codebook: Annotated[
+        str,
+        typer.Option('--codebook', help="The codebook the frozen list pins: bundle 301cce28's"),
+    ],
+    text_only: Annotated[
+        str,
+        typer.Option('--text-only', help='The shared text-only table the frozen list pins'),
+    ],
+    store: Annotated[
+        str,
+        typer.Option('--store', help="The artifact store's root (tables: candidates/economic/)"),
+    ],
+    candidates: Annotated[
+        str,
+        typer.Option('--candidates', help='The frozen candidate list'),
+    ] = ECONOMIC_CANDIDATES,
+    candidate: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            '--candidate',
+            help='A deterministic candidate to build (repeatable; default: every one, in the '
+            "list's order)",
+        ),
+    ] = None,
+):
+    '''
+    Build the frozen list's deterministic candidates' tables, each with its provenance (spec 4.2).
+
+    Each table goes to ``<store>/candidates/economic/<name>.parquet``, with its builder's
+    provenance beside it, and its name, path and sha256 are printed. A named candidate is built
+    once, however often it is named. Building reads the codebook and the text-only table, and no
+    panel or QCEW file.
+
+    Before anything is written, the codebook and the text-only table must be the ones the list
+    pins, every named candidate must be deterministic, and no table or provenance of theirs may
+    exist. A row that pins a table must build those bytes: a table with other bytes is refused,
+    and the build stops there. The refused table stays where it was built, so it can be compared.
+
+    Example:
+        Build the nine tables into the store::
+
+            $ uv run naics-embedder tools economic-build --codebook PATH/naics_codebook.parquet \\
+                --text-only PATH/text_only.parquet --store ~/naics-artifacts
+    '''
+
+    configure_logging('tools_economic_build.log')
+
+    try:
+        frozen = load_candidate_list(candidates)
+        if candidate:
+            entries = [frozen.entry(name) for name in dict.fromkeys(candidate)]
+        else:
+            entries = [entry for entry in frozen.candidates if entry.kind != 'trained']
+        trained = [entry.name for entry in entries if entry.kind == 'trained']
+        if trained:
+            raise ValueError(
+                f'{", ".join(trained)}: a trained candidate is imported by tools economic-read; '
+                'tools economic-build builds deterministic candidates only'
+            )
+        _require_pin(codebook, frozen.codebook_sha256, 'the codebook')
+        _require_pin(text_only, frozen.text_only_sha256, 'the shared text-only table')
+        root = ArtifactStore(store).root
+        tables = {entry.name: candidate_table_path(root, entry.name) for entry in entries}
+        for table in tables.values():
+            for path in (table, provenance_path(table)):
+                if path.exists():
+                    raise FileExistsError(f'{path} exists; a candidate table is built once')
+        for entry in entries:
+            reads_text = 'text_only' in BUILDER_INPUTS[entry.kind]
+            path = build_candidate(
+                entry.kind,
+                entry.dimension,
+                Path(codebook),
+                tables[entry.name],
+                text_only=Path(text_only) if reads_text else None,
+            )
+            digest = sha256_file(path)
+            if entry.table_sha256 is not None and digest != entry.table_sha256:
+                raise ValueError(
+                    f'{entry.name}: the built table {path} has sha256 {digest}, which differs '
+                    f'from its pin {entry.table_sha256}'
+                )
+            # One line each, unwrapped, so a path and its sha256 can be copied whole
+            console.print(f'  • {entry.name}: {path} (sha256 {digest})', soft_wrap=True)
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]Economic build failed:[/bold red] {exc}', soft_wrap=True)
+        raise typer.Exit(code=1)
+
+def _deterministic_candidate(
+    entry: CandidateEntry,
+    frozen: CandidateList,
+    store: ArtifactStore,
+    text_only: Optional[str],
+) -> ArmSpec:
+    '''
+    A deterministic candidate's spec, once every check of its inputs that reads no panel passes.
+
+    In this order: the stored table at ``candidate_table_path`` is the one its row pins; the
+    provenance beside it describes it and comes from text and tree only (Req 29); ``text_only``
+    is the shared table the list pins, and its provenance describes it. The spec takes the D9
+    fields from that provenance (``economic_spec``).
+
+    Raises:
+        ValueError: On the first check that fails.
+        OSError: If a file is missing or cannot be read.
+    '''
+
+    name = entry.name
+    if entry.table_sha256 is None:
+        raise ValueError(f'{name}: its frozen-list row pins no table, so none can be read for it')
+    table = candidate_table_path(store.root, name)
+    digest = sha256_file(table)
+    if digest != entry.table_sha256:
+        raise ValueError(
+            f'{name}: the stored table {table} has sha256 {digest}, which differs from its pin '
+            f'{entry.table_sha256}'
+        )
+    provenance = provenance_path(table)
+    content = json.loads(provenance.read_text(encoding='utf-8'))
+    check_provenance(content, digest, table_fingerprint(pl.read_parquet(table)), str(provenance))
+    check_candidate_provenance(content, entry, frozen)
+    if text_only is None:
+        raise ValueError(
+            f'{name}: a {entry.kind} candidate is read beside the shared text-only table, so it '
+            'needs --text-only'
+        )
+    text_digest = _require_pin(text_only, frozen.text_only_sha256, 'the shared text-only table')
+    text_provenance = provenance_path(Path(text_only))
+    fields = provenance_fields(
+        json.loads(text_provenance.read_text(encoding='utf-8')),
+        text_digest,
+        text_only_fingerprint(pl.read_parquet(text_only)),
+        str(text_provenance),
+    )
+    return economic_spec(entry, text_only=fields)
+
+@app.command('economic-read')
+def economic_read_command(
+    candidate: Annotated[
+        str,
+        typer.Option('--candidate', help='The candidate to read, by its name on the frozen list'),
+    ],
+    codebook: Annotated[
+        str,
+        typer.Option('--codebook', help="A supervision bundle's naics_codebook.parquet"),
+    ],
+    margins: Annotated[
+        str,
+        typer.Option('--margins', help='The relative margin record (tools growth-margins)'),
+    ],
+    store: Annotated[
+        str,
+        typer.Option(
+            '--store', help='The artifact store: the tables, the trained records and the margins'
+        ),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where to write the economic arm record (JSON)'),
+    ],
+    candidates: Annotated[
+        str,
+        typer.Option('--candidates', help='The frozen candidate list'),
+    ] = ECONOMIC_CANDIDATES,
+    text_only: Annotated[
+        Optional[str],
+        typer.Option(
+            '--text-only',
+            help='The shared text-only table, its provenance beside it (a deterministic '
+            'candidate)',
+        ),
+    ] = None,
+    runs_root: Annotated[
+        Optional[str],
+        typer.Option(
+            '--runs-root',
+            help="The directory of the seeds' run directories (a trained candidate)",
+        ),
+    ] = None,
+    purpose: Annotated[
+        Optional[str],
+        typer.Option(
+            '--purpose',
+            help='Why the read happens; recorded in the selection log '
+            '(default: economic candidate read)',
+        ),
+    ] = None,
+    log: Annotated[
+        Optional[str],
+        typer.Option('--log', help='Selection log (default: the regressor config)'),
+    ] = None,
+    lock: Annotated[
+        str,
+        typer.Option('--lock', help='The uv.lock the read runs under, which the record names'),
+    ] = LOCK_FILE,
+    dry_run: Annotated[
+        bool,
+        typer.Option('--dry-run', help='Run every check, then stop: no panel loads, nothing logs'),
+    ] = False,
+):
+    '''
+    Read one candidate of the frozen list on both growth panels' validation splits, and write its
+    economic arm record (spec 4.6).
+
+    Every check runs before the growth panel loads, in this order:
+
+    1. ``--output`` is a new record.
+    2. The list loads, and names the candidate.
+    3. ``--margins`` is a relative margin record (tools growth-margins), and passes its own
+       checks.
+    4. The candidate's inputs. A deterministic candidate's stored table is the one its row pins,
+       and its provenance describes it and comes from text and tree only (Req 29). Its
+       ``--text-only`` is the shared table the list pins, and gives its spec the D9 fields. A
+       trained candidate is imported from its pinned source record and the seeds' run
+       directories under ``--runs-root``.
+    5. ``--lock`` names a file.
+
+    ``--dry-run`` stops there: it loads no panel and no QCEW file, and logs nothing. A read loads
+    the growth panel at level 6, whatever the regressor config's ``outcome`` says, as tools
+    growth-margins does. A deterministic candidate is read once, and a trained one once per
+    seed; each read logs a validation read of each growth panel.
+
+    Run it from the main checkout's root, or with ``--log`` and ``--lock`` as absolute paths, as
+    tools growth-margins runs.
+
+    Example:
+        Check a candidate, then read it::
+
+            $ uv run naics-embedder tools economic-read --candidate tree-d16 \\
+                --codebook PATH/naics_codebook.parquet --margins growth_margins.json \\
+                --store ~/naics-artifacts --text-only PATH/text_only.parquet \\
+                --runs-root checkpoints --output tree-d16.json --dry-run
+            $ uv run naics-embedder tools economic-read --candidate tree-d16 \\
+                --codebook PATH/naics_codebook.parquet --margins growth_margins.json \\
+                --store ~/naics-artifacts --text-only PATH/text_only.parquet \\
+                --runs-root checkpoints --output tree-d16.json
+    '''
+
+    configure_logging('tools_economic_read.log')
+
+    read_purpose = (purpose or '').strip() or 'economic candidate read'
+    try:
+        # Before any check that hashes a file
+        _require_new_record(Path(output))
+        frozen = load_candidate_list(candidates)
+        entry = frozen.entry(candidate)
+        artifacts = ArtifactStore(store)
+        if _margin_kind(margins) != 'relative_margins':
+            raise ValueError(
+                f'tools economic-read reads relative margins (tools growth-margins), and {margins} '
+                'is a D8 margin record (tools margins)'
+            )
+        margin_record = read_record(margins, RelativeMarginRecord)
+        check_relative_margins(margin_record, artifacts)
+        if entry.kind == 'trained':
+            if runs_root is None:
+                raise ValueError(
+                    f'{entry.name}: a trained candidate is imported from its run directories, so '
+                    'it needs --runs-root'
+                )
+            trained = import_trained_candidate(entry, frozen, artifacts, runs_root)
+        else:
+            spec = _deterministic_candidate(entry, frozen, artifacts, text_only)
+        read_environment(lock)
+        if dry_run:
+            console.print(
+                f'Dry run: every check passed for {entry.name}; no panel was loaded and nothing '
+                'was logged',
+                soft_wrap=True,
+            )
+            return
+        regressor_cfg = load_config(RegressorPanelConfig, REGRESSOR_PANEL_CONFIG)
+        growth = regressor_cfg.model_copy(update={'outcome': RegressorOutcome.GROWTH.value})
+        panel = load_regressor_panel(growth, codebook, log_path=log, levels=[DECISION_LEVEL])
+        reading = {
+            'regressor_panel': panel,
+            'margins': margin_record,
+            'store': artifacts,
+            'purpose': read_purpose,
+            'lock': lock,
+        }
+        if entry.kind == 'trained':
+            record = read_trained_arm(trained, **reading)
+        else:
+            record = read_deterministic_arm(
+                spec,
+                candidate_table_path(artifacts.root, entry.name),
+                text_only_table=text_only,
+                **reading,
+            )
+        path = write_record(record, output)
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]Economic read failed:[/bold red] {exc}', soft_wrap=True)
+        raise typer.Exit(code=1)
+
+    runs = len(record.runs)
+    console.print(
+        f'\n[bold cyan]Economic read {entry.name!r}: {runs} {"run" if runs == 1 else "runs"}'
+        '[/bold cyan]\n'
+    )
+    for growth_panel in GROWTH_PANELS:
+        mean = float(np.mean([run.statistics[growth_panel] for run in record.runs]))
+        console.print(
+            f'  • {growth_panel}: covariates+embedding MSE {mean:.6g}, the mean over its runs',
+            soft_wrap=True,
+        )
+    console.print(
+        f'\nReads logged to {panel.log.path} (fingerprint {panel.fingerprint})', soft_wrap=True
+    )
+    console.print(f'Economic arm record: {path}\n', soft_wrap=True)
 
 # -------------------------------------------------------------------------------------------------
 # Diagnostics (Req 6)
