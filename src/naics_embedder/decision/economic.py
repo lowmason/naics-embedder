@@ -494,7 +494,8 @@ def check_economic_arm(
     A trained candidate's (spec 4.4):
 
     1. Its source: the record names the source record its row pins, by path and sha256, which
-       loads from the store as an arm record of the row's arm and passes ``check_arm``.
+       loads from the store as an arm record of the row's arm and passes ``check_arm``. Its seeds
+       are the ones the row names.
     2. Its spec and text-only table: the source's spec under its economic name, and the source's
        text-only table, which is the shared one the list pins.
     3. Its shape: each of the source's seeds, once. The source passed ``check_arm``, so these are
@@ -631,6 +632,11 @@ def _check_trained(
 
     name = arm.spec.name
     source = _trained_source(arm, entry, store)
+    seeds = sorted(run.seed for run in source.runs)
+    if seeds != entry.seeds:
+        raise ValueError(
+            f'{name}: its source holds the seeds {seeds}, and its row names {entry.seeds}'
+        )
     if arm.spec != economic_spec(entry, source=source.spec):
         raise ValueError(
             f"{name}: its spec is not its source arm's, {source.spec.name!r}, under its economic "

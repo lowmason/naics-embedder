@@ -1770,6 +1770,37 @@ def test_a_trained_arm_that_reads_only_some_of_its_sources_seeds_is_refused(
     ):
         check_economic_arm(arm.model_copy(update={'runs': runs}), store, frozen)
 
+@pytest.mark.parametrize(
+    'seeds', [[0, 1, 2, 3, 4], [0, 1, 2, 4, 5]], ids=['the-last-seed', 'a-middle-seed']
+)
+def test_a_row_that_names_only_some_of_its_sources_seeds_is_refused(six_seed_read, store, seeds):
+    '''The arm reads all six of its source's seeds; its frozen-list row names five of them.'''
+
+    arm, frozen, _ = six_seed_read
+    (entry, ) = frozen.candidates
+    row = entry.model_copy(update={'seeds': seeds})
+
+    with pytest.raises(
+        ValueError,
+        match='^euclidean-d3: its source holds the seeds \\[0, 1, 2, 3, 4, 5\\], and its row '
+        f'names {re.escape(str(seeds))}',
+    ):
+        check_economic_arm(arm, store, frozen.model_copy(update={'candidates': [row]}))
+
+def test_a_row_that_names_more_seeds_than_its_source_holds_is_refused(trained_read, store):
+    '''The frozen-list row names seed 5, which the arm and its source never read.'''
+
+    arm, frozen, _ = trained_read
+    (entry, ) = frozen.candidates
+    row = entry.model_copy(update={'seeds': [0, 1, 2, 3, 4, 5]})
+
+    with pytest.raises(
+        ValueError,
+        match='^euclidean-d3: its source holds the seeds \\[0, 1, 2, 3, 4\\], and its row names '
+        '\\[0, 1, 2, 3, 4, 5\\]',
+    ):
+        check_economic_arm(arm, store, frozen.model_copy(update={'candidates': [row]}))
+
 def test_a_trained_run_without_selection_evidence_is_refused(trained_read, store):
     arm, frozen, _ = trained_read
     bare = _trained_with(arm, 2, training_run=None, checkpoint_epoch=None, monitor_records=[])
