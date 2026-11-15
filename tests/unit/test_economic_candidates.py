@@ -1,11 +1,16 @@
 '''
-The frozen economic candidate list (spec economic-candidates, 4.1; plan 16, Task 3).
+The frozen economic candidate list (spec economic-candidates, 4.1; plan 16, Task 3) and the
+text-and-tree-only provenance rule (4.5; Task 4).
 
 The committed list is read as it stands. The entry and list rules are exercised over small lists
 built here, and each kind's ArmSpec is checked against the text-only table's provenance fields.
+The provenance rule reads each builder's real provenance and a fabricated export's.
 '''
 
+import json
+import re
 from pathlib import Path
+from typing import Any, Dict, NamedTuple
 
 import pytest
 import yaml
@@ -20,9 +25,27 @@ from naics_embedder.decision.candidates import (
     economic_spec,
     load_candidate_list,
 )
-from naics_embedder.decision.records import ArmSpec
+from naics_embedder.decision.provenance import (
+    EXPORT_ENTRIES,
+    EXPORT_ENTRIES_WITH_GEOMETRY,
+    check_candidate_provenance,
+)
+from naics_embedder.decision.records import ArmSpec, ArtifactRef
 from naics_embedder.decision.store import provenance_fields
-from tests.fixtures.decision import spec
+from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.tree_model.builders import BUILDER_ENTRIES, BUILDER_INPUTS, KINDS, build_candidate
+from tests.fixtures.decision import spec, write_text_only
+from tests.fixtures.economic import (
+    CODEBOOK_INPUT,
+    CODEBOOK_SHA256,
+    CONTRACT,
+    export_provenance,
+    fixture_list,
+    write_candidate,
+    write_codebook,
+)
+from tests.fixtures.regressor_panel import CODEBOOK, coordinate_table
 
 pytestmark = pytest.mark.unit
 
@@ -552,3 +575,628 @@ def test_a_source_that_differs_from_the_entry_is_refused(edits, word):
 def test_a_trained_candidate_needs_its_source_spec():
     with pytest.raises(ValueError, match='source'):
         economic_spec(_entry(_trained('t-d8')))
+
+# -------------------------------------------------------------------------------------------------
+# Text and tree only: the provenance rule (4.5)
+# -------------------------------------------------------------------------------------------------
+
+RULE = '(Req 29: text and tree only)'
+DETERMINISTIC = {
+    kind: CandidateEntry(
+        name=f'{kind}-d3',
+        kind=kind,
+        dimension=3,
+        components=2 if kind == 'smoothed' else 1,
+        geometry='euclidean',
+    )
+    for kind in KINDS
+}
+
+class Built(NamedTuple):
+    '''Each builder's provenance, as ``build_candidate`` wrote it, and the list that matches it.'''
+
+    contents: Dict[str, Dict[str, Any]]
+    frozen: CandidateList
+
+def _build_every_kind(directory: Path) -> Built:
+    codebook = write_codebook(directory / 'naics_codebook.parquet')
+    text_only = write_text_only(directory / 'text', codes=CODEBOOK)
+    contents = {}
+    for kind in KINDS:
+        reads_text = 'text_only' in BUILDER_INPUTS[kind]
+        table = build_candidate(
+            kind,
+            3,
+            codebook,
+            directory / f'{kind}-d3.parquet',
+            text_only=text_only if reads_text else None,
+        )
+        contents[kind] = json.loads(provenance_path(table).read_text())
+    frozen = fixture_list(
+        list(DETERMINISTIC.values()),
+        text_only_sha256=sha256_file(text_only),
+        codebook_sha256=sha256_file(codebook),
+    )
+    return Built(contents, frozen)
+
+@pytest.fixture(scope='module')
+def built(tmp_path_factory) -> Built:
+    return _build_every_kind(tmp_path_factory.mktemp('built'))
+
+@pytest.fixture
+def tree_entry():
+    return CandidateEntry(
+        name='tree-d3', kind='tree', dimension=3, components=1, geometry='euclidean'
+    )
+
+@pytest.fixture
+def tree_content(tmp_path):
+    path = write_candidate(tmp_path, 'tree-d3', coordinate_table(CODEBOOK))
+    return json.loads(provenance_path(path).read_text())
+
+@pytest.fixture
+def trained_entry():
+    return _entry(_trained('euclidean-d3', dimension=3))
+
+@pytest.fixture
+def candidates(tree_entry, trained_entry):
+    return fixture_list([tree_entry, trained_entry], text_only_sha256='a' * 64)
+
+@pytest.fixture
+def table(tmp_path):
+    path = tmp_path / 'table.parquet'
+    coordinate_table(CODEBOOK).write_parquet(path)
+    return path
+
+@pytest.fixture
+def arm_spec():
+    return spec('euclidean-d3', dimension=3, geometry='euclidean')
+
+@pytest.fixture
+def checkpoint():
+    return ArtifactRef(path='checkpoints/euclidean-d3.ckpt', sha256='b' * 64, bytes=1)
+
+@pytest.fixture
+def export_content(table, arm_spec, checkpoint):
+    return export_provenance(table, arm_spec, checkpoint)
+
+def _refused(content, entry, frozen, check):
+    '''
+    The rule refuses the content with a message that starts with the entry's name, then names
+    the check that refused it, and ends with the rule's citation.
+    '''
+
+    pattern = f'^{re.escape(entry.name)}: {re.escape(check)}: .*{re.escape(RULE)}$'
+    with pytest.raises(ValueError, match=pattern):
+        check_candidate_provenance(content, entry, frozen)
+
+def _without(content, key):
+    return {name: value for name, value in content.items() if name != key}
+
+def _with_input(content, name, **edits):
+    '''The builder provenance with one input's entries replaced.'''
+
+    inputs = {**content['inputs'], name: {**content['inputs'][name], **edits}}
+    return {**content, 'inputs': inputs}
+
+QCEW = {'path': 'qcew/2023.annual.singlefile.csv', 'sha256': 'f' * 64}
+
+# -------------------------------------------------------------------------------------------------
+# What passes
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('kind', KINDS)
+def test_each_builders_provenance_passes_the_rule(tmp_path, kind):
+    built_here = _build_every_kind(tmp_path)
+    entry = DETERMINISTIC[kind]
+    content = built_here.contents[kind]
+    assert content['builder'] == kind
+    check_candidate_provenance(content, entry, built_here.frozen)
+
+@pytest.mark.parametrize('geometry', [False, True], ids=['stage-7', 'stage-8'])
+def test_both_export_versions_pass_the_rule(
+    table, arm_spec, checkpoint, trained_entry, candidates, geometry
+):
+    content = export_provenance(table, arm_spec, checkpoint, geometry=geometry)
+    check_candidate_provenance(content, trained_entry, candidates)
+
+@pytest.mark.parametrize(
+    'edit, message',
+    [
+        ({
+            'qcew': {
+                'path': 'qcew/2023.annual.singlefile.csv',
+                'sha256': 'f' * 64
+            }
+        }, 'entries'),
+        ({
+            'panel': 'growth_seen'
+        }, 'entries'),
+        ({
+            'selection_log': 'logs/selection_log.jsonl'
+        }, 'entries'),
+        ({
+            'inputs': {
+                'codebook': CODEBOOK_INPUT,
+                'qcew': CODEBOOK_INPUT
+            }
+        }, 'inputs'),
+        (
+            {
+                'inputs': {
+                    'codebook': {
+                        'path': 'naics_codebook.parquet',
+                        'sha256': 'f' * 64
+                    }
+                }
+            }, 'codebook'
+        ),
+        ({
+            'builder': 'hgcn'
+        }, 'builder'),
+        ({
+            'builder': 'smoothed'
+        }, 'builder'),  # a tree entry's provenance from another builder
+    ],
+)
+def test_a_provenance_outside_text_and_tree_is_refused(
+    tree_content, tree_entry, candidates, edit, message
+):
+    with pytest.raises(ValueError, match=f'^tree-d3: .*{message}.*Req 29: text and tree only'):
+        check_candidate_provenance({**tree_content, **edit}, tree_entry, candidates)
+
+@pytest.mark.parametrize(
+    'contract',
+    [
+        {
+            **CONTRACT.model_dump(), 'codebook_fingerprint': 'x',
+            'objective': 'req11-v1'
+        },
+        dict(CONTRACT.model_dump()),
+    ],
+    ids=['the full contract an export writes', 'the two named fields'],
+)
+def test_an_exports_contract_may_carry_more_than_the_two_named_fields(
+    export_content, trained_entry, candidates, contract
+):
+    check_candidate_provenance({**export_content, 'contract': contract}, trained_entry, candidates)
+
+def test_the_fixture_tree_provenance_is_the_tree_builders_entries(tree_content, tree_entry):
+    assert set(tree_content) == BUILDER_ENTRIES['tree']
+    assert tree_content['builder'] == 'tree'
+    assert tree_content['inputs'] == {'codebook': CODEBOOK_INPUT}
+    assert tree_content['dimension'] == 3
+    assert tree_content['codes'] == len(CODEBOOK)
+    assert tree_content['eigenvalues'] == [1.0] * 4
+
+def test_the_fixture_exports_hold_the_two_known_versions_entries(
+    table, arm_spec, checkpoint, export_content
+):
+    assert set(export_content) == EXPORT_ENTRIES_WITH_GEOMETRY
+    assert set(export_provenance(table, arm_spec, checkpoint, geometry=False)) == EXPORT_ENTRIES
+    assert EXPORT_ENTRIES_WITH_GEOMETRY == EXPORT_ENTRIES | {'geometry'}
+    assert export_content['contract'] == CONTRACT.model_dump()
+    assert export_content['checkpoint']['sha256'] == checkpoint.sha256
+
+def test_a_tree_provenance_names_no_text_only_input_so_the_lists_text_only_sha_is_not_read(
+    tree_content, tree_entry
+):
+    other = fixture_list([tree_entry], text_only_sha256='9' * 64)
+    check_candidate_provenance(tree_content, tree_entry, other)
+
+def test_the_fixture_codebook_sha_is_settable(tmp_path):
+    path = write_candidate(
+        tmp_path, 'tree-d3', coordinate_table(CODEBOOK), codebook_sha256='7' * 64
+    )
+    content = json.loads(provenance_path(path).read_text())
+    assert content['inputs'] == {'codebook': {**CODEBOOK_INPUT, 'sha256': '7' * 64}}
+    assert CODEBOOK_INPUT['sha256'] == CODEBOOK_SHA256
+
+def test_write_candidate_entries_join_or_replace_the_provenance_entries(tmp_path):
+    path = write_candidate(
+        tmp_path, 'tree-d3', coordinate_table(CODEBOOK), qcew=QCEW, method='another method'
+    )
+    content = json.loads(provenance_path(path).read_text())
+    assert content['qcew'] == QCEW
+    assert content['method'] == 'another method'
+    assert content['table_sha256'] == sha256_file(path)
+
+# -------------------------------------------------------------------------------------------------
+# A builder's provenance
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('kind', KINDS)
+@pytest.mark.parametrize(
+    'edit',
+    [
+        {
+            'qcew': QCEW
+        },
+        {
+            'panel': 'growth_seen'
+        },
+        {
+            'selection_log': 'logs/selection_log.jsonl'
+        },
+        {
+            'generated_at': '2026-11-14T00:00:00+00:00'
+        },
+    ],
+    ids=['qcew', 'panel', 'selection log', 'a timestamp'],
+)
+def test_a_builder_provenance_with_an_entry_its_builder_does_not_write_is_refused(
+    built, kind, edit
+):
+    _refused({**built.contents[kind], **edit}, DETERMINISTIC[kind], built.frozen, 'entries')
+
+@pytest.mark.parametrize('kind', ['text-only', 'smoothed'])
+def test_only_the_tree_builder_writes_eigenvalues(built, kind):
+    content = {**built.contents[kind], 'eigenvalues': [1.0]}
+    _refused(content, DETERMINISTIC[kind], built.frozen, 'entries')
+
+@pytest.mark.parametrize(
+    'kind, key',
+    [
+        pytest.param(kind, key, id=f'{kind}: {key}') for kind in KINDS
+        for key in sorted(BUILDER_ENTRIES[kind] - {'builder'})
+    ],
+)
+def test_a_builder_provenance_missing_an_entry_its_builder_writes_is_refused(built, kind, key):
+    content = _without(built.contents[kind], key)
+    _refused(content, DETERMINISTIC[kind], built.frozen, 'entries')
+
+def test_the_builders_entries_are_what_the_real_builders_wrote(built):
+    for kind in KINDS:
+        assert set(built.contents[kind]) == BUILDER_ENTRIES[kind]
+
+@pytest.mark.parametrize(
+    'name, builder',
+    [
+        pytest.param(name, builder, id=f'{name} entry, {builder} builder') for name in KINDS
+        for builder in KINDS if name != builder
+    ],
+)
+def test_a_provenance_from_another_builder_is_refused(built, name, builder):
+    _refused(built.contents[builder], DETERMINISTIC[name], built.frozen, 'builder')
+
+@pytest.mark.parametrize(
+    'builder', ['hgcn', 'trained', 'Tree', 'tree ', '', None, ['tree'], 3, {
+        'tree': 1
+    }]
+)
+def test_a_builder_outside_the_three_is_refused(built, builder):
+    content = {**built.contents['tree'], 'builder': builder}
+    _refused(content, DETERMINISTIC['tree'], built.frozen, 'builder')
+
+@pytest.mark.parametrize('kind', KINDS)
+def test_a_trained_entry_is_refused_a_builders_provenance(built, trained_entry, candidates, kind):
+    _refused(built.contents[kind], trained_entry, candidates, 'builder')
+
+@pytest.mark.parametrize('builder', ['trained', 'euclidean-d3', None, ''])
+def test_a_trained_entry_is_refused_a_provenance_that_names_any_builder(
+    export_content, trained_entry, candidates, builder
+):
+    # A builder entry, whatever it holds, means the provenance is a builder's, never an export's
+    _refused({**export_content, 'builder': builder}, trained_entry, candidates, 'builder')
+
+@pytest.mark.parametrize(
+    'inputs',
+    [None, [], ['codebook'], 'codebook', 3, {}, {
+        'qcew': CODEBOOK_INPUT
+    }, True],
+    ids=[
+        'null', 'a list', 'a list of the names', 'a string', 'an int', 'empty', 'one wrong name',
+        'a bool'
+    ],
+)
+def test_inputs_that_are_not_the_builders_object_are_refused(
+    tree_content, tree_entry, candidates, inputs
+):
+    _refused({**tree_content, 'inputs': inputs}, tree_entry, candidates, 'inputs')
+
+@pytest.mark.parametrize(
+    'kind, inputs_edit',
+    [
+        ('tree', lambda inputs: {
+            **inputs, 'text_only': inputs['codebook']
+        }),
+        ('tree', lambda inputs: {
+            **inputs, 'qcew': inputs['codebook']
+        }),
+        ('tree', lambda inputs: {
+            'codebook': inputs['codebook'],
+            'panel': inputs['codebook']
+        }),
+        ('tree', lambda inputs: {
+            'Codebook': inputs['codebook']
+        }),
+        ('text-only', lambda inputs: {
+            'codebook': inputs['codebook']
+        }),
+        ('text-only', lambda inputs: {
+            'text_only': inputs['text_only']
+        }),
+        ('text-only', lambda inputs: {
+            **inputs, 'qcew': inputs['codebook']
+        }),
+        ('smoothed', lambda inputs: {
+            'codebook': inputs['codebook']
+        }),
+        ('smoothed', lambda inputs: {
+            'text_only': inputs['text_only']
+        }),
+        ('smoothed', lambda inputs: {
+            **inputs, 'selection_log': inputs['codebook']
+        }),
+        ('smoothed', lambda inputs: {
+            'codebook': inputs['codebook'],
+            'text': inputs['text_only']
+        }),
+    ],
+    ids=[
+        'tree: a text-only input', 'tree: a qcew input', 'tree: a panel input instead of text',
+        'tree: a renamed codebook', 'text-only: no text-only input', 'text-only: no codebook',
+        'text-only: a qcew input', 'smoothed: no text-only input', 'smoothed: no codebook',
+        'smoothed: a selection log input', 'smoothed: a renamed text-only input'
+    ],
+)
+def test_inputs_other_than_the_builders_are_refused(built, kind, inputs_edit):
+    content = built.contents[kind]
+    edited = {**content, 'inputs': inputs_edit(content['inputs'])}
+    _refused(edited, DETERMINISTIC[kind], built.frozen, 'inputs')
+
+INPUT_SHAPES = {
+    'a bare string': 'the fixture codebook',
+    'null': None,
+    'a list': ['path', 'sha256'],
+    'no sha256': {
+        'path': 'x'
+    },
+    'no path': {
+        'sha256': 'f' * 64
+    },
+    'empty': {},
+    'an extra key': {
+        'path': 'x',
+        'sha256': 'f' * 64,
+        'bytes': 1
+    },
+    'a non-string path': {
+        'path': 1,
+        'sha256': 'f' * 64
+    },
+    'a null path': {
+        'path': None,
+        'sha256': 'f' * 64
+    },
+    'a non-string sha256': {
+        'path': 'x',
+        'sha256': 7
+    },
+    'a null sha256': {
+        'path': 'x',
+        'sha256': None
+    },
+}
+
+@pytest.mark.parametrize(
+    'kind, name',
+    [
+        pytest.param(kind, name, id=f'{kind}: {name}') for kind in KINDS
+        for name in BUILDER_INPUTS[kind]
+    ],
+)
+@pytest.mark.parametrize('shape', INPUT_SHAPES.values(), ids=INPUT_SHAPES.keys())
+def test_an_input_that_is_not_a_path_and_a_sha256_is_refused(built, kind, name, shape):
+    content = built.contents[kind]
+    edited = {**content, 'inputs': {**content['inputs'], name: shape}}
+    _refused(edited, DETERMINISTIC[kind], built.frozen, 'inputs')
+
+@pytest.mark.parametrize('kind', KINDS)
+def test_a_codebook_that_is_not_the_lists_is_refused(built, kind):
+    content = _with_input(built.contents[kind], 'codebook', sha256='f' * 64)
+    _refused(content, DETERMINISTIC[kind], built.frozen, 'codebook')
+
+@pytest.mark.parametrize('kind', ['text-only', 'smoothed'])
+def test_a_text_only_table_that_is_not_the_lists_is_refused(built, kind):
+    content = _with_input(built.contents[kind], 'text_only', sha256='f' * 64)
+    _refused(content, DETERMINISTIC[kind], built.frozen, 'text_only')
+
+@pytest.mark.parametrize('kind', ['text-only', 'smoothed'])
+def test_a_text_only_sha_is_checked_against_the_lists_not_the_codebooks(built, kind):
+    # The text-only input names the codebook's sha, which the list holds for the codebook alone
+    content = _with_input(
+        built.contents[kind],
+        'text_only',
+        sha256=built.contents[kind]['inputs']['codebook']['sha256']
+    )
+    _refused(content, DETERMINISTIC[kind], built.frozen, 'text_only')
+
+@pytest.mark.parametrize('kind', ['text-only', 'smoothed'])
+def test_a_codebook_sha_is_checked_against_the_lists_not_the_text_only_tables(built, kind):
+    text_only_sha = built.contents[kind]['inputs']['text_only']['sha256']
+    content = _with_input(built.contents[kind], 'codebook', sha256=text_only_sha)
+    _refused(content, DETERMINISTIC[kind], built.frozen, 'codebook')
+
+# -------------------------------------------------------------------------------------------------
+# The checks' order
+# -------------------------------------------------------------------------------------------------
+
+def test_the_builder_is_checked_before_the_entries(tree_content, tree_entry, candidates):
+    content = {**tree_content, 'builder': 'hgcn', 'qcew': QCEW}
+    _refused(content, tree_entry, candidates, 'builder')
+
+def test_the_entries_are_checked_before_the_inputs(tree_content, tree_entry, candidates):
+    content = {**tree_content, 'qcew': QCEW, 'inputs': None}
+    _refused(content, tree_entry, candidates, 'entries')
+
+def test_the_inputs_are_checked_before_the_codebook(tree_content, tree_entry, candidates):
+    inputs = {'codebook': {**CODEBOOK_INPUT, 'sha256': 'f' * 64}, 'qcew': QCEW}
+    _refused({**tree_content, 'inputs': inputs}, tree_entry, candidates, 'inputs')
+
+@pytest.mark.parametrize('shape', INPUT_SHAPES.values(), ids=INPUT_SHAPES.keys())
+def test_an_inputs_shape_is_checked_before_the_codebooks_sha(built, shape):
+    # The text-only input is malformed and the codebook is another: the shape is refused first
+    content = _with_input(built.contents['smoothed'], 'codebook', sha256='f' * 64)
+    content = {**content, 'inputs': {**content['inputs'], 'text_only': shape}}
+    _refused(content, DETERMINISTIC['smoothed'], built.frozen, 'inputs')
+
+@pytest.mark.parametrize('kind', ['text-only', 'smoothed'])
+def test_the_codebook_is_checked_before_the_text_only_table(built, kind):
+    content = _with_input(built.contents[kind], 'codebook', sha256='f' * 64)
+    content = _with_input(content, 'text_only', sha256='e' * 64)
+    _refused(content, DETERMINISTIC[kind], built.frozen, 'codebook')
+
+# -------------------------------------------------------------------------------------------------
+# An export's provenance
+# -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('geometry', [False, True], ids=['stage-7', 'stage-8'])
+@pytest.mark.parametrize(
+    'edit',
+    [
+        {
+            'qcew': QCEW
+        }, {
+            'panel': 'growth_seen'
+        }, {
+            'selection_log': 'logs/selection_log.jsonl'
+        }, {
+            'inputs': {
+                'codebook': CODEBOOK_INPUT
+            }
+        }, {
+            'method': 'a builder entry'
+        }
+    ],
+    ids=['qcew', 'panel', 'selection log', 'inputs', 'a builder entry'],
+)
+def test_an_export_with_an_unknown_entry_is_refused(
+    table, arm_spec, checkpoint, trained_entry, candidates, geometry, edit
+):
+    content = {**export_provenance(table, arm_spec, checkpoint, geometry=geometry), **edit}
+    _refused(content, trained_entry, candidates, 'entries')
+
+@pytest.mark.parametrize('geometry', [False, True], ids=['stage-7', 'stage-8'])
+@pytest.mark.parametrize('key', sorted(EXPORT_ENTRIES))
+def test_an_export_missing_an_entry_is_refused(
+    table, arm_spec, checkpoint, trained_entry, candidates, geometry, key
+):
+    content = export_provenance(table, arm_spec, checkpoint, geometry=geometry)
+    _refused(_without(content, key), trained_entry, candidates, 'entries')
+
+@pytest.mark.parametrize(
+    'edit, check',
+    [
+        (lambda c: {
+            **c, 'contract': {
+                **CONTRACT.model_dump(), 'bundle_id': 'other'
+            }
+        }, 'contract'),
+        (
+            lambda c: {
+                **c, 'contract': {
+                    **CONTRACT.model_dump(), 'contract_version': 'v0'
+                }
+            }, 'contract'
+        ),
+        (lambda c: {
+            **c, 'qcew': QCEW
+        }, 'entries'),
+        (lambda c: _without(c, 'tokenizer'), 'entries'),
+    ],
+    ids=['another bundle_id', 'another contract_version', 'an extra qcew key', 'no tokenizer'],
+)
+def test_an_export_naming_another_contract_or_an_unknown_entry_is_refused(
+    export_content, trained_entry, candidates, edit, check
+):
+    _refused(edit(export_content), trained_entry, candidates, check)
+
+@pytest.mark.parametrize(
+    'contract',
+    [
+        pytest.param({'contract_version': 'fixture-v1'}, id='no bundle_id'),
+        pytest.param({'bundle_id': 'fixture-bundle'}, id='no contract_version'),
+        pytest.param(
+            {
+                'bundle_id': 'fixture-v1',
+                'contract_version': 'fixture-bundle'
+            }, id='the two swapped'
+        ),
+        pytest.param(
+            {
+                'bundle_id': 'Fixture-bundle',
+                'contract_version': 'fixture-v1'
+            },
+            id='bundle_id in another case'
+        ),
+        pytest.param(
+            {
+                'bundle_id': 'fixture-bundle',
+                'contract_version': 'fixture-v1 '
+            },
+            id='contract_version with a space'
+        ),
+        pytest.param({
+            'bundle_id': None,
+            'contract_version': None
+        }, id='both null'),
+        pytest.param({}, id='empty'),
+        pytest.param(None, id='null'),
+        pytest.param('fixture-bundle', id='a string'),
+        pytest.param(['fixture-bundle', 'fixture-v1'], id='a list'),
+    ],
+)
+def test_an_export_whose_contract_is_not_the_lists_is_refused(
+    export_content, trained_entry, candidates, contract
+):
+    _refused({**export_content, 'contract': contract}, trained_entry, candidates, 'contract')
+
+@pytest.mark.parametrize('field', ['checkpoint', 'descriptions'])
+@pytest.mark.parametrize('shape', INPUT_SHAPES.values(), ids=INPUT_SHAPES.keys())
+def test_an_export_whose_input_file_is_not_a_path_and_a_sha256_is_refused(
+    export_content, trained_entry, candidates, field, shape
+):
+    _refused({**export_content, field: shape}, trained_entry, candidates, 'inputs')
+
+def test_the_contract_is_checked_before_the_exports_input_files(
+    export_content, trained_entry, candidates
+):
+    content = {
+        **export_content,
+        'contract': {
+            **CONTRACT.model_dump(), 'bundle_id': 'other'
+        },
+        'checkpoint': None,
+    }
+    _refused(content, trained_entry, candidates, 'contract')
+
+def test_the_entries_are_checked_before_the_exports_contract(
+    export_content, trained_entry, candidates
+):
+    content = {**export_content, 'qcew': QCEW, 'contract': None}
+    _refused(content, trained_entry, candidates, 'entries')
+
+@pytest.mark.parametrize('kind', KINDS)
+def test_an_export_provenance_is_refused_for_a_deterministic_entry(
+    built, export_content, candidates, kind
+):
+    _refused(export_content, DETERMINISTIC[kind], built.frozen, 'builder')
+
+def test_a_builders_provenance_that_lost_its_builder_entry_reads_as_an_export(
+    tree_content, tree_entry, candidates
+):
+    _refused(_without(tree_content, 'builder'), tree_entry, candidates, 'builder')
+
+def test_the_entry_kind_is_checked_before_an_exports_entries(
+    tree_entry, candidates, export_content
+):
+    _refused({**export_content, 'qcew': QCEW}, tree_entry, candidates, 'builder')
+
+def test_every_refusal_names_the_entry_and_cites_the_rule(tree_content, tree_entry, candidates):
+    with pytest.raises(ValueError) as info:
+        check_candidate_provenance({**tree_content, 'qcew': QCEW}, tree_entry, candidates)
+    message = str(info.value)
+    assert message.startswith('tree-d3: ')
+    assert message.endswith(RULE)
+    assert 'qcew' in message

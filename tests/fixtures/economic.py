@@ -2,25 +2,33 @@
 Deterministic economic candidates on the fixture growth panel (Req 23; Req 24).
 
 A candidate is a coordinate table over the fixture codebook in the export form, with the
-provenance its builder writes beside it. The candidates read the synthetic backbone and text of
-``tests.fixtures.decision``, so the text-only table ``write_text_only`` writes over the codebook
-is their D9 comparator.
+provenance its builder writes beside it: ``write_candidate`` writes the tree builder's, and
+``export_provenance`` is a trained table's, as ``tools export-table`` writes it. The candidates
+read the synthetic backbone and text of ``tests.fixtures.decision``, so the text-only table
+``write_text_only`` writes over the codebook is their D9 comparator. ``fixture_list`` is the
+frozen list the provenance rule (Req 29) checks them against.
 '''
 
 import json
+import re
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Dict, Sequence
 
 import polars as pl
 
-from naics_embedder.decision.records import ArmSpec
+from naics_embedder.decision.candidates import CandidateEntry, CandidateList, CheckpointContract
+from naics_embedder.decision.records import ArmSpec, ArtifactRef
 from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.tree_model.builders import LIBRARIES, METHODS
 from tests.fixtures.decision import spec
 from tests.fixtures.regressor_panel import CODEBOOK
 
 DIMENSION = 3
+CODEBOOK_SHA256 = 'c' * 64
+CONTRACT = CheckpointContract(bundle_id='fixture-bundle', contract_version='fixture-v1')
+CODEBOOK_INPUT = {'path': 'naics_codebook.parquet', 'sha256': CODEBOOK_SHA256}
 
 def write_codebook(path: Path, codes: Sequence[str] = CODEBOOK) -> Path:
     '''
@@ -48,24 +56,111 @@ def candidate_spec(name: str, **overrides) -> ArmSpec:
     fields = {'components': 1, 'dimension': DIMENSION, 'geometry': 'euclidean', **overrides}
     return spec(name, **fields)
 
-def write_candidate(directory: Path, name: str, table: pl.DataFrame, **entries) -> Path:
+def write_candidate(
+    directory: Path,
+    name: str,
+    table: pl.DataFrame,
+    *,
+    codebook_sha256: str = CODEBOOK_SHA256,
+    **entries,
+) -> Path:
     '''
-    A candidate's table and the provenance its builder writes beside it, naming the table's
+    A candidate's table and the provenance the tree builder writes beside it, naming the table's
     sha256 and ``matrix_fingerprint``; ``entries`` join or replace the provenance's entries.
+
+    The provenance has exactly the tree builder's entries (``BUILDER_ENTRIES['tree']``). Its one
+    input is the codebook, whose sha256 is ``codebook_sha256``, and its eigenvalues are ones.
     '''
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f'{name}.parquet'
     table.write_parquet(path)
+    dimension = sum(1 for column in table.columns if re.fullmatch(r'e\d+', column))
     provenance = {
-        'builder': 'fixture',
+        'builder': 'tree',
+        'method': METHODS['tree'],
+        'dimension': dimension,
+        'codes': table.height,
         'inputs': {
-            'codebook': 'the fixture codebook'
+            'codebook': {
+                **CODEBOOK_INPUT, 'sha256': codebook_sha256
+            }
         },
+        'eigenvalues': [1.0] * (dimension + 1),
         'table_sha256': sha256_file(path),
         'matrix_fingerprint': table_fingerprint(table),
+        'library_versions': {
+            library: 'fixture'
+            for library in LIBRARIES
+        },
         **entries,
     }
     provenance_path(path).write_text(json.dumps(provenance, indent=2) + '\n')
     return path
+
+def fixture_list(
+    entries: Sequence[CandidateEntry],
+    *,
+    text_only_sha256: str,
+    codebook_sha256: str = CODEBOOK_SHA256,
+) -> CandidateList:
+    '''
+    A frozen candidate list over the entries, with the fixture checkpoint contract.
+
+    A test whose candidates come from ``build_candidate`` passes the written codebook's
+    ``sha256_file``, which the builder records, as ``codebook_sha256``.
+    '''
+
+    return CandidateList(
+        codebook_sha256=codebook_sha256,
+        text_only_sha256=text_only_sha256,
+        checkpoint_contract=CONTRACT,
+        candidates=list(entries),
+    )
+
+def export_provenance(
+    table_path: Path,
+    arm_spec: ArmSpec,
+    checkpoint: ArtifactRef,
+    *,
+    geometry: bool = True,
+) -> Dict[str, Any]:
+    '''
+    A trained table's export provenance (``tools export-table``), as a dict.
+
+    It names ``CONTRACT`` and the checkpoint's sha256, and what ``arm_spec`` reads. It has the
+    entries of Stage 8's files, or Stage 7's, which have no ``geometry`` entry, when
+    ``geometry`` is false.
+    '''
+
+    table = pl.read_parquet(table_path)
+    provenance: Dict[str, Any] = {
+        'checkpoint': {
+            'path': checkpoint.path,
+            'sha256': checkpoint.sha256
+        },
+        'contract': CONTRACT.model_dump(mode='json'),
+        'backbone': arm_spec.backbone,
+        'revision': arm_spec.backbone_revision,
+        'max_length': arm_spec.max_length,
+        'descriptions': {
+            'path': 'naics_descriptions.parquet',
+            'sha256': arm_spec.descriptions_sha256
+        },
+        'summaries': arm_spec.summaries_sha256,
+        'tokenizer': arm_spec.backbone,
+        'codes': table.height,
+        'dimension': arm_spec.dimension,
+        'coordinates': f'the fixture {arm_spec.geometry} coordinates',
+        'table_sha256': sha256_file(table_path),
+        'matrix_fingerprint': table_fingerprint(table),
+        'library_versions': {
+            library: 'fixture'
+            for library in ('torch', 'polars')
+        },
+        'generated_at': '2026-11-14T00:00:00+00:00',
+    }
+    if geometry:
+        provenance['geometry'] = arm_spec.geometry
+    return provenance
