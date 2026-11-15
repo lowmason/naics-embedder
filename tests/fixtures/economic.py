@@ -9,6 +9,7 @@ is their D9 comparator.
 
 import json
 from pathlib import Path
+from typing import Sequence
 
 import polars as pl
 
@@ -17,8 +18,29 @@ from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
 from tests.fixtures.decision import spec
+from tests.fixtures.regressor_panel import CODEBOOK
 
 DIMENSION = 3
+
+def write_codebook(path: Path, codes: Sequence[str] = CODEBOOK) -> Path:
+    '''
+    A codebook parquet: ``code_id`` (Int32, 0…) and ``code``, in the given order, as bundle
+    301cce28's codebook holds them.
+    '''
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            'code_id': list(range(len(codes))),
+            'code': list(codes)
+        },
+        schema={
+            'code_id': pl.Int32,
+            'code': pl.Utf8
+        },
+    ).write_parquet(path)
+    return path
 
 def candidate_spec(name: str, **overrides) -> ArmSpec:
     '''A deterministic candidate's spec: one component, flat, at the fixture dimension.'''
