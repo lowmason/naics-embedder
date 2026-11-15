@@ -100,7 +100,7 @@ def test_two_codes_give_one_coordinate_each():
 
 @pytest.mark.parametrize('dimension', [0, -1, 3, 4])
 def test_a_dimension_outside_one_to_n_minus_one_is_refused(dimension):
-    with pytest.raises(ValueError, match='dimension'):
+    with pytest.raises(ValueError, match='is not in 1'):
         classical_scaling(_distances(_points(2, rows=3)), dimension)
 
 def test_the_eigenvalues_are_the_d_plus_one_leading_in_descending_order():
