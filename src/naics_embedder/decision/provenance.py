@@ -51,7 +51,7 @@ EXPORT_ENTRIES_WITH_GEOMETRY: FrozenSet[str] = EXPORT_ENTRIES | {'geometry'}
 _RULE = '(Req 29: text and tree only)'
 _FILE_ENTRIES = frozenset({'path', 'sha256'})
 _CONTRACT_FIELDS = ('bundle_id', 'contract_version')
-# The export's input files: the contract names the checkpoint's supervision
+# The export's two input files, each a path and a sha256
 _EXPORT_FILES = ('checkpoint', 'descriptions')
 
 # -------------------------------------------------------------------------------------------------
