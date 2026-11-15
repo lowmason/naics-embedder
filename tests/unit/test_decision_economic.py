@@ -440,6 +440,29 @@ def test_every_run_of_an_arm_pairs_with_the_margin_read(arm, margins, store):
     ):
         check_reference_pairing(margins, arm.model_copy(update={'runs': [run, moved]}), store)
 
+@pytest.mark.parametrize('runs', [1, 2], ids=['one-run', 'second-of-two'])
+def test_a_reference_prediction_one_ulp_from_the_margin_reads_does_not_pair(
+    arm, margins, store, runs
+):
+    '''Spec :283: the reference pairs bit for bit, so one ulp on one prediction is a difference.'''
+
+    (run, ) = arm.runs
+    predictions = store.read_frame(run.predictions)
+    values = predictions.get_column('prediction').to_numpy().copy()
+    first = predictions.get_column('comparator').to_list().index(REFERENCE_COMPARATOR)
+    original = values[first]
+    values[first] = np.nextafter(original, np.inf)
+    assert values[first] > original
+    nudged = predictions.with_columns(prediction=pl.Series(values))
+    moved = run.model_copy(update={'predictions': store.put_frame(nudged, 'predictions.parquet')})
+    record = arm.model_copy(update={'runs': [run] * (runs - 1) + [moved]})
+
+    with pytest.raises(
+        ValueError,
+        match="^tree: its covariates\\+ancestors predictions differ from the margin read's"
+    ):
+        check_reference_pairing(margins, record, store)
+
 # -------------------------------------------------------------------------------------------------
 # A deterministic candidate against the frozen list (§4.3, §4.4, §4.5, §4.8)
 # -------------------------------------------------------------------------------------------------
