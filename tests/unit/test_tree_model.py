@@ -403,6 +403,16 @@ def test_a_builder_refuses_text_only_inputs_that_repeat_a_code(kind, tmp_path, c
         build_candidate(kind, 3, codebook, output, text_only=other)
     assert not output.parent.exists()
 
+@pytest.mark.parametrize('kind', ['text-only', 'smoothed'])
+def test_a_builder_refuses_text_only_inputs_with_another_code_of_the_same_count(
+    kind, tmp_path, codebook
+):
+    other = write_text_only(tmp_path / 'other', codes=(*CODEBOOK[1:], '999999'))
+    output = tmp_path / 'out' / 'candidate.parquet'
+    with pytest.raises(ValueError, match='codes'):
+        build_candidate(kind, 3, codebook, output, text_only=other)
+    assert not output.parent.exists()
+
 def test_a_builder_refuses_text_only_input_for_the_tree_and_none_for_text(
     tmp_path, codebook, text_only
 ):
