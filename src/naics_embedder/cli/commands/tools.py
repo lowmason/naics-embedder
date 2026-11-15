@@ -724,7 +724,9 @@ def decide_command(
     with the reference ``covariates+ancestors``. Only a candidate adopted over the reference is
     eligible for the rule among candidates; with none, the reference stands. It reads exactly the
     candidates of the frozen list (``--candidates``, by default the committed
-    ``conf/data/economic_candidates.yaml``), and its record names the list's sha256.
+    ``conf/data/economic_candidates.yaml``), and its record names the list's sha256. It also
+    reports, one ``Propagation:`` line each, whether a smoothed candidate is adopted over its
+    text-only twin. That report chooses nothing.
 
     Example:
         Decide between a candidate and the reference::
@@ -785,6 +787,13 @@ def decide_command(
                 f'against −δ {-panel.margin:.4g}; {superiority} [{upper_low:+.4g}, '
                 f'{upper_high:+.4g}]'
             )
+    # Only the economic decision reports propagation
+    propagation = getattr(record, 'propagation', [])
+    if propagation:
+        console.print()
+    for comparison in propagation:
+        verdict = 'adopted' if comparison.adopted else 'not adopted'
+        console.print(f'Propagation: {comparison.a} over {comparison.b}: {verdict}')
     reference = getattr(record, 'reference', None)
     if reference is not None:
         console.print(f'\nAdopted over the reference: {", ".join(record.eligible) or "none"}')

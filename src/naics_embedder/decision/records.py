@@ -534,6 +534,11 @@ class EconomicDecisionRecord(_Record):
             eligible, and the reference stands.
         candidates: The frozen candidate list the decision read, as stored, so its sha256 names
             the list's bytes (spec 4.4).
+        propagation: Each ``smoothed-dN`` candidate against its ``text-only-dN`` twin, in the
+            list's order, on the decision's own draws and each panel's δ (spec 4.7). It holds
+            split Req 19's answer at each d: propagation helps at d if ``smoothed-dN`` is adopted
+            over ``text-only-dN``. It is a report: it changes none of the fields above that choose,
+            and it is empty when the list holds no smoothed candidate.
     '''
 
     kind: Literal['economic_decision'] = 'economic_decision'
@@ -554,6 +559,7 @@ class EconomicDecisionRecord(_Record):
     chosen: Optional[str]
     reports: List[EconomicReport]
     candidates: ArtifactRef
+    propagation: List[Comparison]
 
 # -------------------------------------------------------------------------------------------------
 # Files

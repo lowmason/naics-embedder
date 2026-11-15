@@ -44,7 +44,14 @@ from naics_embedder.decision.records import (
     read_record,
     write_record,
 )
-from naics_embedder.decision.resampling import percentile_interval, stream
+from naics_embedder.decision.resampling import (
+    PanelItems,
+    percentile_interval,
+    replicate_statistics,
+    seed_draws,
+    stream,
+    unit_draws,
+)
 from naics_embedder.decision.scores import panel_statistic, regressor_scores, statistic_values
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.decision.trained import TrainedImport, import_trained_candidate
@@ -62,6 +69,7 @@ from naics_embedder.tree_model.builders import build_candidate
 from tests.fixtures.decision import SEED_OFFSETS, spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import (
     CODEBOOK_INPUT,
+    CODEBOOK_SHA256,
     candidate_spec,
     fixture_list,
     list_for,
@@ -1130,17 +1138,23 @@ def candidates(growth_panel, text_only, margins, store, lock, tmp_path):
 
     return read
 
-def _decide(arms, margins, store):
+def _decide(arms, margins, store, codebook_sha256=CODEBOOK_SHA256):
     '''
     The decision over the arms, reading a frozen list of exactly their candidates, each once,
-    written beside the store and pinned to their tables and their text-only table.
+    written beside the store and pinned to their tables and their text-only table. The list names
+    the codebook the arms' builders read: ``CODEBOOK_SHA256``, which ``write_candidate`` records,
+    unless the arms were built by ``build_candidate``.
     '''
 
     distinct = list({arm.spec.name: arm for arm in arms}.values())
     # The arms share one text-only table; a list over no arms pins one that no check reads
     (text_only_sha256, ) = {arm.text_only.table.sha256 for arm in arms} or {'0' * 64}
     listed = write_candidate_list(
-        store.root.parent / 'candidates.yaml', distinct, store, text_only_sha256=text_only_sha256
+        store.root.parent / 'candidates.yaml',
+        distinct,
+        store,
+        text_only_sha256=text_only_sha256,
+        codebook_sha256=codebook_sha256,
     )
     return decide_economic(
         'fixture economic decision',
@@ -2204,3 +2218,368 @@ def test_a_trained_table_that_lacks_a_panel_code_is_refused_before_any_read(
     with pytest.raises(ValueError, match=f"no coordinates for 1 codes: \\['{OUTER_ONLY_CODE}'\\]"):
         _read_trained(imported, growth_panel, margins, store, lock)
     assert log.records() == margins.read.log_records
+
+# -------------------------------------------------------------------------------------------------
+# The propagation report and a decision over both kinds (§4.7; Verification "Decision")
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def built_codebook(tmp_path):
+    '''The codebook ``build_candidate`` reads, which the frozen list pins by its sha256.'''
+
+    return write_codebook(tmp_path / 'built-codebook' / 'naics_codebook.parquet')
+
+@pytest.fixture
+def built(built_codebook, growth_panel, text_only, margins, store, lock, tmp_path):
+    '''
+    Builds a candidate of a kind at a dimension, reads it after the margins and scales its errors.
+    The text-only and smoothed candidates read the backbone; the tree candidate reads none (P7).
+    '''
+
+    def read(kind, dimension, factors, name=None):
+        name = name or f'{kind}-d{dimension}'
+        table = build_candidate(
+            kind,
+            dimension,
+            built_codebook,
+            tmp_path / 'built' / f'{name}.parquet',
+            text_only=None if kind == 'tree' else text_only,
+        )
+        if kind == 'tree':
+            arm_spec = candidate_spec(name, dimension=dimension)
+        else:
+            arm_spec = spec(name, dimension=dimension, geometry='euclidean')
+        arm = _read(table, growth_panel, text_only, margins, store, lock, arm_spec=arm_spec)
+        return scaled_arm(arm, factors, store)
+
+    return read
+
+# Each trained seed has its own errors: scaled_arm alone gives every run the same ones
+DISTINCT_FACTORS = (0.2, 0.25, 0.3, 0.35, 0.4)
+
+def _distinct_seeds(arm, store):
+    '''The arm with each run scaled by its own factor, its evidence fields kept.'''
+
+    runs = [
+        scaled_arm(arm.model_copy(update={'runs': [run]}), _both(factor), store).runs[0]
+        for run, factor in zip(arm.runs, DISTINCT_FACTORS)
+    ]
+    return arm.model_copy(update={'runs': runs})
+
+def _assert_propagation(record, pairs):
+    assert [(c.a, c.b) for c in record.propagation] == pairs
+
+@pytest.mark.parametrize(
+    'smoothed, twin, adopted, chosen',
+    [
+        (_both(0.5), _both(1.0), True, 'smoothed-d3'),
+        (_both(0.5), _both(0.7), True, 'smoothed-d3'),
+        (_both(1.0), _both(0.5), False, 'text-only-d3'),
+        (_both(0.7), _both(0.5), False, 'text-only-d3'),
+        (_both(1.0), _both(1.0), False, None),
+        (_both(1.5), _both(1.0), False, None),
+        ({
+            GROWTH_SEEN: 0.5,
+            GROWTH_HELDOUT: 1.0
+        }, _both(1.0), True, 'smoothed-d3'),
+        ({
+            GROWTH_SEEN: 0.5,
+            GROWTH_HELDOUT: 1.5
+        }, _both(1.0), False, None),
+    ],
+    ids=[
+        'better',
+        'better-both-adopted',
+        'worse',
+        'worse-both-adopted',
+        'equal',
+        'worse-than-the-reference',
+        'better-on-one-panel-only',
+        'better-on-one-panel-worse-on-the-other',
+    ],
+)
+def test_the_propagation_report_answers_each_input_shape_and_chooses_nothing(
+    built, built_codebook, margins, store, smoothed, twin, adopted, chosen
+):
+    '''§4.7: propagation helps if the smoothed candidate is adopted over its twin; chosen is not it.'''
+
+    arms = [built('smoothed', 3, smoothed), built('text-only', 3, twin)]
+
+    record = _decide(arms, margins, store, sha256_file(built_codebook))
+
+    _assert_propagation(record, [('smoothed-d3', 'text-only-d3')])
+    assert record.propagation[0].adopted is adopted
+    # The choice is the one the comparisons with the reference and with each other make
+    assert record.chosen == chosen
+    assert [(c.a, c.b) for c in record.comparisons[:2]] == [
+        ('smoothed-d3', REFERENCE_COMPARATOR), ('text-only-d3', REFERENCE_COMPARATOR)
+    ]
+    assert record.eligible == [c.a for c in record.comparisons[:2] if c.adopted]
+
+def test_the_decision_records_each_propagation_comparison(built, built_codebook, margins, store):
+    smoothed = built('smoothed', 3, _both(0.5))
+    twin = built('text-only', 3, _both(1.0))
+
+    record = _decide([smoothed, twin], margins, store, sha256_file(built_codebook))
+
+    assert [(c.a, c.b) for c in record.propagation] == [('smoothed-d3', 'text-only-d3')]
+    assert record.propagation[0].adopted
+    # The choice is the one a decision without the report makes: the smoothed candidate, adopted
+    # over the reference, and the twin is not
+    assert [(c.a, c.b, c.adopted) for c in record.comparisons] == [
+        ('smoothed-d3', REFERENCE_COMPARATOR, True),
+        ('text-only-d3', REFERENCE_COMPARATOR, False),
+    ]
+    assert (record.eligible, record.chosen) == (['smoothed-d3'], 'smoothed-d3')
+
+def test_a_propagation_comparison_is_made_on_the_decisions_own_draws_and_margins(
+    built, built_codebook, margins, store
+):
+    '''The smoothed candidate's replicates and the twin's are the decision's, with each panel's δ.'''
+
+    smoothed = built('smoothed', 3, _both(0.5))
+    twin = built('text-only', 3, _both(1.0))
+
+    record = _decide([smoothed, twin], margins, store, sha256_file(built_codebook))
+
+    reference = _reference_side(margins, store)
+    _assert_comparison(
+        record.propagation[0], _arm_side(smoothed, store), _arm_side(twin, store), reference, margins
+    )
+
+def test_a_propagation_comparison_is_the_same_comparison_the_tie_rule_reads(
+    built, built_codebook, margins, store
+):
+    '''Both are adopted over the reference: the report is the among-candidates comparison, again.'''
+
+    arms = [built('smoothed', 3, _both(0.7)), built('text-only', 3, _both(0.5))]
+
+    record = _decide(arms, margins, store, sha256_file(built_codebook))
+
+    (among, ) = [c for c in record.comparisons if (c.a, c.b) == ('smoothed-d3', 'text-only-d3')]
+    assert record.propagation == [among]
+    assert not among.adopted
+    assert record.chosen == 'text-only-d3'
+
+def test_the_report_does_not_choose_a_candidate_it_finds_better_than_its_twin(
+    built, built_codebook, margins, store
+):
+    '''Propagation helps at d = 3, and a candidate that dominates the smoothed one is chosen.'''
+
+    arms = [
+        built('smoothed', 3, _both(0.5)),
+        built('text-only', 3, _both(1.0)),
+        built('tree', 3, _both(0.3)),
+    ]
+
+    record = _decide(arms, margins, store, sha256_file(built_codebook))
+
+    _assert_propagation(record, [('smoothed-d3', 'text-only-d3')])
+    assert record.propagation[0].adopted
+    assert [(c.a, c.b) for c in record.comparisons] == [
+        ('smoothed-d3', REFERENCE_COMPARATOR),
+        ('text-only-d3', REFERENCE_COMPARATOR),
+        ('tree-d3', REFERENCE_COMPARATOR),
+        ('smoothed-d3', 'tree-d3'),
+        ('tree-d3', 'smoothed-d3'),
+    ]
+    assert record.eligible == ['smoothed-d3', 'tree-d3']
+    assert (record.non_dominated, record.tie_order, record.cycle) == (
+        ['tree-d3'], ['tree-d3'], False
+    )
+    assert record.chosen == 'tree-d3'
+    assert sorted(record.heldout_gain) == ['smoothed-d3', 'text-only-d3', 'tree-d3']
+    assert [report.arm for report in record.reports] == ['smoothed-d3', 'text-only-d3', 'tree-d3']
+
+def test_the_propagation_pairs_follow_the_lists_kinds_and_dimensions_and_its_order(
+    built, built_codebook, margins, store, tmp_path
+):
+    '''Names that carry no kind or dimension, rows and arms in other orders, a pair of each d.'''
+
+    sm_four = built('smoothed', 4, _both(0.5), name='sm-a')
+    sm_two = built('smoothed', 2, _both(1.0), name='sm-b')
+    sm_three = built('smoothed', 3, _both(1.0), name='sm-c')
+    plain_two = built('text-only', 2, _both(0.5), name='plain-2')
+    plain_three = built('text-only', 3, _both(1.0), name='plain-3')
+    plain_four = built('text-only', 4, _both(1.0), name='plain-4')
+    listed_arms = [plain_three, sm_four, plain_four, sm_two, sm_three, plain_two]
+    (text_only_sha256, ) = {arm.text_only.table.sha256 for arm in listed_arms}
+    listed = write_candidate_list(
+        tmp_path / 'three-pairs.yaml',
+        listed_arms,
+        store,
+        text_only_sha256=text_only_sha256,
+        codebook_sha256=sha256_file(built_codebook),
+    )
+
+    record = decide_economic(
+        'd',
+        'q',
+        listed_arms[::-1],
+        margins,
+        store,
+        candidates=listed,
+        replicates=REPLICATES,
+        bootstrap_seed=BOOTSTRAP_SEED,
+    )
+
+    _assert_propagation(record, [('sm-a', 'plain-4'), ('sm-b', 'plain-2'), ('sm-c', 'plain-3')])
+    assert [c.adopted for c in record.propagation] == [True, False, False]
+
+def test_a_list_without_a_smoothed_candidate_has_an_empty_propagation_report(
+    built, built_codebook, margins, store
+):
+    '''A tree and a text-only candidate at one dimension are not a propagation pair.'''
+
+    arms = [built('tree', 3, _both(0.5)), built('text-only', 3, _both(0.7))]
+
+    record = _decide(arms, margins, store, sha256_file(built_codebook))
+
+    assert record.propagation == []
+    assert record.chosen == 'tree-d3'
+
+def test_a_decision_records_its_propagation_report_in_the_file(
+    built, built_codebook, margins, store, tmp_path
+):
+    arms = [built('smoothed', 3, _both(0.5)), built('text-only', 3, _both(1.0))]
+    record = _decide(arms, margins, store, sha256_file(built_codebook))
+
+    path = write_record(record, tmp_path / 'decision.json')
+
+    assert read_record(path, EconomicDecisionRecord) == record
+    assert json.loads(path.read_text())['propagation'][0]['a'] == 'smoothed-d3'
+
+# -------------------------------------------------------------------------------------------------
+# A trained candidate's seeds are resampled inside each group draw (§4.4; Verification "Decision")
+# -------------------------------------------------------------------------------------------------
+
+class Side(NamedTuple):
+    '''One side of a comparison: its stream's name, its statistic and each run's scores.'''
+
+    name: str
+    statistic: str
+    scores: list
+
+def _reference_side(margins, store):
+    return Side(REFERENCE_COMPARATOR, REFERENCE_COMPARATOR, [store.read_frame(margins.read.scores)])
+
+def _arm_side(arm, store):
+    return Side(
+        arm.spec.name, 'covariates+embedding', [store.read_frame(run.scores) for run in arm.runs]
+    )
+
+def _assert_comparison(comparison, a, b, reference, margins):
+    '''
+    A against B on each growth panel, drawn as the spec says: the groups once for every side, then
+    each side's seeds nested inside them, with n seeds for a side of n runs. Δ is B's minus A's.
+    '''
+
+    for found in comparison.panels:
+        panel = found.panel
+        items = PanelItems.from_values(
+            statistic_values(reference.scores[0], panel, REFERENCE_COMPARATOR)
+        )
+        units = unit_draws(panel, len(items.units), REPLICATES, BOOTSTRAP_SEED)
+
+        def draws(side):
+            values = [items.values(statistic_values(f, panel, side.statistic)) for f in side.scores]
+            seeds = seed_draws(panel, side.name, len(side.scores), REPLICATES, BOOTSTRAP_SEED)
+            return replicate_statistics(items.sums(np.stack(values)), items.sizes, units, seeds)
+
+        def point(side):
+            return np.mean([panel_statistic(f, panel, side.statistic) for f in side.scores])
+
+        delta = draws(b) - draws(a)
+        assert found.delta == pytest.approx(point(b) - point(a), rel=1e-12)
+        assert found.noninferiority_interval == pytest.approx(
+            percentile_interval(delta, 0.95), rel=1e-12
+        )
+        assert found.superiority_interval == pytest.approx(
+            percentile_interval(delta, 0.975), rel=1e-12
+        )
+        assert found.margin == margins.margin(panel)
+
+def test_a_trained_candidates_seeds_are_resampled_inside_each_group_draw(
+    trained_read, margins, store
+):
+    arm, _, _ = trained_read
+    scaled = scaled_arm(arm, _both(0.5), store)
+    assert len(scaled.runs) == 5
+
+    record = _decide([scaled], margins, store)
+
+    (comparison, ) = record.comparisons
+    assert comparison.adopted
+    reference = _reference_side(margins, store)
+    _assert_comparison(comparison, _arm_side(scaled, store), reference, reference, margins)
+
+def test_a_trained_candidates_distinct_seeds_are_each_resampled_inside_each_group_draw(
+    trained_read, margins, store
+):
+    '''
+    Seeds that score alike cancel in the nested draw, so this arm's five seeds score differently:
+    a decision that read one seed, or drew the seeds apart from the groups, would differ.
+    '''
+
+    arm, _, _ = trained_read
+    distinct = _distinct_seeds(arm, store)
+    statistics = {run.statistics[GROWTH_SEEN] for run in distinct.runs}
+    assert len(statistics) == 5
+
+    record = _decide([distinct], margins, store)
+
+    (comparison, ) = record.comparisons
+    reference = _reference_side(margins, store)
+    _assert_comparison(comparison, _arm_side(distinct, store), reference, reference, margins)
+    # The record reports the arm's mean over its five seeds on each panel
+    (report, ) = record.reports
+    assert report.statistics == pytest.approx(
+        {
+            panel: np.mean([run.statistics[panel] for run in distinct.runs])
+            for panel in GROWTH_PANELS
+        },
+        rel=1e-12,
+    )
+    assert report.statistics[GROWTH_SEEN] != pytest.approx(distinct.runs[0].statistics[GROWTH_SEEN])
+
+def test_a_decision_over_a_deterministic_and_a_trained_candidate_records_both(
+    trained_read, candidates, margins, store
+):
+    '''§6 "Decision": one run and five runs, each read on both growth panels, each reported.'''
+
+    trained = _distinct_seeds(trained_read.arm, store)
+    tree = candidates('tree', _both(0.9))
+
+    record = _decide([tree, trained], margins, store)
+
+    assert [(arm.spec.name, len(arm.runs))
+            for arm in record.arms] == [('tree', 1), ('euclidean-d3', 5)]
+    assert [(c.a, c.b) for c in record.comparisons] == [
+        ('tree', REFERENCE_COMPARATOR),
+        ('euclidean-d3', REFERENCE_COMPARATOR),
+        ('tree', 'euclidean-d3'),
+        ('euclidean-d3', 'tree'),
+    ]
+    for comparison in record.comparisons:
+        assert [panel.panel for panel in comparison.panels] == list(GROWTH_PANELS)
+    assert [report.arm for report in record.reports] == ['tree', 'euclidean-d3']
+    assert record.reports[1].statistics == pytest.approx(
+        {
+            panel: np.mean([run.statistics[panel] for run in trained.runs])
+            for panel in GROWTH_PANELS
+        },
+        rel=1e-12,
+    )
+    assert record.eligible == ['tree', 'euclidean-d3']
+    assert (record.non_dominated, record.chosen) == (['euclidean-d3'], 'euclidean-d3')
+    # Each side is drawn with its own number of seeds: one for the deterministic candidate, five
+    sides = {
+        'tree': _arm_side(tree, store),
+        'euclidean-d3': _arm_side(trained, store),
+        REFERENCE_COMPARATOR: _reference_side(margins, store),
+    }
+    for comparison in record.comparisons:
+        _assert_comparison(
+            comparison, sides[comparison.a], sides[comparison.b], sides[REFERENCE_COMPARATOR],
+            margins
+        )

@@ -28,6 +28,8 @@ and the decision over the two growth panels.
   Req 5's non-dominated set and tie order pick one, the higher held-out gain over the reference
   breaking a last tie (D11). With none eligible, the reference stands. The decision scores each
   read's stored predictions itself, so the values it resamples are those the pairing compared.
+  The record reports, beside the choice, whether each smoothed candidate is adopted over its
+  text-only twin (propagation, spec 4.7). That report chooses nothing.
 - **Trained candidates.** A trained candidate is a Stage 7/8 arm, imported by
   ``decision.trained.import_trained_candidate``: each of its seeds is read once on each growth
   panel, and its run carries the seed and the selection evidence of its seed run (spec 4.4). Its
@@ -992,6 +994,10 @@ def decide_economic(
     The decision reads exactly the frozen list's candidates (spec 4.4). The list file is stored
     first and loaded from the store, so the record names the bytes the decision read.
 
+    The record also reports the propagation comparisons (spec 4.7): each smoothed candidate
+    against its text-only twin, as the list pairs them, on the decision's own draws and δ. They
+    choose nothing.
+
     Every check runs before any number is computed: the list's names, the margins
     (``check_relative_margins``), each candidate against its row (``check_economic_arm``) and its
     pairing with the margin read (``check_reference_pairing``), then the order of the reads
@@ -1084,6 +1090,8 @@ def decide_economic(
         )
 
     comparisons = [against(arm, REFERENCE_COMPARATOR) for arm in names]
+    # A report on the same draws and δ: nothing below reads it, so it chooses nothing (spec 4.7)
+    propagation = [against(smoothed, twin) for smoothed, twin in candidate_list.propagation_pairs()]
     eligible = [comparison.a for comparison in comparisons if comparison.adopted]
     among = [against(a, b) for a in eligible for b in eligible if a != b]
     heldout_gain = {
@@ -1114,6 +1122,7 @@ def decide_economic(
         chosen=order[0] if order else None,
         reports=[_economic_report(arm.spec.name, sides[arm.spec.name][1]) for arm in arms],
         candidates=stored_list,
+        propagation=propagation,
     )
 
 def _economic_report(arm: str, frames: Sequence[pl.DataFrame]) -> EconomicReport:

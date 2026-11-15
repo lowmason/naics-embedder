@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
-from naics_embedder.decision.economic import read_deterministic_arm
+from naics_embedder.decision.economic import GROWTH_PANELS, read_deterministic_arm
 from naics_embedder.decision.records import (
     DecisionRecord,
     EconomicDecisionRecord,
@@ -27,9 +27,16 @@ from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.panels.window_summaries import SummariesPin
 from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.tree_model.builders import build_candidate
 from naics_embedder.utils.config import Config
 from tests.fixtures.decision import spec, synthetic_arm, write_text_only
-from tests.fixtures.economic import candidate_spec, write_candidate, write_candidate_list
+from tests.fixtures.economic import (
+    candidate_spec,
+    scaled_arm,
+    write_candidate,
+    write_candidate_list,
+    write_codebook,
+)
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
     HELDOUT_GROUPS,
@@ -571,6 +578,156 @@ def test_decide_reads_the_committed_candidate_list_by_default(
     assert result.exit_code == 1
     output = ' '.join(click.unstyle(result.output).split())
     assert "'tree' is not on the frozen candidate list" in output
+    assert not (tmp_path / 'decision.json').exists()
+
+def _built_candidate(tmp_path, panel, store, kind, dimension, factor, codebook, text_only):
+    '''
+    A candidate built from the fixture codebook, read after the growth margins, its errors
+    ``factor`` times the reference's on both growth panels. It reads a backbone unless it is the
+    tree candidate (P7).
+    '''
+
+    name = f'{kind}-d{dimension}'
+    reads_text = kind != 'tree'
+    table = build_candidate(
+        kind,
+        dimension,
+        codebook,
+        tmp_path / 'built' / f'{name}.parquet',
+        text_only=text_only if reads_text else None,
+    )
+    if reads_text:
+        arm_spec = spec(name, dimension=dimension, geometry='euclidean')
+    else:
+        arm_spec = candidate_spec(name, dimension=dimension)
+    arm = read_deterministic_arm(
+        arm_spec,
+        table,
+        regressor_panel=panel,
+        text_only_table=text_only,
+        margins=read_record(tmp_path / 'margins.json', RelativeMarginRecord),
+        store=store,
+        purpose='fixture candidate read',
+        lock=tmp_path / 'uv.lock',
+    )
+    return scaled_arm(arm, dict.fromkeys(GROWTH_PANELS, factor), store)
+
+def _decide_built(runner, tmp_path, panel, store, candidates):
+    '''
+    ``tools decide`` over built candidates, ``(kind, dimension, factor)`` in the order of their
+    frozen list, which is the order of their ``--arm`` options.
+    '''
+
+    assert _growth_margins(runner, tmp_path, store).exit_code == 0
+    codebook = write_codebook(tmp_path / 'codebook' / 'naics_codebook.parquet')
+    text_only = write_text_only(tmp_path / 'text', codes=CODEBOOK)
+    arms = [
+        _built_candidate(tmp_path, panel, store, kind, dimension, factor, codebook, text_only)
+        for kind, dimension, factor in candidates
+    ]
+    listed = write_candidate_list(
+        tmp_path / 'candidates.yaml',
+        arms,
+        store,
+        text_only_sha256=sha256_file(text_only),
+        codebook_sha256=sha256_file(codebook),
+    )
+    paths = [write_record(arm, tmp_path / f'{arm.spec.name}.json') for arm in arms]
+    return _decide(runner, tmp_path, store, paths, candidates=listed)
+
+@pytest.mark.unit
+def test_decide_prints_the_chosen_candidate_when_one_is_adopted(runner, tmp_path, growth_panel):
+    '''Deferred :650: the adopted path of the economic decision, which no test reached.'''
+
+    panel, _ = growth_panel
+    store = ArtifactStore(tmp_path / 'store')
+
+    result = _decide_built(runner, tmp_path, panel, store, [('tree', 3, 0.5)])
+
+    assert result.exit_code == 0, result.output
+    output = click.unstyle(result.output).replace('\n', '')
+    assert 'tree-d3 over covariates+ancestors: adopted' in output
+    assert 'Adopted over the reference: tree-d3' in output
+    assert 'Chosen: tree-d3' in output
+    assert 'stands' not in output
+    # A list with no smoothed candidate has no propagation comparison to print
+    assert 'Propagation:' not in output
+    assert read_record(tmp_path / 'decision.json', EconomicDecisionRecord).chosen == 'tree-d3'
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'smoothed, twin, verdict', [(0.5, 1.0, 'adopted'), (1.0, 0.5, 'not adopted')],
+    ids=['adopted', 'not-adopted']
+)
+def test_decide_prints_each_propagation_comparison(
+    runner, tmp_path, growth_panel, smoothed, twin, verdict
+):
+    panel, _ = growth_panel
+    store = ArtifactStore(tmp_path / 'store')
+
+    result = _decide_built(
+        runner, tmp_path, panel, store, [('smoothed', 3, smoothed), ('text-only', 3, twin)]
+    )
+
+    assert result.exit_code == 0, result.output
+    output = click.unstyle(result.output).replace('\n', '')
+    assert f'Propagation: smoothed-d3 over text-only-d3: {verdict}' in output
+    assert output.count('Propagation:') == 1
+    # After the comparisons, before what the decision adopted over the reference
+    assert output.rindex('•') < output.index('Propagation:') < output.index('Adopted over')
+    record = read_record(tmp_path / 'decision.json', EconomicDecisionRecord)
+    assert [c.adopted for c in record.propagation] == [verdict == 'adopted']
+
+@pytest.mark.unit
+def test_decide_prints_one_propagation_line_for_each_pair_in_the_lists_order(
+    runner, tmp_path, growth_panel
+):
+    panel, _ = growth_panel
+    store = ArtifactStore(tmp_path / 'store')
+
+    result = _decide_built(
+        runner,
+        tmp_path,
+        panel,
+        store,
+        [
+            ('text-only', 2, 1.0),
+            ('smoothed', 3, 0.5),
+            ('text-only', 3, 1.0),
+            ('smoothed', 2, 1.0),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = click.unstyle(result.output).replace('\n', '')
+    first = 'Propagation: smoothed-d3 over text-only-d3: adopted'
+    second = 'Propagation: smoothed-d2 over text-only-d2: not adopted'
+    assert output.count('Propagation:') == 2
+    assert 0 <= output.index(first) < output.index(second)
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'content, kind',
+    [({
+        'kind': 'economic_arm'
+    }, "'economic_arm'"), ({}, 'None'), ([], 'None')],
+    ids=['another-kind', 'no-kind', 'not-an-object'],
+)
+def test_decide_refuses_a_file_that_is_not_a_margin_record(
+    runner, tmp_path, decision_inputs, content, kind
+):
+    '''Deferred :650: --margins must be a margin record of either kind, before any arm is read.'''
+
+    store, reference = decision_inputs
+    (tmp_path / 'margins.json').write_text(json.dumps(content))
+
+    result = _decide(runner, tmp_path, store, [reference])
+
+    assert result.exit_code == 1
+    output = click.unstyle(result.output).replace('\n', '')
+    assert 'Decision failed' in output
+    assert 'is not a margin record' in output
+    assert f'its kind is {kind}' in output
     assert not (tmp_path / 'decision.json').exists()
 
 @pytest.mark.unit
