@@ -539,6 +539,16 @@ def test_a_trained_runs_evidence_and_source_survive_a_round_trip(arm, tmp_path):
     assert loaded_run.monitor_records == monitor
     assert loaded.source == source
 
+def _refusal(arm, tmp_path, field, value):
+    '''The (location, error type) of each error the run's field set to ``value`` raises.'''
+
+    data = json.loads(arm.model_dump_json())
+    data['runs'][0][field] = value
+    (tmp_path / 'x.json').write_text(json.dumps(data))
+    with pytest.raises(ValidationError) as refused:
+        read_record(tmp_path / 'x.json', EconomicArmRecord)
+    return [(item['loc'], item['type']) for item in refused.value.errors()]
+
 @pytest.mark.parametrize(
     'field, value, error',
     [
@@ -546,8 +556,6 @@ def test_a_trained_runs_evidence_and_source_survive_a_round_trip(arm, tmp_path):
         ('checkpoint_epoch', '1', 'int_type'),
         ('checkpoint_epoch', True, 'int_type'),
         ('checkpoint_epoch', -1, 'greater_than_equal'),
-        ('seed', 1.0, 'int_type'),
-        ('seed', True, 'int_type'),
         ('training_run', '  ', 'string_pattern_mismatch'),
         ('training_run', '', 'string_too_short'),
         ('training_run', 7, 'string_type'),
@@ -559,13 +567,13 @@ def test_imported_evidence_is_refused_for_what_it_is_not_for_being_there(
 ):
     '''The fields exist now, so the refusal is their own check and no longer "Extra inputs".'''
 
-    data = json.loads(arm.model_dump_json())
-    data['runs'][0][field] = value
-    (tmp_path / 'x.json').write_text(json.dumps(data))
-    with pytest.raises(ValidationError) as refused:
-        read_record(tmp_path / 'x.json', EconomicArmRecord)
-    assert [(item['loc'], item['type'])
-            for item in refused.value.errors()] == [(('runs', 0, field), error)]
+    assert _refusal(arm, tmp_path, field, value) == [(('runs', 0, field), error)]
+
+@pytest.mark.parametrize('seed', [1.0, True])
+def test_a_trained_runs_seed_is_an_integer(arm, tmp_path, seed):
+    '''A float or a bool would load as a seed, and a seed names a training run's stream.'''
+
+    assert _refusal(arm, tmp_path, 'seed', seed) == [(('runs', 0, 'seed'), 'int_type')]
 
 @pytest.mark.parametrize(
     'source', [
