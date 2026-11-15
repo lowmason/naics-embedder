@@ -37,7 +37,7 @@ from naics_embedder.panels.regressor import table_fingerprint
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.tree_model.builders import LIBRARIES, METHODS
-from tests.fixtures.decision import spec, synthetic_arm
+from tests.fixtures.decision import SEED_OFFSETS, spec, synthetic_arm
 from tests.fixtures.regressor_panel import CODEBOOK
 
 DIMENSION = 3
@@ -313,12 +313,14 @@ def trained_source(
     dimension: int = DIMENSION,
     geometry: str = 'euclidean',
     codes: Sequence[str] = CODEBOOK,
+    offsets: Sequence[float] = SEED_OFFSETS,
 ) -> Tuple[CandidateEntry, Path]:
     '''
     A trained candidate's Stage 7/8 inputs, as the import finds them, and its frozen-list row.
 
-    The arm is ``synthetic_arm``'s over ``codes``, read beside ``text_only``: five trained seeds,
-    0 to 4, whose ``MONITOR_MRRS`` select epoch 1. Its record is ``<store>/records/<name>.json``.
+    The arm is ``synthetic_arm``'s over ``codes``, read beside ``text_only``: one trained seed for
+    each of ``offsets``, 0 to 4 by default, whose ``MONITOR_MRRS`` select epoch 1. Its record is
+    ``<store>/records/<name>.json``.
     Seed k's stored table, with its export provenance (``export_provenance``) beside it, is in
     ``<runs root>/<name>-s<k>/`` under the stored table's own name.
 
@@ -333,6 +335,7 @@ def trained_source(
         directory,
         arm_spec,
         {},
+        offsets=offsets,
         codes=codes,
         monitor_mrrs=MONITOR_MRRS,
         text_only_table=text_only,

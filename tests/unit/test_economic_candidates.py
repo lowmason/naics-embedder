@@ -36,7 +36,7 @@ from naics_embedder.decision.trained import import_trained_candidate
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.tree_model.builders import BUILDER_ENTRIES, BUILDER_INPUTS, KINDS, build_candidate
-from tests.fixtures.decision import spec, synthetic_arm, write_text_only
+from tests.fixtures.decision import SEED_OFFSETS, spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import (
     CODEBOOK_INPUT,
     CODEBOOK_SHA256,
@@ -1383,6 +1383,49 @@ def test_import_refuses_a_source_whose_seeds_are_not_its_rows(source, store):
     with pytest.raises(
         ValueError,
         match='^euclidean-d3: its source holds the seeds \\[0, 1, 2, 3, 4\\], and its row names',
+    ):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+@pytest.fixture
+def six_seeds(store, shared_text_only, tmp_path) -> Source:
+    '''A source with a sixth seed: five of its seeds are at least 5, and still not all of them.'''
+
+    entry, runs_root = trained_source(
+        store,
+        tmp_path / 'trained',
+        'euclidean-d3',
+        text_only=shared_text_only,
+        offsets=(*SEED_OFFSETS, 0.5),
+    )
+    return Source(
+        entry, runs_root, fixture_list([entry], text_only_sha256=sha256_file(shared_text_only))
+    )
+
+@pytest.mark.parametrize(
+    'seeds', [[0, 1, 2, 3, 4], [0, 1, 2, 4, 5]], ids=['the-last-seed', 'a-middle-seed']
+)
+def test_import_refuses_a_row_that_names_only_some_of_its_sources_seeds(six_seeds, store, seeds):
+    '''The import would read all six of the source's seeds, and the frozen list names five.'''
+
+    import_trained_candidate(six_seeds.entry, six_seeds.frozen, store, six_seeds.runs_root)
+    entry = six_seeds.entry.model_copy(update={'seeds': seeds})
+
+    with pytest.raises(
+        ValueError,
+        match='^euclidean-d3: its source holds the seeds \\[0, 1, 2, 3, 4, 5\\], and its row '
+        f'names {re.escape(str(seeds))}',
+    ):
+        import_trained_candidate(entry, six_seeds.frozen, store, six_seeds.runs_root)
+
+def test_import_refuses_a_row_that_names_more_seeds_than_its_source_holds(source, store):
+    '''The frozen list would name seed 5, which the decision never reads.'''
+
+    entry = source.entry.model_copy(update={'seeds': [0, 1, 2, 3, 4, 5]})
+
+    with pytest.raises(
+        ValueError,
+        match='^euclidean-d3: its source holds the seeds \\[0, 1, 2, 3, 4\\], and its row names '
+        '\\[0, 1, 2, 3, 4, 5\\]',
     ):
         import_trained_candidate(entry, source.frozen, store, source.runs_root)
 

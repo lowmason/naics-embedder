@@ -59,7 +59,7 @@ from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.tree_model.builders import build_candidate
-from tests.fixtures.decision import spec, synthetic_arm, write_text_only
+from tests.fixtures.decision import SEED_OFFSETS, spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import (
     CODEBOOK_INPUT,
     candidate_spec,
@@ -1733,6 +1733,42 @@ def test_a_trained_arm_reads_each_of_its_sources_seeds_once(trained_read, store,
         ValueError, match='^euclidean-d3: an economic arm is one seedless run or at least 5 runs'
     ):
         check_economic_arm(arm.model_copy(update={'runs': cut(arm.runs)}), store, frozen)
+
+# A sixth seed: five of its runs are at least 5 with distinct seeds, and still not all of them
+SIX_OFFSETS = (*SEED_OFFSETS, 0.5)
+
+@pytest.fixture
+def six_seeds(store, text_only, tmp_path):
+    return trained_source(
+        store, tmp_path / 'six', 'euclidean-d3', text_only=text_only, offsets=SIX_OFFSETS
+    )
+
+@pytest.fixture
+def six_seed_read(six_seeds, margins, growth_panel, store, lock, text_only):
+    '''A six-seed source read as ``trained_read`` is, its monitor reads before ``margins``.'''
+
+    imported = _import(six_seeds, store, text_only)
+    arm = _read_trained(imported, growth_panel, margins, store, lock)
+    return TrainedRead(
+        arm, fixture_list([six_seeds[0]], text_only_sha256=sha256_file(text_only)), imported
+    )
+
+@pytest.mark.parametrize('dropped', [5, LATER_SEED], ids=['the-last-seed', 'a-middle-seed'])
+def test_a_trained_arm_that_reads_only_some_of_its_sources_seeds_is_refused(
+    six_seed_read, store, dropped
+):
+    '''§4.4: five of a ten-seed source's runs would resample a chosen subset of its seeds.'''
+
+    arm, frozen, _ = six_seed_read
+    check_economic_arm(arm, store, frozen)
+    runs = [run for run in arm.runs if run.seed != dropped]
+
+    with pytest.raises(
+        ValueError,
+        match='^euclidean-d3: an economic arm is one seedless run or at least 5 runs .* reads '
+        "each of its source's seeds \\[0, 1, 2, 3, 4, 5\\] once",
+    ):
+        check_economic_arm(arm.model_copy(update={'runs': runs}), store, frozen)
 
 def test_a_trained_run_without_selection_evidence_is_refused(trained_read, store):
     arm, frozen, _ = trained_read
