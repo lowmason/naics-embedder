@@ -425,9 +425,13 @@ Before it writes anything, the command checks four points:
    [`tools economic-read`](#tools-economic-read).
 4. No named candidate has a table or a provenance file already. A candidate is built once.
 
-A candidate named twice with `--candidate` is built once. A list row can pin its table's sha256.
-If the built table has another sha256, the command exits 1 with `differs from its pin`. The table
-stays on disk, and any read refuses it.
+A candidate named twice with `--candidate` is built once. A list row pins its table with
+`table_sha256`, and a row with `table_sha256: null` pins none. If a row pins a table and the built
+table has another sha256, the command exits 1 with `differs from its pin`. The table stays on
+disk, and any read refuses it.
+
+A deterministic row must pin its built table's sha256 in `conf/data/economic_candidates.yaml`
+before `tools economic-read` accepts it. Use the sha256 that this command prints.
 
 **Generates:** `<name>.parquet` and `<name>_provenance.json` for each candidate, under
 `<store>/candidates/economic/`
@@ -454,7 +458,7 @@ Read one candidate of the frozen list on both growth validation splits, `growth_
 Stage 7 or Stage 8 trained and read. The command imports it from that arm's record and its seeds'
 run directories, and reads it once per seed.
 
-The command runs every check that needs no panel before it loads the panel. The order is:
+The command runs these checks before it loads the panel. The order is:
 
 1. `--output` is a new record.
 2. The list loads and names the candidate.
@@ -465,11 +469,16 @@ The command runs every check that needs no panel before it loads the panel. The 
 
 The inputs in step 4 depend on the candidate:
 
-- A deterministic candidate: its stored table matches its list pin. Its provenance describes that
-  table and comes from text and tree only. `--text-only` matches the list's pin.
+- A deterministic candidate: its list row pins its built table, and its stored table matches that
+  pin. Its provenance describes that table and comes from text and tree only. `--text-only`
+  matches the list's pin.
 - A trained candidate: its import passes. The import runs `check_arm` on the source record. It
   checks each seed's export provenance and checkpoint sha256. It also checks the identity of the
   descriptions, the summaries and the window.
+
+A deterministic row must pin its built table's sha256 in `conf/data/economic_candidates.yaml`
+before `tools economic-read` accepts it. Use the sha256 that `tools economic-build` prints.
+`tools economic-read` refuses a row with `table_sha256: null`.
 
 `--dry-run` stops after these checks and prints this line:
 
@@ -478,9 +487,20 @@ Dry run: every check passed for <name>; no panel was loaded and nothing was logg
 ```
 
 The dry run loads no panel and reads no QCEW file. It creates no selection log and appends to
-none. The dry run does not run two checks that follow the panel load: the table's width against
-the spec's dimension, and the recorded text-only fields that D9 compares. The real read runs them
-before its first logged read.
+none.
+
+The dry run does not run every check of the read. Some checks need the loaded panel, or run
+inside the read after the panel loads. They wait for the real read:
+
+- The panel's data and fit settings are those of the panel that the margins read.
+- The table covers every code of the panel.
+- The table's width equals the spec's dimension.
+- For a deterministic candidate that reads a backbone, the text-only table was built from what the
+  spec reads (the D9 comparison). A `tree` candidate reads no backbone, so it has no such check.
+
+A trained candidate already passes the D9 comparison in the dry run. Its import runs `check_arm`
+on the source record, and that check makes the comparison. Every check in that list refuses
+before the first logged read, so a refusal there changes no log.
 
 A real read loads the growth panel at level 6, whatever the regressor config's `outcome` says.
 It appends two growth validation reads per run to `--log`, or to the regressor config's log if
@@ -526,7 +546,7 @@ The same command without `--dry-run` makes the real read.
   candidate read)
 - `--log PATH` - Selection log (default: the regressor config's)
 - `--lock PATH` - The `uv.lock` the read runs under, which the record names (default: `uv.lock`)
-- `--dry-run` - Run every check that needs no panel, then stop: no panel loads, nothing is logged
+- `--dry-run` - Run the checks listed above, then stop: no panel loads, nothing is logged
 
 ### `tools decide`
 

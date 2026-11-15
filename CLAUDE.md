@@ -265,18 +265,21 @@ reference's validation MSE, with r = `relative_margin` (0.05) in `conf/data/deci
 A deterministic candidate is one replicate, read by `read_deterministic_arm` with its table's
 provenance and no checkpoint or monitor reads. `tools economic-build` builds the nine
 deterministic tables from the frozen list. `tools economic-read` reads one frozen-list candidate,
-deterministic or trained, after every check that needs no panel. Under `--dry-run` it stops after
-those checks: it loads no panel and logs nothing. A trained candidate is imported from its Stage
-7/8 arm record and run directories (`--runs-root`) and read once per seed. `tools decide` makes
-the economic decision from a relative margin record and takes `--candidates`, the frozen list
-(default `conf/data/economic_candidates.yaml`). It requires exactly the list's candidates and
-records the list's sha256. It also reports whether each smoothed candidate is adopted over its
-text-only twin, and chooses nothing by it. It refuses a candidate whose reference predictions
-differ from the margin read's bit for bit, or that read before the margins. Superiority is
-1 − 0.05/n: 97.5 % over the two growth panels, 98⅓ % over D8's three. Only a candidate adopted
-over the reference is eligible; with none, the reference stands. The growth margins were fixed
-once, on 2026-10-17 (`specs/findings/growth-margins.md`). Never run `tools growth-margins` again:
-nothing refuses a second run, and every economic candidate is decided against that record.
+deterministic or trained, after the checks that run before the panel loads. Under `--dry-run` it
+stops after those checks: it loads no panel and logs nothing. The table's width, its panel-code
+coverage and a deterministic candidate's D9 comparison wait for the real read, and a deterministic
+row must pin its built table's sha256 before the read accepts it. A trained candidate is imported
+from its Stage 7/8 arm record and run directories (`--runs-root`) and read once per seed.
+`tools decide` makes the economic decision from a relative margin record and takes `--candidates`,
+the frozen list (default `conf/data/economic_candidates.yaml`). It requires exactly the list's
+candidates and records the list's sha256. It also reports whether each smoothed candidate is
+adopted over its text-only twin, and chooses nothing by it. It refuses a candidate whose reference
+predictions differ from the margin read's bit for bit, or that read before the margins.
+Superiority is 1 − 0.05/n: 97.5 % over the two growth panels, 98⅓ % over D8's three. Only a
+candidate adopted over the reference is eligible; with none, the reference stands. The growth
+margins were fixed once, on 2026-10-17 (`specs/findings/growth-margins.md`). Never run
+`tools growth-margins` again: nothing refuses a second run, and every economic candidate is
+decided against that record.
 
 ### Remote Workflow and Phase 2 Boundary
 
