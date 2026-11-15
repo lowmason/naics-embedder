@@ -513,17 +513,18 @@ Run it from the main checkout's root, or pass `--log` and `--lock` as absolute p
 selection-log records, and its predictions and scores in the store
 
 Check a candidate with a dry run, then read it. This example uses the worktree form, so every
-path into the main checkout is absolute:
+path into the main checkout is absolute. `/path/to/naics-embedder` stands for the main checkout's
+root:
 
 ```bash
 uv run naics-embedder tools economic-read --candidate tree-d16 \
-  --codebook /Users/lowell/Projects/naics-embedder/data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/naics_codebook.parquet \
+  --codebook /path/to/naics-embedder/data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/naics_codebook.parquet \
   --margins ~/naics-artifacts/records/economic/growth_margins.json \
   --store ~/naics-artifacts \
-  --text-only /Users/lowell/Projects/naics-embedder/checkpoints/plan9_exit/text_only.parquet \
-  --runs-root /Users/lowell/Projects/naics-embedder/checkpoints \
-  --log /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl \
-  --lock /Users/lowell/Projects/naics-embedder/uv.lock \
+  --text-only /path/to/naics-embedder/checkpoints/plan9_exit/text_only.parquet \
+  --runs-root /path/to/naics-embedder/checkpoints \
+  --log /path/to/naics-embedder/logs/selection_log.jsonl \
+  --lock /path/to/naics-embedder/uv.lock \
   --output ~/naics-artifacts/records/economic/tree-d16.json --dry-run
 ```
 
