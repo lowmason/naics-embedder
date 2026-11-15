@@ -1,25 +1,41 @@
 import json
+import shutil
 from pathlib import Path
+from typing import NamedTuple, Optional
 
 import click
+import numpy as np
 import polars as pl
 import pytest
 import torch
 import typer
+import yaml
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
 from naics_embedder.cli.commands import tools as tools_cli
-from naics_embedder.decision.economic import GROWTH_PANELS, read_deterministic_arm
+from naics_embedder.decision.candidates import (
+    CandidateEntry,
+    CandidateList,
+    candidate_table_path,
+    economic_spec,
+)
+from naics_embedder.decision.economic import (
+    GROWTH_PANELS,
+    check_economic_arm,
+    read_deterministic_arm,
+)
 from naics_embedder.decision.records import (
+    ArmRecord,
     DecisionRecord,
+    EconomicArmRecord,
     EconomicDecisionRecord,
     MarginRecord,
     RelativeMarginRecord,
     read_record,
     write_record,
 )
-from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.decision.store import ArtifactStore, provenance_fields
 from naics_embedder.metrics.diagnostics import DiagnosticsReport
 from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import Regime, RegressorPanel, reference_comparators
@@ -32,7 +48,9 @@ from naics_embedder.utils.config import Config
 from tests.fixtures.decision import spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import (
     candidate_spec,
+    fixture_list,
     scaled_arm,
+    trained_source,
     write_candidate,
     write_candidate_list,
     write_codebook,
@@ -1364,3 +1382,757 @@ def test_outcome_panel_refuses_a_text_only_table_without_a_traceback(
     assert 'Outcome panel failed' in message
     assert 'is not an exported arm table: its provenance names no checkpoint' in message
     assert SelectionLog(log).records() == []
+
+# -------------------------------------------------------------------------------------------------
+# Economic candidates: the build and the read (spec economic-candidates, 4.2 and 4.6)
+# -------------------------------------------------------------------------------------------------
+
+# The growth margins' read: the fixture panel's only load before a candidate's
+MARGINS_LOAD = ('growth', 'naics_codebook.parquet', None, (6, ))
+DETERMINISTIC = ('text-only-d3', 'tree-d3', 'smoothed-d3')
+COMPONENTS = {'text-only': 1, 'tree': 1, 'smoothed': 2}
+ROOT = Path(__file__).resolve().parents[2]
+
+class EconomicInputs(NamedTuple):
+    '''
+    What the economic commands read, each option's file (None leaves the option out), and the
+    frozen list as ``candidates`` holds it.
+    '''
+
+    root: Path
+    codebook: Path
+    text_only: Optional[Path]
+    candidates: Optional[Path]
+    frozen: CandidateList
+    store: ArtifactStore
+    runs_root: Optional[Path]
+    margins: Path
+    lock: Optional[Path]
+
+def _write_list(path: Path, frozen: CandidateList) -> Path:
+    path.write_text(yaml.safe_dump(frozen.model_dump(mode='json'), sort_keys=False))
+    return path
+
+def _economic_inputs(tmp_path, store):
+    '''
+    The fixture codebook and text-only table, and a frozen list of ``text-only-d3``, ``tree-d3``,
+    ``smoothed-d3`` and the trained ``euclidean-d3`` over the store (``trained_source``). The
+    three deterministic tables are built where the list pins them, and then the growth margins
+    are read: the fixture panel's one load so far.
+    '''
+
+    codebook = write_codebook(tmp_path / 'codebook' / 'naics_codebook.parquet')
+    text_only = write_text_only(tmp_path / 'text', codes=CODEBOOK)
+    trained, runs_root = trained_source(
+        store, tmp_path / 'trained', 'euclidean-d3', text_only=text_only
+    )
+    entries = []
+    for name in DETERMINISTIC:
+        kind = name[:-len('-d3')]
+        table = build_candidate(
+            kind,
+            3,
+            codebook,
+            candidate_table_path(store.root, name),
+            text_only=None if kind == 'tree' else text_only,
+        )
+        entries.append(
+            CandidateEntry(
+                name=name,
+                kind=kind,
+                dimension=3,
+                components=COMPONENTS[kind],
+                geometry='euclidean',
+                table_sha256=sha256_file(table),
+            )
+        )
+    frozen = fixture_list(
+        [*entries, trained],
+        text_only_sha256=sha256_file(text_only),
+        codebook_sha256=sha256_file(codebook),
+    )
+    candidates = _write_list(tmp_path / 'candidates.yaml', frozen)
+    assert _growth_margins(CliRunner(), tmp_path, store).exit_code == 0
+    return EconomicInputs(
+        root=tmp_path,
+        codebook=codebook,
+        text_only=text_only,
+        candidates=candidates,
+        frozen=frozen,
+        store=store,
+        runs_root=runs_root,
+        margins=tmp_path / 'margins.json',
+        lock=tmp_path / 'uv.lock',
+    )
+
+def _relisted(inputs, path, names=DETERMINISTIC, **update):
+    '''The inputs with a frozen list whose rows of ``names`` take ``update``, written to ``path``.'''
+
+    rows = [
+        entry.model_copy(update=update) if entry.name in names else entry
+        for entry in inputs.frozen.candidates
+    ]
+    frozen = inputs.frozen.model_copy(update={'candidates': rows})
+    return inputs._replace(candidates=_write_list(path, frozen), frozen=frozen)
+
+def _economic_read(runner, inputs, name, *extra, output=None):
+    '''
+    ``tools economic-read`` of ``name`` with every input option the inputs name, and ``--output``
+    ``read.json`` beside them unless ``output`` is given.
+    '''
+
+    options = {
+        '--candidates': inputs.candidates,
+        '--codebook': inputs.codebook,
+        '--margins': inputs.margins,
+        '--store': inputs.store.root,
+        '--text-only': inputs.text_only,
+        '--runs-root': inputs.runs_root,
+        '--lock': inputs.lock,
+    }
+    arguments = ['economic-read', '--candidate', name]
+    for option, value in options.items():
+        if value is not None:
+            arguments += [option, str(value)]
+    arguments += ['--output', str(output or inputs.root / 'read.json'), *extra]
+    return runner.invoke(tools_cli.app, arguments)
+
+def _economic_build(runner, inputs, store, *extra):
+    '''``tools economic-build`` of the inputs' codebook and text-only table into ``store``.'''
+
+    arguments = [
+        'economic-build',
+        '--codebook',
+        str(inputs.codebook),
+        '--text-only',
+        str(inputs.text_only),
+        '--store',
+        str(store.root),
+    ]
+    if inputs.candidates is not None:
+        arguments += ['--candidates', str(inputs.candidates)]
+    return runner.invoke(tools_cli.app, [*arguments, *extra])
+
+def _output(result):
+    '''
+    The output as one line. The economic commands print their long lines unwrapped: Rich folding
+    at 80 columns (CI) can drop the space it folds at.
+    '''
+
+    return click.unstyle(result.output).replace('\n', '')
+
+def _built(store):
+    '''Every file under the store's ``candidates`` directory, by name.'''
+
+    directory = store.root / 'candidates'
+    return sorted(path.name for path in directory.rglob('*') if path.is_file())
+
+def _untouched(panel, loaded):
+    '''No panel loaded beyond the margins' read, and the log holds only its two reads.'''
+
+    assert loaded == [MARGINS_LOAD]
+    assert len(panel.log.records()) == 2
+
+def _refused_read(result, *phrases):
+    assert result.exit_code == 1, result.output
+    output = _output(result)
+    assert 'Economic read failed:' in output
+    for phrase in phrases:
+        assert phrase in output
+    return output
+
+def _rewrite_table(path):
+    '''The table rewritten with other coordinates: its bytes are no longer its pin's.'''
+
+    pl.read_parquet(path).with_columns(pl.col('e0') * 2).write_parquet(path)
+
+def _edit_provenance(table, **entries):
+    path = provenance_path(table)
+    path.write_text(json.dumps({**json.loads(path.read_text()), **entries}))
+
+def _source_run(inputs, seed):
+    '''Seed ``seed``'s run in the trained candidate's stored source record.'''
+
+    entry = inputs.frozen.entry('euclidean-d3')
+    source = read_record(inputs.store.root / entry.record, ArmRecord)
+    (run, ) = [run for run in source.runs if run.seed == seed]
+    return run
+
+# Build ---------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+@pytest.mark.parametrize('pinned', [True, False], ids=['pinned', 'unpinned'])
+def test_economic_build_writes_each_deterministic_table_with_its_provenance(
+    runner, tmp_path, growth_panel, pinned
+):
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    pins = {name: inputs.frozen.entry(name).table_sha256 for name in DETERMINISTIC}
+    if not pinned:
+        inputs = _relisted(inputs, tmp_path / 'unpinned.yaml', table_sha256=None)
+    fresh = ArtifactStore(tmp_path / 'fresh')
+
+    result = _economic_build(runner, inputs, fresh)
+
+    assert result.exit_code == 0, result.output
+    output = _output(result)
+    for name in DETERMINISTIC:
+        table = candidate_table_path(fresh.root, name)
+        # Two builds write the same bytes (spec 4.2), the bytes the pins name
+        assert sha256_file(table) == pins[name]
+        assert json.loads(provenance_path(table).read_text())['table_sha256'] == pins[name]
+        assert f'{name}: {table} (sha256 {pins[name]})' in output
+    # Every deterministic row, in the list's order; the trained row is not built
+    positions = [output.index(f'{name}: ') for name in DETERMINISTIC]
+    assert positions == sorted(positions)
+    assert _built(fresh) == sorted(
+        f'{name}{suffix}' for name in DETERMINISTIC for suffix in ('.parquet', '_provenance.json')
+    )
+    # Building reads no panel
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'chosen', [[], ['--candidate', 'tree-d3']], ids=['every-row', 'the-tree-row-alone']
+)
+def test_economic_build_refuses_a_text_only_table_other_than_the_lists(
+    runner, tmp_path, growth_panel, chosen
+):
+    '''Review Focus 3: a text-only table with a valid provenance, but not the list's.'''
+
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    other = write_text_only(tmp_path / 'plan8', codes=CODEBOOK[::-1])
+    fresh = ArtifactStore(tmp_path / 'fresh')
+
+    result = _economic_build(runner, inputs._replace(text_only=other), fresh, *chosen)
+
+    assert result.exit_code == 1
+    output = _output(result)
+    assert 'Economic build failed:' in output
+    assert f'{other} is not the shared text-only table that the frozen list pins' in output
+    assert not (fresh.root / 'candidates').exists()
+
+@pytest.mark.unit
+def test_economic_build_refuses_a_codebook_other_than_the_lists(runner, tmp_path, growth_panel):
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    other = write_codebook(tmp_path / 'other' / 'naics_codebook.parquet', CODEBOOK[::-1])
+    fresh = ArtifactStore(tmp_path / 'fresh')
+
+    result = _economic_build(runner, inputs._replace(codebook=other), fresh)
+
+    assert result.exit_code == 1
+    output = _output(result)
+    assert 'Economic build failed:' in output
+    assert f'{other} is not the codebook that the frozen list pins' in output
+    assert not (fresh.root / 'candidates').exists()
+
+@pytest.mark.unit
+def test_economic_build_builds_each_named_candidate_once(runner, tmp_path, growth_panel):
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    fresh = ArtifactStore(tmp_path / 'fresh')
+    named = ['--candidate', 'smoothed-d3', '--candidate', 'tree-d3', '--candidate', 'smoothed-d3']
+
+    result = _economic_build(runner, inputs, fresh, *named)
+
+    assert result.exit_code == 0, result.output
+    assert _built(fresh) == [
+        'smoothed-d3.parquet',
+        'smoothed-d3_provenance.json',
+        'tree-d3.parquet',
+        'tree-d3_provenance.json',
+    ]
+    output = _output(result)
+    assert (output.count('smoothed-d3: '), output.count('tree-d3: ')) == (1, 1)
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'names, message',
+    [
+        (['euclidean-d3'], 'euclidean-d3: a trained candidate is imported by tools economic-read'),
+        (
+            ['tree-d3', 'euclidean-d3'],
+            'euclidean-d3: a trained candidate is imported by tools economic-read',
+        ),
+        (['unknown-d3'], "'unknown-d3' is not on the frozen candidate list"),
+        (['tree-d3', 'unknown-d3'], "'unknown-d3' is not on the frozen candidate list"),
+    ],
+    ids=[
+        'a-trained-row',
+        'a-trained-row-after-a-deterministic-one',
+        'an-unknown-name',
+        'an-unknown-name-after-a-known-one',
+    ],
+)
+def test_economic_build_refuses_a_row_it_cannot_build_before_writing_anything(
+    runner, tmp_path, growth_panel, names, message
+):
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    fresh = ArtifactStore(tmp_path / 'fresh')
+    named = [argument for name in names for argument in ('--candidate', name)]
+
+    result = _economic_build(runner, inputs, fresh, *named)
+
+    assert result.exit_code == 1
+    output = _output(result)
+    assert 'Economic build failed:' in output
+    assert message in output
+    assert not (fresh.root / 'candidates').exists()
+
+@pytest.mark.unit
+def test_economic_build_refuses_a_table_that_differs_from_its_pin(runner, tmp_path, growth_panel):
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    inputs = _relisted(inputs, tmp_path / 'repinned.yaml', ['tree-d3'], table_sha256='a' * 64)
+    fresh = ArtifactStore(tmp_path / 'fresh')
+
+    result = _economic_build(runner, inputs, fresh)
+
+    assert result.exit_code == 1
+    output = _output(result)
+    assert 'Economic build failed:' in output
+    assert f'tree-d3: the built table {candidate_table_path(fresh.root, "tree-d3")}' in output
+    assert f'differs from its pin {"a" * 64}' in output
+    # The refusal stops the build
+    assert not candidate_table_path(fresh.root, 'smoothed-d3').exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize('existing', ['table', 'provenance'])
+def test_economic_build_refuses_an_existing_table_before_writing_anything(
+    runner, tmp_path, growth_panel, existing
+):
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    fresh = ArtifactStore(tmp_path / 'fresh')
+    table = candidate_table_path(fresh.root, 'smoothed-d3')
+    path = table if existing == 'table' else provenance_path(table)
+    path.parent.mkdir(parents=True)
+    path.write_text('an earlier build')
+
+    result = _economic_build(runner, inputs, fresh)
+
+    assert result.exit_code == 1
+    output = _output(result)
+    assert 'Economic build failed:' in output
+    assert f'{path} exists; a candidate table is built once' in output
+    assert _built(fresh) == [path.name]
+    assert path.read_text() == 'an earlier build'
+
+# Read ----------------------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_economic_read_dry_run_loads_no_panel_and_leaves_the_log_untouched(
+    runner, tmp_path, growth_panel
+):
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    log = tmp_path / 'real' / 'selection_log.jsonl'
+    for name in ('text-only-d3', 'tree-d3', 'smoothed-d3', 'euclidean-d3'):
+        result = _economic_read(runner, inputs, name, '--dry-run', '--log', str(log))
+        assert result.exit_code == 0, result.output
+        output = click.unstyle(result.output).replace('\n', '')
+        assert 'no panel was loaded and nothing was logged' in output
+    assert loaded == [('growth', 'naics_codebook.parquet', None, (6, ))]  # the margins' only
+    assert not log.exists()
+    assert not (tmp_path / 'read.json').exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize('name', DETERMINISTIC)
+def test_economic_read_refuses_a_text_only_table_other_than_the_lists(
+    runner, tmp_path, growth_panel, name
+):
+    '''Review Focus 3: a text-only table with a valid provenance, but not the list's.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    other = write_text_only(tmp_path / 'plan8', codes=CODEBOOK[::-1])
+
+    result = _economic_read(runner, inputs._replace(text_only=other), name)
+
+    _refused_read(result, f'{other} is not the shared text-only table that the frozen list pins')
+    _untouched(panel, loaded)
+    assert not (tmp_path / 'read.json').exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize('extra', [[], ['--dry-run']], ids=['read', 'dry-run'])
+def test_economic_read_refuses_a_table_that_differs_from_its_pin_before_loading_the_panel(
+    runner, tmp_path, growth_panel, extra
+):
+    '''Review Focus 2: the stored table is edited after it was pinned.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    table = candidate_table_path(inputs.store.root, 'text-only-d3')
+    _rewrite_table(table)
+
+    result = _economic_read(runner, inputs, 'text-only-d3', *extra)
+
+    pin = inputs.frozen.entry('text-only-d3').table_sha256
+    _refused_read(result, f'has sha256 {sha256_file(table)}, which differs from its pin {pin}')
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('extra', [[], ['--dry-run']], ids=['read', 'dry-run'])
+def test_economic_read_refuses_a_trained_candidate_whose_store_lacks_a_checkpoint(
+    runner, tmp_path, growth_panel, extra
+):
+    '''Review Focus 4: a partial store copy, without one later seed's checkpoint object.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    run = _source_run(inputs, 3)
+    (inputs.store.root / run.checkpoint.path).unlink()
+
+    result = _economic_read(runner, inputs, 'euclidean-d3', *extra)
+
+    _refused_read(result, run.checkpoint.path, 'not in the artifact store')
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+def test_economic_read_refuses_an_existing_record_before_any_check(
+    runner, tmp_path, growth_panel, monkeypatch
+):
+    '''Review Focus 5: nothing is checked, so nothing is hashed, and nothing is read.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    (tmp_path / 'read.json').write_text('an earlier record')
+    calls = []
+    monkeypatch.setattr(tools_cli, 'load_candidate_list', lambda *args: calls.append(args))
+
+    result = _economic_read(runner, inputs, 'tree-d3')
+
+    _refused_read(result, 'exists; a record is written once')
+    assert calls == []
+    _untouched(panel, loaded)
+    assert (tmp_path / 'read.json').read_text() == 'an earlier record'
+
+@pytest.mark.unit
+def test_economic_read_refuses_d8_margins(runner, tmp_path, growth_panel, decision_inputs):
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    store, reference = decision_inputs
+    assert _margins(runner, tmp_path / 'd8', store, reference).exit_code == 0
+
+    result = _economic_read(
+        runner, inputs._replace(margins=tmp_path / 'd8' / 'margins.json'), 'tree-d3'
+    )
+
+    _refused_read(result, 'reads relative margins', 'is a D8 margin record')
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+def test_economic_reads_and_decide_record_a_decision_over_both_kinds(
+    runner, tmp_path, growth_panel
+):
+    '''§6 "Decision": the command reads a deterministic and a trained candidate.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    arms = []
+    for name, runs in (('tree-d3', 1), ('euclidean-d3', 5)):
+        before = len(panel.log.records())
+        result = _economic_read(runner, inputs, name, output=tmp_path / f'{name}.json')
+        assert result.exit_code == 0, result.output
+        added = panel.log.records()[before:]
+        assert sorted(record['panel'] for record in added) == sorted(GROWTH_PANELS * runs)
+        assert {(r['event'], r['split'], r['purpose'])
+                for r in added} == {('read', 'validation', 'economic candidate read')}
+        record = read_record(tmp_path / f'{name}.json', EconomicArmRecord)
+        output = _output(result)
+        for growth in GROWTH_PANELS:
+            mean = np.mean([run.statistics[growth] for run in record.runs])
+            assert f'{growth}: covariates+embedding MSE {mean:.6g}, ' in output
+        arms.append(tmp_path / f'{name}.json')
+    # The log gains 2 + 10 growth validation reads
+    assert len(panel.log.records()) == 2 + 2 + 10
+    assert loaded[1:] == [('growth', str(inputs.codebook), None, (6, ))] * 2
+    both = inputs.frozen.model_copy(
+        update={'candidates': [inputs.frozen.entry(name) for name in ('tree-d3', 'euclidean-d3')]}
+    )
+
+    result = _decide(
+        runner, tmp_path, inputs.store, arms, candidates=_write_list(tmp_path / 'two.yaml', both)
+    )
+
+    assert result.exit_code == 0, result.output
+    decision = read_record(tmp_path / 'decision.json', EconomicDecisionRecord)
+    assert [(arm.spec.name, len(arm.runs)) for arm in decision.arms] == [
+        ('tree-d3', 1),
+        ('euclidean-d3', 5),
+    ]
+    assert 'Chosen:' in _output(result)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('name', DETERMINISTIC)
+def test_economic_read_writes_a_deterministic_record_with_the_text_only_tables_d9_fields(
+    runner, tmp_path, growth_panel, name
+):
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    log = tmp_path / 'real' / 'selection_log.jsonl'
+
+    result = _economic_read(runner, inputs, name, '--purpose', 'a fixture read', '--log', str(log))
+
+    assert result.exit_code == 0, result.output
+    record = read_record(tmp_path / 'read.json', EconomicArmRecord)
+    entry = inputs.frozen.entry(name)
+    content = json.loads(provenance_path(inputs.text_only).read_text())
+    fields = provenance_fields(
+        content, sha256_file(inputs.text_only), content['matrix_fingerprint'], 'text-only'
+    )
+    assert record.spec == economic_spec(entry, text_only=fields)
+    (run, ) = record.runs
+    assert run.table.sha256 == entry.table_sha256
+    check_economic_arm(record, inputs.store, inputs.frozen)
+    # The growth panel, loaded as tools growth-margins loads it, with --codebook and --log
+    assert loaded[1:] == [('growth', str(inputs.codebook), str(log), (6, ))]
+    reads = panel.log.records()[2:]
+    assert [(r['panel'], r['purpose'])
+            for r in reads] == [(growth, 'a fixture read') for growth in GROWTH_PANELS]
+    output = _output(result)
+    for growth in GROWTH_PANELS:
+        assert f'{growth}: covariates+embedding MSE {run.statistics[growth]:.6g}, ' in output
+    assert f'Economic arm record: {tmp_path / "read.json"}' in output
+    assert f'Reads logged to {panel.log.path}' in output
+
+@pytest.mark.unit
+def test_economic_read_refuses_a_row_that_pins_no_table(runner, tmp_path, growth_panel):
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    inputs = _relisted(inputs, tmp_path / 'unpinned.yaml', ['tree-d3'], table_sha256=None)
+
+    result = _economic_read(runner, inputs, 'tree-d3')
+
+    _refused_read(result, 'tree-d3: its frozen-list row pins no table')
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+def test_economic_read_refuses_a_provenance_outside_text_and_tree(runner, tmp_path, growth_panel):
+    '''The read itself checks only that a provenance describes its table: the rule runs first.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    table = candidate_table_path(inputs.store.root, 'smoothed-d3')
+    _edit_provenance(table, qcew={'path': 'qcew.parquet', 'sha256': 'q' * 64})
+
+    result = _economic_read(runner, inputs, 'smoothed-d3')
+
+    _refused_read(result, "smoothed-d3: entries: its provenance has the entries ['qcew']", 'Req 29')
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'field, message',
+    [
+        ('table_sha256', 'describes another file than the table'),
+        ('matrix_fingerprint', 'names another matrix_fingerprint'),
+    ],
+    ids=['another-table-sha256', 'another-matrix-fingerprint'],
+)
+def test_economic_read_refuses_a_provenance_that_describes_another_table(
+    runner, tmp_path, growth_panel, field, message
+):
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    table = candidate_table_path(inputs.store.root, 'tree-d3')
+    _edit_provenance(table, **{field: 'f' * 64})
+
+    result = _economic_read(runner, inputs, 'tree-d3')
+
+    _refused_read(result, f'{provenance_path(table)} {message}')
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+def test_economic_read_refuses_a_text_only_table_whose_provenance_does_not_describe_it(
+    runner, tmp_path, growth_panel
+):
+    '''The list's table, whose provenance names other bytes: even the tree read refuses it.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    copy = tmp_path / 'copy' / 'text_only.parquet'
+    copy.parent.mkdir()
+    shutil.copyfile(inputs.text_only, copy)
+    provenance = json.loads(provenance_path(inputs.text_only).read_text())
+    provenance_path(copy).write_text(json.dumps({**provenance, 'table_sha256': 'f' * 64}))
+
+    result = _economic_read(runner, inputs._replace(text_only=copy), 'tree-d3')
+
+    _refused_read(result, f'{provenance_path(copy)} describes another file than the table')
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+def test_economic_read_checks_the_margin_record_in_a_dry_run(runner, tmp_path, growth_panel):
+    '''Spec :258: the margin record's own checks run before the first read, and in a dry run.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    content = json.loads(inputs.margins.read_text())
+    content['margins'][0]['margin'] *= 2
+    tampered = tmp_path / 'tampered.json'
+    tampered.write_text(json.dumps(content))
+
+    result = _economic_read(runner, inputs._replace(margins=tampered), 'tree-d3', '--dry-run')
+
+    output = _refused_read(result, "the growth_seen δ is not r × the reference's MSE")
+    assert 'Dry run' not in output
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'name, field, option',
+    [('tree-d3', 'text_only', '--text-only'), ('euclidean-d3', 'runs_root', '--runs-root')],
+    ids=['deterministic', 'trained'],
+)
+def test_economic_read_needs_the_option_its_candidates_kind_reads(
+    runner, tmp_path, growth_panel, name, field, option
+):
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+
+    result = _economic_read(runner, inputs._replace(**{field: None}), name)
+
+    _refused_read(result, f'{name}: ', f'so it needs {option}')
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+def test_economic_read_checks_a_deterministic_candidate_in_the_briefs_order(
+    runner, tmp_path, growth_panel
+):
+    '''
+    Each read keeps the input the read before it was refused for, and breaks one later check's,
+    so each refusal names the earlier check (brief steps 1-5).
+    '''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    (tmp_path / 'read.json').write_text('an earlier record')
+    d8 = tmp_path / 'd8.json'
+    d8.write_text(json.dumps({'kind': 'margins'}))
+    table = candidate_table_path(inputs.store.root, 'text-only-d3')
+    original = table.read_bytes()
+    _rewrite_table(table)
+    broken = inputs._replace(
+        margins=d8,
+        text_only=write_text_only(tmp_path / 'plan8', codes=CODEBOOK[::-1]),
+        lock=tmp_path / 'missing.lock',
+    )
+
+    def refused(name, chosen, *extra):
+        return _refused_read(_economic_read(runner, chosen, name, *extra))
+
+    assert 'exists; a record is written once' in refused('unknown-d3', broken)
+    (tmp_path / 'read.json').unlink()
+    assert "'unknown-d3' is not on the frozen candidate list" in refused('unknown-d3', broken)
+    assert 'reads relative margins' in refused('text-only-d3', broken)
+    broken = broken._replace(margins=inputs.margins)
+    assert 'differs from its pin' in refused('text-only-d3', broken)
+    table.write_bytes(original)
+    provenance = provenance_path(table).read_text()
+    _edit_provenance(table, qcew={'path': 'qcew.parquet', 'sha256': 'q' * 64})
+    assert 'Req 29' in refused('text-only-d3', broken)
+    provenance_path(table).write_text(provenance)
+    assert 'is not the shared text-only table' in refused('text-only-d3', broken)
+    broken = broken._replace(text_only=inputs.text_only)
+    assert 'no uv.lock to name the read by' in refused('text-only-d3', broken, '--dry-run')
+
+    result = _economic_read(runner, inputs, 'text-only-d3', '--dry-run')
+
+    assert result.exit_code == 0, result.output
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+def test_economic_read_checks_a_trained_candidate_in_the_briefs_order(
+    runner, tmp_path, growth_panel
+):
+    '''As for a deterministic candidate: the margins, then the import, then the lock.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    d8 = tmp_path / 'd8.json'
+    d8.write_text(json.dumps({'kind': 'margins'}))
+    run = _source_run(inputs, 3)
+    checkpoint = inputs.store.root / run.checkpoint.path
+    aside = tmp_path / 'aside.ckpt'
+    checkpoint.rename(aside)
+    broken = inputs._replace(margins=d8, lock=tmp_path / 'missing.lock')
+
+    def refused(chosen, *extra):
+        return _refused_read(_economic_read(runner, chosen, 'euclidean-d3', *extra))
+
+    assert 'reads relative margins' in refused(broken)
+    broken = broken._replace(margins=inputs.margins)
+    assert run.checkpoint.path in refused(broken)
+    aside.rename(checkpoint)
+    assert 'no uv.lock to name the read by' in refused(broken, '--dry-run')
+
+    result = _economic_read(runner, inputs, 'euclidean-d3', '--dry-run')
+
+    assert result.exit_code == 0, result.output
+    _untouched(panel, loaded)
+
+@pytest.mark.unit
+def test_economic_read_names_the_working_directorys_uv_lock_by_default(
+    runner, tmp_path, growth_panel, monkeypatch
+):
+    '''``--lock`` is ``uv.lock`` in the directory the command runs from (spec 4.6).'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))._replace(lock=None)
+
+    monkeypatch.chdir(tmp_path)
+    found = _economic_read(runner, inputs, 'tree-d3', '--dry-run')
+    monkeypatch.chdir(tmp_path / 'codebook')
+    missing = _economic_read(runner, inputs, 'tree-d3', '--dry-run')
+
+    assert found.exit_code == 0, found.output
+    _refused_read(missing, 'uv.lock: no uv.lock to name the read by')
+    _untouched(panel, loaded)
+
+# Both commands -------------------------------------------------------------------------------
+
+def _economic_command(runner, inputs, command, store):
+    if command == 'economic-build':
+        return _economic_build(runner, inputs, store, '--candidate', 'tree-d3')
+    return _economic_read(runner, inputs, 'tree-d3')
+
+@pytest.mark.unit
+@pytest.mark.parametrize('command', ['economic-build', 'economic-read'])
+def test_the_economic_commands_read_the_committed_candidate_list_by_default(
+    runner, tmp_path, growth_panel, monkeypatch, command
+):
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))._replace(candidates=None)
+    fresh = ArtifactStore(tmp_path / 'fresh')
+    # The committed list is relative to the repository root, where the commands run
+    monkeypatch.chdir(ROOT)
+
+    result = _economic_command(runner, inputs, command, fresh)
+
+    assert result.exit_code == 1
+    output = _output(result)
+    assert f'Economic {command.split("-")[1]} failed:' in output
+    assert "'tree-d3' is not on the frozen candidate list" in output
+    assert not (fresh.root / 'candidates').exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize('command', ['economic-build', 'economic-read'])
+def test_the_economic_commands_refuse_a_candidate_list_that_is_not_yaml(
+    runner, tmp_path, growth_panel, command
+):
+    '''The handlers catch it: load_candidate_list refuses broken YAML as a ValueError.'''
+
+    panel, loaded = growth_panel
+    broken = tmp_path / 'broken.yaml'
+    broken.write_text('codebook_sha256: x: y\n')
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))._replace(
+        candidates=broken
+    )
+    fresh = ArtifactStore(tmp_path / 'fresh')
+
+    result = _economic_command(runner, inputs, command, fresh)
+
+    # A handled refusal raises SystemExit; an uncaught YAMLError would exit 1 too
+    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == 1
+    output = _output(result)
+    assert f'Economic {command.split("-")[1]} failed: {broken} is not safe YAML' in output
+    assert not (fresh.root / 'candidates').exists()
+    _untouched(panel, loaded)
