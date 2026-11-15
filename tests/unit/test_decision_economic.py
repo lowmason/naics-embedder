@@ -1958,6 +1958,104 @@ def test_a_trained_runs_provenance_passes_the_rule_as_an_export(trained_read, st
     with pytest.raises(ValueError, match='^euclidean-d3: entries: .*\\(Req 29'):
         check_economic_arm(edited, store, frozen)
 
+# The import's refusal of the same content (``trained._seed_provenance``): D9's check_seed_table
+EXPORT_D9_REFUSAL = f'^euclidean-d3 seed {LATER_SEED}: the table was exported from .*\\(D9\\)'
+# One value for each of D9's five fields, as the export names them
+OTHER_EXPORT_INPUTS = {
+    'backbone': 'other-backbone',
+    'revision': 'other',
+    'descriptions': {
+        'path': 'naics_descriptions.parquet',
+        'sha256': 'f' * 64
+    },
+    'summaries': 'f' * 64,
+    'max_length': 32,
+}
+
+@pytest.mark.parametrize('field', sorted(OTHER_EXPORT_INPUTS))
+def test_a_trained_runs_stored_export_records_what_its_arm_reads(
+    trained_read, store, tmp_path, field
+):
+    '''
+    Final review (P2): the gate D9-checks a trained run's stored export provenance against the
+    arm's spec, as the import does. The provenance differs in the one field, and still names the
+    run's checkpoint and describes its stored table.
+    '''
+
+    arm, frozen, _ = trained_read
+    edited = _with_provenance(
+        arm, LATER_SEED, store, tmp_path, **{field: OTHER_EXPORT_INPUTS[field]}
+    )
+    original, run = arm.runs[LATER_SEED].provenance, edited.runs[LATER_SEED]
+    assert run.provenance.file != original.file
+    assert [
+        key for key in original.content if run.provenance.content[key] != original.content[key]
+    ] == [field]
+    assert run.provenance.content['checkpoint']['sha256'] == run.checkpoint.sha256
+    assert run.provenance.content['table_sha256'] == run.table.sha256
+
+    with pytest.raises(ValueError, match=EXPORT_D9_REFUSAL):
+        check_economic_arm(edited, store, frozen)
+
+@pytest.mark.parametrize(
+    'entries, message',
+    [
+        pytest.param(
+            {'qcew': {
+                'path': 'qcew/2023.annual.singlefile.csv',
+                'sha256': 'f' * 64
+            }},
+            '^euclidean-d3: entries: .*\\(Req 29',
+            id='the rule before d9',
+        ),
+        pytest.param(
+            {'checkpoint': {
+                'path': 'checkpoints/other.ckpt',
+                'sha256': 'f' * 64
+            }},
+            f'^euclidean-d3 seed {LATER_SEED}: .*another checkpoint',
+            id='the checkpoint before d9',
+        ),
+    ],
+)
+def test_a_trained_runs_export_is_d9_checked_after_the_rule_and_its_checkpoint(
+    trained_read, store, tmp_path, entries, message
+):
+    '''The gate refuses in the import's order: the rule, the checkpoint, then D9.'''
+
+    arm, frozen, _ = trained_read
+    edited = _with_provenance(arm, LATER_SEED, store, tmp_path, revision='other', **entries)
+
+    with pytest.raises(ValueError, match=message):
+        check_economic_arm(edited, store, frozen)
+
+def test_a_trained_runs_export_is_d9_checked_only_as_stored(trained_read, store):
+    '''
+    D9 reads the provenance once it is known to be the stored one: a record whose copy names
+    another revision is refused for differing from its stored provenance.
+    '''
+
+    arm, frozen, _ = trained_read
+    provenance = arm.runs[LATER_SEED].provenance
+    copy = provenance.model_copy(update={'content': {**provenance.content, 'revision': 'other'}})
+    edited = _trained_with(arm, LATER_SEED, provenance=copy)
+
+    with pytest.raises(
+        ValueError, match="^euclidean-d3: the record's provenance differs from its stored"
+    ):
+        check_economic_arm(edited, store, frozen)
+
+def test_the_decision_refuses_a_trained_run_whose_export_records_other_inputs(
+    trained_read, margins, store, tmp_path
+):
+    '''The decision refuses it before any number is computed, so it makes no decision record.'''
+
+    arm, _, _ = trained_read
+    edited = _with_provenance(arm, LATER_SEED, store, tmp_path, revision='other')
+
+    with pytest.raises(ValueError, match=EXPORT_D9_REFUSAL):
+        _decide([edited], margins, store)
+
 @pytest.mark.parametrize(
     'index, logged',
     [(0, 1), (1, 2), (1, True), (1, 1.0), (1, None)],

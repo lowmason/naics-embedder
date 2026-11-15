@@ -66,6 +66,7 @@ from naics_embedder.decision.decide import (
     check_arm,
     check_margins_first,
     check_recorded_text_only,
+    check_seed_table,
     check_text_only,
     read_time,
 )
@@ -113,7 +114,7 @@ from naics_embedder.decision.scores import (
     statistic_means,
     statistic_values,
 )
-from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.decision.store import ArtifactStore, provenance_fields
 from naics_embedder.decision.sweep import _fit_settings, _log_records
 from naics_embedder.decision.trained import TrainedImport
 from naics_embedder.panels.qcew_rows import RegressorOutcome
@@ -506,8 +507,10 @@ def check_economic_arm(
        records are its source seed run's, and it names a training run.
 
     Then each run: its files, its provenance as stored and under the text-and-tree rule (Req 29),
-    the checkpoint a trained run's export names, its predictions' binding to its table (P4), its
-    statistics and stored scores against the rescore of its predictions, and its growth reads.
+    its predictions' binding to its table (P4), its statistics and stored scores against the
+    rescore of its predictions, and its growth reads. A trained run's export must also name the
+    run's checkpoint and record what the spec reads: the backbone, revision, descriptions,
+    summaries and window (D9).
 
     Args:
         arm: The record.
@@ -716,7 +719,7 @@ def _check_run(
 ) -> None:
     '''
     Require one run to be intact, of text and tree only, bound to its table and its scores. A
-    trained run's export names the run's checkpoint.
+    trained run's export names the run's checkpoint and records what the arm reads (D9).
     '''
 
     name = arm.spec.name
@@ -727,6 +730,7 @@ def _check_run(
     check_candidate_provenance(run.provenance.content, entry, candidates)
     if entry.kind == 'trained':
         _check_export_checkpoint(name, run)
+        _check_export_inputs(arm, run)
     predictions = store.read_frame(run.predictions)
     _check_binding(name, run, predictions)
     scores = regressor_scores(predictions, arm.panels.fit_settings['repeats'], GROWTH_PANELS)
@@ -754,6 +758,21 @@ def _check_export_checkpoint(name: str, run: EconomicRun) -> None:
             f'{name} seed {run.seed}: its export provenance names another checkpoint, '
             f"{named[:12]}, than the run's {run.checkpoint.sha256[:12]}"
         )
+
+def _check_export_inputs(arm: EconomicArmRecord, run: EconomicRun) -> None:
+    '''
+    Require a trained run's stored export provenance to record the backbone, revision,
+    descriptions, summaries and window that the arm reads (D9), as the import requires of the
+    same file (``decision.trained``). The source record pins the arm's spec, not the export.
+    '''
+
+    fields = provenance_fields(
+        run.provenance.content,
+        run.table.sha256,
+        run.table.matrix_fingerprint,
+        f'{arm.spec.name} seed {run.seed}: the stored {run.provenance.file.path}',
+    )
+    check_seed_table(arm.spec, run.seed, fields)
 
 def _check_binding(name: str, run: EconomicRun, predictions: pl.DataFrame) -> None:
     '''Require every stored prediction to name the run's table, and no other (P4).'''
