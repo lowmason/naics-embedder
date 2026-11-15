@@ -1,10 +1,9 @@
 # Economic candidates — Design Spec
 
-> For agentic workers: REQUIRED NEXT SKILL: writing-plans — plan this spec as plan 16 in a
-> fresh session. Do not read a real growth panel while planning or executing it.
-
-**Status: APPROVED (2026-11-14, U35).** Written in a brainstorming session. A builder check
-found nothing left for the user. Its four notes are folded into §4.4, §4.5, §4.8 and §4.1.
+**Status:** COMPLETE (2026-11-15) — implemented by
+`specs/plans/completed/16-economic-candidates.md`; deferred items in
+`specs/deferred_items.md`. Approved 2026-11-14 (U35). Written in a brainstorming session. A builder
+check found nothing left for the user. Its four notes are folded into §4.4, §4.5, §4.8 and §4.1.
 
 **Roadmap:** `specs/naics-artifact-redesign-roadmap.md`, Stage 1 (ROUTING: brainstorming). Source
 specs: `specs/naics-artifact-redesign.md` (Q4) Req 29, and `specs/naics-representation-split.md`

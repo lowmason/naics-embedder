@@ -1,5 +1,5 @@
-# The economic candidates (specs/economic-candidates.md §4.1; U33), frozen before Stage 3's first
-# read: the decision reads exactly these (decision/candidates.py).
+# The economic candidates (specs/completed/economic-candidates.md §4.1; U33), frozen before
+# Stage 3's first read: the decision reads exactly these (decision/candidates.py).
 #
 # - codebook_sha256, text_only_sha256: what every deterministic builder reads, bundle 301cce28's
 #   naics_codebook.parquet and the shared MiniLM text-only table (§4.3).

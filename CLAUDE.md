@@ -51,7 +51,7 @@ integration files. File counts exclude generated and ignored artifacts.
    scaling of the tree metric D*, and the text-only vectors smoothed over each code's lineage.
    `conf/data/economic_candidates.yaml` freezes the 18 candidates the economic decision reads,
    these nine and nine trained Stage 7/8 arms. A candidate reads the codebook's text and tree only
-   (`specs/economic-candidates.md`).
+   (`specs/completed/economic-candidates.md`).
 
 The text model has no curvature parameter, DCL term, false-negative clustering, negative miner,
 router-guided sampler, text phase curriculum, distributed cache or in-sample validation loader.
