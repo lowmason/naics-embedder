@@ -562,6 +562,37 @@ def test_a_text_only_candidate_reads_the_backbone(
     ):
         check_economic_arm(arm, store, frozen)
 
+def test_a_smoothed_candidate_reads_the_backbone(
+    text_table, growth_panel, text_only, margins, store, lock, tmp_path
+):
+    '''A smoothed candidate reads the text-only table too: every kind but the tree reads one.'''
+
+    table, codebook = text_table
+    text = _read(table, growth_panel, text_only, margins, store, lock, arm_spec=TEXT_ONLY_D3)
+    smoothed_table = build_candidate(
+        'smoothed', 3, codebook, tmp_path / 'built' / 'smoothed-d3.parquet', text_only=text_only
+    )
+    smoothed = _read(
+        smoothed_table,
+        growth_panel,
+        text_only,
+        margins,
+        store,
+        lock,
+        arm_spec=candidate_spec('smoothed-d3'),
+    )
+    frozen = list_for(
+        [text, smoothed],
+        store,
+        text_only_sha256=sha256_file(text_only),
+        codebook_sha256=sha256_file(codebook),
+    )
+
+    with pytest.raises(
+        ValueError, match="^smoothed-d3: a smoothed candidate reads the text-only table's backbone"
+    ):
+        check_economic_arm(smoothed, store, frozen)
+
 def test_a_tree_candidate_reads_no_backbone_and_only_the_shared_text_only_table(
     arm, candidate, growth_panel, text_only, margins, store, lock
 ):
@@ -797,12 +828,27 @@ def test_stored_scores_within_the_tolerance_are_accepted(arm, store, frozen):
 
     check_economic_arm(_stored_scores(arm, store, lambda _: nudged), store, frozen)
 
+def test_stored_scores_beyond_the_tolerance_are_refused(arm, store, frozen):
+    '''One part in 1e10 is beyond STATISTIC_TOLERANCE, though within math.isclose's default.'''
+
+    edited = _stored_scores(
+        arm,
+        store,
+        lambda scores: scores.with_columns(_first_row('value',
+                                                      pl.col('value') * (1 + 1e-10))),
+    )
+
+    with pytest.raises(ValueError, match='^tree: .*stored scores'):
+        check_economic_arm(edited, store, frozen)
+
 @pytest.mark.parametrize(
     'edit',
     [
         lambda scores: scores.slice(1),
         lambda scores: pl.concat([scores, scores.head(1)]),
-        lambda scores: scores.with_columns(_first_row('item', pl.lit('999999/2023'))),
+        # A trailing space keeps the row where the sort puts it, so only its key differs
+        lambda scores: scores.with_columns(_first_row('item',
+                                                      pl.col('item') + ' ')),
     ],
     ids=['dropped', 'repeated', 'renamed'],
 )
@@ -1100,6 +1146,26 @@ def test_the_decision_reads_exactly_the_frozen_lists_candidates(
         decide_economic('d', 'q', [a, b, c], margins, store, **settings)
     record = decide_economic('d', 'q', [a, b], margins, store, **settings)
     assert record.candidates.sha256 == sha256_file(listed)
+
+def test_the_decision_reads_the_lists_names_before_any_other_check(
+    candidates, margins, store, tmp_path, text_only
+):
+    '''An off-list or missing candidate is refused before the margins are checked.'''
+
+    a, c = candidates('a', _both(0.5)), candidates('c', _both(0.5))
+    broken = margins.model_copy(update={'reference': 'covariates+one_hot'})
+    settings = {'replicates': REPLICATES, 'bootstrap_seed': BOOTSTRAP_SEED}
+    only_a = write_candidate_list(
+        tmp_path / 'a.yaml', [a], store, text_only_sha256=sha256_file(text_only)
+    )
+    a_and_c = write_candidate_list(
+        tmp_path / 'ac.yaml', [a, c], store, text_only_sha256=sha256_file(text_only)
+    )
+
+    with pytest.raises(ValueError, match="^'c' is not on the frozen candidate list"):
+        decide_economic('d', 'q', [a, c], broken, store, candidates=only_a, **settings)
+    with pytest.raises(ValueError, match="'c'.*missing"):
+        decide_economic('d', 'q', [a], broken, store, candidates=a_and_c, **settings)
 
 def test_the_decision_checks_each_candidate_against_the_list_it_reads(
     candidates, margins, store, tmp_path
