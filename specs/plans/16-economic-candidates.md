@@ -94,8 +94,13 @@ The five inputs most likely to bite a person using this software, with the test 
 
 ## Decisions
 
-Owner decisions after the spec's approval: none (the brief records none). The plan's own choices,
-for the owner's review at plan review:
+Owner decisions after the spec's approval:
+
+- **O1** (owner, plan review, 2026-11-14): "Approve the plan": the plan as written, P1–P8
+  included, with execution by subagent-driven-development in a new session. Applied in: the
+  whole plan.
+
+The plan's own choices, approved by O1:
 
 - **P1** (plan, 2026-11-14): the real-data steps run the branch's code from its worktree with
   `uv run --locked`, after a check that `naics_embedder.__file__` is under the worktree's `src/`.
