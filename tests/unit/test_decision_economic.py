@@ -2394,15 +2394,18 @@ def test_the_report_does_not_choose_a_candidate_it_finds_better_than_its_twin(
 def test_the_propagation_pairs_follow_the_lists_kinds_and_dimensions_and_its_order(
     built, built_codebook, margins, store, tmp_path
 ):
-    '''Names that carry no kind or dimension, rows and arms in other orders, a pair of each d.'''
+    '''
+    Names that carry no kind or dimension, and a smoothed order that is neither the names', the
+    dimensions' nor the order the arms are given in: the pairs are the list's, in the list's order.
+    '''
 
-    sm_four = built('smoothed', 4, _both(0.5), name='sm-a')
-    sm_two = built('smoothed', 2, _both(1.0), name='sm-b')
-    sm_three = built('smoothed', 3, _both(1.0), name='sm-c')
+    sm_c = built('smoothed', 4, _both(0.5), name='sm-c')
+    sm_a = built('smoothed', 2, _both(1.0), name='sm-a')
+    sm_b = built('smoothed', 3, _both(1.0), name='sm-b')
     plain_two = built('text-only', 2, _both(0.5), name='plain-2')
     plain_three = built('text-only', 3, _both(1.0), name='plain-3')
     plain_four = built('text-only', 4, _both(1.0), name='plain-4')
-    listed_arms = [plain_three, sm_four, plain_four, sm_two, sm_three, plain_two]
+    listed_arms = [plain_three, sm_c, plain_four, sm_a, sm_b, plain_two]
     (text_only_sha256, ) = {arm.text_only.table.sha256 for arm in listed_arms}
     listed = write_candidate_list(
         tmp_path / 'three-pairs.yaml',
@@ -2423,7 +2426,7 @@ def test_the_propagation_pairs_follow_the_lists_kinds_and_dimensions_and_its_ord
         bootstrap_seed=BOOTSTRAP_SEED,
     )
 
-    _assert_propagation(record, [('sm-a', 'plain-4'), ('sm-b', 'plain-2'), ('sm-c', 'plain-3')])
+    _assert_propagation(record, [('sm-c', 'plain-4'), ('sm-a', 'plain-2'), ('sm-b', 'plain-3')])
     assert [c.adopted for c in record.propagation] == [True, False, False]
 
 def test_a_list_without_a_smoothed_candidate_has_an_empty_propagation_report(
