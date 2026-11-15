@@ -222,6 +222,12 @@ class CandidateList(_Record):
 # Loading and paths
 # -------------------------------------------------------------------------------------------------
 
+class CandidateListYAMLError(ValueError, yaml.YAMLError):
+    '''
+    A candidate list file that is not safe YAML. It is a ``ValueError`` that names the file, so a
+    command's handler refuses it, and still the ``yaml.YAMLError`` it wraps.
+    '''
+
 def load_candidate_list(path: Union[str, Path]) -> CandidateList:
     '''
     Read and validate a frozen candidate list.
@@ -230,11 +236,16 @@ def load_candidate_list(path: Union[str, Path]) -> CandidateList:
         path: The YAML file, normally ``ECONOMIC_CANDIDATES`` under the repository root.
 
     Raises:
-        yaml.YAMLError: If the file is not safe YAML.
+        CandidateListYAMLError: If the file is not safe YAML: a ``ValueError`` and a
+            ``yaml.YAMLError``, whose message names the file.
         pydantic.ValidationError: If the content breaks an entry or list rule.
     '''
 
-    return CandidateList.model_validate(yaml.safe_load(Path(path).read_text()))
+    try:
+        content = yaml.safe_load(Path(path).read_text())
+    except yaml.YAMLError as exc:
+        raise CandidateListYAMLError(f'{path} is not safe YAML: {exc}') from exc
+    return CandidateList.model_validate(content)
 
 def candidate_table_path(store_root: Union[str, Path], name: str) -> Path:
     '''

@@ -437,6 +437,18 @@ def test_a_file_that_is_not_a_candidate_list_is_refused(tmp_path, text, error):
     with pytest.raises(error):
         load_candidate_list(path)
 
+@pytest.mark.parametrize(
+    'text', ['!!python/name:os.getcwd', 'codebook_sha256: x: y\n'],
+    ids=['a python tag', 'broken yaml']
+)
+def test_a_file_that_is_not_safe_yaml_is_refused_as_a_value_error_naming_it(tmp_path, text):
+    '''The commands' handlers catch ValueError: a hand-broken list prints their refusal.'''
+
+    path = tmp_path / 'candidates.yaml'
+    path.write_text(text)
+    with pytest.raises(ValueError, match=f'^{re.escape(str(path))} is not safe YAML: '):
+        load_candidate_list(path)
+
 def test_a_table_lives_under_the_stores_candidates_economic_directory(tmp_path):
     expected = tmp_path / 'candidates' / 'economic' / 'tree-d8.parquet'
     assert candidate_table_path(tmp_path, 'tree-d8') == expected
