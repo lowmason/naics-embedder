@@ -706,6 +706,25 @@ def test_decide_prints_one_propagation_line_for_each_pair_in_the_lists_order(
     assert 0 <= output.index(first) < output.index(second)
 
 @pytest.mark.unit
+def test_a_d8_decision_has_no_propagation_comparison_to_print(runner, tmp_path, decision_inputs):
+    '''Only the economic decision reports propagation: a D8 decision record has none.'''
+
+    store, reference = decision_inputs
+    assert _margins(runner, tmp_path, store, reference).exit_code == 0
+    better = write_record(
+        synthetic_arm(store, tmp_path, spec('better', dimension=32), {'outcome': 5}),
+        tmp_path / 'better.json',
+    )
+
+    result = _decide(runner, tmp_path, store, [better, reference])
+
+    assert result.exit_code == 0, result.output
+    output = click.unstyle(result.output).replace('\n', '')
+    assert 'Chosen: better' in output
+    assert 'Propagation' not in output
+    assert not hasattr(read_record(tmp_path / 'decision.json', DecisionRecord), 'propagation')
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     'content, kind',
     [({
