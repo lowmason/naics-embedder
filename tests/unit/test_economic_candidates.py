@@ -363,16 +363,19 @@ def test_a_name_off_the_list_is_refused(name):
         candidates.entry(name)
 
 def test_the_propagation_pairs_follow_the_kinds_and_dimensions_not_the_names_or_order():
+    # The list's order, the names' order and the dimensions' order all differ
     candidates = CandidateList.model_validate(
         _list(
-            _deterministic('smoothed', 32, name='x'),
+            _deterministic('smoothed', 32, name='b'),
             _deterministic('text-only', 8, name='twin-8'),
-            _deterministic('smoothed', 8, name='y'),
+            _deterministic('smoothed', 8, name='c'),
             _deterministic('text-only', 32, name='twin-32'),
+            _deterministic('smoothed', 16, name='a'),
+            _deterministic('text-only', 16, name='twin-16'),
             _deterministic('tree', 8),
         )
     )
-    assert candidates.propagation_pairs() == [('x', 'twin-32'), ('y', 'twin-8')]
+    assert candidates.propagation_pairs() == [('b', 'twin-32'), ('c', 'twin-8'), ('a', 'twin-16')]
 
 def test_a_list_without_a_smoothed_candidate_has_no_propagation_pair():
     candidates = CandidateList.model_validate(
@@ -384,13 +387,13 @@ def test_a_list_without_a_smoothed_candidate_has_no_propagation_pair():
 # Loading and table paths
 # -------------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize('as_text', [False, True])
-def test_a_list_loads_from_a_yaml_file(tmp_path, as_text):
+def test_a_list_loads_from_a_yaml_file_given_as_a_path_or_a_string(tmp_path):
     entries = [_deterministic('text-only', 8), _deterministic('smoothed', 8), _trained('t-d8')]
     path = tmp_path / 'candidates.yaml'
     path.write_text(yaml.safe_dump(_list(*entries)))
-    loaded = load_candidate_list(str(path) if as_text else path)
-    assert loaded == CandidateList.model_validate(_list(*entries))
+    expected = CandidateList.model_validate(_list(*entries))
+    assert load_candidate_list(path) == expected
+    assert load_candidate_list(str(path)) == expected
 
 @pytest.mark.parametrize(
     'text, error',
