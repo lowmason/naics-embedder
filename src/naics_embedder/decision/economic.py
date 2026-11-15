@@ -28,6 +28,13 @@ and the decision over the two growth panels.
   Req 5's non-dominated set and tie order pick one, the higher held-out gain over the reference
   breaking a last tie (D11). With none eligible, the reference stands. The decision scores each
   read's stored predictions itself, so the values it resamples are those the pairing compared.
+- **Trained candidates.** A trained candidate is a Stage 7/8 arm, imported by
+  ``decision.trained.import_trained_candidate``: each of its seeds is read once on each growth
+  panel, and its run carries the seed and the selection evidence of its seed run (spec 4.4). Its
+  record names the source record its list row pins, and must be that record's seed runs, read: the
+  source passes D8's ``check_arm``, so each checkpoint is the earliest highest-MRR epoch of its
+  monitor reads. Those reads are outcome reads from training, not growth reads, so the margin-first
+  check times only each run's growth reads (U32).
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -37,22 +44,32 @@ and the decision over the two growth panels.
 import math
 import platform
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple, Union
+from typing import Any, Dict, List, Sequence, Tuple, Union
 
 import numpy as np
 import polars as pl
 
-from naics_embedder.decision.candidates import CandidateEntry, CandidateList, load_candidate_list
+from naics_embedder.decision.candidates import (
+    CandidateEntry,
+    CandidateList,
+    economic_spec,
+    load_candidate_list,
+)
 from naics_embedder.decision.decide import (
+    MIN_SEEDS,
     _same,
+    check_arm,
     check_margins_first,
+    check_recorded_text_only,
     check_text_only,
     read_time,
 )
 from naics_embedder.decision.provenance import check_candidate_provenance
 from naics_embedder.decision.records import (
+    ArmRecord,
     ArmSpec,
     ArtifactRef,
     Comparison,
@@ -66,6 +83,11 @@ from naics_embedder.decision.records import (
     ReferenceRead,
     RelativeMargin,
     RelativeMarginRecord,
+    SeedRun,
+    TableProvenance,
+    TableRef,
+    TextOnlyRef,
+    read_record,
 )
 from naics_embedder.decision.resampling import (
     PanelItems,
@@ -91,6 +113,7 @@ from naics_embedder.decision.scores import (
 )
 from naics_embedder.decision.store import ArtifactStore
 from naics_embedder.decision.sweep import _fit_settings, _log_records
+from naics_embedder.decision.trained import TrainedImport
 from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import (
     DECISION_LEVEL,
@@ -318,24 +341,9 @@ def read_deterministic_arm(
 
     run_id = f'{spec.name}/{uuid.uuid4().hex}'
     detail = {'run': run_id, 'arm_name': spec.name}
-    predictions = pl.concat(
-        [
-            regressor_panel.validation(regime, DECISION_LEVEL, arm, purpose, detail=detail)
-            for regime in Regime
-        ]
-    ).with_columns(pl.lit(stored.matrix_fingerprint).alias(BINDING_COLUMN))
-    scores = regressor_scores(predictions, regressor_panel.settings.repeats, GROWTH_PANELS)
     run = EconomicRun(
-        run_id=run_id,
-        table=stored,
+        **_read_table(regressor_panel, arm, stored, detail, purpose, store),
         provenance=provenance,
-        scores=store.put_frame(scores, 'scores.parquet'),
-        predictions=store.put_frame(predictions, 'predictions.parquet'),
-        statistics={
-            panel: panel_statistic(scores, panel, EMBEDDING_COMPARATOR)
-            for panel in GROWTH_PANELS
-        },
-        log_records=_log_records([regressor_panel.log], run_id),
     )
     return EconomicArmRecord(
         spec=spec,
@@ -346,6 +354,122 @@ def read_deterministic_arm(
         runs=[run],
         created_at=datetime.now(timezone.utc),
     )
+
+def read_trained_arm(
+    trained: TrainedImport,
+    *,
+    regressor_panel: RegressorPanel,
+    margins: RelativeMarginRecord,
+    store: ArtifactStore,
+    purpose: str,
+    lock: Union[str, Path],
+) -> EconomicArmRecord:
+    '''
+    Read each seed of an imported trained candidate once on each growth panel's validation split
+    (Req 24), with the seed and the selection evidence of its Stage 7/8 seed run (spec 4.4).
+
+    Every check runs before the first read: the growth panel the margins read, with their data
+    and fit settings; the environment; the source's text-only table, against its stored
+    provenance and what the spec reads (D9); and, for each seed, its table's width and codes, and
+    its export provenance, which is stored. Then the seeds are read in seed order. Each read names
+    its run, the candidate and the seed, and each stored prediction carries the seed's table's
+    ``matrix_fingerprint`` as ``BINDING_COLUMN`` (P4).
+
+    Args:
+        trained: The candidate, as ``decision.trained.import_trained_candidate`` checked it.
+        regressor_panel: The growth panel the margins read.
+        margins: The margins the candidate will be judged against.
+        store: The store that holds the source's tables, and where the provenance files and the
+            reads' outputs go.
+        purpose: Why the read happens, which the selection log records.
+        lock: The ``uv.lock`` the read runs under, which the record names.
+
+    Raises:
+        ValueError: If the panel is not the growth panel the margins read, with their data and
+            fit settings; if the source's text-only fields are not those of its stored provenance
+            or it was not built from what the spec reads (D9); if a seed's table is not the
+            spec's width or lacks a panel code; or if a seed's provenance no longer describes its
+            table.
+        FileNotFoundError: If ``lock`` or a seed's provenance file is missing.
+    '''
+
+    spec, source = trained.spec, trained.source
+    _require_growth(regressor_panel, spec.name)
+    panels = growth_panel_set(regressor_panel)
+    _require_same_panels(spec.name, panels, margins)
+    environment = read_environment(lock)
+    check_recorded_text_only(spec, source.text_only, store)
+    text_frame = pl.read_parquet(store.resolve(source.text_only.table))
+    seeds: List[Tuple[SeedRun, ArmTables, TableProvenance]] = []
+    for seed_run in sorted(source.runs, key=lambda run: run.seed):
+        arm = ArmTables.from_tables(pl.read_parquet(store.resolve(seed_run.table)), text_frame)
+        if arm.dimension != spec.dimension:
+            raise ValueError(
+                f'{spec.name} seed {seed_run.seed}: the table has dimension {arm.dimension}, not '
+                f"the spec's {spec.dimension}"
+            )
+        regressor_panel.require_arm(arm)
+        stored = store.put(trained.provenance[seed_run.seed])
+        seeds.append((seed_run, arm, store.candidate_provenance(seed_run.table, stored)))
+
+    runs: List[EconomicRun] = []
+    for seed_run, arm, provenance in seeds:
+        run_id = f'{spec.name}/seed-{seed_run.seed}/{uuid.uuid4().hex}'
+        detail = {'run': run_id, 'arm_name': spec.name, 'seed': seed_run.seed}
+        runs.append(
+            EconomicRun(
+                **_read_table(regressor_panel, arm, seed_run.table, detail, purpose, store),
+                seed=seed_run.seed,
+                provenance=provenance,
+                checkpoint=seed_run.checkpoint,
+                training_run=seed_run.training_run,
+                checkpoint_epoch=seed_run.checkpoint_epoch,
+                monitor_records=seed_run.monitor_records,
+            )
+        )
+    return EconomicArmRecord(
+        spec=spec,
+        text_only=source.text_only,
+        store=str(store.root),
+        panels=panels,
+        environment=environment,
+        runs=runs,
+        source=trained.source_ref,
+        created_at=datetime.now(timezone.utc),
+    )
+
+def _read_table(
+    regressor_panel: RegressorPanel,
+    arm: ArmTables,
+    table: TableRef,
+    detail: Dict[str, Any],
+    purpose: str,
+    store: ArtifactStore,
+) -> Dict[str, Any]:
+    '''
+    One table's validation reads on both growth panels, each stored prediction bound to the table
+    (P4): the fields of its ``EconomicRun`` that the reads give. ``detail['run']`` is the run id.
+    '''
+
+    run_id = detail['run']
+    predictions = pl.concat(
+        [
+            regressor_panel.validation(regime, DECISION_LEVEL, arm, purpose, detail=detail)
+            for regime in Regime
+        ]
+    ).with_columns(pl.lit(table.matrix_fingerprint).alias(BINDING_COLUMN))
+    scores = regressor_scores(predictions, regressor_panel.settings.repeats, GROWTH_PANELS)
+    return {
+        'run_id': run_id,
+        'table': table,
+        'scores': store.put_frame(scores, 'scores.parquet'),
+        'predictions': store.put_frame(predictions, 'predictions.parquet'),
+        'statistics': {
+            panel: panel_statistic(scores, panel, EMBEDDING_COMPARATOR)
+            for panel in GROWTH_PANELS
+        },
+        'log_records': _log_records([regressor_panel.log], run_id),
+    }
 
 # -------------------------------------------------------------------------------------------------
 # Checks
@@ -358,17 +482,29 @@ def check_economic_arm(
     Require an economic arm record to match its candidate's row of the frozen list, intact, with
     its provenance, read once on each growth panel as the decision reads it (Req 24; Req 23).
 
-    A deterministic candidate's checks run in this order:
+    First, the record's dimension, components and geometry are its list row's. A deterministic
+    candidate's checks then run in this order:
 
-    1. Its row: the record's dimension, components and geometry are its list row's.
-    2. Its text-only table: the shared one the list pins, with the recorded fields of its stored
+    1. Its text-only table: the shared one the list pins, with the recorded fields of its stored
        provenance. A candidate that reads a backbone is D9-checked against it. The tree candidate
        reads none, and every other kind reads one (P7).
-    3. Its shape: one seedless run with no source or selection evidence, whose table is the one
+    2. Its shape: one seedless run with no source or selection evidence, whose table is the one
        its row pins.
-    4. Each run: its files, its provenance as stored and under the text-and-tree rule (Req 29),
-       its predictions' binding to its table (P4), its statistics and stored scores against the
-       rescore of its predictions, and its growth reads.
+
+    A trained candidate's (spec 4.4):
+
+    1. Its source: the record names the source record its row pins, by path and sha256, which
+       loads from the store as an arm record of the row's arm and passes ``check_arm``.
+    2. Its spec and text-only table: the source's spec under its economic name, and the source's
+       text-only table, which is the shared one the list pins.
+    3. Its shape: each of the source's seeds, once. The source passed ``check_arm``, so these are
+       at least ``MIN_SEEDS`` runs with distinct seeds.
+    4. Its evidence: each run's table, checkpoint, training run, checkpoint epoch and monitor
+       records are its source seed run's, and it names a training run.
+
+    Then each run: its files, its provenance as stored and under the text-and-tree rule (Req 29),
+    the checkpoint a trained run's export names, its predictions' binding to its table (P4), its
+    statistics and stored scores against the rescore of its predictions, and its growth reads.
 
     Args:
         arm: The record.
@@ -377,12 +513,16 @@ def check_economic_arm(
 
     Raises:
         ValueError: On the first problem found.
+        FileNotFoundError: If a file the record or its source references is not in the store.
     '''
 
     entry = candidates.entry(arm.spec.name)
     _check_list_row(arm, entry)
-    _check_shared_text_only(arm, entry, candidates, store)
-    _check_deterministic_shape(arm, entry)
+    if entry.kind == 'trained':
+        _check_trained(arm, entry, candidates, store)
+    else:
+        _check_shared_text_only(arm, entry, candidates, store)
+        _check_deterministic_shape(arm, entry)
     for run in arm.runs:
         _check_run(arm, run, entry, candidates, store)
 
@@ -411,12 +551,7 @@ def _check_shared_text_only(
     '''
 
     name = arm.spec.name
-    sha256 = arm.text_only.table.sha256
-    if sha256 != candidates.text_only_sha256:
-        raise ValueError(
-            f'{name}: its text-only table {sha256[:12]} is not the shared text-only table '
-            f'{candidates.text_only_sha256[:12]} that the frozen list pins'
-        )
+    _require_shared_text_only(name, arm.text_only, candidates)
     stored = store.text_only(arm.text_only.table, arm.text_only.provenance)
     recorded = arm.text_only.model_dump()
     wrong = sorted(key for key, value in stored.model_dump().items() if value != recorded[key])
@@ -476,6 +611,94 @@ def _check_deterministic_shape(arm: EconomicArmRecord, entry: CandidateEntry) ->
             f'{name}: its table {run.table.sha256} differs from its pin {entry.table_sha256}'
         )
 
+def _require_shared_text_only(name: str, text_only: TextOnlyRef, candidates: CandidateList) -> None:
+    '''Require the text-only table to be the shared one that the frozen list pins.'''
+
+    sha256 = text_only.table.sha256
+    if sha256 != candidates.text_only_sha256:
+        raise ValueError(
+            f'{name}: its text-only table {sha256[:12]} is not the shared text-only table '
+            f'{candidates.text_only_sha256[:12]} that the frozen list pins'
+        )
+
+# What a trained run copies from its Stage 7/8 seed run (spec 4.4)
+TRAINED_EVIDENCE = ('table', 'checkpoint', 'training_run', 'checkpoint_epoch', 'monitor_records')
+
+def _check_trained(
+    arm: EconomicArmRecord, entry: CandidateEntry, candidates: CandidateList, store: ArtifactStore
+) -> None:
+    '''Require a trained candidate's record to be its pinned source's seed runs (spec 4.4).'''
+
+    name = arm.spec.name
+    source = _trained_source(arm, entry, store)
+    if arm.spec != economic_spec(entry, source=source.spec):
+        raise ValueError(
+            f"{name}: its spec is not its source arm's, {source.spec.name!r}, under its economic "
+            'name'
+        )
+    if arm.text_only != source.text_only:
+        raise ValueError(f"{name}: its text-only table is not its source arm's")
+    _require_shared_text_only(name, arm.text_only, candidates)
+    _check_trained_shape(arm, source)
+    _check_trained_evidence(arm, source)
+
+def _trained_source(
+    arm: EconomicArmRecord, entry: CandidateEntry, store: ArtifactStore
+) -> ArmRecord:
+    '''The source record the row pins, which the arm names, intact and as D8 checks it.'''
+
+    name = arm.spec.name
+    pin = (entry.record, entry.record_sha256)
+    if arm.source is None or (arm.source.path, arm.source.sha256) != pin:
+        named = 'none' if arm.source is None else f'{arm.source.path} {arm.source.sha256[:12]}'
+        raise ValueError(
+            f'{name}: a trained candidate names the source record its frozen-list row pins, '
+            f'{entry.record} {entry.record_sha256[:12]}, and this record names {named}'
+        )
+    source = read_record(store.resolve(arm.source), ArmRecord)
+    if source.spec.name != entry.arm:
+        raise ValueError(
+            f'{name}: its source record holds the arm {source.spec.name!r}, not {entry.arm!r}'
+        )
+    check_arm(source, store, MIN_SEEDS)
+    return source
+
+def _check_trained_shape(arm: EconomicArmRecord, source: ArmRecord) -> None:
+    '''
+    Require one run for each of the source's seeds (Req 24). The source passed ``check_arm``, so
+    its seeds are at least ``MIN_SEEDS`` distinct integers, and so are the arm's.
+    '''
+
+    seeds = [run.seed for run in arm.runs]
+    expected = sorted(run.seed for run in source.runs)
+    if Counter(seeds) != Counter(expected):
+        raise ValueError(
+            f'{arm.spec.name}: an economic arm is one seedless run or at least {MIN_SEEDS} runs '
+            'with distinct seeds and their selection evidence (Req 24), and a trained candidate '
+            f"reads each of its source's seeds {expected} once, not {seeds}"
+        )
+
+def _check_trained_evidence(arm: EconomicArmRecord, source: ArmRecord) -> None:
+    '''Require each run to hold its source seed run's table and selection evidence.'''
+
+    seed_runs = {run.seed: run for run in source.runs}
+    for run in arm.runs:
+        name = f'{arm.spec.name} seed {run.seed}'
+        seed_run = seed_runs[run.seed]
+        differing = [
+            field for field in TRAINED_EVIDENCE if getattr(run, field) != getattr(seed_run, field)
+        ]
+        if differing:
+            raise ValueError(
+                f"{name}: its table and selection evidence are not its source seed run's: "
+                f'{differing} differ (spec 4.4)'
+            )
+        if run.training_run is None:
+            raise ValueError(
+                f'{name}: it names no training run, so it carries no selection evidence for its '
+                'checkpoint (spec 4.4)'
+            )
+
 def _check_run(
     arm: EconomicArmRecord,
     run: EconomicRun,
@@ -483,7 +706,10 @@ def _check_run(
     candidates: CandidateList,
     store: ArtifactStore,
 ) -> None:
-    '''Require one run to be intact, of text and tree only, bound to its table and its scores.'''
+    '''
+    Require one run to be intact, of text and tree only, bound to its table and its scores. A
+    trained run's export names the run's checkpoint.
+    '''
 
     name = arm.spec.name
     for reference in (run.table, run.scores, run.predictions):
@@ -491,6 +717,8 @@ def _check_run(
     if store.candidate_provenance(run.table, run.provenance.file) != run.provenance:
         raise ValueError(f"{name}: the record's provenance differs from its stored provenance")
     check_candidate_provenance(run.provenance.content, entry, candidates)
+    if entry.kind == 'trained':
+        _check_export_checkpoint(name, run)
     predictions = store.read_frame(run.predictions)
     _check_binding(name, run, predictions)
     scores = regressor_scores(predictions, arm.panels.fit_settings['repeats'], GROWTH_PANELS)
@@ -508,6 +736,16 @@ def _check_run(
         )
     _check_stored_scores(name, store.read_frame(run.scores), scores)
     _check_growth_reads(arm, run)
+
+def _check_export_checkpoint(name: str, run: EconomicRun) -> None:
+    '''Require a trained run's export provenance, which passed the rule, to name its checkpoint.'''
+
+    named = run.provenance.content['checkpoint']['sha256']
+    if named != run.checkpoint.sha256:
+        raise ValueError(
+            f'{name} seed {run.seed}: its export provenance names another checkpoint, '
+            f"{named[:12]}, than the run's {run.checkpoint.sha256[:12]}"
+        )
 
 def _check_binding(name: str, run: EconomicRun, predictions: pl.DataFrame) -> None:
     '''Require every stored prediction to name the run's table, and no other (P4).'''
@@ -546,7 +784,10 @@ def _check_stored_scores(name: str, stored: pl.DataFrame, rescored: pl.DataFrame
         )
 
 def _check_growth_reads(arm: EconomicArmRecord, run: EconomicRun) -> None:
-    '''Require the run's reads to be its table's validation reads, once on each growth panel.'''
+    '''
+    Require the run's reads to be its table's validation reads, once on each growth panel. A run
+    with a seed has reads that name it.
+    '''
 
     name = arm.spec.name
     panels = sorted(str(record.get('panel')) for record in run.log_records)
@@ -560,6 +801,8 @@ def _check_growth_reads(arm: EconomicArmRecord, run: EconomicRun) -> None:
         'text_only': arm.text_only.table.matrix_fingerprint,
         'dimension': arm.spec.dimension,
     }
+    if run.seed is not None:
+        named['seed'] = run.seed
     for record in run.log_records:
         if record.get('event') != 'read' or record.get('split') != VALIDATION:
             raise ValueError(
@@ -702,12 +945,15 @@ def check_economic_margins_first(
     Require the margin read to precede the margins, and every candidate read to follow them
     (Req 24: δ is fixed from a reference-only read before any candidate is read).
 
+    A candidate's reads are its runs' growth reads. A trained seed's monitor reads are outcome
+    reads from training, not growth reads, and they are not timed (spec 4.4; U32).
+
     Raises:
-        ValueError: If a read's time or the margins' is missing or names no timezone, or if
-            either order fails.
+        ValueError: If a growth read's time or the margins' is missing or names no timezone, or
+            if either order fails.
     '''
 
-    check_margins_first(arms, margins.fixed_at)
+    check_margins_first(arms, margins.fixed_at, monitor_reads=False)
     name = f'the margins {margins.name!r}'
     for record in margins.read.log_records:
         time = read_time(record, f'{name}: its {record.get("panel")} read')

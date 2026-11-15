@@ -30,18 +30,20 @@ from naics_embedder.decision.provenance import (
     EXPORT_ENTRIES_WITH_GEOMETRY,
     check_candidate_provenance,
 )
-from naics_embedder.decision.records import ArmSpec, ArtifactRef
-from naics_embedder.decision.store import provenance_fields
+from naics_embedder.decision.records import ArmRecord, ArmSpec, ArtifactRef, read_record, write_record
+from naics_embedder.decision.store import ArtifactStore, provenance_fields
+from naics_embedder.decision.trained import import_trained_candidate
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.tree_model.builders import BUILDER_ENTRIES, BUILDER_INPUTS, KINDS, build_candidate
-from tests.fixtures.decision import spec, write_text_only
+from tests.fixtures.decision import spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import (
     CODEBOOK_INPUT,
     CODEBOOK_SHA256,
     CONTRACT,
     export_provenance,
     fixture_list,
+    trained_source,
     write_candidate,
     write_codebook,
 )
@@ -1222,3 +1224,401 @@ def test_every_refusal_names_the_entry_and_cites_the_rule(tree_content, tree_ent
     assert message.startswith('tree-d3: ')
     assert message.endswith(RULE)
     assert 'qcew' in message
+
+# -------------------------------------------------------------------------------------------------
+# A trained candidate's import (4.4, 4.6; Task 6)
+# -------------------------------------------------------------------------------------------------
+
+# Not seed 0 alone: a check of the first seed only must not pass
+LATER_SEED = 3
+
+class Source(NamedTuple):
+    '''A trained candidate's Stage 7/8 inputs (``trained_source``) and the list of its row.'''
+
+    entry: CandidateEntry
+    runs_root: Path
+    frozen: CandidateList
+
+@pytest.fixture
+def store(tmp_path):
+    return ArtifactStore(tmp_path / 'store')
+
+@pytest.fixture
+def shared_text_only(tmp_path):
+    return write_text_only(tmp_path / 'text', codes=CODEBOOK)
+
+@pytest.fixture
+def source(store, shared_text_only, tmp_path) -> Source:
+    entry, runs_root = trained_source(
+        store, tmp_path / 'trained', 'euclidean-d3', text_only=shared_text_only
+    )
+    return Source(
+        entry, runs_root, fixture_list([entry], text_only_sha256=sha256_file(shared_text_only))
+    )
+
+def _record(store, entry) -> ArmRecord:
+    return read_record(store.root / entry.record, ArmRecord)
+
+def _repinned(store, entry, record, name='edited') -> CandidateEntry:
+    '''The entry pinned to ``record``, written into the store as ``records/<name>.json``.'''
+
+    path = write_record(record, store.root / 'records' / f'{name}.json')
+    return entry.model_copy(
+        update={
+            'record': f'records/{name}.json',
+            'record_sha256': sha256_file(path)
+        }
+    )
+
+def _with_runs(record, index, **update):
+    runs = list(record.runs)
+    runs[index] = runs[index].model_copy(update=update)
+    return record.model_copy(update={'runs': runs})
+
+BARE = {'training_run': None, 'checkpoint_epoch': None, 'monitor_records': []}
+
+def _bare(record):
+    '''The record with no run carrying selection evidence: D8's checks pass it.'''
+
+    return record.model_copy(update={'runs': [run.model_copy(update=BARE) for run in record.runs]})
+
+def _provenance(source: Source, seed: int) -> Path:
+    '''Seed ``seed``'s export provenance, beside its table in its run directory.'''
+
+    return source.runs_root / f'euclidean-d3-s{seed}' / f'euclidean-d3-{seed}_provenance.json'
+
+def _edit_provenance(source: Source, seed: int, **entries) -> Path:
+    path = _provenance(source, seed)
+    path.write_text(json.dumps({**json.loads(path.read_text()), **entries}))
+    return path
+
+def _files(root: Path) -> Dict[str, str]:
+    return {
+        str(path.relative_to(root)): sha256_file(path)
+        for path in sorted(root.rglob('*')) if path.is_file()
+    }
+
+def test_import_returns_the_spec_the_source_and_each_seeds_provenance(source, store, tmp_path):
+    '''It reads no panel and writes nothing.'''
+
+    before = _files(tmp_path)
+
+    imported = import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+    record = store.root / 'records' / 'euclidean-d3.json'
+    assert imported.entry == source.entry
+    assert imported.source == read_record(record, ArmRecord)
+    assert imported.source_ref == ArtifactRef(
+        path='records/euclidean-d3.json', sha256=sha256_file(record), bytes=record.stat().st_size
+    )
+    assert imported.spec == economic_spec(source.entry, source=imported.source.spec)
+    assert imported.provenance == {seed: _provenance(source, seed) for seed in range(5)}
+    assert _files(tmp_path) == before
+
+def test_import_refuses_a_deterministic_entry(source, store):
+    entry = CandidateEntry(
+        name='tree-d3', kind='tree', dimension=3, components=1, geometry='euclidean'
+    )
+
+    with pytest.raises(ValueError, match='^tree-d3: a tree candidate is read from its table'):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_source_record_missing_from_the_store(source, store):
+    (store.root / source.entry.record).unlink()
+
+    with pytest.raises(
+        FileNotFoundError, match='^euclidean-d3: its source record records/euclidean-d3.json is'
+    ):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+@pytest.mark.parametrize('edit', ['bytes', 'pin'], ids=['edited-after-pinning', 'another-pin'])
+def test_import_refuses_a_source_record_that_is_not_its_pin(source, store, edit):
+    '''The record still loads as the same arm: only its pin tells it from the pinned bytes.'''
+
+    entry = source.entry
+    if edit == 'bytes':
+        path = store.root / entry.record
+        path.write_text(read_record(path, ArmRecord).model_dump_json())
+    else:
+        entry = entry.model_copy(update={'record_sha256': 'f' * 64})
+
+    with pytest.raises(ValueError, match=f'^euclidean-d3: .* is not its pin {entry.record_sha256}'):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_source_record_of_another_arm(source, store):
+    entry = source.entry.model_copy(update={'arm': 'reference'})
+
+    with pytest.raises(
+        ValueError,
+        match="^euclidean-d3: its source record holds the arm 'euclidean-d3', not "
+        "'reference'"
+    ):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_runs_d8s_checks_on_the_source(source, store):
+    '''§4.4: the checkpoint is the earliest highest-MRR epoch (``check_arm``).'''
+
+    record = _record(store, source.entry)
+    epoch = record.runs[LATER_SEED].checkpoint_epoch + 1
+    entry = _repinned(store, source.entry, _with_runs(record, LATER_SEED, checkpoint_epoch=epoch))
+
+    with pytest.raises(
+        ValueError,
+        match=f'^euclidean-d3 seed {LATER_SEED}: the earliest epoch with the highest monitor MRR',
+    ):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_source_whose_store_lacks_a_checkpoint(source, store):
+    '''A partial store copy: the seed's checkpoint object is gone, and the refusal names it.'''
+
+    checkpoint = store.resolve(_record(store, source.entry).runs[LATER_SEED].checkpoint)
+    checkpoint.unlink()
+
+    with pytest.raises(FileNotFoundError, match=re.escape(str(checkpoint))):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_source_whose_seeds_are_not_its_rows(source, store):
+    entry = source.entry.model_copy(update={'seeds': [0, 1, 2, 3, 5]})
+
+    with pytest.raises(
+        ValueError,
+        match='^euclidean-d3: its source holds the seeds \\[0, 1, 2, 3, 4\\], and its row names',
+    ):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_reads_its_seeds_in_order_whatever_the_records_order(source, store):
+    record = _record(store, source.entry)
+    entry = _repinned(store, source.entry, record.model_copy(update={'runs': record.runs[::-1]}))
+
+    imported = import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+    assert list(imported.provenance) == [0, 1, 2, 3, 4]
+    _provenance(source, 1).unlink()
+    _provenance(source, LATER_SEED).unlink()
+    with pytest.raises(FileNotFoundError, match=re.escape(str(_provenance(source, 1)))):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_source_run_without_selection_evidence(
+    source, store, shared_text_only, tmp_path
+):
+    untrained = synthetic_arm(
+        store,
+        tmp_path / 'untrained',
+        spec('euclidean-d3', dimension=3, geometry='euclidean'),
+        {},
+        codes=CODEBOOK,
+        text_only_table=shared_text_only,
+    )
+    entry = _repinned(store, source.entry, untrained, 'untrained')
+
+    with pytest.raises(ValueError, match='no selection evidence'):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_source_with_one_run_without_selection_evidence(source, store):
+    record = _with_runs(_record(store, source.entry), LATER_SEED, **BARE)
+    entry = _repinned(store, source.entry, record)
+
+    with pytest.raises(
+        ValueError, match=f'^euclidean-d3: the source seeds \\[{LATER_SEED}\\] name no training'
+    ):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_source_whose_text_only_table_is_not_the_lists(source, store):
+    frozen = source.frozen.model_copy(update={'text_only_sha256': 'f' * 64})
+
+    with pytest.raises(ValueError, match="^euclidean-d3: its source's text-only table .* is not"):
+        import_trained_candidate(source.entry, frozen, store, source.runs_root)
+
+def test_import_refuses_a_source_whose_spec_is_not_its_rows(source, store):
+    entry = source.entry.model_copy(update={'dimension': 4})
+
+    with pytest.raises(ValueError, match="^euclidean-d3: its source spec 'euclidean-d3' has dim"):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_seed_with_no_export_provenance(source, store):
+    path = _provenance(source, LATER_SEED)
+    path.unlink()
+
+    with pytest.raises(FileNotFoundError, match=re.escape(str(path))):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_an_export_provenance_that_describes_another_table(source, store):
+    path = _edit_provenance(source, LATER_SEED, table_sha256='f' * 64)
+
+    with pytest.raises(
+        ValueError, match=f'^{re.escape(str(path))} describes another file than the table'
+    ):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_an_export_provenance_outside_text_and_tree(source, store):
+    _edit_provenance(source, LATER_SEED, qcew=QCEW)
+
+    with pytest.raises(ValueError, match='^euclidean-d3: entries: .*qcew.*\\(Req 29'):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+def test_import_refuses_a_provenance_naming_another_checkpoint(source, store):
+    checkpoint = {'path': 'checkpoints/euclidean-d3-s1/best.ckpt', 'sha256': 'f' * 64}
+    _edit_provenance(source, 1, checkpoint=checkpoint)
+
+    with pytest.raises(ValueError, match='^euclidean-d3 seed 1: .*another checkpoint'):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+D9_REFUSAL = f'^euclidean-d3 seed {LATER_SEED}: the table was exported from .*\\(D9\\)'
+CHECKPOINT_REFUSAL = f'^euclidean-d3 seed {LATER_SEED}: .*another checkpoint'
+
+@pytest.mark.parametrize(
+    'entries, message',
+    [
+        pytest.param({'backbone': 'other-backbone'}, D9_REFUSAL, id='another backbone'),
+        pytest.param({'revision': 'other'}, D9_REFUSAL, id='another revision'),
+        pytest.param(
+            {'descriptions': {
+                'path': 'naics_descriptions.parquet',
+                'sha256': 'f' * 64
+            }},
+            D9_REFUSAL,
+            id='another descriptions sha256',
+        ),
+        pytest.param({'descriptions': QCEW}, D9_REFUSAL, id='a QCEW file as its descriptions'),
+        pytest.param({'summaries': 'f' * 64}, D9_REFUSAL, id='another summaries sha256'),
+        pytest.param({'summaries': QCEW['path']}, D9_REFUSAL, id='a QCEW path as its summaries'),
+        pytest.param({'summaries': None}, D9_REFUSAL, id='no summaries'),
+        pytest.param({'max_length': 32}, D9_REFUSAL, id='another window'),
+        pytest.param(
+            {'checkpoint': {
+                'path': 'checkpoints/best.ckpt',
+                'sha256': 'f' * 64
+            }},
+            CHECKPOINT_REFUSAL,
+            id='another checkpoint sha256',
+        ),
+        pytest.param({'checkpoint': QCEW}, CHECKPOINT_REFUSAL, id='a QCEW file as its checkpoint'),
+    ],
+)
+def test_import_refuses_an_export_provenance_of_other_inputs(source, store, entries, message):
+    '''
+    Spec :226-229, :235 (ledger ruling, Task 4): the rule reads these slots' shape, and the import
+    their identity: the backbone, revision, descriptions, summaries and window are what the arm
+    reads (D9), and the checkpoint is the seed's.
+    '''
+
+    _edit_provenance(source, LATER_SEED, **entries)
+
+    with pytest.raises(ValueError, match=message):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+@pytest.mark.parametrize(
+    'entries, message',
+    [
+        pytest.param(
+            {
+                'table_sha256': 'f' * 64,
+                'qcew': QCEW
+            },
+            'describes another file than the table',
+            id='the table before the rule',
+        ),
+        pytest.param(
+            {
+                'qcew': QCEW,
+                'checkpoint': {
+                    'path': 'best.ckpt',
+                    'sha256': 'f' * 64
+                }
+            },
+            '^euclidean-d3: entries: ',
+            id='the rule before the checkpoint',
+        ),
+        pytest.param(
+            {
+                'checkpoint': {
+                    'path': 'best.ckpt',
+                    'sha256': 'f' * 64
+                },
+                'backbone': 'other'
+            },
+            CHECKPOINT_REFUSAL,
+            id='the checkpoint before d9',
+        ),
+    ],
+)
+def test_a_seeds_export_provenance_is_checked_in_order(source, store, entries, message):
+    _edit_provenance(source, LATER_SEED, **entries)
+
+    with pytest.raises(ValueError, match=message):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
+def _broken(
+    source, store, *, record=None, seeds=None, text_only=None, dimension=None, arm=None, pin=None
+):
+    '''The import's inputs, each given edit applied: a record, a row or a list.'''
+
+    entry = source.entry
+    if record is not None:
+        entry = _repinned(store, entry, record(_record(store, entry)))
+    update = {
+        field: value
+        for field, value in (
+            ('seeds', seeds), ('dimension', dimension), ('arm', arm), ('record_sha256', pin)
+        ) if value is not None
+    }
+    frozen = source.frozen
+    if text_only is not None:
+        frozen = frozen.model_copy(update={'text_only_sha256': text_only})
+    return entry.model_copy(update=update), frozen
+
+@pytest.mark.parametrize(
+    'edits, message',
+    [
+        pytest.param(
+            {
+                'pin': 'f' * 64,
+                'arm': 'reference'
+            }, 'is not its pin', id='the pin before the arm'
+        ),
+        pytest.param(
+            {
+                'record': lambda record: _with_runs(record, 2, checkpoint_epoch=2),
+                'seeds': [0, 1, 2, 3, 5],
+            },
+            'the earliest epoch with the highest monitor MRR',
+            id='d8 before the seeds',
+        ),
+        pytest.param(
+            {
+                'record': _bare,
+                'seeds': [0, 1, 2, 3, 5]
+            },
+            'its source holds the seeds',
+            id='the seeds before the evidence',
+        ),
+        pytest.param(
+            {
+                'record': _bare,
+                'text_only': 'f' * 64
+            },
+            'no selection evidence',
+            id='the evidence before the text-only table',
+        ),
+        pytest.param(
+            {
+                'text_only': 'f' * 64,
+                'dimension': 4
+            },
+            'the shared text-only table',
+            id='the text-only table before the spec',
+        ),
+    ],
+)
+def test_the_import_checks_its_source_in_order(source, store, edits, message):
+    entry, frozen = _broken(source, store, **edits)
+
+    with pytest.raises(ValueError, match=message):
+        import_trained_candidate(entry, frozen, store, source.runs_root)
+
+def test_the_import_checks_its_source_and_spec_before_any_seed(source, store):
+    _provenance(source, 0).unlink()
+    entry = source.entry.model_copy(update={'dimension': 4})
+
+    with pytest.raises(ValueError, match="its source spec 'euclidean-d3' has dimension"):
+        import_trained_candidate(entry, source.frozen, store, source.runs_root)

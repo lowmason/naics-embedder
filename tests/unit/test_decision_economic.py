@@ -13,6 +13,7 @@ import re
 import zlib
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 import numpy as np
 import polars as pl
@@ -20,15 +21,18 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from naics_embedder.decision.decide import check_arm
+from naics_embedder.decision.candidates import CandidateList
+from naics_embedder.decision.decide import check_arm, check_margins_first
 from naics_embedder.decision.economic import (
     GROWTH_PANELS,
     REFERENCE_COMPARATOR,
     check_economic_arm,
+    check_economic_margins_first,
     check_reference_pairing,
     decide_economic,
     fix_relative_margins,
     read_deterministic_arm,
+    read_trained_arm,
 )
 from naics_embedder.decision.records import (
     ArmRecord,
@@ -43,6 +47,7 @@ from naics_embedder.decision.records import (
 from naics_embedder.decision.resampling import percentile_interval, stream
 from naics_embedder.decision.scores import panel_statistic, regressor_scores, statistic_values
 from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.decision.trained import TrainedImport, import_trained_candidate
 from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import (
     Regime,
@@ -58,8 +63,10 @@ from tests.fixtures.decision import spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import (
     CODEBOOK_INPUT,
     candidate_spec,
+    fixture_list,
     list_for,
     scaled_arm,
+    trained_source,
     write_candidate,
     write_candidate_list,
     write_codebook,
@@ -1498,3 +1505,635 @@ def test_a_decision_reads_distinct_candidates_none_named_for_the_reference(
     for arms in ([better, better], [named]):
         with pytest.raises(ValueError, match='^candidate names must be distinct'):
             _decide(arms, margins, store)
+
+# -------------------------------------------------------------------------------------------------
+# A trained candidate (§4.4, §4.6; Verification "Trained records", "Margin first")
+# -------------------------------------------------------------------------------------------------
+
+# Not seed 0 alone: a check of the first seed only must not pass
+LATER_SEED = 3
+
+class TrainedRead(NamedTuple):
+    '''A trained candidate read after the margins, its frozen list and its import.'''
+
+    arm: EconomicArmRecord
+    frozen: CandidateList
+    imported: TrainedImport
+
+def _read_trained(imported, panel, margins, store, lock):
+    return read_trained_arm(
+        imported, regressor_panel=panel, margins=margins, store=store, purpose=PURPOSE, lock=lock
+    )
+
+def _import(trained, store, text_only):
+    entry, runs_root = trained
+    frozen = fixture_list([entry], text_only_sha256=sha256_file(text_only))
+    return import_trained_candidate(entry, frozen, store, runs_root)
+
+@pytest.fixture
+def trained(store, text_only, tmp_path):
+    return trained_source(store, tmp_path / 'trained', 'euclidean-d3', text_only=text_only)
+
+@pytest.fixture
+def trained_read(trained, margins, growth_panel, store, lock, text_only):
+    '''``trained`` is built before ``margins``, so its monitor reads precede them (§4.4).'''
+
+    imported = _import(trained, store, text_only)
+    arm = _read_trained(imported, growth_panel, margins, store, lock)
+    return TrainedRead(
+        arm, fixture_list([trained[0]], text_only_sha256=sha256_file(text_only)), imported
+    )
+
+def _trained_with(arm, index, **update):
+    '''The arm with run ``index`` updated.'''
+
+    runs = list(arm.runs)
+    runs[index] = runs[index].model_copy(update=update)
+    return arm.model_copy(update={'runs': runs})
+
+def _source_runs_with(source, index, **update):
+    runs = list(source.runs)
+    runs[index] = runs[index].model_copy(update=update)
+    return source.model_copy(update={'runs': runs})
+
+def _with_source(arm, frozen, source, store, name='edited'):
+    '''The arm and its list row, both pinned to ``source`` written into the store.'''
+
+    path = write_record(source, store.root / 'records' / f'{name}.json')
+    reference = ArtifactRef(
+        path=f'records/{name}.json', sha256=sha256_file(path), bytes=path.stat().st_size
+    )
+    (entry, ) = frozen.candidates
+    row = entry.model_copy(update={'record': reference.path, 'record_sha256': reference.sha256})
+    return (
+        arm.model_copy(update={'source': reference}),
+        frozen.model_copy(update={'candidates': [row]}),
+    )
+
+def _with_provenance(arm, index, store, directory, **entries):
+    '''The arm with run ``index``'s provenance rewritten with ``entries`` and stored again.'''
+
+    run = arm.runs[index]
+    path = directory / 'edited' / f'seed-{run.seed}_provenance.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({**run.provenance.content, **entries}))
+    return _trained_with(
+        arm, index, provenance=store.candidate_provenance(run.table, store.put(path))
+    )
+
+def test_a_trained_candidate_is_read_once_per_seed_on_each_growth_panel(
+    trained, margins, growth_panel, store, lock, log, text_only
+):
+    entry, runs_root = trained
+    frozen = fixture_list([entry], text_only_sha256=sha256_file(text_only))
+    imported = import_trained_candidate(entry, frozen, store, runs_root)
+    arm = read_trained_arm(
+        imported,
+        regressor_panel=growth_panel,
+        margins=margins,
+        store=store,
+        purpose=PURPOSE,
+        lock=lock
+    )
+    assert [run.seed for run in arm.runs] == [0, 1, 2, 3, 4]
+    assert [(r['panel'], r['detail']['seed']) for r in log.records()[2:]] == [
+        (panel, seed) for seed in range(5) for panel in GROWTH_PANELS
+    ]
+    for run, source_run in zip(arm.runs, imported.source.runs):
+        assert (
+            run.table, run.checkpoint, run.training_run, run.checkpoint_epoch, run.monitor_records
+        ) == (
+            source_run.table, source_run.checkpoint, source_run.training_run,
+            source_run.checkpoint_epoch, source_run.monitor_records
+        )
+    assert arm.source == imported.source_ref
+    check_economic_arm(arm, store, frozen)
+    check_reference_pairing(margins, arm, store)
+
+def test_a_trained_read_names_each_seed_its_run_and_its_table(
+    trained_read, margins, store, log, tmp_path
+):
+    '''Each seed's reads name it as Stage 8's do, and its run keeps its export provenance.'''
+
+    arm, _, imported = trained_read
+
+    assert [read for run in arm.runs for read in run.log_records] == log.records()[2:]
+    for run in arm.runs:
+        assert re.fullmatch(f'euclidean-d3/seed-{run.seed}/[0-9a-f]{{32}}', run.run_id)
+        for read, regime in zip(run.log_records, Regime):
+            assert read['detail'] == {
+                'level': 6,
+                'comparators': list(comparators(regime, 6)),
+                'arm': run.table.matrix_fingerprint,
+                'text_only': arm.text_only.table.matrix_fingerprint,
+                'dimension': 3,
+                'run': run.run_id,
+                'arm_name': 'euclidean-d3',
+                'seed': run.seed,
+            }
+        written = imported.provenance[run.seed]
+        assert run.provenance.content == json.loads(written.read_text())
+        assert store.resolve(run.provenance.file).read_bytes() == written.read_bytes()
+        predictions = store.read_frame(run.predictions)
+        assert predictions.get_column(BINDING).unique().to_list() == [run.table.matrix_fingerprint]
+        scores = store.read_frame(run.scores)
+        assert run.statistics == pytest.approx(
+            {
+                panel: panel_statistic(scores, panel, 'covariates+embedding')
+                for panel in GROWTH_PANELS
+            },
+            rel=1e-12,
+        )
+    assert (arm.spec, arm.text_only) == (imported.spec, imported.source.text_only)
+    assert (arm.panels, arm.environment) == (margins.read.panels, margins.read.environment)
+    assert arm.store == str(store.root)
+    path = write_record(arm, tmp_path / 'trained.json')
+    assert read_record(path, EconomicArmRecord) == arm
+
+def test_a_trained_candidate_is_read_in_seed_order_whatever_its_records_order(
+    trained, margins, growth_panel, store, lock, log, text_only
+):
+    '''Per seed, in seed order: a source whose runs are reversed is read seed 0 first.'''
+
+    entry, runs_root = trained
+    source = read_record(store.root / entry.record, ArmRecord)
+    path = write_record(
+        source.model_copy(update={'runs': source.runs[::-1]}),
+        store.root / 'records' / 'reversed.json',
+    )
+    repinned = entry.model_copy(
+        update={
+            'record': 'records/reversed.json',
+            'record_sha256': sha256_file(path)
+        }
+    )
+    frozen = fixture_list([repinned], text_only_sha256=sha256_file(text_only))
+
+    arm = _read_trained(
+        import_trained_candidate(repinned, frozen, store, runs_root), growth_panel, margins, store,
+        lock
+    )
+
+    assert [run.seed for run in arm.runs] == [0, 1, 2, 3, 4]
+    assert [read['detail']['seed'] for read in log.records()[2:]] == [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]
+    check_economic_arm(arm, store, frozen)
+
+def test_a_trained_candidate_takes_its_economic_name_from_its_row(
+    margins, growth_panel, store, lock, text_only, tmp_path
+):
+    '''Stage 7's arm is ``reference``, and its row names it ``hyperbolic-d16`` (§4.1).'''
+
+    source_row, runs_root = trained_source(
+        store, tmp_path / 'stage7', 'reference', text_only=text_only
+    )
+    entry = source_row.model_copy(update={'name': 'euclidean-d3'})
+    frozen = fixture_list([entry], text_only_sha256=sha256_file(text_only))
+
+    imported = import_trained_candidate(entry, frozen, store, runs_root)
+    arm = _read_trained(imported, growth_panel, margins, store, lock)
+
+    assert imported.source.spec.name == 'reference'
+    assert arm.spec == imported.source.spec.model_copy(update={'name': 'euclidean-d3'})
+    assert {read['detail']['arm_name']
+            for run in arm.runs
+            for read in run.log_records} == {'euclidean-d3'}
+    check_economic_arm(arm, store, frozen)
+    assert list_for([arm], store, text_only_sha256=sha256_file(text_only)) == frozen
+
+@pytest.mark.parametrize(
+    'cut',
+    [
+        lambda runs: runs[:4],
+        lambda runs: [runs[0].model_copy(update={'seed': None}), *runs[1:]],
+        lambda runs: runs[:1],
+    ],
+    ids=['four-runs', 'a-seedless-run-among-several', 'a-single-seeded-run'],
+)
+def test_a_trained_arm_of_the_wrong_shape_is_refused(trained_read, store, cut):
+    arm, frozen, _ = trained_read
+
+    with pytest.raises(ValueError, match='one seedless run or at least 5 runs with distinct seeds'):
+        check_economic_arm(arm.model_copy(update={'runs': cut(arm.runs)}), store, frozen)
+
+@pytest.mark.parametrize(
+    'cut',
+    [
+        lambda runs: [runs[0].model_copy(update={'seed': None})],
+        lambda runs: [*runs, runs[LATER_SEED]],
+        lambda runs: [*runs[:4], runs[4].model_copy(update={'seed': 5})],
+    ],
+    ids=['one-seedless-run', 'a-repeated-seed', 'a-seed-its-source-lacks'],
+)
+def test_a_trained_arm_reads_each_of_its_sources_seeds_once(trained_read, store, cut):
+    '''§4.4: at least 5 runs with distinct seeds, and a trained candidate's are its source's.'''
+
+    arm, frozen, _ = trained_read
+
+    with pytest.raises(
+        ValueError, match='^euclidean-d3: an economic arm is one seedless run or at least 5 runs'
+    ):
+        check_economic_arm(arm.model_copy(update={'runs': cut(arm.runs)}), store, frozen)
+
+def test_a_trained_run_without_selection_evidence_is_refused(trained_read, store):
+    arm, frozen, _ = trained_read
+    bare = _trained_with(arm, 2, training_run=None, checkpoint_epoch=None, monitor_records=[])
+
+    with pytest.raises(ValueError, match='selection evidence'):
+        check_economic_arm(bare, store, frozen)
+
+def test_a_trained_run_whose_evidence_differs_from_its_source_is_refused(trained_read, store):
+    arm, frozen, _ = trained_read
+    epoch = arm.runs[1].checkpoint_epoch
+
+    with pytest.raises(ValueError, match="^euclidean-d3 seed 1: .*\\['checkpoint_epoch'\\]"):
+        check_economic_arm(_trained_with(arm, 1, checkpoint_epoch=epoch + 1), store, frozen)
+
+@pytest.mark.parametrize(
+    'field', ['table', 'checkpoint', 'training_run', 'monitor_records'],
+    ids=['table', 'checkpoint', 'training-run', 'monitor-records']
+)
+def test_each_part_of_a_trained_runs_evidence_is_its_source_seed_runs(trained_read, store, field):
+    '''§4.4: the table, checkpoint, training run and monitor reads are copied from the seed run.'''
+
+    arm, frozen, _ = trained_read
+    other = getattr(arm.runs[0], field)
+
+    with pytest.raises(ValueError, match=f"^euclidean-d3 seed {LATER_SEED}: .*\\['{field}'\\]"):
+        check_economic_arm(_trained_with(arm, LATER_SEED, **{field: other}), store, frozen)
+
+def test_a_trained_run_whose_source_seed_trained_nothing_is_refused(trained_read, store):
+    '''A seed run with no training run passes D8's checks, and copied, it still names none.'''
+
+    arm, frozen, imported = trained_read
+    bare = {'training_run': None, 'checkpoint_epoch': None, 'monitor_records': []}
+    source = _source_runs_with(imported.source, LATER_SEED, **bare)
+    check_arm(source, store, 5)
+    edited, listed = _with_source(_trained_with(arm, LATER_SEED, **bare), frozen, source, store)
+
+    with pytest.raises(
+        ValueError, match=f'^euclidean-d3 seed {LATER_SEED}: .*no selection evidence'
+    ):
+        check_economic_arm(edited, store, listed)
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        None,
+        ArtifactRef(path='records/other.json', sha256='0' * 64, bytes=1),
+        'another-path',
+        'another-sha256',
+    ],
+    ids=['none', 'another-record', 'another-path', 'another-sha256'],
+)
+def test_a_trained_arm_names_the_source_its_row_pins(trained_read, store, source):
+    arm, frozen, _ = trained_read
+    if source == 'another-path':
+        source = arm.source.model_copy(update={'path': 'records/other.json'})
+    elif source == 'another-sha256':
+        source = arm.source.model_copy(update={'sha256': 'f' * 64})
+
+    with pytest.raises(
+        ValueError,
+        match='^euclidean-d3: a trained candidate names the source record its frozen-list row pins'
+    ):
+        check_economic_arm(arm.model_copy(update={'source': source}), store, frozen)
+
+def test_a_trained_arms_source_edited_after_it_was_pinned_is_refused(trained_read, store):
+    arm, frozen, imported = trained_read
+    (store.root / arm.source.path).write_text(imported.source.model_dump_json())
+
+    with pytest.raises(ValueError, match='changed since it was stored'):
+        check_economic_arm(arm, store, frozen)
+
+def test_a_trained_arms_source_is_its_rows_arm(trained_read, store):
+    arm, frozen, _ = trained_read
+    (entry, ) = frozen.candidates
+    other = frozen.model_copy(
+        update={'candidates': [entry.model_copy(update={'arm': 'reference'})]}
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="^euclidean-d3: its source record holds the arm 'euclidean-d3', not "
+        "'reference'"
+    ):
+        check_economic_arm(arm, store, other)
+
+def test_a_trained_arms_source_passes_d8s_checks(trained_read, store):
+    '''§4.4: the checkpoint is the earliest highest-MRR epoch, as check_arm requires.'''
+
+    arm, frozen, imported = trained_read
+    epoch = imported.source.runs[2].checkpoint_epoch + 1
+    source = _source_runs_with(imported.source, 2, checkpoint_epoch=epoch)
+    edited, listed = _with_source(
+        _trained_with(arm, 2, checkpoint_epoch=epoch), frozen, source, store
+    )
+
+    with pytest.raises(
+        ValueError, match='^euclidean-d3 seed 2: the earliest epoch with the highest monitor MRR'
+    ):
+        check_economic_arm(edited, store, listed)
+
+def test_a_trained_arms_spec_is_its_sources_under_its_economic_name(trained_read, store):
+    arm, frozen, _ = trained_read
+    other = arm.spec.model_copy(update={'settings': {'learning_rate': 1.0}})
+
+    with pytest.raises(ValueError, match="^euclidean-d3: its spec is not its source arm's"):
+        check_economic_arm(arm.model_copy(update={'spec': other}), store, frozen)
+
+def test_a_trained_arms_text_only_table_is_its_sources(trained_read, store, tmp_path):
+    '''The same table bytes under another provenance are another text-only table.'''
+
+    arm, frozen, _ = trained_read
+    other = store.put_text_only(
+        write_text_only(tmp_path / 'other', revision='other', codes=CODEBOOK)
+    )
+    assert other.table.sha256 == arm.text_only.table.sha256
+
+    with pytest.raises(ValueError, match='^euclidean-d3: its text-only table is not its source'):
+        check_economic_arm(arm.model_copy(update={'text_only': other}), store, frozen)
+
+def test_a_trained_arms_text_only_table_is_the_lists(trained_read, store):
+    arm, frozen, _ = trained_read
+
+    with pytest.raises(ValueError, match='^euclidean-d3: .*the shared text-only table'):
+        check_economic_arm(arm, store, frozen.model_copy(update={'text_only_sha256': 'f' * 64}))
+
+def test_a_trained_runs_provenance_names_its_checkpoint(trained_read, store, tmp_path):
+    arm, frozen, _ = trained_read
+    checkpoint = {'path': 'checkpoints/other.ckpt', 'sha256': 'f' * 64}
+    edited = _with_provenance(arm, LATER_SEED, store, tmp_path, checkpoint=checkpoint)
+
+    with pytest.raises(ValueError, match=f'^euclidean-d3 seed {LATER_SEED}: .*another checkpoint'):
+        check_economic_arm(edited, store, frozen)
+
+def test_a_trained_runs_provenance_passes_the_rule_as_an_export(trained_read, store, tmp_path):
+    '''Req 29: an export's provenance that names a QCEW file is refused on a trained row too.'''
+
+    arm, frozen, _ = trained_read
+    qcew = {'path': 'qcew/2023.annual.singlefile.csv', 'sha256': 'f' * 64}
+    edited = _with_provenance(arm, LATER_SEED, store, tmp_path, qcew=qcew)
+
+    with pytest.raises(ValueError, match='^euclidean-d3: entries: .*\\(Req 29'):
+        check_economic_arm(edited, store, frozen)
+
+@pytest.mark.parametrize(
+    'index, logged',
+    [(0, 1), (1, 2), (1, True), (1, 1.0), (1, None)],
+    ids=['seed-0-logged-as-1', 'another-seed', 'a-boolean-seed', 'a-float-seed', 'no-seed'],
+)
+def test_a_trained_runs_growth_reads_name_its_seed(trained_read, store, index, logged):
+    '''A seeded run's reads name its seed by type as well as value (``_same``).'''
+
+    arm, frozen, _ = trained_read
+    reads = json.loads(json.dumps(arm.runs[index].log_records))
+    if logged is None:
+        del reads[1]['detail']['seed']
+    else:
+        reads[1]['detail']['seed'] = logged
+
+    with pytest.raises(
+        ValueError, match="^euclidean-d3: a growth_heldout read names another \\['seed'\\]"
+    ):
+        check_economic_arm(_trained_with(arm, index, log_records=reads), store, frozen)
+
+def test_a_seedless_runs_reads_are_not_compared_on_a_seed(arm, store, frozen):
+    '''The seed rule binds a run with a seed: a deterministic run's reads are not read for one.'''
+
+    (run, ) = arm.runs
+    reads = json.loads(json.dumps(run.log_records))
+    reads[0]['detail']['seed'] = 0
+
+    check_economic_arm(_with_run(arm, log_records=reads), store, frozen)
+
+def test_a_trained_seed_whose_monitor_reads_precede_the_margins_is_accepted(trained_read, margins):
+    '''§4.4, U32: monitor reads are outcome reads from training, not growth reads.'''
+
+    arm = trained_read.arm
+    monitor = [
+        datetime.fromisoformat(record['read']['time']) for run in arm.runs
+        for record in run.monitor_records
+    ]
+
+    assert min(monitor) < margins.fixed_at
+    check_economic_margins_first([arm], margins)
+
+def test_a_trained_seeds_growth_read_before_the_margins_is_refused(
+    trained_read, growth_panel, store, lock
+):
+    later = fix_relative_margins(
+        growth_panel, R, 'later margins', store, purpose=PURPOSE, lock=lock
+    )
+
+    with pytest.raises(ValueError, match='^euclidean-d3 seed 0 read at '):
+        check_economic_margins_first([trained_read.arm], later)
+
+def test_a_later_trained_seeds_growth_read_before_the_margins_is_refused(trained_read, margins):
+    '''Every seed's growth reads are timed, by the first of them.'''
+
+    arm = trained_read.arm
+    reads = json.loads(json.dumps(arm.runs[LATER_SEED].log_records))
+    early = (margins.fixed_at - timedelta(minutes=1)).isoformat()
+    reads[1]['time'] = early
+
+    with pytest.raises(
+        ValueError,
+        match=f'^euclidean-d3 seed {LATER_SEED} read at {re.escape(early)}, before the margins',
+    ):
+        check_economic_margins_first([_trained_with(arm, LATER_SEED, log_records=reads)], margins)
+
+def test_every_trained_seed_pairs_with_the_margin_read(trained_read, margins, store):
+    arm = trained_read.arm
+    run = arm.runs[4]
+    predictions = store.read_frame(run.predictions)
+    values = predictions.get_column('prediction').to_numpy().copy()
+    values[predictions.get_column('comparator').to_list().index(REFERENCE_COMPARATOR)] += 1e-12
+    moved = predictions.with_columns(prediction=pl.Series(values))
+    edited = _trained_with(arm, 4, predictions=store.put_frame(moved, 'predictions.parquet'))
+
+    with pytest.raises(ValueError, match="predictions differ from the margin read's"):
+        check_reference_pairing(margins, edited, store)
+
+def _early_monitor_read(arm, seed, time):
+    '''The arm with the monitor read of epoch 1 of seed ``seed`` read at ``time``.'''
+
+    records = json.loads(json.dumps(arm.runs[seed].monitor_records))
+    records[1]['read']['time'] = time
+    return _trained_with(arm, seed, monitor_records=records)
+
+@pytest.fixture
+def d8_arm(store, tmp_path):
+    '''A D8 arm of trained seeds, and a time no earlier than any of its decision reads.'''
+
+    arm = synthetic_arm(
+        store,
+        tmp_path / 'd8',
+        spec('stage8', dimension=16, geometry='euclidean'), {},
+        monitor_mrrs=(0.1, 0.3, 0.2)
+    )
+    reads = [datetime.fromisoformat(read['time']) for run in arm.runs for read in run.log_records]
+    return arm, min(reads)
+
+def test_d8_still_times_a_trained_runs_monitor_reads(d8_arm):
+    '''D8's callers pass no flag, so a trained run's monitor reads are timed as before (§4.4).'''
+
+    arm, fixed_at = d8_arm
+    early = (fixed_at - timedelta(minutes=1)).isoformat()
+
+    with pytest.raises(
+        ValueError, match=f'^stage8 seed 2 read at {re.escape(early)}, before the margins were'
+    ):
+        check_margins_first([_early_monitor_read(arm, 2, early)], fixed_at)
+
+def test_d8_still_reads_each_monitor_reads_time_by_name(d8_arm):
+    arm, fixed_at = d8_arm
+
+    with pytest.raises(
+        ValueError,
+        match='^stage8 seed 2: its monitor read of epoch 1 has the time .*, with no '
+        'timezone'
+    ):
+        check_margins_first([_early_monitor_read(arm, 2, '2026-10-12T12:00:00')], fixed_at)
+
+def test_without_monitor_reads_only_a_runs_decision_reads_are_timed(d8_arm):
+    '''``monitor_reads=False``: an early or unreadable monitor read is not read, a run's own are.'''
+
+    arm, fixed_at = d8_arm
+    early = (fixed_at - timedelta(minutes=1)).isoformat()
+    reads = json.loads(json.dumps(arm.runs[2].log_records))
+    reads[0]['time'] = early
+
+    for edited in (
+        _early_monitor_read(arm, 2, early),
+        _early_monitor_read(arm, 2, '2026-10-12T12:00:00'),
+    ):
+        check_margins_first([edited], fixed_at, monitor_reads=False)
+    with pytest.raises(ValueError, match=f'^stage8 seed 2 read at {re.escape(early)}'):
+        check_margins_first(
+            [_trained_with(arm, 2, log_records=reads)], fixed_at, monitor_reads=False
+        )
+
+# -------------------------------------------------------------------------------------------------
+# A trained candidate's read: every check before the first read
+# -------------------------------------------------------------------------------------------------
+
+def test_a_trained_candidate_is_read_on_the_growth_panel_the_margins_read(
+    trained, margins, growth_panel, regressor_rows, regressor_growth_rows, log, store, lock,
+    text_only, tmp_path
+):
+    imported = _import(trained, store, text_only)
+    level = RegressorPanel(regressor_rows, HELDOUT_GROUPS, log, SETTINGS)
+    refit = RegressorPanel(
+        regressor_growth_rows,
+        HELDOUT_GROUPS,
+        log,
+        replace(SETTINGS, alphas=(0.1, 1.0)),
+        outcome=RegressorOutcome.GROWTH,
+    )
+
+    with pytest.raises(
+        ValueError, match='^euclidean-d3: the economic decision reads growth, not level'
+    ):
+        _read_trained(imported, level, margins, store, lock)
+    with pytest.raises(
+        ValueError, match='^euclidean-d3 read other panels or fit settings than the margins'
+    ):
+        _read_trained(imported, refit, margins, store, lock)
+    with pytest.raises(FileNotFoundError, match='no uv.lock'):
+        _read_trained(imported, growth_panel, margins, store, tmp_path / 'missing.lock')
+    assert log.records() == margins.read.log_records
+
+@pytest.mark.parametrize(
+    'edit, message',
+    [
+        (
+            lambda imported: replace(
+                imported,
+                source=imported.source.model_copy(
+                    update=
+                    {'text_only': imported.source.text_only.model_copy(update={'max_length': 99})}
+                ),
+            ),
+            "^euclidean-d3: the record's text-only fields \\['max_length'\\] differ",
+        ),
+        (
+            lambda imported: replace(
+                imported, spec=imported.spec.model_copy(update={'backbone_revision': 'other'})
+            ),
+            '^euclidean-d3: the text-only table was built from .*D9',
+        ),
+    ],
+    ids=['recorded-fields', 'd9'],
+)
+def test_a_trained_candidates_text_only_table_is_checked_before_any_read(
+    trained, margins, growth_panel, store, lock, log, text_only, edit, message
+):
+    imported = edit(_import(trained, store, text_only))
+
+    with pytest.raises(ValueError, match=message):
+        _read_trained(imported, growth_panel, margins, store, lock)
+    assert log.records() == margins.read.log_records
+
+def test_every_seeds_table_is_checked_before_the_first_read(
+    trained, margins, growth_panel, store, lock, log, text_only, tmp_path
+):
+    '''A later seed's table of another width is refused before seed 0 is read.'''
+
+    imported = _import(trained, store, text_only)
+    path = tmp_path / 'wide.parquet'
+    coordinate_table(CODEBOOK, dimension=4).write_parquet(path)
+    source = _source_runs_with(imported.source, 4, table=store.put_table(path))
+
+    with pytest.raises(
+        ValueError, match='^euclidean-d3 seed 4: the table has dimension 4, not the'
+    ):
+        _read_trained(replace(imported, source=source), growth_panel, margins, store, lock)
+    assert log.records() == margins.read.log_records
+
+@pytest.mark.parametrize(
+    'edit, error, message',
+    [
+        (lambda path: path.unlink(), FileNotFoundError, 'is not a file'),
+        (
+            lambda path: path.write_text(
+                json.dumps({
+                    **json.loads(path.read_text()), 'table_sha256': 'f' * 64
+                })
+            ),
+            ValueError,
+            'describes another file than the table',
+        ),
+    ],
+    ids=['missing', 'another-table'],
+)
+def test_every_seeds_provenance_is_stored_before_the_first_read(
+    trained, margins, growth_panel, store, lock, log, text_only, edit, error, message
+):
+    '''A later seed's provenance, gone or changed since the import, is refused before any read.'''
+
+    imported = _import(trained, store, text_only)
+    edit(imported.provenance[4])
+
+    with pytest.raises(error, match=message):
+        _read_trained(imported, growth_panel, margins, store, lock)
+    assert log.records() == margins.read.log_records
+
+# A six-digit code of a held-out group: its rows are outer rows, never remainder rows
+OUTER_ONLY_CODE = '111311'
+
+def test_a_trained_table_that_lacks_a_panel_code_is_refused_before_any_read(
+    margins, growth_panel, store, lock, log, tmp_path
+):
+    '''require_arm reads every row's code, the outer sets' included, before any read is logged.'''
+
+    codes = [code for code in CODEBOOK if code != OUTER_ONLY_CODE]
+    text = write_text_only(tmp_path / 'subset-text', codes=codes)
+    entry, runs_root = trained_source(
+        store, tmp_path / 'subset', 'euclidean-d3', text_only=text, codes=codes
+    )
+    frozen = fixture_list([entry], text_only_sha256=sha256_file(text))
+    imported = import_trained_candidate(entry, frozen, store, runs_root)
+
+    with pytest.raises(ValueError, match=f"no coordinates for 1 codes: \\['{OUTER_ONLY_CODE}'\\]"):
+        _read_trained(imported, growth_panel, margins, store, lock)
+    assert log.records() == margins.read.log_records
