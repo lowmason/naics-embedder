@@ -500,10 +500,10 @@ def test_a_candidate_that_reads_the_backbone_needs_the_text_only_fields(kind):
         economic_spec(_entry(_deterministic(kind, 8)))
 
 def test_the_spec_takes_its_shape_from_the_entry_not_from_its_kind():
-    row = _deterministic('smoothed', 24, name='odd', components=3)
+    row = _deterministic('smoothed', 24, name='odd', components=3, geometry='spherical')
     built = economic_spec(_entry(row), text_only=_text_only())
     assert (built.name, built.components, built.dimension, built.geometry) == (
-        'odd', 3, 24, 'euclidean'
+        'odd', 3, 24, 'spherical'
     )
 
 def test_a_trained_candidate_is_its_source_spec_under_the_entrys_name():
