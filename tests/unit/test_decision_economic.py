@@ -498,6 +498,13 @@ def test_a_spec_that_reads_a_backbone_has_a_window_of_at_least_one(max_length):
     ):
         spec('narrow', max_length=max_length)
 
+def test_a_spec_that_reads_a_backbone_may_have_a_window_of_exactly_one():
+    '''One is the smallest window: the bound is ``ge=1``, not ``gt=1``.'''
+
+    narrowest = spec('narrowest', max_length=1)
+    assert narrowest.max_length == 1 and narrowest.reads_backbone
+    assert ArmSpec.model_validate_json(narrowest.model_dump_json()) == narrowest
+
 def test_a_deterministic_run_carries_no_selection_evidence(arm, tmp_path):
     '''The four fields and the source default to none, so such a record needs no key for them.'''
 
