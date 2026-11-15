@@ -94,6 +94,7 @@ def test_the_committed_list_is_the_specs_eighteen_candidates():
     )
     for entry in committed.candidates:
         if entry.kind != 'trained':
+            assert re.fullmatch('[0-9a-f]{64}', entry.table_sha256 or ''), entry.name
             continue
         stage7 = entry.name == 'hyperbolic-d16'
         assert entry.record == (

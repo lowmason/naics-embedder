@@ -7,7 +7,7 @@
 # - A trained candidate's record is its Stage 7/8 arm record under the artifact store's root,
 #   pinned by its sha256; run_directory is each seed's run directory under the runs root, which
 #   holds that seed's export provenance.
-# - A deterministic candidate's table_sha256 pins its built table, once Stage 1 has built it.
+# - A deterministic candidate's table_sha256 pins its built table, as Stage 1 built it.
 codebook_sha256: 0f9e61343e673540e1e18ecc5581618be099c5d79531b68153496bf982d6e96d
 text_only_sha256: f4fb4f574f880c940ee8cf44c7f86615638e59f113b527d0b86973cd45ba32ff
 checkpoint_contract:
@@ -19,55 +19,55 @@ candidates:
     dimension: 8
     components: 1
     geometry: euclidean
-    table_sha256: null
+    table_sha256: 474393b2ad3aee41540491c37f285fd37176b311176d386ac0b06848a5d6f0cb
   - name: text-only-d16
     kind: text-only
     dimension: 16
     components: 1
     geometry: euclidean
-    table_sha256: null
+    table_sha256: 8ed9ea4f396f93c6425bfbb591c85b8b96573cd8e443e32cfba8be2e2f8c7fdb
   - name: text-only-d32
     kind: text-only
     dimension: 32
     components: 1
     geometry: euclidean
-    table_sha256: null
+    table_sha256: b15508a7ade357620d0cfcca944e291b32fb873fee37af197792afecc8937570
   - name: tree-d8
     kind: tree
     dimension: 8
     components: 1
     geometry: euclidean
-    table_sha256: null
+    table_sha256: b2da0e6656b4ffd6f5f22c0382084d876b6965752109a1c5caed922786326115
   - name: tree-d16
     kind: tree
     dimension: 16
     components: 1
     geometry: euclidean
-    table_sha256: null
+    table_sha256: b54b8d3b725ed3195c9be77b78e9c8b6c08768c2a5bdbd0e6525b8d6c800e4d7
   - name: tree-d32
     kind: tree
     dimension: 32
     components: 1
     geometry: euclidean
-    table_sha256: null
+    table_sha256: e8e4d011f4d6a19d5a1554211c712c271162c454cedfa576335a094280d713d2
   - name: smoothed-d8
     kind: smoothed
     dimension: 8
     components: 2
     geometry: euclidean
-    table_sha256: null
+    table_sha256: c73b2c405e99a0e613048dbe76ddb5ed38a118ce784aa96405f3e3e12e778e90
   - name: smoothed-d16
     kind: smoothed
     dimension: 16
     components: 2
     geometry: euclidean
-    table_sha256: null
+    table_sha256: 064ee668ec55344f1eef143abf0ea67194cef1279a710f32ce2ebc06d78e2f67
   - name: smoothed-d32
     kind: smoothed
     dimension: 32
     components: 2
     geometry: euclidean
-    table_sha256: null
+    table_sha256: e1c7341488ba3efc6752a198b7517b91fc66f2fde39637d7a1ac6ed2118bb6ea
   - name: hyperbolic-d16
     kind: trained
     dimension: 16
