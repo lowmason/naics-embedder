@@ -79,6 +79,7 @@
       that `_nested_excess` already applies, plus a fixture test. Size: quick-fix.
       Done when: `run` on the 2022–2025 files reports no invariant failure and a
       test pins the allowance.
+      → acknowledged 2026-11-15 (claude/naics-embedder-economic-candidates-a9d499): they wait for the next /deferred pass, which the owner will run after this PR.
 
 ## 4-outcome-panel-sealed-splits — 2026-09-24
 - [ ] Review Minor: the index-roles checks outside `data roles` hardcode the near-duplicate
@@ -94,6 +95,7 @@
       document the two keys as frozen with the table. Size: quick-fix. Done when: every
       index-roles check uses the threshold and floor the table was drawn with, or the config
       documents them as frozen.
+      → acknowledged 2026-11-15 (claude/naics-embedder-economic-candidates-a9d499): they wait for the next /deferred pass, which the owner will run after this PR.
 - [x] Review Minor: when a bundle carries the `index_roles` member, `load_validated_bundle`
       (src/naics_embedder/supervision/artifacts.py) re-validates the table but does not require
       the build's `index_roles_one_role_per_entry`, `index_roles_examples_channel` and
@@ -118,6 +120,7 @@
       curvature is learnable. Roadmap Stage 6 must pass a curvature-aware callable to
       `OutcomePanel.score(..., distance=...)` or add a curvature parameter. Size: quick-fix.
       Done when: Stage 6 scores its arm under the trained curvature.
+      → acknowledged 2026-11-15 (claude/naics-embedder-economic-candidates-a9d499): they wait for the next /deferred pass, which the owner will run after this PR.
 
 ## 5-regressor-panel — 2026-09-24
 - [x] Review Minor: nothing checks the held-out group table's hash when the regressor panel
@@ -227,6 +230,7 @@
       calls the report today. Fix: name the first missing or extra code and cast; settle one
       key style; make `codebook_codes` required. Size: quick-fix. Done when: settled before
       Stage 10's keep-or-drop record reads the report.
+      → acknowledged 2026-11-15 (claude/naics-embedder-economic-candidates-a9d499): they wait for the next /deferred pass, which the owner will run after this PR.
 - [ ] Review Minor: the table-reading `tools` commands (src/naics_embedder/cli/commands/tools.py)
       catch `OSError` and `ValueError` but not polars' errors, so a parquet without a `code`
       column ends in a `ColumnNotFoundError` traceback rather than a formatted refusal.
@@ -265,6 +269,7 @@
       final review: no bundle change, and bundle 301cce28 built. Fix: resolve the tokenizer
       before any artifact and name the cache fix in the error. Size: quick-fix. Done when: a
       build without the cached backbone fails before building its first artifact.
+      → acknowledged 2026-11-15 (claude/naics-embedder-economic-candidates-a9d499): they wait for the next /deferred pass, which the owner will run after this PR.
 - [ ] Review Minor: the bundle build does not re-check the text channels.
       `verify_text_channels` (src/naics_embedder/data/download_data.py:636: no blanks, no
       `[EMPTY]`, provenance present) runs only in preprocess, not on the descriptions a bundle
@@ -273,6 +278,7 @@
       `REQUIRED_VALIDATION_RESULTS` would make bundle 301cce28 unloadable; the five-code fixtures
       in tests/fixtures/supervision.py then need `description_source`. Size: quick-fix. Done
       when: a build refuses descriptions that fail `verify_text_channels`.
+      → acknowledged 2026-11-15 (claude/naics-embedder-economic-candidates-a9d499): they wait for the next /deferred pass, which the owner will run after this PR.
 - [ ] Review Minor: nothing ties the bundle's backbone to training at runtime.
       `manifest.input_window.backbone` (src/naics_embedder/supervision/schema.py:178) is never
       compared with `model.base_model_name` or `data_loader.tokenization.tokenizer_name`; only
@@ -281,6 +287,7 @@
       backbone is Stage 9's question, since Stage 9 trains several backbones. Size: design. Done
       when: Stage 9's plan decides whether training refuses a backbone other than the bundle's,
       and lands the check it chooses, verified against bundle 301cce28.
+      → acknowledged 2026-11-15 (claude/naics-embedder-economic-candidates-a9d499): they wait for the next /deferred pass, which the owner will run after this PR.
 - [x] Review Minor: the loader checks where each activity phrase sits, not its value.
       `validate_redirection_table` (src/naics_embedder/supervision/artifacts.py:439) would accept
       a rehashed table with a wrong phrase. Deferred from plan 7's final review. Fix: move
