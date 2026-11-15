@@ -279,8 +279,8 @@ def read_deterministic_arm(
     ``matrix_fingerprint`` as ``BINDING_COLUMN`` (P4).
 
     Args:
-        spec: The candidate, with what the tie order and D9 read. A tree candidate's reads no
-            backbone (P7).
+        spec: The candidate, with what the tie order and D9 read. A tree candidate's spec reads
+            no backbone (P7).
         table: Its 2,125-code table in the export form, with its builder's provenance beside it
             (``panels.text_only.provenance_path``).
         regressor_panel: The growth panel the margins read.
@@ -355,8 +355,8 @@ def check_economic_arm(
     arm: EconomicArmRecord, store: ArtifactStore, candidates: CandidateList
 ) -> None:
     '''
-    Require an economic arm record to be its frozen-list candidate's, intact, with its provenance,
-    read once on each growth panel as the decision reads it (Req 24; Req 23).
+    Require an economic arm record to match its candidate's row of the frozen list, intact, with
+    its provenance, read once on each growth panel as the decision reads it (Req 24; Req 23).
 
     A deterministic candidate's checks run in this order:
 
