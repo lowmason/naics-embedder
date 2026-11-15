@@ -264,7 +264,10 @@ def test_a_single_replicate_record_validates_and_pairs_with_the_reference(
     check_reference_pairing(margins, arm, store)
 
     def reference(predictions):
-        return store.read_frame(predictions).filter(pl.col('comparator') == REFERENCE_COMPARATOR)
+        columns = store.read_frame(margins.read.predictions).columns
+        return store.read_frame(predictions).select(columns).filter(
+            pl.col('comparator') == REFERENCE_COMPARATOR
+        )
 
     assert reference(arm.runs[0].predictions).equals(reference(margins.read.predictions))
 
