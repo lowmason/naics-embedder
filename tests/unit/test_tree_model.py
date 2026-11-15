@@ -108,6 +108,12 @@ def test_the_eigenvalues_are_the_d_plus_one_leading_in_descending_order():
     assert eigenvalues.shape == (4, )
     assert eigenvalues == pytest.approx([554.89480068, 434.44998578, 164.35243481, 135.97399396])
 
+def test_a_cut_at_a_negative_eigenvalue_is_not_positive():
+    # D* is not Euclidean: the last of B's n - 1 possible cuts lies in its negative eigenvalues
+    distances = tree_distance_matrix(CODEBOOK).astype(float)
+    with pytest.raises(ValueError, match='is not positive'):
+        classical_scaling(distances, len(CODEBOOK) - 1)
+
 def test_the_cut_gap_is_a_millionth():
     assert CUT_GAP == 1e-6
 
@@ -457,9 +463,41 @@ def test_a_builder_makes_the_output_directory(tmp_path, codebook):
     assert build_candidate('tree', 3, codebook, output) == output
     assert output.exists() and provenance_path(output).exists()
 
+@pytest.mark.parametrize('kind', KINDS)
+def test_each_builder_writes_one_coordinate_at_dimension_one(kind, tmp_path, codebook, text_only):
+    path = _built(kind, tmp_path, codebook, text_only, dimension=1)
+    table = pl.read_parquet(path)
+    assert table.columns == ['code', 'index', 'level', 'e0']
+    provenance = _read_provenance(path)
+    assert provenance['dimension'] == 1
+    if kind == 'tree':
+        assert len(provenance['eigenvalues']) == 2
+
+def test_write_codebook_writes_code_id_and_code_in_the_given_order(tmp_path):
+    path = write_codebook(tmp_path / 'sub' / 'codebook.parquet', ('23', '11', '111'))
+    frame = pl.read_parquet(path)
+    assert frame.schema == {'code_id': pl.Int32, 'code': pl.Utf8}
+    assert frame.rows() == [(0, '23'), (1, '11'), (2, '111')]
+
 # -------------------------------------------------------------------------------------------------
 # Row order
 # -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('kind', KINDS)
+def test_the_index_is_the_codebook_s_code_id(kind, tmp_path, text_only):
+    path = tmp_path / 'offset_codebook.parquet'
+    ids = [10 + 3 * row for row in range(len(CODEBOOK))]
+    pl.DataFrame(
+        {
+            'code_id': ids,
+            'code': list(CODEBOOK)
+        }, schema={
+            'code_id': pl.Int32,
+            'code': pl.Utf8
+        }
+    ).write_parquet(path)
+    table = pl.read_parquet(_built(kind, tmp_path, path, text_only))
+    assert table.get_column('index').to_list() == ids
 
 def _shuffled_inputs(tmp_path):
     '''
