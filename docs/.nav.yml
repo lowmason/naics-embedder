@@ -4,7 +4,7 @@ nav:
   - System Overview: overview.md
   - Training Overview:
       - Text Training: text_training.md
-      - HGCN Training: hgcn_training.md
+      - HGCN Training (Parked): hgcn_training.md
   - Usage: 
       - Quickstart: quickstart.md
       - Usage: usage.md

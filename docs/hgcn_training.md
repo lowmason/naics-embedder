@@ -1,13 +1,20 @@
-# NAICS Hyperbolic Embedding System — HGCN Refinement Guide
+# HGCN Refinement Guide (Parked)
+
+!!! warning "Parked"
+    The HGCN graph stage is parked. It feeds none of the three types of embedding. The roadmap
+    parked its decision experiment and its repairs (`specs/naics-embedding-roadmap.md`, Stages 10
+    and 11) on 2026-10-12. Its question, whether propagation over the tree helps, went to the
+    smoothed economic candidates. The relatedness type (type 1) does not revive this stage, but
+    it may reuse code from `graph_model/`. The code and its unit tests stay in the repository.
 
 ## Overview
 
-This document explains the final stage of the NAICS hyperbolic embedding pipeline: refinement
-using a Hyperbolic Graph Convolutional Network (HGCN).
+This guide describes the optional refinement of the text model's hyperbolic code embeddings with
+a hyperbolic graph convolutional network (HGCN). HGCN reads the NAICS parent–child graph.
 
 ## 1. Purpose of HGCN Refinement
 
-Integrates NAICS taxonomy directly into embedding geometry.
+HGCN puts the NAICS taxonomy directly into the embedding geometry.
 
 ## 2. Input Requirements
 
@@ -110,20 +117,20 @@ tree distance matrix from the configured supervision bundle.
 
 ### Configuration
 
-Add the following keys to your `GraphConfig` (or `configs/hgcn.yaml`) to customize evaluation:
+Set these `GraphConfig` keys in `conf/graph.yaml` to change the evaluation:
 
 | Key | Description |
 | --- | --- |
-| `distance_matrix_parquet` | Path to `naics_distance_matrix.parquet`. Required to unlock hierarchy metrics. |
+| `distance_matrix_parquet` | Path to `naics_distance_matrix.parquet`. The hierarchy metrics need it. With a manifest, it comes from the bundle, and an explicit path must point into the same bundle. |
 | `full_eval_frequency` | Run the expensive metrics every _N_ optimizer steps (default `1`, meaning every validation epoch). |
 | `ndcg_k_values` | List of K values used for NDCG logging. |
 
 If the optional distance matrix is unavailable, HGCN skips the extra metrics and continues with
 lightweight batch metrics such as triplet accuracy.
 
-## 9. Diagnostics and the Keep-or-Drop Decision
+## 9. Diagnostics
 
-Report Req 6's structural diagnostics on a table before and after refinement:
+Report the structural diagnostics on a table before and after refinement:
 
 ```bash
 uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperbolic \
@@ -133,9 +140,9 @@ uv run naics-embedder tools diagnostics --table arm.parquet --geometry hyperboli
 `--table` takes a 2,125-code table in the export form: tangent coordinates at the origin for a
 hyperbolic arm. Lorentz points are refused. The report covers sector separation, within-sector
 rank correlation, MAP over ancestors, NDCG with integer lowest-common-ancestor grades, the
-Pearson correlation of distance with D*, and parent retrieval without the 522 unary pairs. It
-has no thresholds and no pass/fail.
+Pearson correlation of distance with the tree distance, and parent retrieval without the 522
+unary pairs. It has no thresholds and no pass or fail.
 
-Whether the graph stage is kept is decided under Req 5's rule on the outcome and regressor
-panels (`tools margins`, `tools decide`; see the [usage guide](usage.md#tools-decide)), never on
-structural statistics.
+Structural statistics never decide whether a stage is kept. The earlier design planned a
+keep-or-drop decision for this stage on the outcome and regressor panels. That decision is
+parked with the stage, and no type's decision reads HGCN output now.
