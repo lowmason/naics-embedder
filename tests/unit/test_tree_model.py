@@ -186,8 +186,9 @@ def test_a_small_d_th_eigenvalue_is_no_tie_when_the_next_is_smaller_still(monkey
     assert classical_scaling(np.zeros((3, 3)), 1)[0].shape == (3, 1)
 
 def test_a_negative_next_eigenvalue_is_no_tie(monkeypatch):
-    _with_spectrum(monkeypatch, [-3.0, 0.0, 2.0])
-    assert classical_scaling(np.zeros((3, 3)), 1)[0].shape == (3, 1)
+    # the (d+1)-th eigenvalue is -2: equal in magnitude to the d-th, but a gap of 4, not a tie
+    _with_spectrum(monkeypatch, [-2.0, 2.0])
+    assert classical_scaling(np.zeros((2, 2)), 1)[0].shape == (2, 1)
 
 # -------------------------------------------------------------------------------------------------
 # Lineage smoothing
