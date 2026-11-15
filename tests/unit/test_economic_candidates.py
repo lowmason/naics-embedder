@@ -1442,6 +1442,18 @@ def test_import_refuses_a_seed_with_no_export_provenance(source, store):
     with pytest.raises(FileNotFoundError, match=re.escape(str(path))):
         import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
 
+def test_import_names_the_seed_whose_export_provenance_is_missing(source, store):
+    '''The refusal names the candidate and the seed before the path, not the file system alone.'''
+
+    path = _provenance(source, LATER_SEED)
+    path.unlink()
+
+    with pytest.raises(
+        FileNotFoundError,
+        match=f'^euclidean-d3 seed {LATER_SEED}: {re.escape(str(path))}: no export provenance',
+    ):
+        import_trained_candidate(source.entry, source.frozen, store, source.runs_root)
+
 def test_import_refuses_an_export_provenance_that_describes_another_table(source, store):
     path = _edit_provenance(source, LATER_SEED, table_sha256='f' * 64)
 
