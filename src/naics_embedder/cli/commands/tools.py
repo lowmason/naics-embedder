@@ -37,6 +37,7 @@ import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
+from naics_embedder.decision.candidates import ECONOMIC_CANDIDATES
 from naics_embedder.decision.decide import _check_monitor_records, decide, fix_margins
 from naics_embedder.decision.economic import decide_economic, fix_relative_margins
 from naics_embedder.decision.records import (
@@ -696,6 +697,16 @@ def decide_command(
         str,
         typer.Option('--output', help='Where to write the decision record (JSON)'),
     ],
+    candidates: Annotated[
+        Optional[str],
+        typer.Option(
+            '--candidates',
+            help=(
+                'The frozen candidate list the economic decision reads (default: '
+                f'{ECONOMIC_CANDIDATES}); refused with D8 margins'
+            ),
+        ),
+    ] = None,
 ):
     '''
     Decide among arms under Req 5's rule: over D8's three panels with margins from tools margins,
@@ -711,7 +722,9 @@ def decide_command(
 
     The economic decision reads economic arm records, one or more, and compares each candidate
     with the reference ``covariates+ancestors``. Only a candidate adopted over the reference is
-    eligible for the rule among candidates; with none, the reference stands.
+    eligible for the rule among candidates; with none, the reference stands. It reads exactly the
+    candidates of the frozen list (``--candidates``, by default the committed
+    ``conf/data/economic_candidates.yaml``), and its record names the list's sha256.
 
     Example:
         Decide between a candidate and the reference::
@@ -734,10 +747,16 @@ def decide_command(
                 [read_record(path, EconomicArmRecord) for path in arm],
                 read_record(margins, RelativeMarginRecord),
                 ArtifactStore(store),
+                candidates=ECONOMIC_CANDIDATES if candidates is None else candidates,
                 replicates=cfg.replicates,
                 bootstrap_seed=cfg.bootstrap_seed,
             )
         else:
+            if candidates is not None:
+                raise ValueError(
+                    f'--candidates applies only to the economic decision, and {margins} is a D8 '
+                    'margin record (tools margins)'
+                )
             record = decide(
                 name,
                 question,

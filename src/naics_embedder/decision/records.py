@@ -26,7 +26,8 @@ The economic decision (Req 24) has kinds of its own:
 - **Economic decision record.** Its candidates and margins, each candidate's comparison with the
   reference ``covariates+ancestors`` with its 95 % non-inferiority and 97.5 % superiority
   intervals, the candidates adopted over the reference, the non-dominated set and tie order among
-  them, and the chosen candidate, or none when the reference stands.
+  them, the chosen candidate, or none when the reference stands, and the frozen candidate list
+  it read, by its sha256.
 
 Artifact references are paths relative to an ``ArtifactStore`` root with their sha256, so a
 record names exactly the bytes it was computed from.
@@ -531,6 +532,8 @@ class EconomicDecisionRecord(_Record):
             ``growth_heldout`` MSE minus the candidate's (D11).
         chosen: The candidate whose table is the economic deliverable; None when no candidate is
             eligible, and the reference stands.
+        candidates: The frozen candidate list the decision read, as stored, so its sha256 names
+            the list's bytes (spec 4.4).
     '''
 
     kind: Literal['economic_decision'] = 'economic_decision'
@@ -550,6 +553,7 @@ class EconomicDecisionRecord(_Record):
     heldout_gain: Dict[str, float]
     chosen: Optional[str]
     reports: List[EconomicReport]
+    candidates: ArtifactRef
 
 # -------------------------------------------------------------------------------------------------
 # Files

@@ -26,9 +26,10 @@ from naics_embedder.panels.regressor import Regime, RegressorPanel, reference_co
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
 from naics_embedder.panels.window_summaries import SummariesPin
+from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.utils.config import Config
 from tests.fixtures.decision import spec, synthetic_arm, write_text_only
-from tests.fixtures.economic import candidate_spec, write_candidate
+from tests.fixtures.economic import candidate_spec, write_candidate, write_candidate_list
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
     HELDOUT_GROUPS,
@@ -310,7 +311,7 @@ def _margins(runner, tmp_path, store, reference):
         ],
     )
 
-def _decide(runner, tmp_path, store, arms):
+def _decide(runner, tmp_path, store, arms, candidates=None):
     arguments = ['decide']
     for path in arms:
         arguments += ['--arm', str(path)]
@@ -326,6 +327,8 @@ def _decide(runner, tmp_path, store, arms):
         '--output',
         str(tmp_path / 'decision.json'),
     ]
+    if candidates is not None:
+        arguments += ['--candidates', str(candidates)]
     return runner.invoke(tools_cli.app, arguments)
 
 @pytest.mark.unit
@@ -401,6 +404,26 @@ def test_decide_adopts_the_better_arm_and_writes_the_record(runner, tmp_path, de
     assert '98.33 % [' in ' '.join(result.output.split())
     assert 'Chosen: better' in output
     assert read_record(tmp_path / 'decision.json', DecisionRecord).chosen == 'better'
+
+@pytest.mark.unit
+def test_decide_refuses_candidates_with_d8_margins(runner, tmp_path, decision_inputs):
+    '''--candidates names the economic decision's frozen list, which a D8 decision never reads.'''
+
+    store, reference = decision_inputs
+    assert _margins(runner, tmp_path, store, reference).exit_code == 0
+    better = write_record(
+        synthetic_arm(store, tmp_path, spec('better', dimension=32), {'outcome': 5}),
+        tmp_path / 'better.json',
+    )
+    listed = tmp_path / 'candidates.yaml'
+    listed.write_text('candidates: []\n')
+
+    result = _decide(runner, tmp_path, store, [better, reference], candidates=listed)
+
+    assert result.exit_code == 1
+    output = ' '.join(click.unstyle(result.output).split())
+    assert 'applies only to the economic decision' in output
+    assert not (tmp_path / 'decision.json').exists()
 
 @pytest.mark.unit
 def test_decide_reports_a_tie_it_cannot_break(runner, tmp_path, decision_inputs):
@@ -488,24 +511,39 @@ def test_growth_margins_refuses_an_existing_record_before_anything_is_read(
     assert (loaded, panel.log.records()) == ([], [])
     assert (tmp_path / 'margins.json').read_text() == 'an earlier record'
 
-@pytest.mark.unit
-def test_decide_reads_an_economic_decision_from_relative_margins(runner, tmp_path, growth_panel):
-    panel, _ = growth_panel
-    store = ArtifactStore(tmp_path / 'store')
-    assert _growth_margins(runner, tmp_path, store).exit_code == 0
+def _economic_candidate(tmp_path, panel, store):
+    '''The fixture tree candidate read after the growth margins, and its text-only table.'''
+
     table = write_candidate(tmp_path / 'candidates', 'tree', coordinate_table(CODEBOOK))
+    text_only = write_text_only(tmp_path / 'text', codes=CODEBOOK)
     candidate = read_deterministic_arm(
         candidate_spec('tree'),
         table,
         regressor_panel=panel,
-        text_only_table=write_text_only(tmp_path / 'text', codes=CODEBOOK),
+        text_only_table=text_only,
         margins=read_record(tmp_path / 'margins.json', RelativeMarginRecord),
         store=store,
         purpose='fixture candidate read',
         lock=tmp_path / 'uv.lock',
     )
+    return candidate, text_only
 
-    result = _decide(runner, tmp_path, store, [write_record(candidate, tmp_path / 'tree.json')])
+@pytest.mark.unit
+def test_decide_reads_an_economic_decision_from_relative_margins(runner, tmp_path, growth_panel):
+    panel, _ = growth_panel
+    store = ArtifactStore(tmp_path / 'store')
+    assert _growth_margins(runner, tmp_path, store).exit_code == 0
+    candidate, text_only = _economic_candidate(tmp_path, panel, store)
+    listed = write_candidate_list(
+        tmp_path / 'candidates.yaml', [candidate], store, text_only_sha256=sha256_file(text_only)
+    )
+
+    result = _decide(
+        runner,
+        tmp_path,
+        store, [write_record(candidate, tmp_path / 'tree.json')],
+        candidates=listed
+    )
 
     assert result.exit_code == 0, result.output
     output = result.output.replace('\n', '')
@@ -513,6 +551,27 @@ def test_decide_reads_an_economic_decision_from_relative_margins(runner, tmp_pat
     assert '97.5 % [' in ' '.join(result.output.split())
     assert 'Chosen: none; the reference covariates+ancestors stands' in output
     assert read_record(tmp_path / 'decision.json', EconomicDecisionRecord).chosen is None
+
+@pytest.mark.unit
+def test_decide_reads_the_committed_candidate_list_by_default(
+    runner, tmp_path, growth_panel, monkeypatch
+):
+    '''With no --candidates, the economic decision reads conf/data/economic_candidates.yaml.'''
+
+    panel, _ = growth_panel
+    store = ArtifactStore(tmp_path / 'store')
+    assert _growth_margins(runner, tmp_path, store).exit_code == 0
+    candidate, _ = _economic_candidate(tmp_path, panel, store)
+    arm = write_record(candidate, tmp_path / 'tree.json')
+    # The committed list is relative to the repository root, where the commands run
+    monkeypatch.chdir(Path(__file__).resolve().parents[2])
+
+    result = _decide(runner, tmp_path, store, [arm])
+
+    assert result.exit_code == 1
+    output = ' '.join(click.unstyle(result.output).split())
+    assert "'tree' is not on the frozen candidate list" in output
+    assert not (tmp_path / 'decision.json').exists()
 
 @pytest.mark.unit
 def test_diagnostics_reports_every_statistic_and_writes_json(runner, tmp_path):

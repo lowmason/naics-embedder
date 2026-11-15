@@ -10,12 +10,14 @@ import hashlib
 import json
 import platform
 import re
+import zlib
 from dataclasses import replace
 from datetime import datetime, timedelta
 
 import numpy as np
 import polars as pl
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from naics_embedder.decision.decide import check_arm
@@ -50,8 +52,18 @@ from naics_embedder.panels.regressor import (
 )
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
+from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.tree_model.builders import build_candidate
 from tests.fixtures.decision import spec, synthetic_arm, write_text_only
-from tests.fixtures.economic import CODEBOOK_INPUT, candidate_spec, write_candidate
+from tests.fixtures.economic import (
+    CODEBOOK_INPUT,
+    candidate_spec,
+    list_for,
+    scaled_arm,
+    write_candidate,
+    write_candidate_list,
+    write_codebook,
+)
 from tests.fixtures.regressor_panel import CODEBOOK, HELDOUT_GROUPS, SETTINGS, coordinate_table
 
 pytestmark = pytest.mark.unit
@@ -59,6 +71,8 @@ pytestmark = pytest.mark.unit
 PURPOSE = 'fixture economic decision'
 # U13
 R = 0.05
+# The column that binds a read's predictions to its table (P4: economic.BINDING_COLUMN)
+BINDING = 'table_fingerprint'
 
 @pytest.fixture
 def log(tmp_path):
@@ -241,10 +255,12 @@ def test_the_record_keeps_the_tables_provenance_verbatim(arm, candidate, store, 
     path = write_record(arm, tmp_path / 'arm.json')
     assert read_record(path, EconomicArmRecord) == arm
 
-def test_a_single_replicate_record_validates_and_pairs_with_the_reference(arm, margins, store):
+def test_a_single_replicate_record_validates_and_pairs_with_the_reference(
+    arm, margins, store, text_only
+):
     '''Verification "Deterministic arms": the reference predicts as in the margin read.'''
 
-    check_economic_arm(arm, store)
+    check_economic_arm(arm, store, list_for([arm], store, text_only_sha256=sha256_file(text_only)))
     check_reference_pairing(margins, arm, store)
 
     def reference(predictions):
@@ -298,11 +314,21 @@ def test_a_candidate_is_read_only_with_provenance_that_describes_it(
 def test_a_candidate_reads_its_own_text_only_table_at_its_dimension(
     candidate, growth_panel, text_only, margins, store, lock, log, tmp_path
 ):
+    '''D9 holds for a text-only candidate, which reads the backbone; a tree candidate reads none.'''
+
     other = write_text_only(tmp_path / 'other', revision='other', codes=CODEBOOK)
+    table = build_candidate(
+        'text-only',
+        3,
+        write_codebook(tmp_path / 'cb.parquet'),
+        tmp_path / 'c' / 'text-only-d3.parquet',
+        text_only=text_only,
+    )
+    text = spec('text-only-d3', dimension=3, geometry='euclidean')
     wide = candidate_spec('tree', dimension=4)
 
-    with pytest.raises(ValueError, match='^tree: the text-only table was built from .*D9'):
-        _read(candidate, growth_panel, other, margins, store, lock)
+    with pytest.raises(ValueError, match='^text-only-d3: the text-only table was built from .*D9'):
+        _read(table, growth_panel, other, margins, store, lock, arm_spec=text)
     with pytest.raises(ValueError, match="^tree: the table has dimension 3, not the spec's 4"):
         _read(candidate, growth_panel, text_only, margins, store, lock, arm_spec=wide)
     assert log.records() == margins.read.log_records
@@ -319,32 +345,38 @@ def test_an_imported_run_with_a_blank_run_id_does_not_load(arm, tmp_path, run_id
     with pytest.raises(ValidationError, match='runs\\.0\\.run_id'):
         read_record(path, EconomicArmRecord)
 
-def test_an_economic_arm_is_one_replicate_with_no_seed(arm, store):
+def test_an_economic_arm_is_one_replicate_with_no_seed(arm, store, text_only):
     (run, ) = arm.runs
     seeded = arm.model_copy(update={'runs': [run.model_copy(update={'seed': 0})]})
     twice = arm.model_copy(update={'runs': [run, run]})
 
     for record in (seeded, twice):
         with pytest.raises(ValueError, match='^tree: an economic arm is one deterministic'):
-            check_economic_arm(record, store)
+            check_economic_arm(
+                record, store, list_for([arm], store, text_only_sha256=sha256_file(text_only))
+            )
 
-def test_a_run_whose_reads_name_another_table_is_refused(arm, store):
+def test_a_run_whose_reads_name_another_table_is_refused(arm, store, text_only):
     (run, ) = arm.runs
     reads = json.loads(json.dumps(run.log_records))
     reads[0]['detail']['arm'] = 'another table'
     edited = arm.model_copy(update={'runs': [run.model_copy(update={'log_records': reads})]})
 
     with pytest.raises(ValueError, match="^tree: a growth_seen read names another \\['arm'\\]"):
-        check_economic_arm(edited, store)
+        check_economic_arm(
+            edited, store, list_for([arm], store, text_only_sha256=sha256_file(text_only))
+        )
 
-def test_a_provenance_edited_after_it_was_stored_is_refused(arm, store):
+def test_a_provenance_edited_after_it_was_stored_is_refused(arm, store, text_only):
     (run, ) = arm.runs
     content = {**run.provenance.content, 'inputs': {'qcew': 'national slices'}}
     provenance = run.provenance.model_copy(update={'content': content})
     edited = arm.model_copy(update={'runs': [run.model_copy(update={'provenance': provenance})]})
 
     with pytest.raises(ValueError, match="^tree: the record's provenance differs from its stored"):
-        check_economic_arm(edited, store)
+        check_economic_arm(
+            edited, store, list_for([arm], store, text_only_sha256=sha256_file(text_only))
+        )
 
 def test_reference_predictions_that_differ_from_the_margin_reads_do_not_pair(arm, margins, store):
     '''Req 24: only the predictions decide; the environments name where each read ran.'''
@@ -371,20 +403,412 @@ def test_reference_predictions_that_differ_from_the_margin_reads_do_not_pair(arm
             }), store
         )
 
-def test_the_pairing_check_alone_refuses_an_arm_without_exactly_one_run(arm, margins, store):
-    '''A loop over no runs would pass an arm that read nothing, so the check refuses it first.'''
+def test_an_economic_arm_with_no_runs_pairs_nothing(arm, margins, store):
+    '''
+    A loop over no runs would pass an arm that read nothing, so the check refuses it first. It
+    compares every run, so two runs that each predict as the margin read pair.
+    '''
 
     (run, ) = arm.runs
     none = arm.model_copy(update={'runs': []})
     twice = arm.model_copy(update={'runs': [run, run]})
 
-    for record, count in ((none, 0), (twice, 2)):
-        with pytest.raises(
-            ValueError,
-            match=f'^tree: an economic arm is one deterministic replicate \\(Req 24\\), '
-            f'not {count} runs$'
-        ):
-            check_reference_pairing(margins, record, store)
+    with pytest.raises(
+        ValueError, match='^tree: an economic arm with no runs pairs nothing \\(Req 24\\)$'
+    ):
+        check_reference_pairing(margins, none, store)
+    check_reference_pairing(margins, twice, store)
+
+def test_every_run_of_an_arm_pairs_with_the_margin_read(arm, margins, store):
+    '''§4.4: the pairing compares each run's reference predictions, not the first run's alone.'''
+
+    (run, ) = arm.runs
+    reference = pl.col('comparator') == REFERENCE_COMPARATOR
+    predictions = store.read_frame(run.predictions).with_columns(
+        prediction=pl.when(reference).then(pl.col('prediction') + 1e-12).otherwise('prediction')
+    )
+    moved = run.model_copy(
+        update={'predictions': store.put_frame(predictions, 'predictions.parquet')}
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="^tree: its covariates\\+ancestors predictions differ from the margin read's"
+    ):
+        check_reference_pairing(margins, arm.model_copy(update={'runs': [run, moved]}), store)
+
+# -------------------------------------------------------------------------------------------------
+# A deterministic candidate against the frozen list (§4.3, §4.4, §4.5, §4.8)
+# -------------------------------------------------------------------------------------------------
+
+@pytest.fixture
+def frozen(arm, store, text_only):
+    '''The frozen list of exactly the fixture candidate, pinned to its table.'''
+
+    return list_for([arm], store, text_only_sha256=sha256_file(text_only))
+
+@pytest.fixture
+def text_table(text_only, tmp_path):
+    '''``text-only-d3`` as its builder writes it, with the codebook the builder read.'''
+
+    codebook = write_codebook(tmp_path / 'codebook' / 'naics_codebook.parquet')
+    table = build_candidate(
+        'text-only', 3, codebook, tmp_path / 'built' / 'text-only-d3.parquet', text_only=text_only
+    )
+    return table, codebook
+
+TEXT_ONLY_D3 = spec('text-only-d3', dimension=3, geometry='euclidean')
+
+def _with_run(arm, **update):
+    '''The arm with its one run updated.'''
+
+    (run, ) = arm.runs
+    return arm.model_copy(update={'runs': [run.model_copy(update=update)]})
+
+def _first_row(column, value):
+    '''``column`` with its first row set to ``value`` and every other row kept.'''
+
+    first = pl.int_range(pl.len()) == 0
+    return pl.when(first).then(value).otherwise(pl.col(column)).alias(column)
+
+def test_a_text_only_candidates_embedding_predicts_as_its_text_only_comparator(
+    growth_panel, text_only, margins, store, lock, tmp_path
+):
+    '''§6 "D9 consistency": text-only-dN's covariates+embedding is its covariates+text_only.'''
+    table = build_candidate(
+        'text-only',
+        3,
+        write_codebook(tmp_path / 'cb.parquet'),
+        tmp_path / 'c' / 'text-only-d3.parquet',
+        text_only=text_only
+    )
+    arm = _read(
+        table,
+        growth_panel,
+        text_only,
+        margins,
+        store,
+        lock,
+        arm_spec=spec('text-only-d3', dimension=3, geometry='euclidean')
+    )
+    keys = ['panel', 'repeat', 'code', 'feature_year']
+    predictions = store.read_frame(arm.runs[0].predictions)
+    embedding = predictions.filter(pl.col('comparator') == 'covariates+embedding').sort(keys)
+    text = predictions.filter(pl.col('comparator') == 'covariates+text_only').sort(keys)
+    assert embedding.get_column('prediction').equals(text.get_column('prediction'))
+
+def test_a_reads_predictions_are_bound_to_its_table(arm, margins, store):
+    '''P4: each stored prediction names its table; the margin read's carry no binding.'''
+
+    (run, ) = arm.runs
+    predictions = store.read_frame(run.predictions)
+
+    assert predictions.get_column(BINDING).unique().to_list() == [run.table.matrix_fingerprint]
+    assert BINDING not in store.read_frame(margins.read.predictions).columns
+
+def test_a_binding_stored_with_the_predictions_does_not_break_the_pairing(arm, margins, store):
+    '''§4.8: the reference comparison reads only the margin read's own columns.'''
+
+    (run, ) = arm.runs
+    assert BINDING in store.read_frame(run.predictions).columns
+
+    check_reference_pairing(margins, arm, store)
+
+def test_a_text_only_candidate_passes_its_checks_and_is_d9_checked(
+    text_table, growth_panel, text_only, margins, store, lock
+):
+    '''A text-only candidate reads the backbone, so its record's spec is D9-checked too.'''
+
+    table, codebook = text_table
+    arm = _read(table, growth_panel, text_only, margins, store, lock, arm_spec=TEXT_ONLY_D3)
+    frozen = list_for(
+        [arm],
+        store,
+        text_only_sha256=sha256_file(text_only),
+        codebook_sha256=sha256_file(codebook),
+    )
+    other = TEXT_ONLY_D3.model_copy(update={'backbone_revision': 'other'})
+
+    check_economic_arm(arm, store, frozen)
+    check_reference_pairing(margins, arm, store)
+    with pytest.raises(ValueError, match='^text-only-d3: the text-only table was built from .*D9'):
+        check_economic_arm(arm.model_copy(update={'spec': other}), store, frozen)
+
+def test_a_text_only_candidate_reads_the_backbone(
+    text_table, growth_panel, text_only, margins, store, lock
+):
+    '''A spec that reads no backbone is read without D9, and refused as a text-only candidate's.'''
+
+    table, codebook = text_table
+    arm = _read(
+        table,
+        growth_panel,
+        text_only,
+        margins,
+        store,
+        lock,
+        arm_spec=candidate_spec('text-only-d3'),
+    )
+    frozen = list_for(
+        [arm],
+        store,
+        text_only_sha256=sha256_file(text_only),
+        codebook_sha256=sha256_file(codebook),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="^text-only-d3: a text-only candidate reads the text-only table's backbone"
+    ):
+        check_economic_arm(arm, store, frozen)
+
+def test_a_tree_candidate_reads_no_backbone_and_only_the_shared_text_only_table(
+    arm, candidate, growth_panel, text_only, margins, store, lock
+):
+    '''P7: a tree candidate's spec names no backbone, and the list pins its text-only table.'''
+
+    backboned = _read(
+        candidate,
+        growth_panel,
+        text_only,
+        margins,
+        store,
+        lock,
+        arm_spec=spec('tree', dimension=3, geometry='euclidean'),
+    )
+
+    with pytest.raises(ValueError, match='^tree: a tree candidate reads no backbone'):
+        check_economic_arm(
+            backboned,
+            store,
+            list_for([backboned], store, text_only_sha256=sha256_file(text_only)),
+        )
+    with pytest.raises(ValueError, match='^tree: .*the shared text-only table'):
+        check_economic_arm(arm, store, list_for([arm], store, text_only_sha256='f' * 64))
+
+def test_a_tree_candidate_is_not_d9_checked(
+    candidate, growth_panel, margins, store, lock, frozen, tmp_path
+):
+    '''
+    A tree candidate reads no backbone, so a text-only table from another revision is read beside
+    it, and its check reads that table's bytes alone: here they are the shared table's.
+    '''
+
+    other = write_text_only(tmp_path / 'other', revision='other', codes=CODEBOOK)
+
+    arm = _read(candidate, growth_panel, other, margins, store, lock)
+
+    assert arm.text_only.revision == 'other'
+    check_economic_arm(arm, store, frozen)
+
+def test_a_recorded_text_only_field_that_differs_from_its_stored_provenance_is_refused(
+    arm, store, frozen
+):
+    edited = arm.model_copy(
+        update={'text_only': arm.text_only.model_copy(update={'max_length': 99})}
+    )
+
+    with pytest.raises(
+        ValueError, match="^tree: the record's text-only fields \\['max_length'\\] differ"
+    ):
+        check_economic_arm(edited, store, frozen)
+
+@pytest.mark.parametrize(
+    'row, message',
+    [
+        ({
+            'dimension': 4
+        }, 'its frozen-list row'),
+        ({
+            'components': 2
+        }, 'its frozen-list row'),
+        ({
+            'geometry': 'spherical'
+        }, 'its frozen-list row'),
+        ({
+            'table_sha256': None
+        }, 'pins no table'),
+        ({
+            'table_sha256': 'f' * 64
+        }, 'differs from its pin'),
+    ],
+    ids=['dimension', 'components', 'geometry', 'unpinned', 'another-sha'],
+)
+def test_a_candidate_off_its_list_row_is_refused(arm, store, frozen, row, message):
+    (entry, ) = frozen.candidates
+    edited = frozen.model_copy(update={'candidates': [entry.model_copy(update=row)]})
+
+    with pytest.raises(ValueError, match=f'^tree: .*{message}'):
+        check_economic_arm(arm, store, edited)
+
+def test_an_arm_whose_name_is_not_on_the_list_is_refused(arm, store, frozen):
+    '''The arm's row is the one that bears its name, even beside a row of its exact shape.'''
+
+    (entry, ) = frozen.candidates
+    renamed = frozen.model_copy(update={'candidates': [entry.model_copy(update={'name': 'other'})]})
+
+    with pytest.raises(ValueError, match="^'tree' is not on the frozen candidate list"):
+        check_economic_arm(arm, store, renamed)
+
+def test_a_candidate_whose_provenance_breaks_the_rule_is_refused(
+    growth_panel, text_only, margins, store, lock, tmp_path
+):
+    '''Req 29: a provenance that names a QCEW file describes its table, so it is read; then refused.'''
+
+    table = write_candidate(
+        tmp_path / 'qcew',
+        'tree',
+        coordinate_table(CODEBOOK),
+        qcew={
+            'path': 'qcew.parquet',
+            'sha256': 'f' * 64
+        },
+    )
+    arm = _read(table, growth_panel, text_only, margins, store, lock)
+
+    with pytest.raises(ValueError, match='^tree: entries: .*\\(Req 29'):
+        check_economic_arm(
+            arm, store, list_for([arm], store, text_only_sha256=sha256_file(text_only))
+        )
+
+@pytest.mark.parametrize(
+    'target, update',
+    [
+        ('run', {
+            'seed': 0
+        }),
+        ('run', {
+            'checkpoint': ArtifactRef(path='objects/a', sha256='a' * 64, bytes=1)
+        }),
+        ('run', {
+            'training_run': 't-0'
+        }),
+        ('run', {
+            'checkpoint_epoch': 0
+        }),
+        ('run', {
+            'monitor_records': [{
+                'mrr': 0.5,
+                'read': {}
+            }]
+        }),
+        ('arm', {
+            'source': ArtifactRef(path='records/x.json', sha256='b' * 64, bytes=1)
+        }),
+    ],
+    ids=['seed', 'checkpoint', 'training-run', 'epoch', 'monitor-records', 'source'],
+)
+def test_a_deterministic_run_with_selection_evidence_is_refused(arm, store, frozen, target, update):
+    '''§4.4: a deterministic run keeps no seed and no selection evidence, and names no source.'''
+
+    edited = _with_run(arm, **update) if target == 'run' else arm.model_copy(update=update)
+
+    with pytest.raises(ValueError, match='^tree: .*one seedless run'):
+        check_economic_arm(edited, store, frozen)
+
+@pytest.mark.parametrize('count', [0, 2], ids=['none', 'two'])
+def test_a_deterministic_arm_holds_exactly_one_run(arm, store, frozen, count):
+    (run, ) = arm.runs
+
+    with pytest.raises(ValueError, match='^tree: .*one seedless run'):
+        check_economic_arm(arm.model_copy(update={'runs': [run] * count}), store, frozen)
+
+@pytest.mark.parametrize(
+    'edit',
+    [
+        lambda frame: frame.with_columns(_first_row(BINDING, pl.lit('another table'))),
+        lambda frame: frame.drop(BINDING),
+    ],
+    ids=['two-tables', 'unbound'],
+)
+def test_predictions_bound_to_two_tables_or_to_none_are_refused(arm, store, frozen, edit):
+    (run, ) = arm.runs
+    predictions = edit(store.read_frame(run.predictions))
+    edited = _with_run(arm, predictions=store.put_frame(predictions, 'predictions.parquet'))
+
+    with pytest.raises(ValueError, match='^tree: its predictions belong to another table'):
+        check_economic_arm(edited, store, frozen)
+
+@pytest.mark.parametrize(
+    'edit',
+    [
+        lambda statistics: {
+            'growth_seen': statistics['growth_seen']
+        },
+        lambda statistics: {
+            **statistics, 'regressor_seen': statistics['growth_seen']
+        },
+    ],
+    ids=['dropped', 'extra'],
+)
+def test_a_record_whose_statistics_name_other_panels_is_refused(arm, store, frozen, edit):
+    '''Deferred :650: the statistics' keys are exactly the growth panels.'''
+
+    (run, ) = arm.runs
+    edited = _with_run(arm, statistics=edit(run.statistics))
+
+    with pytest.raises(ValueError, match="^tree: the record's statistics are not those of its"):
+        check_economic_arm(edited, store, frozen)
+
+@pytest.mark.parametrize(
+    'field, value',
+    [('dimension', 3.0), ('level', True), ('level', 6.0)],
+    ids=['dimension-float', 'level-bool', 'level-float'],
+)
+def test_a_logged_identity_of_another_type_is_refused(arm, store, frozen, field, value):
+    '''Deferred :650: a logged identity is the named one and of its type (``_same``).'''
+
+    (run, ) = arm.runs
+    reads = json.loads(json.dumps(run.log_records))
+    reads[0]['detail'][field] = value
+    edited = _with_run(arm, log_records=reads)
+
+    with pytest.raises(
+        ValueError, match=f"^tree: a growth_seen read names another \\['{field}'\\]"
+    ):
+        check_economic_arm(edited, store, frozen)
+
+def _stored_scores(arm, store, edit):
+    '''The arm with its stored scores edited and stored again.'''
+
+    (run, ) = arm.runs
+    return _with_run(
+        arm, scores=store.put_frame(edit(store.read_frame(run.scores)), 'scores.parquet')
+    )
+
+def test_a_record_whose_stored_scores_differ_from_its_predictions_is_refused(arm, store, frozen):
+    '''Deferred :633: one stored value raised by 1e-6 is not the rescore of the predictions.'''
+
+    edited = _stored_scores(
+        arm, store, lambda scores: scores.with_columns(_first_row('value',
+                                                                  pl.col('value') + 1e-6))
+    )
+
+    with pytest.raises(ValueError, match='^tree: .*stored scores'):
+        check_economic_arm(edited, store, frozen)
+
+def test_stored_scores_within_the_tolerance_are_accepted(arm, store, frozen):
+    '''A stored value one part in 1e13 from the rescore agrees with it to float summation order.'''
+
+    (run, ) = arm.runs
+    scores = store.read_frame(run.scores)
+    nudged = scores.with_columns(_first_row('value', pl.col('value') * (1 + 1e-13)))
+    assert nudged.get_column('value')[0] != scores.get_column('value')[0]
+
+    check_economic_arm(_stored_scores(arm, store, lambda _: nudged), store, frozen)
+
+@pytest.mark.parametrize(
+    'edit',
+    [
+        lambda scores: scores.slice(1),
+        lambda scores: pl.concat([scores, scores.head(1)]),
+        lambda scores: scores.with_columns(_first_row('item', pl.lit('999999/2023'))),
+    ],
+    ids=['dropped', 'repeated', 'renamed'],
+)
+def test_stored_scores_hold_exactly_the_rescores_rows(arm, store, frozen, edit):
+    with pytest.raises(ValueError, match='^tree: .*stored scores'):
+        check_economic_arm(_stored_scores(arm, store, edit), store, frozen)
 
 # -------------------------------------------------------------------------------------------------
 # Records (§4.3, §4.4: the backbone-less spec and a trained candidate's selection evidence)
@@ -611,63 +1035,100 @@ GROWTH_SEEN, GROWTH_HELDOUT = GROWTH_PANELS
 def _both(factor):
     return dict.fromkeys(GROWTH_PANELS, factor)
 
-def _scaled(arm, factors, store):
-    '''
-    The arm, rescored with each ``covariates+embedding`` prediction moved to the outcome plus
-    ``factors[panel]`` times the reference's error on its row and repeat. Every row's squared
-    error is then factor² times the reference's, so Δ on each item is (1 − factor²) times the
-    reference's error, whatever the draw.
-    '''
-
-    (run, ) = arm.runs
-    predictions = store.read_frame(run.predictions)
-    keys = ['panel', 'repeat', 'code', 'feature_year']
-    reference = predictions.filter(pl.col('comparator') == REFERENCE_COMPARATOR
-                                   ).select(*keys, reference='prediction')
-    factor = pl.when(pl.col('panel') == GROWTH_SEEN).then(factors[GROWTH_SEEN]).otherwise(
-        factors[GROWTH_HELDOUT]
-    )
-    error = pl.col('reference') - pl.col('outcome')
-    moved = predictions.join(reference, on=keys).with_columns(
-        prediction=pl.when(pl.col('comparator') == 'covariates+embedding').then(
-            pl.col('outcome') + factor * error
-        ).otherwise('prediction')
-    ).select(predictions.columns)
-    scores = regressor_scores(moved, SETTINGS.repeats, GROWTH_PANELS)
-    scaled = run.model_copy(
-        update={
-            'predictions': store.put_frame(moved, 'predictions.parquet'),
-            'scores': store.put_frame(scores, 'scores.parquet'),
-            'statistics': {
-                panel: panel_statistic(scores, panel, 'covariates+embedding')
-                for panel in GROWTH_PANELS
-            },
-        }
-    )
-    return arm.model_copy(update={'runs': [scaled]})
-
 @pytest.fixture
 def candidates(growth_panel, text_only, margins, store, lock, tmp_path):
-    '''Reads a new candidate, after the margins, and scales its errors (``_scaled``).'''
+    '''
+    Reads a new candidate, after the margins, and scales its errors (``scaled_arm``). Each name
+    has its own table, so two candidates' predictions are bound to two tables.
+    '''
 
     def read(name, factors, **overrides):
-        table = write_candidate(tmp_path / 'candidates', name, coordinate_table(CODEBOOK))
+        coordinates = coordinate_table(CODEBOOK, seed=zlib.crc32(name.encode()))
+        table = write_candidate(tmp_path / 'candidates', name, coordinates)
         arm_spec = candidate_spec(name, **overrides)
         arm = _read(table, growth_panel, text_only, margins, store, lock, arm_spec)
-        return _scaled(arm, factors, store)
+        return scaled_arm(arm, factors, store)
 
     return read
 
 def _decide(arms, margins, store):
+    '''
+    The decision over the arms, reading a frozen list of exactly their candidates, each once,
+    written beside the store and pinned to their tables and their text-only table.
+    '''
+
+    distinct = list({arm.spec.name: arm for arm in arms}.values())
+    # The arms share one text-only table; a list over no arms pins one that no check reads
+    (text_only_sha256, ) = {arm.text_only.table.sha256 for arm in arms} or {'0' * 64}
+    listed = write_candidate_list(
+        store.root.parent / 'candidates.yaml', distinct, store, text_only_sha256=text_only_sha256
+    )
     return decide_economic(
         'fixture economic decision',
         'which candidate, if any, is the economic artifact?',
         arms,
         margins,
         store,
+        candidates=listed,
         replicates=REPLICATES,
         bootstrap_seed=BOOTSTRAP_SEED,
     )
+
+def test_a_record_whose_predictions_belong_to_another_table_is_refused(
+    candidates, store, text_only
+):
+    a, b = candidates('a', _both(1.0)), candidates('b', _both(1.0))
+    swapped = a.model_copy(
+        update={'runs': [a.runs[0].model_copy(update={'predictions': b.runs[0].predictions})]}
+    )
+    frozen = list_for([a, b], store, text_only_sha256=sha256_file(text_only))
+    with pytest.raises(ValueError, match='^a: its predictions belong to another table'):
+        check_economic_arm(swapped, store, frozen)
+
+def test_the_decision_reads_exactly_the_frozen_lists_candidates(
+    candidates, margins, store, tmp_path, text_only
+):
+    a, b = candidates('a', _both(0.5)), candidates('b', _both(1.0))
+    listed = write_candidate_list(
+        tmp_path / 'list.yaml', [a, b], store, text_only_sha256=sha256_file(text_only)
+    )
+    settings = {'candidates': listed, 'replicates': REPLICATES, 'bootstrap_seed': BOOTSTRAP_SEED}
+    with pytest.raises(ValueError, match="'b'.*missing"):
+        decide_economic('d', 'q', [a], margins, store, **settings)
+    c = candidates('c', _both(1.0))
+    with pytest.raises(ValueError, match="'c' is not on the frozen candidate list"):
+        decide_economic('d', 'q', [a, b, c], margins, store, **settings)
+    record = decide_economic('d', 'q', [a, b], margins, store, **settings)
+    assert record.candidates.sha256 == sha256_file(listed)
+
+def test_the_decision_checks_each_candidate_against_the_list_it_reads(
+    candidates, margins, store, tmp_path
+):
+    '''The list the decision loads is the one each candidate is checked against.'''
+
+    arm = candidates('tree', _both(0.5))
+    listed = write_candidate_list(tmp_path / 'list.yaml', [arm], store, text_only_sha256='f' * 64)
+
+    with pytest.raises(ValueError, match='^tree: .*the shared text-only table'):
+        decide_economic(
+            'd',
+            'q',
+            [arm],
+            margins,
+            store,
+            candidates=listed,
+            replicates=REPLICATES,
+            bootstrap_seed=BOOTSTRAP_SEED,
+        )
+
+def test_the_decision_records_the_list_as_stored(candidates, margins, store, tmp_path):
+    '''§4.4: the record names the list file's bytes in the store, and they load as the list.'''
+
+    record = _decide([candidates('tree', _both(0.5))], margins, store)
+
+    stored = store.resolve(record.candidates)
+    assert stored.read_bytes() == (tmp_path / 'candidates.yaml').read_bytes()
+    assert yaml.safe_load(stored.read_text())['candidates'][0]['name'] == 'tree'
 
 def test_a_candidate_adopted_over_the_reference_is_chosen(candidates, margins, store):
     record = _decide([candidates('better', _both(0.5))], margins, store)
@@ -886,6 +1347,17 @@ def test_margins_whose_delta_is_not_r_times_the_reference_mse_are_refused(
     with pytest.raises(ValueError, match="name the reference 'covariates\\+one_hot'"):
         _decide([arm], margins.model_copy(update={'reference': 'covariates+one_hot'}), store)
 
+def test_margins_whose_stored_scores_differ_from_their_read_are_refused(candidates, margins, store):
+    '''Deferred :633: the margin read's stored scores are the rescore of its predictions.'''
+
+    arm = candidates('tree', _both(0.5))
+    scores = store.read_frame(margins.read.scores)
+    raised = scores.with_columns(_first_row('value', pl.col('value') + 1e-6))
+    edited = _margin_read(margins, scores=store.put_frame(raised, 'scores.parquet'))
+
+    with pytest.raises(ValueError, match="^the margins 'fixture margins': .*stored scores"):
+        _decide([arm], edited, store)
+
 def test_the_decision_refuses_a_candidate_whose_reference_predicts_otherwise(
     candidates, margins, store
 ):
@@ -906,7 +1378,9 @@ def test_the_decision_refuses_a_candidate_whose_reference_predicts_otherwise(
     with pytest.raises(ValueError, match='^tree: its covariates\\+ancestors predictions differ'):
         _decide([arm.model_copy(update={'runs': [refit]})], margins, store)
 
-def test_a_candidate_whose_statistics_are_not_its_predictions_is_refused(candidates, store):
+def test_a_candidate_whose_statistics_are_not_its_predictions_is_refused(
+    candidates, store, text_only
+):
     '''The decision scores the predictions the pairing guard compared, and the record must agree.'''
 
     arm = candidates('tree', _both(0.5))
@@ -915,7 +1389,11 @@ def test_a_candidate_whose_statistics_are_not_its_predictions_is_refused(candida
     moved = run.model_copy(update={'predictions': store.put_frame(shifted, 'predictions.parquet')})
 
     with pytest.raises(ValueError, match="^tree: the record's statistics are not those of its"):
-        check_economic_arm(arm.model_copy(update={'runs': [moved]}), store)
+        check_economic_arm(
+            arm.model_copy(update={'runs': [moved]}),
+            store,
+            list_for([arm], store, text_only_sha256=sha256_file(text_only)),
+        )
 
 def test_a_decision_reads_distinct_candidates_none_named_for_the_reference(
     candidates, margins, store
