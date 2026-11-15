@@ -1734,6 +1734,26 @@ def test_economic_read_dry_run_loads_no_panel_and_leaves_the_log_untouched(
     assert not (tmp_path / 'read.json').exists()
 
 @pytest.mark.unit
+def test_economic_read_dry_run_leaves_an_existing_log_as_it_was(runner, tmp_path, growth_panel):
+    '''Review Focus 1 with the main checkout's log, which exists: its bytes stay the same.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    log = tmp_path / 'real' / 'selection_log.jsonl'
+    log.parent.mkdir()
+    log.write_text('{"event": "read"}\n')
+    before = sha256_file(log)
+
+    for name in ('text-only-d3', 'tree-d3', 'smoothed-d3', 'euclidean-d3'):
+        result = _economic_read(runner, inputs, name, '--dry-run', '--log', str(log))
+        assert result.exit_code == 0, result.output
+        assert f'Dry run: every check passed for {name}; ' in _output(result)
+
+    assert sha256_file(log) == before
+    _untouched(panel, loaded)
+    assert not (tmp_path / 'read.json').exists()
+
+@pytest.mark.unit
 @pytest.mark.parametrize('name', DETERMINISTIC)
 def test_economic_read_refuses_a_text_only_table_other_than_the_lists(
     runner, tmp_path, growth_panel, name
