@@ -29,7 +29,7 @@ artifact. The economic artifact's first roadmap is complete
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
-Python 3.12. The source tree has **117 Python files**; tests have **105 unit** files and two
+Python 3.12. The source tree has **124 Python files**; tests have **107 unit** files and two
 integration files. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
@@ -46,6 +46,12 @@ integration files. File counts exclude generated and ignored artifacts.
    their own distance and have no radial term. Hyperbolic is the default.
 4. **Graph refinement** (`graph_model/hgcn.py`): HGCN uses the graph, triplet/radial objectives
    and its four-phase graph curriculum. Its curvature utilities remain separate from text.
+5. **Economic candidates** (`tree_model/`, `decision/candidates.py`): three deterministic builders,
+   none trained, each at d in {8, 16, 32}: the text-only table reduced by PCA, the classical
+   scaling of the tree metric D*, and the text-only vectors smoothed over each code's lineage.
+   `conf/data/economic_candidates.yaml` freezes the 18 candidates the economic decision reads,
+   these nine and nine trained Stage 7/8 arms. A candidate reads the codebook's text and tree only
+   (`specs/economic-candidates.md`).
 
 The text model has no curvature parameter, DCL term, false-negative clustering, negative miner,
 router-guided sampler, text phase curriculum, distributed cache or in-sample validation loader.
@@ -92,14 +98,18 @@ src/naics_embedder/
 │   └── mixins/                # loss, logging and optimizer responsibilities
 ├── panels/                    # outcome/regressor panels and selection-log guards
 ├── decision/                  # paired resampling, margins, arm records and decisions;
-│                              # economic.py: the growth margin read and economic decision
+│                              # economic.py: the growth margin read and economic decision;
+│                              # candidates.py: the frozen candidate list;
+│                              # provenance.py: the text-and-tree-only rule;
+│                              # trained.py: a trained candidate's import
+├── tree_model/                # deterministic economic candidates: scaling, smoothing, builders
 ├── graph_model/               # HGCN, graph data loading and four-phase curriculum
 ├── metrics/                   # structural and retrieval diagnostics
 ├── tools/                     # config display, epoch-summary plotting and metrics API
 └── utils/                     # config, training, input-window and geometry utilities
 
 tests/
-├── unit/                      # 105 unit test files
+├── unit/                      # 107 unit test files
 ├── integration/               # test_reference_training.py, test_remote_workflow.py
 ├── fixtures/                  # tiny models, bundles, panels and runs
 └── conftest.py
@@ -252,15 +262,21 @@ The economic decision (Req 24, `decision/economic.py`) reads `growth_seen` and `
 against the reference `covariates+ancestors`. `tools growth-margins` reads growth whatever the
 config says, scoring only the comparators that read no candidate, and records δ = r × the
 reference's validation MSE, with r = `relative_margin` (0.05) in `conf/data/decision.yaml`.
-A deterministic candidate is one replicate, read by `read_deterministic_arm` (no command yet)
-with its table's provenance and no checkpoint or monitor reads. `tools decide` makes the economic
-decision from a relative margin record. It refuses a candidate whose reference predictions
+A deterministic candidate is one replicate, read by `read_deterministic_arm` with its table's
+provenance and no checkpoint or monitor reads. `tools economic-build` builds the nine
+deterministic tables from the frozen list. `tools economic-read` reads one frozen-list candidate,
+deterministic or trained, after every check that needs no panel. Under `--dry-run` it stops after
+those checks: it loads no panel and logs nothing. A trained candidate is imported from its Stage
+7/8 arm record and run directories (`--runs-root`) and read once per seed. `tools decide` makes
+the economic decision from a relative margin record and takes `--candidates`, the frozen list
+(default `conf/data/economic_candidates.yaml`). It requires exactly the list's candidates and
+records the list's sha256. It also reports whether each smoothed candidate is adopted over its
+text-only twin, and chooses nothing by it. It refuses a candidate whose reference predictions
 differ from the margin read's bit for bit, or that read before the margins. Superiority is
 1 − 0.05/n: 97.5 % over the two growth panels, 98⅓ % over D8's three. Only a candidate adopted
-over the reference is eligible; with none, the reference stands. A trained candidate's seeds
-have no economic record yet. The growth margins were fixed once, on 2026-10-17
-(`specs/findings/growth-margins.md`). Never run `tools growth-margins` again: nothing refuses a
-second run, and every economic candidate is decided against that record.
+over the reference is eligible; with none, the reference stands. The growth margins were fixed
+once, on 2026-10-17 (`specs/findings/growth-margins.md`). Never run `tools growth-margins` again:
+nothing refuses a second run, and every economic candidate is decided against that record.
 
 ### Remote Workflow and Phase 2 Boundary
 
@@ -346,7 +362,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **3,342 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **4,077 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -521,7 +537,7 @@ evaluation currently uses curvature 1; a non-unit-curvature correction is a sepa
 
 ## Testing and Validation
 
-There are 105 unit files and two integration files. Important current seams include:
+There are 107 unit files and two integration files. Important current seams include:
 
 - `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
   and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and
@@ -537,6 +553,11 @@ There are 105 unit files and two integration files. Important current seams incl
 - `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates'
   records and pairing, eligibility, the tie order, margin-first refusals and the economic
   decision record (Req 24).
+- `test_tree_model.py`: classical scaling and its cut refusals, lineage smoothing, and the three
+  builders' tables, codebook order and byte-for-byte determinism.
+- `test_economic_candidates.py`: the frozen list and its pins, the text-and-tree-only provenance
+  rule and trained imports. `test_cli_commands.py` covers `tools economic-build`,
+  `tools economic-read` (with its dry run) and `tools decide --candidates`.
 - `test_local_config.py`: `conf/local.yaml`'s two keys and `data/` paths, its place between the
   tracked YAML and overrides, its root and env var, and the graph config's explicit fields.
 - `integration/test_reference_training.py`: tiny-backbone Trainer runs, earliest-best selection,

@@ -43,6 +43,7 @@ nav:
                   - Streaming DataSet: api/hgcn_streaming_dataset.md
                   - DataLoader: api/hgcn_datamodule.md
               - HGCN: api/hgcn.md
+          - Tree Model: api/tree_model.md
       - Metrics:
           - Core: api/core_metrics.md
           - Graph: api/graph_metrics.md
