@@ -51,7 +51,7 @@ from naics_embedder.panels.regressor import (
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.panels.text_only import provenance_path
 from tests.fixtures.decision import spec, synthetic_arm, write_text_only
-from tests.fixtures.economic import candidate_spec, write_candidate
+from tests.fixtures.economic import CODEBOOK_INPUT, candidate_spec, write_candidate
 from tests.fixtures.regressor_panel import CODEBOOK, HELDOUT_GROUPS, SETTINGS, coordinate_table
 
 pytestmark = pytest.mark.unit
@@ -762,9 +762,7 @@ def test_the_economic_decision_record_shows_what_verification_lists(
         )
     assert record.reference == record.margins.reference == 'covariates+ancestors'
     # Each candidate's provenance, which names no employment-data input
-    assert record.arms[0].runs[0].provenance.content['inputs'] == {
-        'codebook': 'the fixture codebook'
-    }
+    assert record.arms[0].runs[0].provenance.content['inputs'] == {'codebook': CODEBOOK_INPUT}
     # The chosen arm
     assert record.chosen == 'better'
     # One-hot is still reported, where the seen regime scores it
