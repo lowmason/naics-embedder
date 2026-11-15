@@ -30,6 +30,8 @@ from naics_embedder.decision.economic import (
 )
 from naics_embedder.decision.records import (
     ArmRecord,
+    ArmSpec,
+    ArtifactRef,
     EconomicArmRecord,
     EconomicDecisionRecord,
     RelativeMarginRecord,
@@ -447,6 +449,140 @@ def test_imported_evidence_identities_are_strict(arm, tmp_path, field, value):
     data['runs'][0][field] = value
     (tmp_path / 'x.json').write_text(json.dumps(data))
     with pytest.raises(ValidationError, match=f'runs\\.0\\.{field}'):
+        read_record(tmp_path / 'x.json', EconomicArmRecord)
+
+# One value for each of a spec's five D9 fields, to set on a spec that reads no backbone
+D9_VALUES = {
+    'backbone': 'tiny-backbone',
+    'backbone_revision': 'abc123',
+    'descriptions_sha256': 'd' * 64,
+    'summaries_sha256': 'e' * 64,
+    'max_length': 16,
+}
+
+@pytest.mark.parametrize('field', sorted(D9_VALUES))
+def test_a_spec_with_one_backbone_field_set_and_the_rest_null_is_refused(field):
+    '''No backbone means all five D9 fields null: a revision or a window names none.'''
+
+    with pytest.raises(ValidationError, match='reads its backbone or no backbone'):
+        spec('half', **{**NO_BACKBONE, field: D9_VALUES[field]})
+
+@pytest.mark.parametrize('pinned', ['backbone_revision', 'summaries_sha256'])
+def test_a_spec_reads_a_backbone_with_no_pinned_revision_or_summaries(pinned):
+    '''The revision and the summaries are the two D9 fields a backbone may lack.'''
+
+    unpinned = spec('unpinned', **{pinned: None})
+    both = spec('both-unpinned', backbone_revision=None, summaries_sha256=None)
+    assert unpinned.reads_backbone and both.reads_backbone
+    assert ArmSpec.model_validate_json(both.model_dump_json()) == both
+
+def test_a_spec_that_reads_no_backbone_dumps_five_null_keys_and_loads_back():
+    tree = spec('tree-d3', dimension=3, geometry='euclidean', **NO_BACKBONE)
+    dumped = json.loads(tree.model_dump_json())
+    assert {field: dumped[field] for field in NO_BACKBONE} == NO_BACKBONE
+    assert ArmSpec.model_validate_json(tree.model_dump_json()) == tree
+
+@pytest.mark.parametrize('field', sorted(NO_BACKBONE))
+def test_every_backbone_field_of_a_spec_is_still_a_required_key(field):
+    '''Null is a value, not an absent key: the JSON shape of Stage 8's specs does not change.'''
+
+    data = json.loads(spec('text-only-d3').model_dump_json())
+    del data[field]
+    with pytest.raises(ValidationError, match=f'{field}\\n  Field required'):
+        ArmSpec.model_validate(data)
+
+@pytest.mark.parametrize('max_length', [0, -1])
+def test_a_spec_that_reads_a_backbone_has_a_window_of_at_least_one(max_length):
+    with pytest.raises(
+        ValidationError, match='max_length\\n  Input should be greater than or equal'
+    ):
+        spec('narrow', max_length=max_length)
+
+def test_a_deterministic_run_carries_no_selection_evidence(arm, tmp_path):
+    '''The four fields and the source default to none, so such a record needs no key for them.'''
+
+    (run, ) = arm.runs
+    assert run.seed is None
+    assert (run.checkpoint, run.training_run, run.checkpoint_epoch) == (None, None, None)
+    assert run.monitor_records == []
+    assert arm.source is None
+
+    data = json.loads(arm.model_dump_json())
+    for key in ('checkpoint', 'training_run', 'checkpoint_epoch', 'monitor_records'):
+        del data['runs'][0][key]
+    del data['source']
+    (tmp_path / 'bare.json').write_text(json.dumps(data))
+    assert read_record(tmp_path / 'bare.json', EconomicArmRecord) == arm
+
+def test_a_trained_runs_evidence_and_source_survive_a_round_trip(arm, tmp_path):
+    checkpoint = ArtifactRef(path='objects/a', sha256='a' * 64, bytes=7)
+    source = ArtifactRef(path='records/x.json', sha256='b' * 64, bytes=9)
+    monitor = [{'mrr': 0.5, 'read': {'epoch': 0}}, {'mrr': 0.7, 'read': {'epoch': 1}}]
+    (run, ) = arm.runs
+    trained_run = run.model_copy(
+        update={
+            'seed': 0,
+            'checkpoint': checkpoint,
+            'training_run': 't-0',
+            'checkpoint_epoch': 0,
+            'monitor_records': monitor,
+        }
+    )
+    trained = arm.model_copy(update={'runs': [trained_run], 'source': source})
+    write_record(trained, tmp_path / 'trained.json')
+
+    loaded = read_record(tmp_path / 'trained.json', EconomicArmRecord)
+    assert loaded == trained
+    (loaded_run, ) = loaded.runs
+    assert (loaded_run.seed, loaded_run.checkpoint_epoch, loaded_run.training_run) == (0, 0, 't-0')
+    assert loaded_run.checkpoint == checkpoint
+    assert loaded_run.monitor_records == monitor
+    assert loaded.source == source
+
+@pytest.mark.parametrize(
+    'field, value, error',
+    [
+        ('checkpoint_epoch', 1.0, 'int_type'),
+        ('checkpoint_epoch', '1', 'int_type'),
+        ('checkpoint_epoch', True, 'int_type'),
+        ('checkpoint_epoch', -1, 'greater_than_equal'),
+        ('seed', 1.0, 'int_type'),
+        ('seed', True, 'int_type'),
+        ('training_run', '  ', 'string_pattern_mismatch'),
+        ('training_run', '', 'string_too_short'),
+        ('training_run', 7, 'string_type'),
+        ('checkpoint', 'objects/a', 'model_type'),
+    ],
+)
+def test_imported_evidence_is_refused_for_what_it_is_not_for_being_there(
+    arm, tmp_path, field, value, error
+):
+    '''The fields exist now, so the refusal is their own check and no longer "Extra inputs".'''
+
+    data = json.loads(arm.model_dump_json())
+    data['runs'][0][field] = value
+    (tmp_path / 'x.json').write_text(json.dumps(data))
+    with pytest.raises(ValidationError) as refused:
+        read_record(tmp_path / 'x.json', EconomicArmRecord)
+    assert [(item['loc'], item['type'])
+            for item in refused.value.errors()] == [(('runs', 0, field), error)]
+
+@pytest.mark.parametrize(
+    'source', [
+        {
+            'path': 'records/x.json'
+        }, {
+            'path': 'records/x.json',
+            'sha256': 'b' * 64,
+            'bytes': -1
+        }
+    ]
+)
+def test_a_source_names_a_stored_file_by_path_sha256_and_size(arm, tmp_path, source):
+    data = json.loads(arm.model_dump_json())
+    data['source'] = source
+    (tmp_path / 'x.json').write_text(json.dumps(data))
+    with pytest.raises(ValidationError, match='source\\.'):
         read_record(tmp_path / 'x.json', EconomicArmRecord)
 
 # -------------------------------------------------------------------------------------------------
