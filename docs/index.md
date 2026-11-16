@@ -97,6 +97,11 @@ the reference ([finding][reference]) and the October runs ([finding][geometry-5-
   `euclidean-d16` figures are means over 10 and 5 training seeds. The first reading is one run.
 - **Selection.** Each seed of the nine configurations kept the training epoch that scored best on
   this same validation split. The stub and the first reading selected nothing.
+- **Training length.** All 15 runs of three configurations, `euclidean-d16` among them, used the
+  full 40-epoch budget and kept an epoch from 37 to 39. One reference seed did the same. The finding
+  says that the budget bound those runs, and that their scores "are not converged values". The other
+  five configurations stopped early, after 7 to 11 epochs, and the comparison did not examine why
+  ([finding][geometry-1-the-runs], §1).
 
 No decision has compared the stub with a trained model. The October decision compared the nine
 trained configurations only ([finding][geometry-3-the-decision], §3). The first-reading finding says
@@ -159,6 +164,7 @@ seeds, so no spread across seeds can set the margin. Text→code's own spec, roa
 [design-spec-the-textcode-artifact]: https://github.com/lowmason/naics-embedder/blob/main/specs/naics-artifact-redesign.md#the-textcode-artifact
 [first-reading-4-the-outcome-panel]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/shared-encoder-first-reading.md#4-the-outcome-panel
 [first-reading-5-the-selection-log]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/shared-encoder-first-reading.md#5-the-selection-log
+[geometry-1-the-runs]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/geometry-by-dimension.md#1-the-runs
 [geometry-2-the-arms]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/geometry-by-dimension.md#2-the-arms
 [geometry-3-the-decision]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/geometry-by-dimension.md#3-the-decision
 [geometry-5-the-selection-log]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/geometry-by-dimension.md#5-the-selection-log

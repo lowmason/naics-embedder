@@ -105,6 +105,11 @@ reference ([finding](specs/findings/reference-configuration.md)) and the October
   `euclidean-d16` figures are means over 10 and 5 training seeds. The first reading is one run.
 - **Selection.** Each seed of the nine configurations kept the training epoch that scored best on
   this same validation split. The stub and the first reading selected nothing.
+- **Training length.** All 15 runs of three configurations, `euclidean-d16` among them, used the
+  full 40-epoch budget and kept an epoch from 37 to 39. One reference seed did the same. The
+  finding says that the budget bound those runs, and that their scores "are not converged
+  values". The other five configurations stopped early, after 7 to 11 epochs, and the comparison
+  did not examine why ([finding](specs/findings/geometry-by-dimension.md#1-the-runs), §1).
 
 No decision has compared the stub with a trained model. The October decision compared the nine
 trained configurations only ([finding](specs/findings/geometry-by-dimension.md#3-the-decision),
