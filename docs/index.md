@@ -59,13 +59,12 @@ See [HGCN training](hgcn_training.md).
 ## Results So Far
 
 All nine trained configurations of the October 2026 comparison have a mean score below that of a
-lexical stub with no training. The task is text→code (type 2): rank all 1,012 six-digit codes for a
-short phrase that describes an activity. The test phrases are 4,042 entries of the Census Bureau's
-NAICS 2022 index, for 939 codes, held out from all training text
-([finding][outcome-panel-1-index-entries], §§1–3). They form the validation split of the outcome
-panel, the project's fixed test set for this task. The score is mean reciprocal rank (MRR): the mean
-over queries of 1 / (rank of the correct code). An MRR of 1.0 means that the correct code always
-ranks first.
+lexical stub with no training. The task is text→code (type 2): given a short phrase, rank all 1,012
+six-digit codes. The test phrases are 4,042 entries of the Census Bureau's NAICS 2022 index, for 939
+codes, held out from all training text ([finding][outcome-panel-1-index-entries], §§1–3). They form
+the validation split of the outcome panel, the project's fixed test set for this task. The score is
+mean reciprocal rank (MRR): the mean over queries of 1 / (rank of the correct code). An MRR of 1.0
+means that the correct code always ranks first.
 
 These scores come from the earlier one-embedding design, and they stand as history. The trained
 scores, in date order, and the stub's score:
@@ -77,12 +76,12 @@ scores, in date order, and the stub's score:
 | 2026-10-11 | Adopted: `euclidean-d16`, Euclidean, dimension 16 | 5 | Euclidean | 0.592 (mean) | [geometry §§2–3][geometry-3-the-decision] |
 | 2026-09-24 | Lexical stub: hashed character trigrams, no training | none | cosine | 0.6165 | [outcome panel §5][outcome-panel-5-the-lexical-stub-on-the-validation-split] |
 
-The October comparison trained three geometries, hyperbolic, Euclidean and spherical, each at
-dimension 8, 16 and 32. The reference is its hyperbolic configuration at dimension 16. The spread of
-the reference's ten seeds set the comparison's margins: how far one configuration could fall below
-another and still count as no worse. Each of the nine means is below 0.6165. So is each seed score
-behind them, from the 40 new runs and the reference's ten seeds. The best seed scored 0.5995
-([finding][geometry-2-the-arms], §2).
+The October comparison covered three geometries, hyperbolic, Euclidean and spherical, each at
+dimension 8, 16 and 32. Its hyperbolic configuration at dimension 16 is the reference, which trained
+earlier and was not retrained. The spread of the reference's ten seeds set the comparison's margins:
+how far one configuration could fall below another and still count as no worse. Each of the nine
+means is below 0.6165. So is each seed score behind them, from the 40 new runs and the reference's
+ten seeds. The best seed scored 0.5995 ([finding][geometry-2-the-arms], §2).
 
 The scores share one test, but they differ in other ways. All of them rank the same 1,012 candidate
 codes for the same 4,042 queries, under one frozen assignment of index entries to splits
