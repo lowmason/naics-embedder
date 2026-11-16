@@ -160,10 +160,10 @@ built the ITA pairs. Selection on the ITA validation part also waits for a rule 
 From here, a text→code model must beat the better of the lexical stub and `euclidean-d16` on the
 ITA validation part, by a margin. The project owner ruled this on 2026-11-16
 ([roadmap](specs/naics-artifact-redesign-roadmap.md), the ruling after Decisions). The better of
-the two is text→code's reference, and the score is the headline MRR. The margin is relative: r
-times the reference's MRR, fixed from scores of the reference alone before any candidate is
-scored. The stub has no training seeds, so no spread across seeds can set the margin. Text→code's
-own spec, roadmap Stage 2, sets r.
+the two is the comparator, which the ruling calls text→code's reference. The score is the
+headline MRR. The margin is relative: r times the comparator's MRR, fixed from scores of the
+comparator alone before any candidate is scored. The stub has no training seeds, so no spread
+across seeds can set the margin. Text→code's own spec, roadmap Stage 2, sets r.
 
 ## The Text Model
 
