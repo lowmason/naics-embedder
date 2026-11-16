@@ -41,6 +41,18 @@ not a stage here.
   read or relatedness judging read, the successor spec exists and assigns ITA scoring and
   splitting to text→code's spec. G4 does not block writing or building the scoring on fixtures.
 
+**Text→code's reference (owner ruling, 2026-11-16).** No spec named the comparator that text→code
+must beat on ITA text, so the user was asked. Question: which bar should text→code meet? Ruling,
+the chosen option's label: "Stub or d16, better (Recommended)". The option read:
+
+- Text→code must beat the better of the lexical stub (finding: outcome-panel-splits §5) and
+  `euclidean-d16` (finding: geometry-by-dimension §3) on the ITA validation headline MRR.
+- The margin is relative, r × the reference's MRR. It is fixed from reference reads only, before
+  any candidate read. The stub has no seeds, so a margin from the spread across seeds is
+  undefined.
+
+The ruling leaves r open. Stage 2's spec sets it with the rest of the margin rule.
+
 ## Gap analysis
 
 | Req | Verdict | Evidence | Note |
@@ -152,6 +164,7 @@ qualification (`:560`).
       gate), Req 26, Req 25 (own reference, margins and opening), U24, U25, U27, U28, P3–P5,
       Supersessions (the text→code rows), Verification "One role per table or part", Rollout note
       item 3, Stage 10 (the pair table's schema and copied-text flags, at embedding-data 60068eb).
+      Text→code's reference (owner ruling, 2026-11-16, above Gap analysis).
       Gap closed: Req 28 (the judging panel, on fixtures).
       Consumes: The codebook (bundle 301cce28), from which a six-digit code's ancestors follow.
       The outcome panel (`panels/outcome.py`), reported beside the ITA scores. The selection
