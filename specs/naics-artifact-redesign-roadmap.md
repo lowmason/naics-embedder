@@ -42,16 +42,19 @@ not a stage here.
   splitting to text→code's spec. G4 does not block writing or building the scoring on fixtures.
 
 **Text→code's reference (owner ruling, 2026-11-16).** No spec named the comparator that text→code
-must beat on ITA text, so the user was asked. Question: which bar should text→code meet? Ruling,
-the chosen option's label: "Stub or d16, better (Recommended)". The option read:
+must beat on ITA text, so the user was asked which bar the README should state. The ruling is the
+chosen option's label, "Stub or d16, better (Recommended)". The option's description, quoted as
+given:
 
-- Text→code must beat the better of the lexical stub (finding: outcome-panel-splits §5) and
-  `euclidean-d16` (finding: geometry-by-dimension §3) on the ITA validation headline MRR.
-- The margin is relative, r × the reference's MRR. It is fixed from reference reads only, before
-  any candidate read. The stub has no seeds, so a margin from the spread across seeds is
-  undefined.
+> Proposed ruling: text→code must beat the better of the lexical stub and euclidean-d16 on the ITA
+> validation headline MRR, by a relative margin (r × the reference's MRR) fixed from reference
+> reads only, before any candidate read. The margin is relative because the stub has no seeds, so
+> a seed-spread margin is undefined. I would record the ruling in the roadmap's Stage 2 entry so
+> that the README can link to it.
 
-The ruling leaves r open. Stage 2's spec sets it with the rest of the margin rule.
+The lexical stub is finding: outcome-panel-splits §5, and `euclidean-d16` is finding:
+geometry-by-dimension §3. The ruling leaves r open. Stage 2's spec sets it with the rest of the
+margin rule.
 
 ## Gap analysis
 

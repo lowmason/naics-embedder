@@ -78,14 +78,18 @@ scores, in date order, and the stub's score:
 | 2026-09-24 | Lexical stub: hashed character trigrams, no training | none | cosine | 0.6165 | [outcome panel §5][outcome-panel-5-the-lexical-stub-on-the-validation-split] |
 
 The October comparison trained three geometries, hyperbolic, Euclidean and spherical, each at
-dimension 8, 16 and 32. The reference is its hyperbolic cell at dimension 16, and the spread of its
-ten seeds set the comparison's margins. Each of the nine means is below 0.6165. So is each of the 50
-seed scores behind them, and the best seed scored 0.5995 ([finding][geometry-2-the-arms], §2).
+dimension 8, 16 and 32. The reference is its hyperbolic configuration at dimension 16. The spread of
+the reference's ten seeds set the comparison's margins: how far one configuration could fall below
+another and still count as no worse. Each of the nine means is below 0.6165. So is each seed score
+behind them, from the 40 new runs and the reference's ten seeds. The best seed scored 0.5995
+([finding][geometry-2-the-arms], §2).
 
 The scores share one test, but they differ in other ways. All of them rank the same 1,012 candidate
 codes for the same 4,042 queries, under one frozen assignment of index entries to splits
-([finding][outcome-panel-3-roles-d4], §3). The trained runs log the hash of that assignment with
-each score ([finding][geometry-5-the-selection-log], §5). The differences:
+([finding][outcome-panel-3-roles-d4], §3). The log record of each trained score names that
+assignment by its hash: see the first reading ([finding][first-reading-5-the-selection-log], §5),
+the reference ([finding][reference]) and the October runs ([finding][geometry-5-the-selection-log],
+§5). The differences:
 
 - **Distance.** Each model ranks codes by its own distance: cosine for the stub, Lorentz
   (hyperbolic) distance for the first reading and the reference, and Euclidean distance for
@@ -95,9 +99,9 @@ each score ([finding][geometry-5-the-selection-log], §5). The differences:
 - **Selection.** Each seed of the nine configurations kept the training epoch that scored best on
   this same validation split. The stub and the first reading selected nothing.
 
-No statistical test has compared the stub with a trained model. The October decision compared the
-nine trained configurations only ([finding][geometry-3-the-decision], §3). The first-reading finding
-says that no decision reads the stub's numbers ([finding][first-reading-4-the-outcome-panel], §4).
+No decision has compared the stub with a trained model. The October decision compared the nine
+trained configurations only ([finding][geometry-3-the-decision], §3). The first-reading finding says
+that no decision uses the stub's numbers ([finding][first-reading-4-the-outcome-panel], §4).
 
 The stub is the command `tools outcome-baseline`
 ([finding][outcome-panel-5-the-lexical-stub-on-the-validation-split], §5). It turns each text into
@@ -111,7 +115,7 @@ the Census descriptions file (§§1, 4).
 An index entry that matched another index entry or any code text never became a validation or test
 query. Such entries became examples text or training queries. A match is an occurrence as whole
 words, or a character-trigram Jaccard similarity of at least 0.9 (§2). After the assignment, no
-validation query matched any code text or training query. The finding reads the stub's scores as "a
+validation query matched any code text or training query. The finding calls the stub's scores "a
 floor, not memorization" (§5). Its check compares whole texts. So it misses a query whose words
 appear in another order inside a longer text, or that spans two sentences or two examples entries.
 An audit of unsplit texts found 2 validation queries inside whole descriptions and 2 inside joined
@@ -135,7 +139,7 @@ The approved Q4 spec sets these rules for text→code:
 
 - The ITA descriptions are split into a validation part and a sealed part. Each normalized
   description falls in one part only. The validation part is to select checkpoints and choose among
-  candidates. The sealed part is to be read once, for the final decision.
+  candidates. The sealed part is to be scored once, for the final decision.
 - The headline score leaves out each ITA description that, after normalization, equals an official
   NAICS title or index entry. These copied pairs are reported separately. Each distinct
   employer-and-description pair counts once.
@@ -147,14 +151,15 @@ built the ITA pairs. Selection on the ITA validation part also waits for a rule 
 ([roadmap][roadmap-stages], Stages 4 and 5).
 
 From here, a text→code model must beat the better of the lexical stub and `euclidean-d16` on the ITA
-validation part. The project owner ruled this on 2026-11-16 ([roadmap][roadmap], the ruling after
-Decisions). The better of the two is text→code's reference, and the score is the headline MRR. The
-margin is relative: r times the reference's MRR, fixed from scores of the reference alone before any
-candidate is scored. The stub has no training seeds, so no spread across seeds can set the margin.
-Text→code's own spec, roadmap Stage 2, sets r.
+validation part, by a margin. The project owner ruled this on 2026-11-16 ([roadmap][roadmap], the
+ruling after Decisions). The better of the two is text→code's reference, and the score is the
+headline MRR. The margin is relative: r times the reference's MRR, fixed from scores of the
+reference alone before any candidate is scored. The stub has no training seeds, so no spread across
+seeds can set the margin. Text→code's own spec, roadmap Stage 2, sets r.
 
 [design-spec-the-textcode-artifact]: https://github.com/lowmason/naics-embedder/blob/main/specs/naics-artifact-redesign.md#the-textcode-artifact
 [first-reading-4-the-outcome-panel]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/shared-encoder-first-reading.md#4-the-outcome-panel
+[first-reading-5-the-selection-log]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/shared-encoder-first-reading.md#5-the-selection-log
 [geometry-2-the-arms]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/geometry-by-dimension.md#2-the-arms
 [geometry-3-the-decision]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/geometry-by-dimension.md#3-the-decision
 [geometry-5-the-selection-log]: https://github.com/lowmason/naics-embedder/blob/main/specs/findings/geometry-by-dimension.md#5-the-selection-log
