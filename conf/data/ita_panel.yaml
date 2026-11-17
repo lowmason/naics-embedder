@@ -1,0 +1,15 @@
+# The text-to-code ITA panel (redesign roadmap Stage 2): its name, the split rule's version and salt,
+# and the relative margin r
+
+panel: ita_text
+
+# The split rule's version, part of the split fingerprint
+rule_version: 1
+
+# The salt was drawn once at plan 17, with secrets.token_hex(16), and never changes: every opening
+# of the sealed part is keyed on the split fingerprint, which names the salt, so a new salt would
+# move description keys between the validation part and the sealed part (spec 4.2, 4.4)
+salt: '9986637c5a4468938b7bd5c4f1e8a4cd'
+
+# U38: delta = r times the chosen reference's ITA validation headline MRR
+relative_margin: 0.05
