@@ -28,7 +28,7 @@ the part. Mojibake, company-fallback and conflict flags only add to the counts.
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Sequence, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 import polars as pl
 import torch
@@ -234,6 +234,9 @@ class ItaResult:
     '''
     A part's ITA scores at three grains and in four reports.
 
+    Every mean is correctly rounded and independent of row order, so the same scores always give
+    the same values, bit for bit.
+
     Attributes:
         per_pair: One row per pair, in the scorer's order: the scorer's columns, then
             ``description_key`` and ``copied``. The decision's bootstrap resamples it by
@@ -257,8 +260,40 @@ class ItaResult:
     phrasing: Dict[str, Union[int, float, str, None]]
     counts: Dict[str, int]
 
-def _metric_means() -> List[pl.Expr]:
-    return [pl.col(column).mean().alias(name) for name, column in _METRIC_COLUMNS.items()]
+# The distinct per-pair columns the metrics average: ``top1`` and ``hit_at_1`` share one
+_METRIC_SOURCES = list(dict.fromkeys(_METRIC_COLUMNS.values()))
+
+def _mean(values: Sequence[float]) -> Optional[float]:
+    '''
+    The correctly rounded mean of the values, whatever their order, or None when there are none.
+
+    A float sum depends on its order and, in Polars, on how the column is split into chunks, which a
+    parallel ``group_by`` varies from one run to the next. ``math.fsum`` has one result for the same
+    values, so the same scores always give the same report, bit for bit.
+    '''
+
+    return math.fsum(values) / len(values) if values else None
+
+def _metric_means(frame: pl.DataFrame) -> Dict[str, Optional[float]]:
+    return {
+        name: _mean(frame.get_column(column).to_list())
+        for name, column in _METRIC_COLUMNS.items()
+    }
+
+def _group_values(frame: pl.DataFrame, key: str) -> pl.DataFrame:
+    '''One row per ``key``: ``n_pairs`` and, for each source column, the group's values as a list.'''
+
+    return frame.group_by(key).agg(
+        pl.len().cast(pl.Int64).alias('n_pairs'), *(pl.col(column) for column in _METRIC_SOURCES)
+    )
+
+def _group_means(groups: pl.DataFrame) -> Dict[str, List[Optional[float]]]:
+    '''Each metric's mean within each group of ``_group_values``, in the groups' order.'''
+
+    return {
+        name: [_mean(values) for values in groups.get_column(column).to_list()]
+        for name, column in _METRIC_COLUMNS.items()
+    }
 
 def _check_summary_inputs(scores: pl.DataFrame, pairs: pl.DataFrame) -> None:
     for label, frame in (('scores', scores), ('pairs', pairs)):
@@ -276,6 +311,9 @@ def _check_summary_inputs(scores: pl.DataFrame, pairs: pl.DataFrame) -> None:
     for column in ('description_key', *_COUNT_FLAGS.values()):
         if pairs.get_column(column).null_count():
             raise ValueError(f'pairs have a null {column!r}')
+    for column in _METRIC_SOURCES:
+        if scores.get_column(column).null_count():
+            raise ValueError(f'scores have a null {column!r}')
 
 def summarize_ita(scores: pl.DataFrame, pairs: pl.DataFrame, distance: str) -> ItaResult:
     '''
@@ -292,7 +330,7 @@ def summarize_ita(scores: pl.DataFrame, pairs: pl.DataFrame, distance: str) -> I
 
     Raises:
         ValueError: When a pair id repeats in either frame, the two frames' pair ids differ, a
-            column the reports read is null in ``pairs``, or the part has no pair that is not
+            column the reports read is null in either frame, or the part has no pair that is not
             copied, so no headline pair.
     '''
 
@@ -310,26 +348,28 @@ def summarize_ita(scores: pl.DataFrame, pairs: pl.DataFrame, distance: str) -> I
         )
 
     def report(frame: pl.DataFrame) -> Dict[str, Union[int, float, str, None]]:
-        return {
-            'n_pairs': frame.height,
-            'distance': distance,
-            **frame.select(_metric_means()).row(0, named=True),
-        }
+        return {'n_pairs': frame.height, 'distance': distance, **_metric_means(frame)}
 
-    groups = headline_pairs.group_by('description_key').agg(_metric_means())
-    # top1 and hit_at_1 average one column, so the columns are named once
-    metric_columns = list(dict.fromkeys(_METRIC_COLUMNS.values()))
-    # yapf: disable
-    per_code = (
-        headline_pairs
-        .select('codes', *metric_columns)
-        .explode('codes')
-        .rename({'codes': 'code'})
-        .group_by('code')
-        .agg(pl.len().cast(pl.Int64).alias('n_pairs'), *_metric_means())
-        .sort('code')
+    groups = _group_values(headline_pairs, 'description_key')
+    pair_codes = (
+        headline_pairs.select('codes', *_METRIC_SOURCES).explode('codes').rename({'codes': 'code'})
     )
-    # yapf: enable
+    by_code = _group_values(pair_codes, 'code').sort('code')
+    per_code = pl.DataFrame(
+        {
+            'code': by_code.get_column('code'),
+            'n_pairs': by_code.get_column('n_pairs'),
+            **_group_means(by_code),
+        },
+        schema={
+            'code': pl.Utf8,
+            'n_pairs': pl.Int64,
+            **{
+                name: pl.Float64
+                for name in SUMMARY_METRICS
+            },
+        },
+    )
     counts = {
         'n_pairs': pairs.height,
         'n_groups': pairs.get_column('description_key').n_unique(),
@@ -345,7 +385,10 @@ def summarize_ita(scores: pl.DataFrame, pairs: pl.DataFrame, distance: str) -> I
         copied=report(per_pair.filter(pl.col('copied'))),
         phrasing={
             'n_groups': groups.height,
-            **groups.select(pl.col(name).mean() for name in SUMMARY_METRICS).row(0, named=True),
+            **{
+                name: _mean(means)
+                for name, means in _group_means(groups).items()
+            },
         },
         counts=counts,
     )

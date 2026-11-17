@@ -932,6 +932,23 @@ def test_a_group_with_different_codes_keeps_every_pair():
     assert summary.phrasing['mrr'] == pytest.approx(((1 + 1 / 3) / 2 + 1) / 2)
     assert summary.headline['n_pairs'] == 3
 
+def test_the_phrasing_report_is_bit_identical_every_time_the_same_scores_are_read():
+    # The mean over groups adds many floats, and a sum depends on its order. Four thousand groups
+    # with reciprocal ranks that no two sums share make a change of order show in the last bit
+    specs = [
+        {
+            'key': f'group {index:04d}',
+            'rank': (index * 7919) % 997 + 1
+        } for index in range(4000)
+    ]
+    scores, pairs = _synthetic(specs)
+
+    reads = [summarize_ita(scores, pairs, 'euclidean').phrasing for _ in range(20)]
+
+    assert all(read == reads[0] for read in reads)
+    assert reads[0]['n_groups'] == 4000
+    assert reads[0]['mrr'] == pytest.approx(math.fsum(1 / spec['rank'] for spec in specs) / 4000)
+
 def test_per_code_means_each_metric_over_a_codes_non_copied_pairs():
     # 311111 is reported by p00 (rank 1), p01 (rank 3) and p02 (rank 12, which also reports
     # 111110); p03 reports 111110 and is copied, and p04 reports 236220 and is copied
@@ -1127,3 +1144,18 @@ def test_a_null_in_a_pair_column_the_reports_read_is_refused(column):
 
     with pytest.raises(ValueError, match=f'null.*{column}'):
         summarize_ita(SCORES, pairs, 'cosine')
+
+@pytest.mark.parametrize(
+    'column',
+    [
+        name for name in EXPECTED_SCHEMA
+        if name not in ('pair_id', 'codes', 'top1_code') and not name.startswith('rank')
+    ],
+)
+def test_a_null_in_a_score_column_the_reports_read_is_refused(column):
+    scores = SCORES.with_columns(
+        pl.when(pl.col('pair_id') == 'p01').then(None).otherwise(pl.col(column)).alias(column)
+    )
+
+    with pytest.raises(ValueError, match=f'null.*{column}'):
+        summarize_ita(scores, PANEL_PAIRS, 'cosine')
