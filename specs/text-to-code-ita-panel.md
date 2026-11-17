@@ -1,6 +1,6 @@
 # Text→code ITA panel — Design Spec
 
-**Status:** DRAFT (2026-11-17), for the user's review. Written in a brainstorming session. A
+**Status:** APPROVED (2026-11-17, U41). Written in a brainstorming session. A
 builder check raised three points, none of them the user's to rule. They are folded into §4.1
 (the node-id level token), §4.4 and §4.5 (margin-first in code) and §4.5 (the reference's
 checkpoints).
@@ -42,6 +42,7 @@ specs. For a multiple-choice question, the ruling is the user's words as given.
 | U38 | How large is r, the relative margin? Four calls were played back with it: copied means the pair-level `_any` flags; a salted hash split of `description_key`, 50/50; the outcome test split stays sealed at Stage 12; δ = r × the reference's ITA validation headline MRR, fixed from reference reads only, with description groups as the resampling unit | "r = 0.05, your calls stand" |
 | U39 | How is the panel built: a separate ITA panel, a shared base class with `OutcomePanel`, or one generalized scorer? | "A, separate ITA panel" |
 | U40 | The existing rule makes δ a non-inferiority margin, which never binds on one panel. Should text→code beat the reference by δ, or use the existing rule? | "Beat by δ" |
+| U41 | Do you approve the committed spec? | "Approve the spec" |
 
 ## 1. Intent
 
