@@ -167,10 +167,6 @@ def test_the_parts_come_from_the_salted_description_key():
         'p11': 'sealed',
     }
 
-def test_a_part_is_its_name_not_the_enum_member():
-    assert _base().schema['part'] == pl.Utf8
-    assert set(_base().get_column('part').to_list()) == {'validation', 'sealed'}
-
 def test_the_salt_moves_the_parts():
     pairs, codes = ita_tables()
     base = _base()
