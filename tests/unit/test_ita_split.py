@@ -10,6 +10,9 @@ Stage 10's schemas, copied verbatim, and against the brief's table of base pairs
 import hashlib
 import json
 import math
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import polars as pl
@@ -54,6 +57,29 @@ GOLDEN = {
 # Pinned from a hand computation with hashlib, so each is also a key whose encoding matters: UTF-8
 # bytes, not UTF-16, UTF-32 or Latin-1 ones
 ENCODING_KEYS = {'über cleaners': 'sealed', 'señor taco': 'sealed', '寿司店': 'validation'}
+
+# The key is hashed as given: each differs in its part from the same key lower-cased or stripped
+UNNORMALIZED_KEYS = {
+    'Soybean farm': 'validation',
+    'Canola growers': 'validation',
+    'General Contractor': 'sealed',
+    'sawmill ': 'validation',
+    ' general contractor': 'sealed',
+    'we make dog food ': 'sealed',
+}
+
+# Run in another process: print each key's part as 0 or 1, from the module's file alone
+PART_IN_ANOTHER_PROCESS = """
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location('ita_split', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules['ita_split'] = module
+spec.loader.exec_module(module)
+parts = [module.split_part(key, sys.argv[2]) is module.ItaPart.SEALED for key in sys.argv[3:]]
+print(''.join('1' if sealed else '0' for sealed in parts))
+"""
 
 # Stage 10's ``ita_text_pairs.parquet`` and ``ita_text_pair_codes.parquet`` (embedding-data spec at
 # ec6fb29), every column in its order
@@ -227,6 +253,29 @@ def test_split_part_hashes_a_keys_utf8_bytes(key, part):
 
 def test_split_part_reads_an_empty_key():
     assert split_part('', SALT) is ItaPart.VALIDATION
+
+@pytest.mark.parametrize('key, part', sorted(UNNORMALIZED_KEYS.items()))
+def test_split_part_hashes_the_key_as_given(key, part):
+    assert split_part(key, SALT) is ItaPart(part)
+
+@pytest.mark.parametrize('seed', ['1', '2'])
+def test_a_key_falls_in_the_same_part_in_every_process(seed):
+    # spec 4.2: the part depends on the key alone, so a rebuild in a new process keeps old keys in
+    # their old parts. Python's built-in hash of a string differs from one process to the next.
+    keys = [f'key {number}' for number in range(40)] + list(GOLDEN) + list(UNNORMALIZED_KEYS)
+    expected = ''.join('1' if split_part(key, SALT) is ItaPart.SEALED else '0' for key in keys)
+    source = ROOT / 'src/naics_embedder/panels/ita_split.py'
+    done = subprocess.run(
+        [sys.executable, '-c', PART_IN_ANOTHER_PROCESS,
+         str(source), SALT, *keys],
+        env={
+            **os.environ, 'PYTHONHASHSEED': seed
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert done.stdout.strip() == expected
 
 def test_the_salt_is_separated_from_the_key_by_a_null_byte():
     # 'aa' + 'b' + key and 'aab' + key would hash the same bytes with no separator
