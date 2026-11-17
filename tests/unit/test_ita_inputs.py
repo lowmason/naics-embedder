@@ -113,6 +113,13 @@ def test_the_panel_pairs_come_in_the_panel_pair_schema():
     assert frame.columns == list(PANEL_PAIR_SCHEMA)
     assert dict(frame.schema) == dict(PANEL_PAIR_SCHEMA)
 
+def test_no_headline_pair_gives_an_empty_frame_in_the_panel_pair_schema():
+    pairs, codes = ita_tables()
+    frame = _panel(pairs.with_columns(pl.lit(False).alias('flag_headline')), codes)
+    assert frame.is_empty()
+    assert frame.columns == list(PANEL_PAIR_SCHEMA)
+    assert dict(frame.schema) == dict(PANEL_PAIR_SCHEMA)
+
 def test_the_columns_read_are_stage_10s_columns_with_its_types():
     assert list(PAIR_COLUMNS) == [
         'pair_id', 'description_key', 'representative_string', 'flag_headline',
