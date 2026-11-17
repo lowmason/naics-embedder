@@ -73,9 +73,10 @@ Every task's requirements include this section.
 
 ## Decisions
 
-None.
+- **O1** (owner, plan review, 2026-11-17): "Approve the plan": the plan as written, P1–P7
+  included. Applied in: the whole plan.
 
-The plan's own calls, for review:
+The plan's own calls, approved by O1:
 
 - **P1** (plan, 2026-11-17): the split hashes `f'{salt}\x00{description_key}'` in UTF-8 with
   SHA-256 and reads the first 8 bytes big-endian, modulo 2. The rule fingerprint is the SHA-256 of
