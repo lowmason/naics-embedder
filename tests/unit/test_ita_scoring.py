@@ -475,6 +475,45 @@ def test_points_on_mps_are_scored_in_float64_on_the_cpu():
 CANDIDATES = ['111110', '111120', '111211', '211111']
 CANDIDATE_POINTS = [[0.0, 0.0], [1.0, 0.0], [0.0, 3.0], [5.0, 5.0]]
 
+def _refusal_arguments(**overrides):
+    '''Arguments of one valid pair, over four candidates, with the ones given replaced.'''
+
+    return {
+        'query_points': torch.zeros(1, 2),
+        'reported_codes': [['111110']],
+        'candidate_points': torch.tensor(CANDIDATE_POINTS),
+        'candidate_codes': CANDIDATES,
+        'pair_ids': ['p01'],
+        'distance': 'euclidean',
+        **overrides,
+    }
+
+def test_a_code_that_is_not_a_candidate_or_an_empty_code_list_is_refused():
+    # An empty list of reported codes, on its own and in the second of two pairs
+    with pytest.raises(ValueError, match='1 pairs report no code'):
+        score_shortlist(**_refusal_arguments(reported_codes=[[]]))
+    with pytest.raises(ValueError, match=r"report no code, e.g. \['p02'\]"):
+        score_shortlist(
+            **_refusal_arguments(
+                query_points=torch.zeros(2, 2),
+                reported_codes=[['111110'], []],
+                pair_ids=['p01', 'p02'],
+            )
+        )
+    # A code that is not a candidate, alone, beside a candidate and in the second of two pairs
+    with pytest.raises(ValueError, match=r"1 reported codes are not candidates, e.g. \['112130'\]"):
+        score_shortlist(**_refusal_arguments(reported_codes=[['112130']]))
+    with pytest.raises(ValueError, match=r"1 reported codes are not candidates, e.g. \['112130'\]"):
+        score_shortlist(**_refusal_arguments(reported_codes=[['111110', '112130']]))
+    with pytest.raises(ValueError, match=r"1 reported codes are not candidates, e.g. \['112130'\]"):
+        score_shortlist(
+            **_refusal_arguments(
+                query_points=torch.zeros(2, 2),
+                reported_codes=[['111110'], ['112130']],
+                pair_ids=['p01', 'p02'],
+            )
+        )
+
 @pytest.mark.parametrize(
     ('kwargs', 'message'),
     [
@@ -533,15 +572,5 @@ CANDIDATE_POINTS = [[0.0, 0.0], [1.0, 0.0], [0.0, 3.0], [5.0, 5.0]]
     ],
 )
 def test_inconsistent_inputs_fail_closed(kwargs, message):
-    arguments = {
-        'query_points': torch.zeros(1, 2),
-        'reported_codes': [['111110']],
-        'candidate_points': torch.tensor(CANDIDATE_POINTS),
-        'candidate_codes': CANDIDATES,
-        'pair_ids': ['p01'],
-        'distance': 'euclidean',
-        **kwargs,
-    }
-
     with pytest.raises(ValueError, match=message):
-        score_shortlist(**arguments)
+        score_shortlist(**_refusal_arguments(**kwargs))
