@@ -191,7 +191,8 @@ def test_split_fingerprint_is_pinned():
     )
 
 def test_committed_settings_hold_the_planned_values():
-    settings = load_ita_settings('conf/data/ita_panel.yaml')
+    # ROOT = Path(__file__).resolve().parents[2], as test_economic_candidates.py resolves it
+    settings = load_ita_settings(ROOT / 'conf/data/ita_panel.yaml')
     assert settings == ITA_SETTINGS
 
 def test_each_description_key_falls_in_one_part():
@@ -223,7 +224,7 @@ def test_fixture_tables_carry_every_stage_10_column():
 ```yaml
 panel: ita_text
 rule_version: 1
-salt: 9986637c5a4468938b7bd5c4f1e8a4cd
+salt: '9986637c5a4468938b7bd5c4f1e8a4cd'
 relative_margin: 0.05
 ```
 
@@ -421,8 +422,11 @@ mean. `counts`: `n_pairs`, `n_groups`, `n_copied`, `n_conflict`, `n_mojibake`,
 `n_company_fallback` over the part's panel pairs. A part with no non-copied pair raises
 `ValueError('… has no headline pair …')`.
 
-- [ ] **Step 1: Write the failing tests.** Score the fixture's validation pairs with
-  `AssignedStubEncoder` and cosine (p03 ranks 8, the others 1):
+- [ ] **Step 1: Write the failing tests.** Build the result without `ItaPanel` (Task 5): take
+  `panel_pairs(*ita_tables(), ITA_CANDIDATES, ITA_SETTINGS.salt)` filtered to `part ==
+  'validation'`, encode its queries and `ITA_CANDIDATES` with `AssignedStubEncoder`, call
+  `score_shortlist(..., distance='cosine')`, then `summarize_ita(scores, pairs, 'cosine')`.
+  p03 ranks 8 and the others 1:
 
 ```python
 def test_the_headline_excludes_copied_pairs_and_counts_each_pair_once():
@@ -531,8 +535,11 @@ def test_ita_reads_stay_out_of_another_runs_log_records():
     # for run id 'stage7/x' returns only that run's records (an outcome read logged with it)
 
 def test_from_files_reads_the_tables_and_the_bundle_codebook():
-    # write_ita_tables + the reference fixture bundle (tests/fixtures/supervision): the panel's
-    # candidates are the bundle's six-digit codes; build the fixture rows on codes it holds
+    # the generated_bundle fixture (tests/fixtures/supervision.py), loaded as
+    # test_outcome_panel.py's from_bundle test does. Its six-digit codes are 111111, 111112,
+    # 111113, 222222 and 333333. Write ita_tables(replace_codes=...) with p04's basis rows on
+    # 111111 and 111112 and every other headline pair's single basis row on 111111.
+    assert panel.candidates == ('111111', '111112', '111113', '222222', '333333')
 ```
 
 - [ ] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_panel.py -q`.
@@ -719,7 +726,8 @@ git commit -m "feat(decision): fix text→code's margin from reference reads, ch
   sentence each under "Monitor, Epoch Summary and Selection" (the ITA panel and its sealed part)
   and "Testing and Validation" (the five test files). Recount: `find src -name '*.py' | wc -l`,
   `ls tests/unit/test_*.py | wc -l`, and `uv run pytest --collect-only -q -q | tail -1`; write
-  those numbers where `CLAUDE.md` states them.
+  those numbers where `CLAUDE.md` states them (at `4fa2857` the first two give 124 and 107). Update
+  `tests/README.md` too where it states the same counts or lists test files.
 
 - [ ] **Step 3: Check the untouched seams and the lock.** Run:
 
