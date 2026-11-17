@@ -10,6 +10,7 @@ first. Each test builds its tables from ``tests/fixtures/ita.py`` and writes und
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Sequence
 
 import polars as pl
@@ -462,3 +463,27 @@ def test_from_files_reads_the_tables_and_the_bundle_codebook(generated_bundle, t
         ['111111', '111112']
     ]
     assert not panel.log.path.exists()
+
+class _CodebookBundle:
+    '''A bundle whose only member is a codebook, as ``from_files`` reads it.'''
+
+    def __init__(self, codebook: Path):
+        self.codebook = codebook
+
+    def artifact_path(self, name: str) -> Path:
+        assert name == 'codebook'
+        return self.codebook
+
+def test_from_files_takes_only_the_codebooks_six_digit_codes(tmp_path):
+    codebook = tmp_path / 'codebook.parquet'
+    coarser = ['11', '111', '1111', '11111', '21', '31-33']
+    pl.DataFrame({'code': [*coarser, *ITA_CANDIDATES[::-1]]}).write_parquet(codebook)
+    pairs_path, codes_path = write_ita_tables(tmp_path, *ita_tables())
+    settings_path = tmp_path / 'ita_panel.yaml'
+    settings_path.write_text(json.dumps(ITA_SETTINGS.model_dump()), encoding='utf-8')
+
+    panel = ItaPanel.from_files(
+        pairs_path, codes_path, _CodebookBundle(codebook), settings_path, tmp_path / 'log.jsonl'
+    )
+
+    assert panel.candidates == ITA_CANDIDATES
