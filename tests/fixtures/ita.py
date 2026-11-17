@@ -1,14 +1,16 @@
 '''
 Stage 10's two ITA tables on a miniature panel, and a stub arm that decodes by assignment (plan 17).
 
-``ita_pairs`` and ``ita_pair_codes`` are built with the exact column names, order and dtypes of
-embedding-data's spec (commit ec6fb29), copied into ``ITA_PAIRS_SCHEMA`` and
+``ita_tables`` builds the pair table and the pair-code table with the exact column names, order
+and dtypes of embedding-data's spec (commit ec6fb29), copied into ``ITA_PAIRS_SCHEMA`` and
 ``ITA_PAIR_CODES_SCHEMA``. The base fixture has eleven pairs over the eight codes of
 ``ITA_CANDIDATES``: copied pairs, a conflict pair, a company-fallback pair, a mojibake pair, two
 employers with one description (p01 and p02), a pair that reports one node under two vintages and a
-2017 crosswalked row that asserts no node (p01), and a pair with ``flag_headline`` false (p06). The
-salt of ``ITA_SETTINGS`` puts p01 through p07 in the validation part and p08 through p11 in the
-sealed part.
+2017 crosswalked row that asserts no node and sits on a code outside the candidates (p01), and a
+pair with ``flag_headline`` false (p06). A node id of another level on a reported row, and a
+reported code outside the candidates, are refused by the panel, so the base holds neither on a
+reported row: ``replace_codes`` builds them. The salt of ``ITA_SETTINGS`` puts p01 through p07 in the validation
+part and p08 through p11 in the sealed part.
 
 A row an extra argument adds, or a replacement ``replace_codes`` gives, is completed with neutral
 values: false flags, zero counts, empty lists and null codes and years. Nothing here reads

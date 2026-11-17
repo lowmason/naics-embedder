@@ -474,6 +474,30 @@ def test_replace_codes_swaps_one_pairs_rows_and_leaves_the_rest():
     assert codes.filter(pl.col('pair_id') != 'p03').equals(base.filter(pl.col('pair_id') != 'p03'))
     assert dict(codes.schema) == ITA_PAIR_CODES_SCHEMA
 
+def test_the_fixture_builds_a_node_of_another_level_and_a_code_outside_the_candidates():
+    # spec 4.1 refuses both on a reported row, so the base holds neither: a test builds them
+    _, base = ita_tables()
+    assert set(base.get_column('naics_code')) - set(ITA_CANDIDATES) == {'311119'}
+    assert base.filter(pl.col('naics_code') == '311119'
+                       ).get_column('flag_headline_basis').to_list() == [False]
+    other = 'naics:2022:industry:517112'
+    _, codes = ita_tables(
+        replace_codes={
+            'p03': [
+                {
+                    'naics_code': '999999',
+                    'naics_2022_node_id': other,
+                    'flag_headline_basis': True
+                }
+            ]
+        }
+    )
+    row = codes.filter(pl.col('pair_id') == 'p03').row(0, named=True)
+    assert (row['naics_code'], row['naics_2022_node_id'], row['flag_headline_basis']) == (
+        '999999', other, True
+    )
+    assert dict(codes.schema) == ITA_PAIR_CODES_SCHEMA
+
 def test_replace_codes_names_the_pair_that_does_not_exist():
     with pytest.raises(ValueError, match='p99'):
         ita_tables(replace_codes={'p99': []})
