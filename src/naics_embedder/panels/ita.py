@@ -13,18 +13,46 @@ Inputs
     another dtype, a repeated pair, a null in a column read, a node id of another system, vintage
     or level, a code outside the candidates, a headline pair with no reported code, and a conflict
     flag that disagrees with the reported codes.
+
+Panel
+    ``ItaPanel`` mirrors ``OutcomePanel`` under its own panel name, ``ita_text``, and shares no
+    class with it. Every read of a part appends a ``read`` record to the selection log before any
+    query is encoded. The sealed part is read only after ``open_sealed`` on the same panel object.
+    Openings are keyed on the split fingerprint, which a rebuilt pair table does not change, so a
+    second opening needs a stated reason and is logged as ``reopen``. The data fingerprint names
+    what a read scores: each panel pair's id, query, reported codes and copied flag, and the
+    candidates. Computing it is not a read.
 '''
 
 # -------------------------------------------------------------------------------------------------
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import hashlib
+import json
 import re
-from typing import Dict, List, Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import polars as pl
 
-from naics_embedder.panels.ita_split import split_part
+from naics_embedder.panels.decoding import resolve_distance
+from naics_embedder.panels.ita_scoring import ItaResult, score_shortlist, summarize_ita
+from naics_embedder.panels.ita_split import (
+    ITA_PANEL,
+    ItaPanelSettings,
+    ItaPart,
+    load_ita_settings,
+    split_fingerprint,
+    split_part,
+)
+from naics_embedder.panels.outcome import (
+    QueryCodeEncoder,
+    SealedSplitError,
+    SplitAlreadyOpenedError,
+)
+from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog, merge_read_detail
+from naics_embedder.supervision.artifacts import ValidatedSupervisionBundle
 
 # -------------------------------------------------------------------------------------------------
 # Inputs
@@ -201,3 +229,244 @@ def panel_pairs(
             }
         )
     return pl.DataFrame(panel, schema=PANEL_PAIR_SCHEMA)
+
+# -------------------------------------------------------------------------------------------------
+# Panel
+# -------------------------------------------------------------------------------------------------
+
+# The roles a caller's read may name: a reference arm, or a candidate judged against one (P5)
+READ_ROLES = ('reference', 'candidate')
+
+# The distance an encoder without a ``distance`` attribute is read under: the stub's (P4)
+DEFAULT_DISTANCE = 'cosine'
+
+class ItaPanel:
+    '''
+    The ITA pairs in their two parts, the six-digit candidates, and the log every read goes to.
+
+    Args:
+        pairs: ``ita_text_pairs``.
+        pair_codes: ``ita_text_pair_codes``.
+        candidates: The six-digit codes a query is ranked over.
+        settings: The panel's settings, ``conf/data/ita_panel.yaml``.
+        log: The selection log.
+
+    Attributes:
+        pairs: The panel pairs (``panel_pairs``), sorted by ``pair_id``.
+        candidates: The candidates, sorted.
+        settings: The panel's settings.
+        log: The selection log.
+        fingerprint: The split fingerprint, which keys the sealed part's openings.
+
+    Raises:
+        ValueError: When the candidates are not distinct six-digit codes, or ``panel_pairs``
+            refuses the tables. Nothing is logged.
+    '''
+
+    def __init__(
+        self,
+        pairs: pl.DataFrame,
+        pair_codes: pl.DataFrame,
+        candidates: Sequence[str],
+        settings: ItaPanelSettings,
+        log: SelectionLog,
+    ):
+        candidates = [str(code) for code in candidates]
+        if len(set(candidates)) != len(candidates) or any(
+            not CODE_PATTERN.fullmatch(code) for code in candidates
+        ):
+            raise ValueError('candidates must be distinct six-digit codes')
+        self.pairs = panel_pairs(pairs, pair_codes, candidates, settings.salt)
+        self.candidates: Tuple[str, ...] = tuple(sorted(candidates))
+        self.settings = settings
+        self.log = log
+        self.fingerprint = split_fingerprint(settings)
+        self._sealed_open = False
+
+    @classmethod
+    def from_files(
+        cls,
+        pairs_parquet: Union[str, Path],
+        pair_codes_parquet: Union[str, Path],
+        bundle: ValidatedSupervisionBundle,
+        settings_path: Union[str, Path],
+        log_path: Union[str, Path],
+    ) -> 'ItaPanel':
+        '''
+        The panel from Stage 10's two tables and a validated bundle's codebook.
+
+        Args:
+            pairs_parquet: ``ita_text_pairs.parquet``.
+            pair_codes_parquet: ``ita_text_pair_codes.parquet``.
+            bundle: The supervision bundle whose codebook's six-digit codes are the candidates.
+            settings_path: The panel's settings file, ``conf/data/ita_panel.yaml``.
+            log_path: The selection log's file.
+
+        Returns:
+            The panel.
+        '''
+
+        codebook = pl.read_parquet(bundle.artifact_path('codebook'))
+        candidates = codebook.filter(pl.col('code').str.len_chars() == 6).get_column('code')
+        return cls(
+            pl.read_parquet(pairs_parquet),
+            pl.read_parquet(pair_codes_parquet),
+            candidates.to_list(),
+            load_ita_settings(settings_path),
+            SelectionLog(Path(log_path)),
+        )
+
+    def data_fingerprint(self, part: Union[ItaPart, str]) -> str:
+        '''
+        SHA-256 of what a read of the part scores.
+
+        The payload is each panel pair's ``pair_id``, query, reported codes and copied flag, in
+        ``pair_id`` order, and the candidates, as canonical JSON. ``fingerprint`` names the split
+        alone, so two panels can share it and score other pairs. This returns no rows, so it is
+        not a read and logs nothing, even for the sealed part.
+
+        Args:
+            part: ``validation`` or ``sealed``.
+
+        Returns:
+            The hexadecimal digest.
+        '''
+
+        rows = self._part(ItaPart(part)
+                          ).sort('pair_id').select('pair_id', 'query', 'codes', 'copied').rows()
+        payload = {
+            'pairs': [list(row) for row in rows],
+            'candidates': list(self.candidates),
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+        return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+    def open_sealed(self, purpose: str, *, reopen_reason: Optional[str] = None) -> None:
+        '''
+        Open the sealed part for this panel object, logging the opening.
+
+        Args:
+            purpose: Why the part is opened.
+            reopen_reason: Why it is opened again, needed when the log already records an opening
+                under the split fingerprint.
+
+        Raises:
+            SplitAlreadyOpenedError: If the log already records an opening of this split and no
+                non-blank ``reopen_reason`` is given.
+        '''
+
+        prior = self.log.openings(ITA_PANEL, self.fingerprint)
+        reason = (reopen_reason or '').strip()
+        if prior and not reason:
+            first = prior[0]
+            raise SplitAlreadyOpenedError(
+                f'the ITA sealed part was opened at {first["time"]} for {first["purpose"]!r}; '
+                f'opening it again needs reopen_reason'
+            )
+        self.log.append(
+            SelectionEvent.REOPEN if prior else SelectionEvent.OPEN,
+            panel=ITA_PANEL,
+            split=ItaPart.SEALED.value,
+            purpose=purpose,
+            fingerprint=self.fingerprint,
+            n_queries=self._part(ItaPart.SEALED).height,
+            detail={'reason': reason} if reason else None,
+        )
+        self._sealed_open = True
+
+    def score(
+        self,
+        encoder: QueryCodeEncoder,
+        part: Union[ItaPart, str],
+        purpose: str,
+        detail: Optional[Mapping[str, Any]] = None,
+    ) -> ItaResult:
+        '''
+        Rank every candidate for each of the part's queries with the encoder, logging the read.
+
+        Args:
+            encoder: The arm: queries and codes in one space. Its ``distance`` attribute names the
+                distance it is read under; without one, cosine.
+            part: ``validation`` or ``sealed``.
+            purpose: Why the part is read.
+            detail: The caller's detail joined to the read's logged detail: the arm (``arm``), its
+                seed, its role in ``READ_ROLES`` (``role``) and the run (``run``).
+
+        Returns:
+            The part's ``ItaResult``. ``score_logged`` also returns the record the read logged.
+        '''
+
+        result, _ = self.score_logged(encoder, part, purpose, detail=detail)
+        return result
+
+    def score_logged(
+        self,
+        encoder: QueryCodeEncoder,
+        part: Union[ItaPart, str],
+        purpose: str,
+        detail: Optional[Mapping[str, Any]] = None,
+    ) -> Tuple[ItaResult, Dict[str, Any]]:
+        '''
+        ``score``, also returning the record the read appended to the selection log.
+
+        The refusals come first and log nothing. The record is then appended before any query is
+        encoded, so a read that fails while it scores is logged all the same. Its detail holds the
+        encoder's type name, the distance's name and the part's data fingerprint, joined with the
+        caller's ``detail``.
+
+        Args:
+            encoder: The arm: queries and codes in one space. Its ``distance`` attribute names the
+                distance it is read under; without one, cosine.
+            part: ``validation`` or ``sealed``.
+            purpose: Why the part is read.
+            detail: The caller's detail: the arm (``arm``), its seed, its role in ``READ_ROLES``
+                (``role``) and the run (``run``). A missing role is allowed.
+
+        Returns:
+            The part's ``ItaResult``, and the read's record as the log appended it.
+
+        Raises:
+            ValueError: When the part is neither ``validation`` nor ``sealed``, ``detail`` names a
+                role outside ``READ_ROLES`` or a key the panel logs itself.
+            SealedSplitError: When the part is sealed and this panel object has not opened it.
+        '''
+
+        part = ItaPart(part)
+        if detail is not None and 'role' in detail and detail['role'] not in READ_ROLES:
+            raise ValueError(
+                f'a read\'s role must be one of {list(READ_ROLES)}, not {detail["role"]!r}'
+            )
+        if part is ItaPart.SEALED and not self._sealed_open:
+            raise SealedSplitError(
+                'the ITA sealed part is sealed: call open_sealed(purpose) first, which is logged'
+            )
+        distance = getattr(encoder, 'distance', DEFAULT_DISTANCE)
+        name, _ = resolve_distance(distance)
+        logged = {
+            'encoder': type(encoder).__name__,
+            'distance': name,
+            'data_fingerprint': self.data_fingerprint(part),
+        }
+        merged = merge_read_detail(logged, detail)
+        pairs = self._part(part)
+        record = self.log.append(
+            SelectionEvent.READ,
+            panel=ITA_PANEL,
+            split=part.value,
+            purpose=purpose,
+            fingerprint=self.fingerprint,
+            n_queries=pairs.height,
+            detail=merged,
+        )
+        scores = score_shortlist(
+            encoder.encode_queries(pairs.get_column('query').to_list()),
+            pairs.get_column('codes').to_list(),
+            encoder.encode_codes(list(self.candidates)),
+            self.candidates,
+            pairs.get_column('pair_id').to_list(),
+            distance=distance,
+        )
+        return summarize_ita(scores, pairs, name), record
+
+    def _part(self, part: ItaPart) -> pl.DataFrame:
+        return self.pairs.filter(pl.col('part') == part.value)
