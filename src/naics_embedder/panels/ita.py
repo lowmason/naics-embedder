@@ -332,8 +332,8 @@ class ItaPanel:
             The hexadecimal digest.
         '''
 
-        rows = self._part(ItaPart(part)
-                          ).sort('pair_id').select('pair_id', 'query', 'codes', 'copied').rows()
+        pairs = self._part(ItaPart(part)).sort('pair_id')
+        rows = pairs.select('pair_id', 'query', 'codes', 'copied').rows()
         payload = {
             'pairs': [list(row) for row in rows],
             'candidates': list(self.candidates),
