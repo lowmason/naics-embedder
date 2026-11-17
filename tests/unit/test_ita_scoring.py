@@ -932,22 +932,47 @@ def test_a_group_with_different_codes_keeps_every_pair():
     assert summary.phrasing['mrr'] == pytest.approx(((1 + 1 / 3) / 2 + 1) / 2)
     assert summary.headline['n_pairs'] == 3
 
-def test_the_phrasing_report_is_bit_identical_every_time_the_same_scores_are_read():
-    # The mean over groups adds many floats, and a sum depends on its order. Four thousand groups
-    # with reciprocal ranks that no two sums share make a change of order show in the last bit
-    specs = [
+def _many_pairs() -> List[Dict[str, Any]]:
+    '''
+    Four thousand pairs in groups of three, on fifty codes, with reciprocal ranks that few sums share.
+
+    A float sum depends on the order of its terms, so a mean taken in row order, or over groups in
+    the order a parallel group-by returns them, shows in the last bit.
+    '''
+
+    return [
         {
-            'key': f'group {index:04d}',
-            'rank': (index * 7919) % 997 + 1
+            'key': f'group {index // 3:04d}',
+            'codes': [f'{100000 + index % 50}'],
+            'rank': (index * 7919) % 997 + 1,
         } for index in range(4000)
     ]
+
+def test_the_phrasing_report_is_bit_identical_every_time_the_same_scores_are_read():
+    specs = _many_pairs()
     scores, pairs = _synthetic(specs)
 
     reads = [summarize_ita(scores, pairs, 'euclidean').phrasing for _ in range(20)]
 
     assert all(read == reads[0] for read in reads)
-    assert reads[0]['n_groups'] == 4000
-    assert reads[0]['mrr'] == pytest.approx(math.fsum(1 / spec['rank'] for spec in specs) / 4000)
+    by_group: Dict[str, List[float]] = {}
+    for spec in specs:
+        by_group.setdefault(spec['key'], []).append(1 / spec['rank'])
+    assert reads[0]['n_groups'] == len(by_group) == 1334
+    assert reads[0]['mrr'] == pytest.approx(
+        math.fsum(math.fsum(values) / len(values) for values in by_group.values()) / 1334
+    )
+
+def test_the_reports_do_not_depend_on_the_order_of_the_pairs():
+    scores, pairs = _synthetic(_many_pairs())
+
+    forward = summarize_ita(scores, pairs, 'euclidean')
+    backward = summarize_ita(scores.reverse(), pairs.reverse(), 'euclidean')
+
+    assert backward.headline == forward.headline
+    assert backward.phrasing == forward.phrasing
+    assert backward.per_code.equals(forward.per_code)
+    assert backward.counts == forward.counts
 
 def test_per_code_means_each_metric_over_a_codes_non_copied_pairs():
     # 311111 is reported by p00 (rank 1), p01 (rank 3) and p02 (rank 12, which also reports
