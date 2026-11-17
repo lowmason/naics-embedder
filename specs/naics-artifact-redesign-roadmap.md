@@ -6,8 +6,10 @@
 
 **Status: APPROVED (2026-11-14).** Derived in an interactive session. The user answered the
 derivation's three questions (Decisions, below) and approved the seven-stage partition at the
-human checkpoint ("Approve, hand off Stage 1"). Stage 1 is handed off. Stage 2 waits for the next
-resume. Stages 4–7 are HELD on gates in embedding-data (Gates, under Stages).
+human checkpoint ("Approve, hand off Stage 1"). Stage 1 is COMPLETE. The resume of 2026-11-17
+amended Stage 3 from plan 16's Handoff, re-read the gates at embedding-data ec6fb29 and, on the
+owner's answer ("Yes, re-pin"), re-pinned Stage 2 there. Stage 2 is handed off. Stages 4–7 are HELD
+on gates in embedding-data (Gates, under Stages).
 
 **Basis.** Source spec `specs/naics-artifact-redesign.md` (user adjudication Q4, approved as U31),
 merged as PR #156 (beaee8f), under ADRs 0001 and 0002 (`specs/adr/`, accepted 2026-11-14).
@@ -172,7 +174,9 @@ qualification (`:560`).
       Spec: Req 28 (Output, Judge, What the ITA text is like, The outcome panel stays and Owner
       gate), Req 26, Req 25 (own reference, margins and opening), U24, U25, U27, U28, P3–P5,
       Supersessions (the text→code rows), Verification "One role per table or part", Rollout note
-      item 3, Stage 10 (the pair table's schema and copied-text flags, at embedding-data 60068eb).
+      item 3, Stage 10 (the pair table's schema and copied-text flags, at embedding-data ec6fb29,
+      where index-entry copies are flagged apart from title copies; re-pinned from 60068eb,
+      owner, resume 2026-11-17).
       Text→code's reference (owner ruling, 2026-11-16, above Gap analysis).
       Gap closed: Req 28 (the judging panel, on fixtures).
       Consumes: The codebook (bundle 301cce28), from which a six-digit code's ancestors follow.
