@@ -6,8 +6,10 @@
 
 **Status: APPROVED (2026-11-14).** Derived in an interactive session. The user answered the
 derivation's three questions (Decisions, below) and approved the seven-stage partition at the
-human checkpoint ("Approve, hand off Stage 1"). Stage 1 is handed off. Stage 2 waits for the next
-resume. Stages 4–7 are HELD on gates in embedding-data (Gates, under Stages).
+human checkpoint ("Approve, hand off Stage 1"). Stage 1 is COMPLETE. The resume of 2026-11-17
+amended Stage 3 from plan 16's Handoff, re-read the gates at embedding-data ec6fb29 and, on the
+owner's answer ("Yes, re-pin"), re-pinned Stage 2 there. Stage 2 is handed off. Stages 4–7 are HELD
+on gates in embedding-data (Gates, under Stages).
 
 **Basis.** Source spec `specs/naics-artifact-redesign.md` (user adjudication Q4, approved as U31),
 merged as PR #156 (beaee8f), under ADRs 0001 and 0002 (`specs/adr/`, accepted 2026-11-14).
@@ -61,7 +63,7 @@ margin rule.
 | Req | Verdict | Evidence | Note |
 |---|---|---|---|
 | 25 | implemented-differently | `CLAUDE.md:5-7`, `README.md:8-11` and `docs/index.md:3-6` name Q3's hierarchy artifact, and `CLAUDE.md:7` judges text→code on the outcome panel. Embedding roadmap Stage 12 (`specs/naics-embedding-roadmap.md:1093-1094`) gives the hierarchy no opening and opens the outcome test split for text→code. The codebook is the bundle's (`supervision/`). | The codebook, and the economic artifact's own reference and margins, exist. No relatedness artifact exists. The derivation discharges the docs half (Decisions). Stages 1–7 build the rest. |
-| 26 | out-of-repo | embedding-data at 60068eb: R8.4 is unamended (spec `:550`). V9 runs "after the first full build" (`:606-609`, `:669-670`), at embedding-data Stage 13, which is unticked (roadmap `:123`, `:299`). Stage 10's anti-goal is unchanged (`ita-establishment-targets.md:124`, `:92-93`). The successor protocol spec does not exist (spec `:634`). In this repository, no `src/` module reads an embedding-data table. | The owner gates live in embedding-data (Gates, under Stages). For the existing panels, the one-role rule already holds through the selection log and `decide`'s validation-only reads (`decision/decide.py`). Each stage spec lists its tables and parts with one role each. |
+| 26 | out-of-repo | embedding-data at 60068eb: R8.4 is unamended (spec `:550`). V9 runs "after the first full build" (`:606-609`, `:669-670`), at embedding-data Stage 13, which is unticked (roadmap `:123`, `:299`). Stage 10's anti-goal is unchanged (`ita-establishment-targets.md:124`, `:92-93`). The successor protocol spec does not exist (spec `:634`). In this repository, no `src/` module reads an embedding-data table. Re-read at ec6fb29 on 2026-11-17: no gate opened (Gates, under Stages). | The owner gates live in embedding-data (Gates, under Stages). For the existing panels, the one-role rule already holds through the selection log and `decide`'s validation-only reads (`decision/decide.py`). Each stage spec lists its tables and parts with one role each. |
 | 27 | missing | `graph_model/` holds the parked HGCN only, and nothing reads a relation family. embedding-data: the ITA area mix is built (embedding-data Stage 6) with `size_gate_pending`. Co-ownership (embedding-data Stage 10) is not built, and none of plan 11's modules is in its `src/`. ACS (Stage 9) and CPS (Stage 11) are unticked there. | Every family waits for its build and its count gate. Training also waits for R8.4. Stages 6 and 7. |
 | 28 | implemented-differently | Training reads the codebook's own text only (`supervision/queries.py:9-19`). Judging uses the outcome panel (`panels/outcome.py:159`, `:217`). No ITA reader exists, and embedding-data Stage 10's pairs are not built. | Spec: judged on the ITA validation and sealed parts, with the outcome panel reported beside them. Code: judged on the outcome panel. Stages 2, 4 and 5. |
 | 29 | implemented-differently | The test is built: `fix_relative_margins` and `decide_economic` (`decision/economic.py:179`, `:537`) and `tools growth-margins` (`cli/commands/tools.py:562`). The margins were fixed once (finding: growth-margins), and `uv.lock` is still 6de4fbdc. `read_deterministic_arm` (`decision/economic.py:250`) has no command. Trained candidates are deferred (`specs/deferred_items.md:622`). | No candidate exists. The Q3 audit gave its candidates row the same verdict. Stages 1 and 3. |
@@ -93,29 +95,35 @@ decision exists, a stage spec that changes `uv.lock` says how those reads still 
 Negative). The text→code and economic chains both build on `text_model/` (ADR 0001), so a change
 that one chain makes there reaches the other chain's next training run.
 
-**Gates in embedding-data, read at 60068eb.** They are not `Consumes` (Decisions). Each HELD stamp
-names the gates it waits on.
+**Gates in embedding-data, read at ec6fb29** (resume, 2026-11-17; first read at 60068eb). They are
+not `Consumes` (Decisions). Each HELD stamp names the gates it waits on. On 2026-11-16
+embedding-data parked its roadmap (now `specs/completed/embedding-evaluation-data-spec-roadmap.md`)
+and replaced it with `specs/naics-evaluation-data-roadmap.md`. Old Stage 10 continues as new
+Stages 1 and 4. The NAICS families' count gate is new Stage 3. Old Stages 9, 11, 12 and 13 are
+deferred items there. "Embedding-data Stage N" below cites the new roadmap.
 
 - **G1, R8.4.** No embedding-data table trains an artifact until the owner amends it (Req 26).
-  State: unamended, "Benchmark tables are never training data" (spec `:550`). Holds Stage 7.
+  State: unamended, "Benchmark tables are never training data" (spec `:553`). Holds Stage 7.
 - **G2, Stage 10's anti-goal.** It must allow selection on the ITA validation part (Req 26, U27).
   State: unchanged (`ita-establishment-targets.md:124`, and `:92-93` under Out of scope). Holds
   Stage 5.
 - **G3, the V9 Rollout sentence.** It must allow a per-family count gate (Req 26, U29). State:
-  unchanged. V9 runs "after the first full build" (spec `:606-609`, `:669-670`), at embedding-data
-  Stage 13 (roadmap `:123`, `:299`), which is unticked. Holds Stages 4–7.
+  unchanged. V9 runs "after the first full build" (spec `:609-612`, `:672-673`). Embedding-data
+  Stage 3 (unticked) has a design, `specs/ita-naics-minimum-counts.md`, whose Goal 4 amends R7.3,
+  V9 and that sentence for a gate per family. Holds Stages 4–7.
 - **G4, the successor evaluation-protocol spec** (Decisions). For text→code, it assigns ITA
   scoring and splitting to text→code's spec. For relatedness, it covers the families that Stage
   6's spec names, because the protocol for tables other than the ITA pairs stays with
-  embedding-data (the spec's Out of scope). State: none exists (spec `:634`). Holds Stages 4–7.
+  embedding-data (the spec's Out of scope). State: none exists (spec `:637`). Holds Stages 4–7.
 - **G5, each family's build and count gate** (Req 26, U29). A family is read only after it is
   built and has passed its own V9 count gate under G3. State per family:
-  - ITA text–code pairs and co-ownership (embedding-data Stage 10, unticked): not built. Plan 11
-    is on that main, and none of its modules (`ita_text_pairs.py`, `ita_co_ownership.py` and
-    others) is in `src/`.
-  - ITA area mix (embedding-data Stage 6, complete): built, with `size_gate_pending`.
-  - ACS families (embedding-data Stage 9, unticked, its acceptance on hold) and CPS job-change
-    flows (embedding-data Stage 11, unticked): not built.
+  - ITA text–code pairs and co-ownership (embedding-data Stage 1, complete 2026-11-16): built
+    once and verified, each target `size_gate_pending`. The count gate is embedding-data Stage 3,
+    and the replay check is Stage 4. Both are unticked.
+  - ITA area mix (old Stage 6, complete): built, with `size_gate_pending`. Embedding-data Stage 3
+    sets its count gate too.
+  - ACS families (old Stage 9) and CPS job-change flows (old Stage 11): not built, and now
+    deferred items in embedding-data.
 
   The ITA pairs hold Stages 4 and 5. The families that Stage 6's spec names hold Stages 6 and 7.
 
@@ -166,7 +174,9 @@ qualification (`:560`).
       Spec: Req 28 (Output, Judge, What the ITA text is like, The outcome panel stays and Owner
       gate), Req 26, Req 25 (own reference, margins and opening), U24, U25, U27, U28, P3–P5,
       Supersessions (the text→code rows), Verification "One role per table or part", Rollout note
-      item 3, Stage 10 (the pair table's schema and copied-text flags, at embedding-data 60068eb).
+      item 3, Stage 10 (the pair table's schema and copied-text flags, at embedding-data ec6fb29,
+      where index-entry copies are flagged apart from title copies; re-pinned from 60068eb,
+      owner, resume 2026-11-17).
       Text→code's reference (owner ruling, 2026-11-16, above Gap analysis).
       Gap closed: Req 28 (the judging panel, on fixtures).
       Consumes: The codebook (bundle 301cce28), from which a six-digit code's ancestors follow.
@@ -196,14 +206,25 @@ qualification (`:560`).
       Consumes: Stage 1's candidates, read command and Handoff. The margin record, read at
       origin/main 30aeff6 on macOS arm64 with Python 3.12.12 under `uv.lock` 6de4fbdc (finding:
       growth-margins, Sources and §1). Every candidate read runs under the same three, because
-      `decide` pairs only bit-identical reference predictions (`decision/economic.py:414`). The
-      lock on main is still 6de4fbdc at beaee8f. The main checkout's selection log
-      (`logs/selection_log.jsonl`), in which the margin read found no opening of either growth
+      `decide` pairs only bit-identical reference predictions (`check_reference_pairing` in
+      `decision/economic.py`; cite names, not lines: plan 16, Handoff, Resolved at resume,
+      2026-11-17). The lock on main is still 6de4fbdc at 6e3ff00. The main checkout's selection
+      log (`logs/selection_log.jsonl`), in which the margin read found no opening of either growth
       regime (finding: growth-margins §3). The user's approval, asked when the stage starts.
+      As built (plan 16, Handoff, Resolved at resume, 2026-11-17): the frozen list
+      `conf/data/economic_candidates.yaml` with its nine pinned deterministic tables, the read
+      command `tools economic-read`, and `tools decide --candidates`. The nine trained candidates
+      have no Stage 1 record: each is imported at its read from its Stage 7/8 arm record and
+      `--runs-root`.
       Produces: The economic decision record over `growth_seen` and `growth_heldout`, which
       names the adopted candidate or says that the reference stands, and a written finding.
-      Embedding roadmap Stage 12's economic opening reads both.
-      Exit: The decision record exists and names each candidate's text-and-tree provenance.
+      The finding also answers split Req 19's propagation question from `decide`'s
+      `Propagation:` lines (plan 16, Handoff, Resolved at resume, 2026-11-17). Embedding roadmap
+      Stage 12's economic opening reads both.
+      Exit: Before the first real candidate read, the frozen list pins the text-only table's
+      provenance file and the list's sha256 is recorded again (`specs/deferred_items.md`,
+      § 16-economic-candidates, second item; plan 16, Handoff, Resolved at resume, 2026-11-17).
+      The decision record exists and names each candidate's text-and-tree provenance.
       `tools growth-margins` did not run, and the decision reads the 2026-10-17 record. The
       selection log gained only validation reads, and no outer set opened. The finding cites the
       record's sha256 and the platform, Python and lock that it was read under.
