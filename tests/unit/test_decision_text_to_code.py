@@ -300,5 +300,5 @@ def test_an_arm_with_no_seed_is_refused(tmp_path, side):
     stub = _stub(tmp_path)
     seeds = {'candidate': [stub], 'reference': [stub]}
     seeds[side] = []
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='has no seed'):
         _compare(seeds['candidate'], seeds['reference'])
