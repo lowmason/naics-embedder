@@ -14,6 +14,12 @@ candidate matches when its level-L ancestor is the level-L ancestor of a reporte
 nearest matching one. Ancestors come from the codebook lineage, so the combined sectors 31-33,
 44-45 and 48-49 are one sector each. Distances are computed in float64 on the CPU whatever the
 device or dtype of the points.
+
+``summarize_ita`` reads a part's scores in four reports (4.3). A pair is copied when its title or
+index is copied (U38). The headline is the mean over the pairs that are not copied, each pair once.
+The copied report is the same over the copied pairs. The phrasing report is the mean over
+description groups of each group's mean over its non-copied pairs. The counts cover every pair of
+the part. Mojibake, company-fallback and conflict flags only add to the counts.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -21,7 +27,8 @@ device or dtype of the points.
 # -------------------------------------------------------------------------------------------------
 
 import math
-from typing import Dict, Sequence, Union
+from dataclasses import dataclass
+from typing import Dict, List, Sequence, Union
 
 import polars as pl
 import torch
@@ -187,3 +194,157 @@ def score_shortlist(
         matches = _ancestor_matches(reported, candidate_codes, level)
         _rank_columns(_rank_behind_matches(distances, matches), f'_l{level}', data, schema)
     return pl.DataFrame(data, schema=schema)
+
+# -------------------------------------------------------------------------------------------------
+# Summary
+# -------------------------------------------------------------------------------------------------
+
+def _metric_columns() -> Dict[str, str]:
+    '''Each summary metric and the per-pair column it averages, in the order reports list them.'''
+
+    columns = {
+        'mrr': 'reciprocal_rank',
+        'top1': 'hit_at_1',
+        **{
+            f'hit_at_{k}': f'hit_at_{k}'
+            for k in HIT_KS
+        },
+        'lca_level': 'lca_level',
+    }
+    for level in COARSE_LEVELS:
+        columns[f'mrr_l{level}'] = f'reciprocal_rank_l{level}'
+        for k in HIT_KS:
+            columns[f'hit_at_{k}_l{level}'] = f'hit_at_{k}_l{level}'
+    return columns
+
+# A boolean metric averages as a fraction. ``top1`` and ``hit_at_1`` are one quantity
+_METRIC_COLUMNS = _metric_columns()
+SUMMARY_METRICS = tuple(_METRIC_COLUMNS)
+
+# Each count and the pair-frame flag it adds up
+_COUNT_FLAGS = {
+    'n_copied': 'copied',
+    'n_conflict': 'conflict',
+    'n_mojibake': 'mojibake',
+    'n_company_fallback': 'company_fallback',
+}
+
+@dataclass(frozen=True)
+class ItaResult:
+    '''
+    A part's ITA scores at three grains and in four reports.
+
+    Attributes:
+        per_pair: One row per pair, in the scorer's order: the scorer's columns, then
+            ``description_key`` and ``copied``. Stage 11 resamples it by description group.
+        per_code: One row per reported code, sorted by ``code``: ``code``, ``n_pairs`` and each
+            metric's mean over the non-copied pairs that report it. A pair that reports several
+            codes counts under each.
+        headline: ``n_pairs``, ``distance`` and each ``SUMMARY_METRICS`` mean over the pairs that
+            are not copied.
+        copied: The same over the copied pairs. With none, ``n_pairs`` is 0 and every metric None.
+        phrasing: ``n_groups``, the description groups with a non-copied pair, and each metric's
+            mean over those groups of the group's mean over its non-copied pairs.
+        counts: ``n_pairs``, ``n_groups``, ``n_copied``, ``n_conflict``, ``n_mojibake`` and
+            ``n_company_fallback``, over every pair of the part, copied ones included.
+    '''
+
+    per_pair: pl.DataFrame
+    per_code: pl.DataFrame
+    headline: Dict[str, Union[int, float, str, None]]
+    copied: Dict[str, Union[int, float, str, None]]
+    phrasing: Dict[str, Union[int, float, str, None]]
+    counts: Dict[str, int]
+
+def _metric_means() -> List[pl.Expr]:
+    return [pl.col(column).mean().alias(name) for name, column in _METRIC_COLUMNS.items()]
+
+def _check_summary_inputs(scores: pl.DataFrame, pairs: pl.DataFrame) -> None:
+    for label, frame in (('scores', scores), ('pairs', pairs)):
+        repeated = frame.filter(pl.col('pair_id').is_duplicated()).get_column('pair_id')
+        if not repeated.is_empty():
+            raise ValueError(f'{label} repeat pair ids: {repeated.unique().sort().to_list()[:5]}')
+    scored = set(scores.get_column('pair_id'))
+    listed = set(pairs.get_column('pair_id'))
+    if scored != listed:
+        raise ValueError(
+            f'scores and pairs name different pair ids: {len(scored - listed):,} only scored, '
+            f'e.g. {sorted(scored - listed)[:5]}, and {len(listed - scored):,} only in pairs, '
+            f'e.g. {sorted(listed - scored)[:5]}'
+        )
+    for column in ('description_key', *_COUNT_FLAGS.values()):
+        if pairs.get_column(column).null_count():
+            raise ValueError(f'pairs have a null {column!r}')
+
+def summarize_ita(scores: pl.DataFrame, pairs: pl.DataFrame, distance: str) -> ItaResult:
+    '''
+    Read a part's shortlist scores as the headline, copied, phrasing and count reports.
+
+    Args:
+        scores: ``score_shortlist``'s frame for the part, one row per panel pair.
+        pairs: The part's panel pairs, in ``PANEL_PAIR_SCHEMA``, with the same pair ids.
+        distance: The name of the distance the scores were read under, carried into the headline
+            and the copied report.
+
+    Returns:
+        The part's ``ItaResult``.
+
+    Raises:
+        ValueError: When a pair id repeats in either frame, the two frames' pair ids differ, a
+            column the reports read is null in ``pairs``, or the part has no pair that is not
+            copied, so no headline pair.
+    '''
+
+    _check_summary_inputs(scores, pairs)
+    per_pair = (
+        scores.with_row_index('_row').join(
+            pairs.select('pair_id', 'description_key', 'copied'), on='pair_id', how='left'
+        ).sort('_row').drop('_row')
+    )
+    headline_pairs = per_pair.filter(~pl.col('copied'))
+    if headline_pairs.is_empty():
+        raise ValueError(
+            f'the part has no headline pair: none of its {per_pair.height:,} pairs is without a '
+            f'copied title or index'
+        )
+
+    def report(frame: pl.DataFrame) -> Dict[str, Union[int, float, str, None]]:
+        return {
+            'n_pairs': frame.height,
+            'distance': distance,
+            **frame.select(_metric_means()).row(0, named=True),
+        }
+
+    groups = headline_pairs.group_by('description_key').agg(_metric_means())
+    # top1 and hit_at_1 average one column, so the columns are named once
+    metric_columns = list(dict.fromkeys(_METRIC_COLUMNS.values()))
+    # yapf: disable
+    per_code = (
+        headline_pairs
+        .select('codes', *metric_columns)
+        .explode('codes')
+        .rename({'codes': 'code'})
+        .group_by('code')
+        .agg(pl.len().cast(pl.Int64).alias('n_pairs'), *_metric_means())
+        .sort('code')
+    )
+    # yapf: enable
+    counts = {
+        'n_pairs': pairs.height,
+        'n_groups': pairs.get_column('description_key').n_unique(),
+        **{
+            name: int(pairs.get_column(flag).sum())
+            for name, flag in _COUNT_FLAGS.items()
+        },
+    }
+    return ItaResult(
+        per_pair=per_pair,
+        per_code=per_code,
+        headline=report(headline_pairs),
+        copied=report(per_pair.filter(pl.col('copied'))),
+        phrasing={
+            'n_groups': groups.height,
+            **groups.select(pl.col(name).mean() for name in SUMMARY_METRICS).row(0, named=True),
+        },
+        counts=counts,
+    )

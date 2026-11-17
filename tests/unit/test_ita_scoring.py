@@ -6,18 +6,29 @@ reported codes, with ties against the truth. Expected values are worked out by h
 production code, except where a test compares the scorer with ``score_decoding`` on pairs of one
 code. Most tests put the candidates on a line (the i-th at distance i + 1 from a query at the
 origin) so each rank can be read off the order of the codes.
+
+The summary's tests (plan 17, Task 4) score the fixture's validation pairs with the assigned stub,
+or hand the summary a scorer-shaped frame whose ranks the test chose, and compare each report with
+means worked out in the test.
 '''
 
 import math
-from typing import Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 import polars as pl
 import pytest
 import torch
 
 from naics_embedder.panels.decoding import score_decoding
-from naics_embedder.panels.ita_scoring import COARSE_LEVELS, score_shortlist
-from tests.fixtures.ita import ITA_CANDIDATES
+from naics_embedder.panels.ita import PANEL_PAIR_SCHEMA, panel_pairs
+from naics_embedder.panels.ita_scoring import (
+    COARSE_LEVELS,
+    SUMMARY_METRICS,
+    ItaResult,
+    score_shortlist,
+    summarize_ita,
+)
+from tests.fixtures.ita import ITA_CANDIDATES, ITA_SETTINGS, AssignedStubEncoder, ita_tables
 
 pytestmark = pytest.mark.unit
 
@@ -574,3 +585,545 @@ def test_a_code_that_is_not_a_candidate_or_an_empty_code_list_is_refused():
 def test_inconsistent_inputs_fail_closed(kwargs, message):
     with pytest.raises(ValueError, match=message):
         score_shortlist(**_refusal_arguments(**kwargs))
+
+# -------------------------------------------------------------------------------------------------
+# Summary
+# -------------------------------------------------------------------------------------------------
+
+def _stub_scores(pairs: pl.DataFrame) -> pl.DataFrame:
+    '''Score panel pairs with the assigned stub, by cosine, over every candidate.'''
+
+    stub = AssignedStubEncoder()
+    return score_shortlist(
+        stub.encode_queries(pairs.get_column('query').to_list()),
+        pairs.get_column('codes').to_list(),
+        stub.encode_codes(ITA_CANDIDATES),
+        ITA_CANDIDATES,
+        pairs.get_column('pair_id').to_list(),
+        distance='cosine',
+    )
+
+# The fixture's validation part: p01 to p05 and p07, p05 copied, p04 a conflict pair. p03 ranks
+# 8th (the stub decodes it to 111110, not its 211120) and the others 1st
+PANEL_PAIRS = panel_pairs(*ita_tables(), ITA_CANDIDATES, ITA_SETTINGS.salt).filter(
+    pl.col('part') == 'validation'
+)
+SCORES = _stub_scores(PANEL_PAIRS)
+result = summarize_ita(SCORES, PANEL_PAIRS, 'cosine')
+
+def _rank_columns(rank: int, suffix: str) -> Dict[str, Any]:
+    '''One pair's rank, reciprocal rank and hits at a level, as the scorer names them.'''
+
+    return {
+        f'rank{suffix}': rank,
+        f'reciprocal_rank{suffix}': 1 / rank,
+        **{
+            f'hit_at_{k}{suffix}': rank <= k
+            for k in (1, 5, 10)
+        },
+    }
+
+def _synthetic(specs: Sequence[Dict[str, Any]]) -> Tuple[pl.DataFrame, pl.DataFrame]:
+    '''
+    A scorer-shaped frame and a panel pair frame for pairs given by hand, ids p00, p01, ...
+
+    A spec names ``key`` (the description group) and may name ``codes`` (default 311111), ``rank``
+    (default 1, the rank at the finest level and at each coarse one), ``levels`` (a rank for
+    some of ``_l2`` to ``_l5``, over ``rank``), ``lca_level`` (default 6) and the flags ``copied``,
+    ``conflict``, ``mojibake`` and ``company_fallback``.
+    '''
+
+    scores, pairs = [], []
+    for index, spec in enumerate(specs):
+        pair_id = f'p{index:02d}'
+        codes = spec.get('codes', ['311111'])
+        row = {
+            'pair_id': pair_id,
+            'codes': codes,
+            'top1_code': codes[0],
+            **_rank_columns(spec.get('rank', 1), ''),
+            'lca_level': spec.get('lca_level', 6),
+        }
+        for level in COARSE_LEVELS:
+            suffix = f'_l{level}'
+            row.update(
+                _rank_columns(spec.get('levels', {}).get(suffix, spec.get('rank', 1)), suffix)
+            )
+        scores.append(row)
+        pairs.append(
+            {
+                'pair_id': pair_id,
+                'description_key': spec['key'],
+                'query': f'query {pair_id}',
+                'codes': codes,
+                'copied': spec.get('copied', False),
+                'conflict': spec.get('conflict', False),
+                'mojibake': spec.get('mojibake', False),
+                'company_fallback': spec.get('company_fallback', False),
+                'part': 'validation',
+            }
+        )
+    return (
+        pl.DataFrame(scores, schema=EXPECTED_SCHEMA),
+        pl.DataFrame(pairs, schema=PANEL_PAIR_SCHEMA),
+    )
+
+def _summarize(specs: Sequence[Dict[str, Any]]) -> ItaResult:
+    return summarize_ita(*_synthetic(specs), 'euclidean')
+
+def test_the_summary_metrics_are_the_stated_names():
+    assert SUMMARY_METRICS == (
+        'mrr', 'top1', 'hit_at_1', 'hit_at_5', 'hit_at_10', 'lca_level',
+        'mrr_l2', 'hit_at_1_l2', 'hit_at_5_l2', 'hit_at_10_l2',
+        'mrr_l3', 'hit_at_1_l3', 'hit_at_5_l3', 'hit_at_10_l3',
+        'mrr_l4', 'hit_at_1_l4', 'hit_at_5_l4', 'hit_at_10_l4',
+        'mrr_l5', 'hit_at_1_l5', 'hit_at_5_l5', 'hit_at_10_l5',
+    )  # yapf: disable
+
+# -------------------------------------------------------------------------------------------------
+# Summary: the plan's reports
+# -------------------------------------------------------------------------------------------------
+
+def test_the_headline_excludes_copied_pairs_and_counts_each_pair_once():
+    assert result.headline['n_pairs'] == 5
+    assert result.headline['mrr'] == pytest.approx((1 + 1 + 1 / 8 + 1 + 1) / 5)  # 0.825
+
+def test_the_phrasing_report_counts_each_description_once():
+    assert result.phrasing['n_groups'] == 4
+    assert result.phrasing['mrr'] == pytest.approx((1 + 1 / 8 + 1 + 1) / 4)  # 0.78125
+
+def test_copied_pairs_are_reported_apart():
+    assert result.copied['n_pairs'] == 1 and result.copied['mrr'] == 1.0
+
+def test_counts_report_conflicts_and_flags_without_changing_the_headline():
+    assert result.counts == {
+        'n_pairs': 6,
+        'n_groups': 5,
+        'n_copied': 1,
+        'n_conflict': 1,
+        'n_mojibake': 0,
+        'n_company_fallback': 1,
+    }
+
+def test_per_code_counts_a_conflict_pair_under_each_code():
+    # p04 reports 311111 and 111110, and the stub decodes it to 111110: rank 1. p01 and p02 report
+    # 311111, p03 reports 211120 (rank 8) and p07 reports 236220. p05 reports 513210 but is copied
+    per_code = result.per_code
+
+    assert per_code.columns == ['code', 'n_pairs', *SUMMARY_METRICS]
+    assert per_code.select('code', 'n_pairs', 'mrr', 'hit_at_1', 'hit_at_10').rows() == [
+        ('111110', 1, 1.0, 1.0, 1.0),
+        ('211120', 1, 1 / 8, 0.0, 1.0),
+        ('236220', 1, 1.0, 1.0, 1.0),
+        ('311111', 3, 1.0, 1.0, 1.0),
+    ]
+
+def test_a_part_with_no_headline_pair_is_refused():
+    every_pair_copied = PANEL_PAIRS.with_columns(copied=pl.lit(True))
+
+    with pytest.raises(ValueError, match='no headline pair'):
+        summarize_ita(SCORES, every_pair_copied, 'cosine')
+
+# -------------------------------------------------------------------------------------------------
+# Summary: the reports in detail
+# -------------------------------------------------------------------------------------------------
+
+def test_a_part_with_no_pair_at_all_is_refused():
+    with pytest.raises(ValueError, match='no headline pair'):
+        summarize_ita(SCORES.clear(), PANEL_PAIRS.clear(), 'cosine')
+
+def test_the_per_pair_frame_is_the_scorers_columns_with_the_description_and_copied_flag():
+    per_pair = result.per_pair
+
+    assert per_pair.columns == [*SCORES.columns, 'description_key', 'copied']
+    assert per_pair.select(SCORES.columns).equals(SCORES)
+    assert per_pair.select('pair_id', 'description_key', 'copied').rows() == [
+        ('p01', 'we make dog food', False),
+        ('p02', 'we make dog food', False),
+        ('p03', 'oil and gas wells', False),
+        ('p04', 'cat food plant', False),
+        ('p05', 'software publisher', True),
+        ('p07', 'general contractor', False),
+    ]
+
+def test_the_per_pair_frame_follows_the_scores_whatever_the_order_of_the_pairs():
+    shuffled = PANEL_PAIRS.sort('pair_id', descending=True)
+
+    per_pair = summarize_ita(SCORES, shuffled, 'cosine').per_pair
+
+    assert per_pair.get_column('pair_id').to_list() == SCORES.get_column('pair_id').to_list()
+    assert per_pair.get_column('description_key').to_list() == (
+        result.per_pair.get_column('description_key').to_list()
+    )
+    assert per_pair.get_column('copied').to_list() == result.per_pair.get_column('copied').to_list()
+
+def test_the_reports_name_the_distance_and_hold_every_metric_as_a_python_number():
+    expected_keys = ['n_pairs', 'distance', *SUMMARY_METRICS]
+
+    assert list(result.headline) == expected_keys
+    assert list(result.copied) == expected_keys
+    assert list(result.phrasing) == ['n_groups', *SUMMARY_METRICS]
+    assert result.headline['distance'] == 'cosine' and result.copied['distance'] == 'cosine'
+    for report in (result.headline, result.copied, result.phrasing):
+        assert type(report.get('n_pairs', report.get('n_groups'))) is int
+        assert all(type(report[name]) is float for name in SUMMARY_METRICS)
+    assert all(type(count) is int for count in result.counts.values())
+
+def test_the_distance_is_named_as_given():
+    scores, pairs = _synthetic([{'key': 'a'}, {'key': 'b', 'copied': True}])
+
+    summary = summarize_ita(scores, pairs, 'lorentz')
+
+    assert summary.headline['distance'] == 'lorentz' and summary.copied['distance'] == 'lorentz'
+
+def test_with_no_copied_pair_the_copied_report_has_none_for_every_metric():
+    copied = _summarize([{'key': 'a'}, {'key': 'b', 'rank': 2}]).copied
+
+    assert copied == {
+        'n_pairs': 0,
+        'distance': 'euclidean',
+        **{
+            name: None
+            for name in SUMMARY_METRICS
+        },
+    }
+
+def test_the_flags_change_no_report_but_the_counts():
+    flagged = PANEL_PAIRS.with_columns(
+        mojibake=pl.col('pair_id').is_in(['p01', 'p03']),
+        company_fallback=pl.col('pair_id').is_in(['p02', 'p04']),
+        conflict=pl.col('pair_id').is_in(['p01', 'p07']),
+    )
+
+    summary = summarize_ita(SCORES, flagged, 'cosine')
+
+    assert summary.headline == result.headline
+    assert summary.copied == result.copied
+    assert summary.phrasing == result.phrasing
+    assert summary.per_code.equals(result.per_code)
+    assert summary.counts == {
+        'n_pairs': 6,
+        'n_groups': 5,
+        'n_copied': 1,
+        'n_conflict': 2,
+        'n_mojibake': 2,
+        'n_company_fallback': 2,
+    }
+
+def test_each_count_is_its_own_flag_over_every_pair_copied_ones_included():
+    # Ten pairs in three groups: one copied (and mojibake), two conflict, three mojibake and four
+    # company-fallback. No two counts are alike
+    specs = [
+        {
+            'key': 'a',
+            'copied': True,
+            'mojibake': True
+        },
+        {
+            'key': 'a',
+            'conflict': True
+        },
+        {
+            'key': 'a',
+            'conflict': True
+        },
+        {
+            'key': 'a',
+            'mojibake': True
+        },
+        {
+            'key': 'b',
+            'mojibake': True
+        },
+        {
+            'key': 'b',
+            'company_fallback': True
+        },
+        {
+            'key': 'b',
+            'company_fallback': True
+        },
+        {
+            'key': 'b',
+            'company_fallback': True
+        },
+        {
+            'key': 'c',
+            'company_fallback': True
+        },
+        {
+            'key': 'c'
+        },
+    ]
+
+    assert _summarize(specs).counts == {
+        'n_pairs': 10,
+        'n_groups': 3,
+        'n_copied': 1,
+        'n_conflict': 2,
+        'n_mojibake': 3,
+        'n_company_fallback': 4,
+    }
+
+def test_a_group_that_is_all_copied_is_a_group_in_the_counts_but_not_in_the_phrasing_report():
+    summary = _summarize([{'key': 'a'}, {'key': 'a', 'copied': True}, {'key': 'b', 'copied': True}])
+
+    assert summary.counts['n_groups'] == 2
+    assert summary.phrasing['n_groups'] == 1
+
+def test_the_phrasing_report_averages_each_groups_non_copied_pairs_and_then_the_groups():
+    # Group a holds three pairs at rank 1 and a copied one at rank 11, group b one pair at rank 2,
+    # and group c only a copied pair. The groups' means are 1 and 1/2
+    summary = _summarize(
+        [
+            {
+                'key': 'a'
+            },
+            {
+                'key': 'a'
+            },
+            {
+                'key': 'a'
+            },
+            {
+                'key': 'a',
+                'copied': True,
+                'rank': 11
+            },
+            {
+                'key': 'b',
+                'rank': 2
+            },
+            {
+                'key': 'c',
+                'copied': True,
+                'rank': 11
+            },
+        ]
+    )
+
+    assert summary.phrasing['n_groups'] == 2
+    assert summary.phrasing['mrr'] == pytest.approx((1 + 1 / 2) / 2)
+    assert summary.phrasing['hit_at_1'] == pytest.approx((1 + 0) / 2)
+    assert summary.headline['n_pairs'] == 4
+    assert summary.headline['mrr'] == pytest.approx((3 + 1 / 2) / 4)  # pairs, not groups
+
+def test_a_group_with_different_codes_keeps_every_pair():
+    summary = _summarize(
+        [
+            {
+                'key': 'a',
+                'codes': ['311111'],
+                'rank': 1
+            },
+            {
+                'key': 'a',
+                'codes': ['111110'],
+                'rank': 3
+            },
+            {
+                'key': 'b',
+                'codes': ['236220'],
+                'rank': 1
+            },
+        ]
+    )
+
+    assert summary.phrasing['mrr'] == pytest.approx(((1 + 1 / 3) / 2 + 1) / 2)
+    assert summary.headline['n_pairs'] == 3
+
+def test_per_code_means_each_metric_over_a_codes_non_copied_pairs():
+    # 311111 is reported by p00 (rank 1), p01 (rank 3) and p02 (rank 12, which also reports
+    # 111110); p03 reports 111110 and is copied, and p04 reports 236220 and is copied
+    summary = _summarize(
+        [
+            {
+                'key': 'a',
+                'codes': ['311111'],
+                'rank': 1,
+                'lca_level': 6
+            },
+            {
+                'key': 'b',
+                'codes': ['311111'],
+                'rank': 3,
+                'lca_level': 4
+            },
+            {
+                'key': 'c',
+                'codes': ['111110', '311111'],
+                'rank': 12,
+                'lca_level': 1
+            },
+            {
+                'key': 'd',
+                'codes': ['111110'],
+                'rank': 1,
+                'copied': True
+            },
+            {
+                'key': 'e',
+                'codes': ['236220'],
+                'rank': 1,
+                'copied': True
+            },
+        ]
+    )
+
+    assert summary.per_code.select(
+        'code', 'n_pairs', 'mrr', 'hit_at_1', 'hit_at_5', 'hit_at_10', 'lca_level'
+    ).rows() == [
+        ('111110', 1, pytest.approx(1 / 12), 0.0, 0.0, 0.0, 1.0),
+        (
+            '311111', 3, pytest.approx((1 + 1 / 3 + 1 / 12) / 3), pytest.approx(1 / 3),
+            pytest.approx(2 / 3), pytest.approx(2 / 3), pytest.approx(11 / 3)
+        ),
+    ]
+
+# A pair's rank at each level, finest first (the key ''), and its LCA level. Each level's ranks
+# give it hits at 1, 5 and 10 that no other level has, so a metric read from the wrong level shows
+PAIR_RANKS = [
+    ({
+        '': 2,
+        '_l5': 1,
+        '_l4': 1,
+        '_l3': 1,
+        '_l2': 1
+    }, 6),
+    ({
+        '': 6,
+        '_l5': 2,
+        '_l4': 1,
+        '_l3': 1,
+        '_l2': 1
+    }, 5),
+    ({
+        '': 11,
+        '_l5': 6,
+        '_l4': 2,
+        '_l3': 1,
+        '_l2': 1
+    }, 4),
+    ({
+        '': 12,
+        '_l5': 11,
+        '_l4': 6,
+        '_l3': 2,
+        '_l2': 1
+    }, 3),
+    ({
+        '': 13,
+        '_l5': 12,
+        '_l4': 11,
+        '_l3': 6,
+        '_l2': 2
+    }, 2),
+    ({
+        '': 14,
+        '_l5': 13,
+        '_l4': 12,
+        '_l3': 11,
+        '_l2': 6
+    }, 1),
+]
+
+def _expected_metrics(ranks: Dict[str, int], lca: int) -> Dict[str, float]:
+    '''A pair's summary metrics, from its rank at each level and its LCA level.'''
+
+    metrics = {'lca_level': float(lca), 'top1': float(ranks[''] == 1)}
+    for suffix, rank in ranks.items():
+        metrics[f'mrr{suffix}'] = 1 / rank
+        for k in (1, 5, 10):
+            metrics[f'hit_at_{k}{suffix}'] = float(rank <= k)
+    return metrics
+
+def _pair_specs(**extra) -> List[Dict[str, Any]]:
+    '''PAIR_RANKS as pairs in groups of their own and on codes of their own, in code order.'''
+
+    codes = ['111110', '211120', '236220', '311111', '513210', '621210']
+    return [
+        {
+            'key': f'group {index}',
+            'codes': [code],
+            'rank': ranks[''],
+            'levels': {
+                suffix: rank
+                for suffix, rank in ranks.items() if suffix
+            },
+            'lca_level': lca,
+            **extra,
+        } for index, (code, (ranks, lca)) in enumerate(zip(codes, PAIR_RANKS))
+    ]
+
+def _mean_metrics(rows: Sequence[Dict[str, float]]) -> Dict[str, float]:
+    return {name: sum(row[name] for row in rows) / len(rows) for name in rows[0]}
+
+def test_the_oracle_names_every_summary_metric():
+    assert set(_expected_metrics(*PAIR_RANKS[0])) == set(SUMMARY_METRICS)
+
+def test_each_metric_reads_its_own_column_in_the_headline_and_the_phrasing_report():
+    summary = _summarize(_pair_specs())
+
+    expected = _mean_metrics([_expected_metrics(*pair) for pair in PAIR_RANKS])
+    for name in SUMMARY_METRICS:
+        assert summary.headline[name] == pytest.approx(expected[name]), name
+        assert summary.phrasing[name] == pytest.approx(expected[name]), name
+
+def test_each_metric_reads_its_own_column_in_the_copied_report():
+    summary = _summarize([{'key': 'plain'}, *_pair_specs(copied=True)])
+
+    expected = _mean_metrics([_expected_metrics(*pair) for pair in PAIR_RANKS])
+    assert summary.copied['n_pairs'] == 6
+    for name in SUMMARY_METRICS:
+        assert summary.copied[name] == pytest.approx(expected[name]), name
+
+def test_each_metric_reads_its_own_column_in_the_per_code_frame():
+    summary = _summarize(_pair_specs())
+
+    for row, pair in zip(summary.per_code.iter_rows(named=True), PAIR_RANKS):
+        assert row['n_pairs'] == 1
+        for name, value in _expected_metrics(*pair).items():
+            assert row[name] == pytest.approx(value), (row['code'], name)
+
+# -------------------------------------------------------------------------------------------------
+# Summary: inputs the reports refuse
+# -------------------------------------------------------------------------------------------------
+
+def _renamed(scores: pl.DataFrame, old: str, new: str) -> pl.DataFrame:
+    return scores.with_columns(
+        pair_id=pl.when(pl.col('pair_id') == old).then(pl.lit(new)).otherwise(pl.col('pair_id'))
+    )
+
+@pytest.mark.parametrize(
+    'scores, pairs',
+    [
+        pytest.param(SCORES, PANEL_PAIRS.head(5), id='a scored pair that is not a panel pair'),
+        pytest.param(SCORES.head(5), PANEL_PAIRS, id='a panel pair that is not scored'),
+        pytest.param(_renamed(SCORES, 'p01', 'p99'), PANEL_PAIRS, id='one pair id renamed'),
+        pytest.param(pl.concat([SCORES, SCORES.head(1)]), PANEL_PAIRS, id='a pair scored twice'),
+        pytest.param(
+            SCORES,
+            pl.concat([PANEL_PAIRS, PANEL_PAIRS.head(1)]),
+            id='a pair listed twice',
+        ),
+        pytest.param(
+            pl.concat([SCORES, SCORES.head(1)]),
+            pl.concat([PANEL_PAIRS, PANEL_PAIRS.head(1)]),
+            id='a pair scored and listed twice',
+        ),
+    ],
+)
+def test_scores_and_pairs_with_different_pair_ids_are_refused(scores, pairs):
+    with pytest.raises(ValueError, match='pair ids'):
+        summarize_ita(scores, pairs, 'cosine')
+
+@pytest.mark.parametrize(
+    'column', ['description_key', 'copied', 'conflict', 'mojibake', 'company_fallback']
+)
+def test_a_null_in_a_pair_column_the_reports_read_is_refused(column):
+    pairs = PANEL_PAIRS.with_columns(
+        pl.when(pl.col('pair_id') == 'p01').then(None).otherwise(pl.col(column)).alias(column)
+    )
+
+    with pytest.raises(ValueError, match=f'null.*{column}'):
+        summarize_ita(SCORES, pairs, 'cosine')
