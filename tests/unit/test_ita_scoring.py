@@ -1097,19 +1097,19 @@ def _renamed(scores: pl.DataFrame, old: str, new: str) -> pl.DataFrame:
 @pytest.mark.parametrize(
     'scores, pairs',
     [
-        pytest.param(SCORES, PANEL_PAIRS.head(5), id='a scored pair that is not a panel pair'),
-        pytest.param(SCORES.head(5), PANEL_PAIRS, id='a panel pair that is not scored'),
-        pytest.param(_renamed(SCORES, 'p01', 'p99'), PANEL_PAIRS, id='one pair id renamed'),
-        pytest.param(pl.concat([SCORES, SCORES.head(1)]), PANEL_PAIRS, id='a pair scored twice'),
+        pytest.param(SCORES, PANEL_PAIRS.head(5), id='extra_scored_pair'),
+        pytest.param(SCORES.head(5), PANEL_PAIRS, id='unscored_panel_pair'),
+        pytest.param(_renamed(SCORES, 'p01', 'p99'), PANEL_PAIRS, id='one_pair_id_renamed'),
+        pytest.param(pl.concat([SCORES, SCORES.head(1)]), PANEL_PAIRS, id='pair_scored_twice'),
         pytest.param(
             SCORES,
             pl.concat([PANEL_PAIRS, PANEL_PAIRS.head(1)]),
-            id='a pair listed twice',
+            id='pair_listed_twice',
         ),
         pytest.param(
             pl.concat([SCORES, SCORES.head(1)]),
             pl.concat([PANEL_PAIRS, PANEL_PAIRS.head(1)]),
-            id='a pair scored and listed twice',
+            id='pair_scored_and_listed_twice',
         ),
     ],
 )

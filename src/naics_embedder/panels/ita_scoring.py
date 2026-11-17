@@ -236,7 +236,8 @@ class ItaResult:
 
     Attributes:
         per_pair: One row per pair, in the scorer's order: the scorer's columns, then
-            ``description_key`` and ``copied``. Stage 11 resamples it by description group.
+            ``description_key`` and ``copied``. The decision's bootstrap resamples it by
+            description group.
         per_code: One row per reported code, sorted by ``code``: ``code``, ``n_pairs`` and each
             metric's mean over the non-copied pairs that report it. A pair that reports several
             codes counts under each.
