@@ -452,13 +452,17 @@ def test_a_retyped_column_of_the_pair_code_table_is_refused(column):
     with pytest.raises(ValueError, match=f"pair-code table column '{column}' has type"):
         _panel(pairs, _retype(codes, column))
 
-@pytest.mark.parametrize('repeated', ['p03', 'p06'], ids=['a headline pair', 'another pair'])
-def test_a_repeated_pair_id_is_refused(repeated):
+@pytest.mark.parametrize(
+    ('repeated', 'headline'),
+    [('p03', True), ('p06', False)],
+    ids=['a headline pair', 'a pair that is not headline'],
+)
+def test_a_repeated_pair_id_is_refused(repeated, headline):
     twin = {
         'pair_id': repeated,
         'description_key': 'a twin',
         'representative_string': 'A twin',
-        'flag_headline': True,
+        'flag_headline': headline,
     }
     pairs, codes = ita_tables(extra_pairs=[twin])
     with pytest.raises(ValueError, match=f"pair table repeats pair_id: \\['{repeated}'\\]"):
