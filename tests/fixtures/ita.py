@@ -9,8 +9,8 @@ employers with one description (p01 and p02), a pair that reports one node under
 2017 crosswalked row that asserts no node and sits on a code outside the candidates (p01), and a
 pair with ``flag_headline`` false (p06). A node id of another level on a reported row, and a
 reported code outside the candidates, are refused by the panel, so the base holds neither on a
-reported row: ``replace_codes`` builds them. The salt of ``ITA_SETTINGS`` puts p01 through p07 in the validation
-part and p08 through p11 in the sealed part.
+reported row: ``replace_codes`` builds them. The salt of ``ITA_SETTINGS`` puts p01 through p07 in
+the validation part and p08 through p11 in the sealed part.
 
 A row an extra argument adds, or a replacement ``replace_codes`` gives, is completed with neutral
 values: false flags, zero counts, empty lists and null codes and years. Nothing here reads
