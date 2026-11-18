@@ -401,6 +401,22 @@ def test_the_stub_is_the_reference_when_d16_reads_worse(tmp_path):
     assert record.reference == LEXICAL_STUB
     assert record.margin == 0.05 * record.reference_mrr[LEXICAL_STUB]
 
+def test_a_tie_between_the_reference_arms_goes_to_the_stub(tmp_path):
+    panel = _panel(tmp_path)
+    arms = {
+        LEXICAL_STUB: [(None, AssignedStubEncoder())],
+        EUCLIDEAN_D16: [(1, AssignedStubEncoder())],
+    }
+    record = fix_ita_margin(panel, arms, 0.05, 'ita-margins', purpose=PURPOSE)
+    assert record.reference_mrr[LEXICAL_STUB] == record.reference_mrr[EUCLIDEAN_D16]
+    assert record.reference == LEXICAL_STUB
+
+def test_the_margin_scales_with_r(tmp_path):
+    panel = _panel(tmp_path)
+    record = fix_ita_margin(panel, _margin_arms(), 0.2, 'ita-margins', purpose=PURPOSE)
+    assert record.r == 0.2
+    assert record.margin == 0.2 * record.reference_mrr[EUCLIDEAN_D16]
+
 @pytest.mark.parametrize(
     'r, arms',
     [
