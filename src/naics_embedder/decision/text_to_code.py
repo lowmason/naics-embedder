@@ -14,9 +14,13 @@ Text→code's decision on the ITA panel (spec ``text-to-code-ita-panel``, 4.5).
   comparison enforces no seed floor (P6): Stage 5's read applies it to candidates.
 - **Margin.** δ = r × the chosen reference's validation headline MRR (U38), fixed from the margin
   record's own fresh reference reads under a new run id, before any candidate read. Stage 4's reads
-  stay gap evidence and are not reused. ``check_ita_margin_first`` refuses a record when the log
-  holds an ``ita_text`` validation read with role ``candidate``, or with no role, made before it was
-  fixed: training-monitor reads count as candidate reads.
+  stay gap evidence and are not reused. An arm that lists a seed twice is refused before any read,
+  since that seed would count twice in its MRR. ``check_ita_margin`` refuses a record that does not
+  agree with itself: its arms, its reference, its δ and its reads. ``check_ita_margin_first`` runs
+  that check, then refuses a record when the log holds an ``ita_text`` validation read made before
+  it was fixed that is not a reference read: one with role ``candidate``, with no role, or with
+  role ``reference`` but an arm outside ``REFERENCE_ARMS``. Training-monitor reads count as
+  candidate reads.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -312,8 +316,9 @@ def fix_ita_margin(
         The margin record, fixed after its reads.
 
     Raises:
-        ValueError: If ``r`` is not a positive finite number, or the arms are not exactly
-            ``REFERENCE_ARMS`` or one has no seed, before anything is read.
+        ValueError: If ``r`` is not a positive finite number, the arms are not exactly
+            ``REFERENCE_ARMS``, one has no seed, or one lists a seed more than once (two equal
+            seeds, or two None seeds), naming the arm and the seed, before anything is read.
     '''
 
     if not (math.isfinite(r) and r > 0):
@@ -325,6 +330,13 @@ def fix_ita_margin(
     for arm in REFERENCE_ARMS:
         if not reference_arms[arm]:
             raise ValueError(f'arm {arm!r} has no seed')
+        seeds = [seed for seed, _ in reference_arms[arm]]
+        for seed in seeds:
+            if seeds.count(seed) > 1:
+                raise ValueError(
+                    f'arm {arm!r} lists seed {seed} more than once: a repeated seed would count '
+                    'twice in its MRR'
+                )
     run_id = f'ita-margin/{uuid.uuid4().hex}'
     reference_mrr: Dict[str, float] = {}
     for arm in REFERENCE_ARMS:
@@ -351,24 +363,96 @@ def fix_ita_margin(
         fixed_at=datetime.now(timezone.utc),
     )
 
+def check_ita_margin(margin: ItaMarginRecord) -> None:
+    '''
+    Require the margin record to agree with itself (spec 4.5).
+
+    Its MRRs are keyed by exactly ``REFERENCE_ARMS``, its reference is the one ``choose_reference``
+    picks from them, and δ is exactly ``r`` times the reference's MRR. Each of its reads is an
+    ``ita_text`` read of the validation part under its run id, with role ``reference``, an arm in
+    ``REFERENCE_ARMS``, its split fingerprint and its data fingerprint. The record holds no
+    per-seed MRR, so each arm's MRR is not recomputed.
+
+    Args:
+        margin: The margin record.
+
+    Raises:
+        ValueError: If the MRRs are not keyed by exactly ``REFERENCE_ARMS``; if the reference is
+            not the one they choose; if δ is not ``r`` times the reference's MRR; if the record
+            holds no read; or if a read is not an ``ita_text`` validation read, or names another
+            run, a role other than ``reference``, an arm outside ``REFERENCE_ARMS``, another split
+            fingerprint or another data fingerprint. The message names the record and what
+            disagrees.
+    '''
+
+    name = f'the margin {margin.name!r}'
+    if set(margin.reference_mrr) != set(REFERENCE_ARMS):
+        raise ValueError(
+            f'{name} holds MRRs for {sorted(margin.reference_mrr)}, not the reference arms '
+            f'{list(REFERENCE_ARMS)}'
+        )
+    chosen = choose_reference(margin.reference_mrr)
+    if margin.reference != chosen:
+        raise ValueError(
+            f'{name} names the reference {margin.reference!r}, but its MRRs choose {chosen!r}'
+        )
+    expected = margin.r * margin.reference_mrr[margin.reference]
+    if margin.margin != expected:
+        raise ValueError(
+            f"{name} holds δ = {margin.margin}, not r × the reference's MRR, {margin.r} × "
+            f'{margin.reference_mrr[margin.reference]} = {expected}'
+        )
+    if not margin.log_records:
+        raise ValueError(f'{name} holds no read')
+    for position, record in enumerate(margin.log_records):
+        detail = record.get('detail', {})
+        read = f'{name}: its read {position}'
+        logged = (record.get('event'), record.get('panel'), record.get('split'))
+        if logged != (SelectionEvent.READ.value, ITA_PANEL, ItaPart.VALIDATION.value):
+            raise ValueError(f'{read} is not an ita_text read of the validation part: {logged}')
+        if detail.get('run') != margin.run_id:
+            raise ValueError(
+                f"{read} was logged under run {detail.get('run')!r}, not {margin.run_id!r}"
+            )
+        if detail.get('role') != 'reference':
+            raise ValueError(f"{read} has role {detail.get('role')!r}, not 'reference'")
+        if detail.get('arm') not in REFERENCE_ARMS:
+            raise ValueError(
+                f"{read} reads arm {detail.get('arm')!r}, not one of {list(REFERENCE_ARMS)}"
+            )
+        if record.get('fingerprint') != margin.split_fingerprint:
+            raise ValueError(
+                f"{read} was read on split fingerprint {record.get('fingerprint')}, not "
+                f'{margin.split_fingerprint}'
+            )
+        if detail.get('data_fingerprint') != margin.data_fingerprint:
+            raise ValueError(
+                f"{read} was read on data fingerprint {detail.get('data_fingerprint')}, not "
+                f'{margin.data_fingerprint}'
+            )
+
 def check_ita_margin_first(margin: ItaMarginRecord, log: SelectionLog) -> None:
     '''
     Require the margin's reads to precede it, and no candidate read of ITA validation to precede
     it (spec 4.5).
 
-    A read counts as a candidate read when its role is ``candidate`` or it names no role:
-    training-monitor reads count. Sealed-part reads and other panels' reads do not count.
+    The record must first pass ``check_ita_margin``. A read counts as a candidate read unless its
+    role is ``reference`` and its arm is in ``REFERENCE_ARMS``: a read with role ``candidate``, with
+    no role, or with role ``reference`` and another arm or none counts, and training-monitor reads
+    count. Sealed-part reads and other panels' reads do not count.
 
     Args:
         margin: The margin record.
         log: The selection log the reads went to.
 
     Raises:
-        ValueError: If ``fixed_at`` names no timezone; if one of the margin's reads is later than
-            ``fixed_at``; or if the log holds an ``ita_text`` validation read whose role is not
-            ``reference`` before ``fixed_at``, naming its purpose and time.
+        ValueError: If the record fails ``check_ita_margin``; if ``fixed_at`` names no timezone;
+            if one of the margin's reads is later than ``fixed_at``; or if the log holds an
+            ``ita_text`` validation read before ``fixed_at`` that is not a reference read of a
+            reference arm, naming its purpose and time.
     '''
 
+    check_ita_margin(margin)
     name = f'the margin {margin.name!r}'
     if margin.fixed_at.utcoffset() is None:
         raise ValueError(f'{name} was fixed at {margin.fixed_at.isoformat()}, with no timezone')
@@ -384,7 +468,8 @@ def check_ita_margin_first(margin: ItaMarginRecord, log: SelectionLog) -> None:
             SelectionEvent.READ.value, ITA_PANEL, ItaPart.VALIDATION.value
         ):
             continue
-        if record.get('detail', {}).get('role') == 'reference':
+        detail = record.get('detail', {})
+        if detail.get('role') == 'reference' and detail.get('arm') in REFERENCE_ARMS:
             continue
         time = read_time(record, f'the read {record.get("purpose")!r}')
         if time < margin.fixed_at:

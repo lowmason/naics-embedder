@@ -9,8 +9,10 @@ headline pairs the items, and each arm's seeds are nested in the shared unit dra
 scored on the fixture panel of ``tests/fixtures/ita.py``, with its log under ``tmp_path``.
 '''
 
+import copy
 import dataclasses
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Mapping, Sequence
 
@@ -37,6 +39,7 @@ from naics_embedder.decision.text_to_code import (
     ItaVerdict,
     arm_replicates,
     beat_by_margin,
+    check_ita_margin,
     check_ita_margin_first,
     choose_reference,
     compare_to_reference,
@@ -378,8 +381,8 @@ def _margin_arms() -> dict:
         ],
     }
 
-def _read(panel: ItaPanel, role=None, part='validation', purpose='a stage 5 read') -> dict:
-    detail = {'arm': 'c', 'seed': 1, 'run': 'stage5/c'}
+def _read(panel: ItaPanel, role=None, part='validation', purpose='a stage 5 read', arm='c') -> dict:
+    detail = {'arm': arm, 'seed': 1, 'run': f'stage5/{arm}'}
     if role is not None:
         detail['role'] = role
     if part == 'sealed':
@@ -511,6 +514,193 @@ def test_fix_ita_margin_refuses_a_bad_r_or_other_arms_before_reading(tmp_path, r
         )
     assert not panel.log.path.exists()
 
+@pytest.mark.parametrize(
+    'arm, seeds',
+    [
+        (EUCLIDEAN_D16, [1, 1]),
+        (EUCLIDEAN_D16, [1, 2, 1]),
+        (EUCLIDEAN_D16, [None, None]),
+        (LEXICAL_STUB, [None, None]),
+        (LEXICAL_STUB, [3, 3]),
+    ],
+    ids=['two-equal', 'equal-apart', 'two-none-d16', 'two-none-stub', 'stub-two-equal'],
+)
+def test_fix_ita_margin_refuses_a_repeated_seed_before_reading(tmp_path, arm, seeds):
+    panel = _panel(tmp_path)
+    arms = _margin_arms()
+    arms[arm] = [(seed, AssignedStubEncoder()) for seed in seeds]
+    repeated = seeds[-1]
+    with pytest.raises(ValueError, match=f"arm '{arm}' lists seed {repeated} more than once"):
+        fix_ita_margin(panel, arms, 0.05, 'ita-margins', purpose=PURPOSE)
+    assert not panel.log.path.exists()
+
+def test_one_none_seed_per_arm_and_distinct_seeds_pass(tmp_path):
+    panel = _panel(tmp_path)
+    arms = {
+        LEXICAL_STUB: [(None, AssignedStubEncoder())],
+        EUCLIDEAN_D16: [(None, AssignedStubEncoder()), (1, AssignedStubEncoder())],
+    }
+    record = fix_ita_margin(panel, arms, 0.05, 'ita-margins', purpose=PURPOSE)
+    assert len(record.log_records) == 3
+
+def _broken_read(index: int, change):
+
+    def update(margin: ItaMarginRecord) -> dict:
+        records = [copy.deepcopy(record) for record in margin.log_records]
+        change(records[index])
+        return {'log_records': records}
+
+    return update
+
+def _set_detail(key, value):
+
+    def change(record):
+        record['detail'][key] = value
+
+    return change
+
+def _drop_detail(key):
+
+    def change(record):
+        del record['detail'][key]
+
+    return change
+
+def _set(key, value):
+
+    def change(record):
+        record[key] = value
+
+    return change
+
+INCONSISTENT_MARGINS = {
+    'extra-arm': (
+        lambda m: {
+            'reference_mrr': {
+                **m.reference_mrr, 'euclidean-d32': 0.9
+            }
+        },
+        'not the reference arms',
+    ),
+    'missing-arm': (
+        lambda m: {
+            'reference_mrr': {
+                LEXICAL_STUB: m.reference_mrr[LEXICAL_STUB]
+            }
+        },
+        'not the reference arms',
+    ),
+    'other-reference': (lambda m: {
+        'reference': LEXICAL_STUB
+    }, 'names the reference'),
+    'reference-not-an-arm': (lambda m: {
+        'reference': 'euclidean-d32'
+    }, 'names the reference'),
+    'mrr-flips-the-choice': (
+        lambda m: {
+            'reference_mrr': {
+                **m.reference_mrr, LEXICAL_STUB: 1.0
+            }
+        },
+        'names the reference',
+    ),
+    'margin': (lambda m: {
+        'margin': math.nextafter(m.margin, 1.0)
+    }, 'not r ×'),
+    'r': (lambda m: {
+        'r': 0.1
+    }, 'not r ×'),
+    'mrr-moves-delta': (
+        lambda m: {
+            'reference_mrr': {
+                **m.reference_mrr, EUCLIDEAN_D16: 0.99
+            }
+        },
+        'not r ×',
+    ),
+    'no-reads': (lambda m: {
+        'log_records': []
+    }, 'holds no read'),
+    'not-a-read': (_broken_read(-1, _set('event', 'open')), 'not an ita_text read'),
+    'other-panel': (_broken_read(-1, _set('panel', 'outcome')), 'not an ita_text read'),
+    'sealed-read': (_broken_read(-1, _set('split', 'sealed')), 'not an ita_text read'),
+    'other-run': (_broken_read(-1, _set_detail('run', 'stage5/c')), 'under run'),
+    'no-run': (_broken_read(-1, _drop_detail('run')), 'under run'),
+    'candidate-role': (_broken_read(-1, _set_detail('role', 'candidate')), 'has role'),
+    'no-role': (_broken_read(-1, _drop_detail('role')), 'has role'),
+    'other-arm': (_broken_read(-1, _set_detail('arm', 'c')), 'reads arm'),
+    'no-arm': (_broken_read(-1, _drop_detail('arm')), 'reads arm'),
+    'read-split-fingerprint': (
+        _broken_read(-1, _set('fingerprint', 'f' * 64)), 'split fingerprint'
+    ),
+    'record-split-fingerprint': (lambda m: {
+        'split_fingerprint': 'f' * 64
+    }, 'split fingerprint'),
+    'read-data-fingerprint': (
+        _broken_read(-1, _set_detail('data_fingerprint', 'f' * 64)),
+        'data fingerprint',
+    ),
+    'record-data-fingerprint': (lambda m: {
+        'data_fingerprint': 'f' * 64
+    }, 'data fingerprint'),
+    'first-read-other-run': (_broken_read(0, _set_detail('run', 'stage5/c')), 'under run'),
+}
+
+@pytest.mark.parametrize(
+    'update, disagrees', INCONSISTENT_MARGINS.values(), ids=INCONSISTENT_MARGINS.keys()
+)
+def test_an_inconsistent_margin_record_is_refused(tmp_path, update, disagrees):
+    panel = _panel(tmp_path)
+    margin = _fix(panel)
+    check_ita_margin(margin)
+    broken = margin.model_copy(update=update(margin))
+    with pytest.raises(ValueError, match=f"the margin 'ita-margins'.*{re.escape(disagrees)}"):
+        check_ita_margin(broken)
+    with pytest.raises(ValueError, match=f"the margin 'ita-margins'.*{re.escape(disagrees)}"):
+        check_ita_margin_first(broken, panel.log)
+
+def test_a_consistent_margin_record_passes_after_a_json_round_trip(tmp_path):
+    margin = _fix(_panel(tmp_path))
+    check_ita_margin(ItaMarginRecord.model_validate_json(margin.model_dump_json()))
+
+@pytest.mark.parametrize('arm', ['c', None], ids=['other-arm', 'no-arm'])
+def test_a_margin_after_a_reference_read_of_another_arm_is_refused(tmp_path, arm):
+    panel = _panel(tmp_path)
+    detail = {'role': 'reference', 'run': 'outside/c'}
+    if arm is not None:
+        detail['arm'] = arm
+    read = panel.log.append(
+        SelectionEvent.READ,
+        panel='ita_text',
+        split='validation',
+        purpose='a mislabeled candidate read',
+        fingerprint=panel.fingerprint,
+        n_queries=3,
+        detail=detail,
+    )
+    margin = _fix(panel)
+    with pytest.raises(ValueError, match='a mislabeled candidate read') as refused:
+        check_ita_margin_first(margin, panel.log)
+    assert read['time'] in str(refused.value)
+
+def test_a_margin_after_an_outside_reference_read_of_the_stub_passes(tmp_path):
+    panel = _panel(tmp_path)
+    panel.log.append(
+        SelectionEvent.READ,
+        panel='ita_text',
+        split='validation',
+        purpose='stage 4 gap evidence',
+        fingerprint=panel.fingerprint,
+        n_queries=3,
+        detail={
+            'arm': LEXICAL_STUB,
+            'role': 'reference',
+            'run': 'outside/stub'
+        },
+    )
+    margin = _fix(panel)
+    check_ita_margin_first(margin, panel.log)
+
 def test_a_margin_after_a_candidate_read_is_refused(tmp_path):
     panel = _panel(tmp_path)
     read = _read(panel, role='candidate', purpose='an early candidate read')
@@ -550,7 +740,7 @@ def test_a_margin_after_a_read_with_another_role_is_refused(tmp_path):
 
 def test_earlier_reference_reads_and_later_candidate_reads_pass(tmp_path):
     panel = _panel(tmp_path)
-    _read(panel, role='reference', purpose='stage 4 gap evidence')
+    _read(panel, role='reference', purpose='stage 4 gap evidence', arm=EUCLIDEAN_D16)
     margin = _fix(panel)
     _read(panel, role='candidate')
     _read(panel, role=None)
