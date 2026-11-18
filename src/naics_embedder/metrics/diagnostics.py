@@ -325,7 +325,7 @@ def parent_retrieval(distances: np.ndarray, tree: Tree) -> ParentRetrieval:
     # A tie is broken against the parent: every code as near as it ranks ahead
     ranks = (others <= to_parent[:, None]).sum(axis=1)
     return ParentRetrieval(
-        at={str(k): float((ranks <= k).mean())
+        at={f'@{k}': float((ranks <= k).mean())
             for k in PARENT_KS},
         queries=len(queries),
         unary_pairs_excluded=int(unary.sum()),
@@ -335,11 +335,25 @@ def parent_retrieval(distances: np.ndarray, tree: Tree) -> ParentRetrieval:
 # Report
 # -------------------------------------------------------------------------------------------------
 
+def _codebook_mismatch(codes: Sequence[str], codebook_codes: Sequence[str]) -> Optional[str]:
+    '''How the table's codes differ from the codebook's, naming the first of each kind.'''
+
+    lacks = sorted(set(codebook_codes) - set(codes))
+    adds = sorted(set(codes) - set(codebook_codes))
+    parts = []
+    if lacks:
+        parts.append(
+            f'lacks {len(lacks):,} codebook code{"s" * (len(lacks) > 1)}, first {lacks[0]}'
+        )
+    if adds:
+        parts.append(f'adds {len(adds):,} code{"s" * (len(adds) > 1)} outside it, first {adds[0]}')
+    return f"the table's codes are not the codebook's: it {' and '.join(parts)}" if parts else None
+
 def diagnostics_report(
     table: pl.DataFrame,
     geometry: Geometry,
     *,
-    codebook_codes: Optional[Sequence[str]] = None,
+    codebook_codes: Sequence[str],
     curvature: float = 1.0,
 ) -> DiagnosticsReport:
     '''
@@ -348,20 +362,18 @@ def diagnostics_report(
     Args:
         table: ``code`` plus coordinates (``panels.regressor.coordinate_matrix``).
         geometry: The arm's geometry, which sets its distance.
-        codebook_codes: If given, the table must cover exactly these codes.
+        codebook_codes: The codebook's codes, which the table must cover exactly.
         curvature: A hyperbolic arm's curvature magnitude.
 
     Raises:
-        ValueError: If the table's codes differ from ``codebook_codes``, or an ancestor of a code
-            is missing.
+        ValueError: If the table's codes differ from ``codebook_codes`` (the message names the
+            first code missing and the first extra), or an ancestor of a code is missing.
     '''
 
     codes, matrix = coordinate_matrix(table)
-    if codebook_codes is not None and set(codes) != set(codebook_codes):
-        raise ValueError(
-            f"the table has {len(codes):,} codes; the report covers the codebook's "
-            f'{len(set(codebook_codes)):,}'
-        )
+    mismatch = _codebook_mismatch(codes, codebook_codes)
+    if mismatch is not None:
+        raise ValueError(mismatch)
     tree = Tree.from_codes(codes)
     distances = pairwise_distances(matrix, geometry, curvature)
     lca = tree.lca_depth()

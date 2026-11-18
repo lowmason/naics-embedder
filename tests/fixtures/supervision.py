@@ -253,6 +253,7 @@ def text_descriptions_fixture(descriptions_fixture) -> pl.DataFrame:
     return descriptions_fixture.with_columns(
         title=pl.concat_str(pl.lit('Industry '), pl.col('code')),
         description=pl.lit('This industry comprises establishments.'),
+        description_source=pl.col('code'),
         examples=pl.col('code').replace_strict(examples, default=None),
         excluded=pl.col('code').replace_strict(excluded, default=None),
     )
@@ -365,6 +366,7 @@ def hierarchy_descriptions() -> pl.DataFrame:
             'code': list(HIERARCHY_CODES),
             'title': [f'Industry {code}' for code in HIERARCHY_CODES],
             'description': ['This industry comprises establishments.'] * len(HIERARCHY_CODES),
+            'description_source': list(HIERARCHY_CODES),
             'examples': [None] * len(HIERARCHY_CODES),
             'excluded': [excluded.get(code) for code in HIERARCHY_CODES],
             'excluded_codes': [excluded_codes.get(code) for code in HIERARCHY_CODES],
@@ -591,6 +593,7 @@ def _reference_descriptions(
             'code': list(HIERARCHY_CODES),
             'title': [f'Industry {code}' for code in HIERARCHY_CODES],
             'description': ['This industry comprises establishments.'] * len(HIERARCHY_CODES),
+            'description_source': list(HIERARCHY_CODES),
             'examples': ['; '.join(examples.get(code, [])) or None for code in HIERARCHY_CODES],
             'excluded': [' '.join(excluded.get(code, [])) or None for code in HIERARCHY_CODES],
             'excluded_codes': [excluded_codes.get(code) or None for code in HIERARCHY_CODES],

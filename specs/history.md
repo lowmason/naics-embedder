@@ -24,3 +24,13 @@ Closed earlier deferred items:
 - "Economic stored-scores check (plan 14 final review, Minor, triaged defer):" (deferred by 14-economic-decision-tooling).
 - "Economic predictions-to-table binding (plan 14 final review, Minor, triaged defer):" (deferred by 14-economic-decision-tooling).
 - "Economic decision test gaps (plan 14 final review, Minors, triaged defer): enforced but" (deferred by 14-economic-decision-tooling).
+
+## /deferred — 2026-11-18
+
+Closed deferred items:
+- "Review: the national-total employment comparison in `check_invariants`" (deferred by 3-employment-statistics-coverage): the comparison gets the `cells/2 + 1` employment allowance, and the real 2022–2025 run exits 0.
+- "Review Minor: the index-roles checks outside `data roles` hardcode the near-duplicate" (deferred by 4-outcome-panel-sealed-splits): both keys are documented as frozen with the table, and a test pins the config, the provenance and the checks' defaults together.
+- "Review Minor, for Stage 10: the diagnostics report's interfaces" (deferred by 6-decision-rule-and-diagnostics): a mismatch names the first missing and extra code, the codebook is cast to Utf8, every key uses `@k`, and `codebook_codes` is required.
+- "Review Minor: the bundle build loads its tokenizer last. `generate_supervision_bundle`" (deferred by 7-supervision-target-and-text): the build resolves the cached tokenizer first and names the command that caches it.
+- "Review Minor: the bundle build does not re-check the text channels." (deferred by 7-supervision-target-and-text): the build runs `verify_text_channels` before any artifact, as a raising check only.
+- "Review Minor: a test needs a newer transformers than pyproject's floor." (deferred by 8-shared-encoder-and-projection): the test guards its import and skips its one checkpointing test without the class.

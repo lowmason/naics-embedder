@@ -810,7 +810,28 @@ def test_diagnostics_refuses_a_table_that_misses_a_codebook_code(runner, tmp_pat
     )
 
     assert result.exit_code == 1
-    assert 'Diagnostics failed' in result.output
+    output = click.unstyle(result.output).replace('\n', '')
+    assert 'Diagnostics failed' in output
+    assert 'first 11' in output
+
+@pytest.mark.unit
+def test_diagnostics_reads_a_codebook_whose_codes_are_not_strings(runner, tmp_path):
+    codebook = tmp_path / 'naics_codebook.parquet'
+    pl.DataFrame({'code': [int(code) for code in CODEBOOK]}).write_parquet(codebook)
+    table = tmp_path / 'arm.parquet'
+    coordinate_table(CODEBOOK, dimension=4).write_parquet(table)
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'diagnostics', '--table',
+            str(table), '--codebook',
+            str(codebook), '--geometry', 'euclidean'
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert 'parent retrieval: @1 ' in click.unstyle(result.output).replace('\n', '')
 
 def _diagnose(runner, tmp_path, geometry, provenance):
     '''

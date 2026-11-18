@@ -952,6 +952,33 @@ def test_a_bundle_records_its_input_window(generated_bundle):
     assert manifest['input_window'] == FIVE_CODE_INPUT_WINDOW
     assert load_validated_bundle(generated_bundle).manifest.input_window == _five_code_record()
 
+def _on_111111(channel: str, value) -> pl.Expr:
+    return pl.when(pl.col('code') == '111111').then(pl.lit(value)).otherwise(pl.col(channel))
+
+@pytest.mark.parametrize(
+    ('change', 'message'),
+    [
+        (_on_111111('examples', '  ').alias('examples'), 'examples texts are blank'),
+        (
+            _on_111111('description', 'Farms [EMPTY]').alias('description'),
+            "contain the placeholder '\\[EMPTY\\]'",
+        ),
+        (
+            _on_111111('description_source', None).alias('description_source'),
+            'description_source without a description',
+        ),
+    ],
+    ids=['blank', 'placeholder', 'no-provenance'],
+)
+def test_bundle_refuses_descriptions_whose_text_channels_fail_their_check(
+    tmp_path, build_bundle, text_descriptions_fixture, change, message
+):
+    '''Deferred plan 7: the build re-checks the descriptions it pins, as preprocess does.'''
+
+    with pytest.raises(ValueError, match=message):
+        build_bundle(descriptions=text_descriptions_fixture.with_columns(change))
+    assert list(tmp_path.iterdir()) == []
+
 @pytest.mark.parametrize(
     ('record', 'message'),
     [
@@ -1010,6 +1037,30 @@ def test_production_bundle_counts_tokens_with_the_backbones_cached_tokenizer(
             },
         },
     }
+
+def test_a_build_without_the_cached_tokenizer_fails_before_its_first_artifact(
+    monkeypatch, hierarchy_build_config
+):
+    import transformers
+
+    built = []
+
+    def missing(name, **kwargs):
+        raise OSError(f'We could not find {name} in the cached files')
+
+    monkeypatch.setattr(transformers.AutoTokenizer, 'from_pretrained', missing)
+    monkeypatch.setattr(
+        'naics_embedder.data.supervision_bundle.build_codebook',
+        lambda descriptions: built.append('codebook'),
+    )
+
+    with pytest.raises(OSError) as refusal:
+        generate_supervision_bundle(hierarchy_build_config)
+
+    assert built == []
+    message = str(refusal.value)
+    assert "sentence-transformers/all-MiniLM-L6-v2's tokenizer is not in the local" in message
+    assert "AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')" in message
 
 def test_loader_names_the_contract_of_a_manifest_it_cannot_parse(generated_bundle):
     # A v1 manifest predates the input-window record, so it does not parse as a v2 one

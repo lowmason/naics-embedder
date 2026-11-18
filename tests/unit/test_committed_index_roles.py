@@ -5,14 +5,18 @@ These read only ``conf/data/index_roles.csv`` and its provenance, so they run in
 Census files. The pinned hash fails any accidental redraw: redrawing unseals the splits.
 '''
 
+import inspect
 import json
+from fractions import Fraction
 from pathlib import Path
 
 import polars as pl
 import pytest
 
 from naics_embedder.panels.index_roles import read_role_table, role_table_fingerprint
-from naics_embedder.supervision.artifacts import sha256_file
+from naics_embedder.panels.leakage import NEAR_DUPLICATE_MIN_JACCARD
+from naics_embedder.supervision.artifacts import sha256_file, validate_index_role_table
+from naics_embedder.utils.config import OutcomePanelConfig, load_config
 
 pytestmark = pytest.mark.unit
 
@@ -47,6 +51,16 @@ def test_the_table_is_the_one_its_provenance_describes(roles, provenance):
     assert role_table_fingerprint(roles) == TABLE_SHA256
     assert provenance['role_table']['sha256'] == TABLE_SHA256
     assert dict(roles.group_by('role').len().iter_rows()) == provenance['roles']
+
+def test_the_draws_threshold_and_floor_are_frozen_with_the_table(provenance):
+    '''Only ``data roles`` reads the config's two keys: the preprocess, bundle, loader and panel
+    checks use the defaults below. So the config, the draw and those defaults must agree.'''
+    cfg = load_config(OutcomePanelConfig, 'data/outcome_panel.yaml')
+    floor_default = inspect.signature(validate_index_role_table).parameters['min_examples_per_code']
+
+    assert Fraction(provenance['near_duplicate_min_jaccard']) == NEAR_DUPLICATE_MIN_JACCARD
+    assert Fraction(str(cfg.near_duplicate_min_jaccard)) == NEAR_DUPLICATE_MIN_JACCARD
+    assert provenance['examples_floor'] == cfg.examples_floor == floor_default.default
 
 def test_held_out_queries_were_checked_against_training_text(provenance):
     assert provenance['roles'] == {
