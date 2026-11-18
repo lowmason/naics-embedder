@@ -275,6 +275,24 @@ def test_check_invariants_catch_detail_above_its_total():
     assert any('state cells exceed their national cell' in failure for failure in failures)
     assert not any('county cells exceed' in failure for failure in failures)
 
+def _with_national_total(emp, wages='100000'):
+    rows = _annual_rows(2024)
+    for row in rows:
+        if (row['area_fips'], row['industry_code'], row['agglvl_code']) == ('US000', '10', '11'):
+            row['annual_avg_emplvl'], row['total_annual_wages'] = emp, wages
+    return esc.read_annual_csv(_csv_bytes(rows))
+
+@pytest.mark.parametrize(('emp', 'fails'), [('163', False), ('162', False), ('161', True)])
+def test_check_invariants_allow_annual_average_rounding_against_the_national_total(emp, fails):
+    # Four disclosed national six-digit private cells sum to 165 employees, so annual-average
+    # rounding may put them up to 4/2 + 1 = 3 above the published total.
+    failures = esc.check_invariants(_with_national_total(emp), 2024)
+    assert any('disclosed six-digit emp' in failure for failure in failures) is fails
+
+def test_check_invariants_give_national_wages_no_rounding_allowance():
+    failures = esc.check_invariants(_with_national_total('1000', wages='16499'), 2024)
+    assert failures == ['2024: disclosed six-digit wages 16500 exceeds total 16499']
+
 def test_singlefile_header_reads_the_first_line(tmp_path):
     path = tmp_path / '2024_annual_singlefile.zip'
     with zipfile.ZipFile(path, 'w') as archive:

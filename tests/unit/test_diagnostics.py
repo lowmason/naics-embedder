@@ -173,7 +173,7 @@ def test_parent_retrieval_skips_the_unary_pairs_and_breaks_ties_against_the_pare
 
     assert (result.queries, result.unary_pairs_excluded) == (12, 1)
     # Leaves 111111, 111112, 211111 and 211112 rank their parent first
-    assert result.at == pytest.approx({'1': 4 / 12, '5': 1.0})
+    assert result.at == pytest.approx({'@1': 4 / 12, '@5': 1.0})
 
 def test_each_geometry_reads_its_own_distance():
     points = np.array([[0.0, 0.0], [3.0, 4.0], [1.0, 0.0], [6.0, 8.0]])
@@ -224,14 +224,31 @@ def test_the_report_covers_every_code_of_the_tree():
     # 238110 is its five-digit parent's only child
     assert report.parent_retrieval.unary_pairs_excluded == 1
     assert report.parent_retrieval.queries == n - 4 - 1
-    assert diagnostics_report(_table(CODEBOOK), 'euclidean').curvature is None
+    assert set(report.parent_retrieval.at) == {'@1', '@5'}
+    euclidean = diagnostics_report(_table(CODEBOOK), 'euclidean', codebook_codes=CODEBOOK)
+    assert euclidean.curvature is None
 
 def test_the_report_refuses_a_table_that_is_not_the_codebook():
-    with pytest.raises(ValueError, match='covers the codebook'):
+    with pytest.raises(ValueError, match='lacks 1 codebook code, first 11'):
         diagnostics_report(_table(CODEBOOK[1:]), 'euclidean', codebook_codes=CODEBOOK)
     lorentz = pl.DataFrame({'code': ['11', '111'], 'x0': [1.0, 2.0], 'x1': [0.0, 3.0**0.5]})
     with pytest.raises(ValueError, match='Lorentz points'):
-        diagnostics_report(lorentz, 'hyperbolic')
+        diagnostics_report(lorentz, 'hyperbolic', codebook_codes=['11', '111'])
+
+def test_the_refusal_names_the_codes_when_the_counts_match():
+    # One code swapped for another: the counts agree, so only the codes can say what differs
+    swapped = [*CODEBOOK[1:], '999999']
+
+    with pytest.raises(ValueError) as refusal:
+        diagnostics_report(_table(swapped), 'euclidean', codebook_codes=CODEBOOK)
+
+    message = str(refusal.value)
+    assert 'lacks 1 codebook code, first 11' in message
+    assert 'adds 1 code outside it, first 999999' in message
+
+def test_the_report_requires_the_codebook():
+    with pytest.raises(TypeError, match='codebook_codes'):
+        diagnostics_report(_table(CODEBOOK), 'euclidean')
 
 def test_d_star_is_the_one_tree_distance_function(tree):
     # The supervision bundle's distances call the same function (Stage 5)

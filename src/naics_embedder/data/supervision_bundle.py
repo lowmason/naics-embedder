@@ -32,7 +32,7 @@ from naics_embedder.data.create_triplets import (
     CROSS_SECTOR_NEGATIVE_CAP,
     iter_training_pair_batches,
 )
-from naics_embedder.data.download_data import TEXT_CHANNELS
+from naics_embedder.data.download_data import TEXT_CHANNELS, verify_text_channels
 from naics_embedder.data.redirections import exclusion_channel
 from naics_embedder.panels.index_roles import verify_examples_channel, verify_role_leakage
 from naics_embedder.supervision.artifacts import (
@@ -734,6 +734,8 @@ def generate_supervision_bundle_from_frames(
     '''
     Validate canonical frames and publish them as one immutable supervision bundle.
 
+    ``descriptions`` must pass preprocess's text-channel check: no blank channel, no placeholder,
+    and a ``description_source`` exactly where there is a description.
     ``index_roles`` (every index entry with its text and role) and ``redirections`` (the
     redirection table) become required members after checks against ``descriptions``. Each entry
     holds one known role, examples channels hold examples-role entries only, and no held-out
@@ -757,6 +759,8 @@ def generate_supervision_bundle_from_frames(
     if final.exists():
         raise FileExistsError(f'supervision bundle {bundle_id} already exists at {final}')
 
+    # A raising check only: a new validation-results key would make published bundles unloadable
+    verify_text_channels(descriptions)
     codebook = build_codebook(descriptions)
     _validate_input_window(input_window, descriptions)
     pair_facts = _normalize_pair_facts(pair_facts)
@@ -845,6 +849,21 @@ def generate_supervision_bundle_from_frames(
     )
     return final / MANIFEST_FILENAME
 
+def _cached_tokenizer(backbone: str) -> Any:
+    '''The backbone's tokenizer from the local Hugging Face cache, or an error naming the fix.'''
+
+    # Imported here: only a real build loads the tokenizer
+    from transformers import AutoTokenizer
+
+    try:
+        return AutoTokenizer.from_pretrained(backbone, local_files_only=True)
+    except OSError as exc:
+        raise OSError(
+            f"{backbone}'s tokenizer is not in the local Hugging Face cache, which a bundle build "
+            'reads to record the input window. Cache it once with network access: uv run python '
+            f"-c \"from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('{backbone}')\""
+        ) from exc
+
 def generate_supervision_bundle(
     cfg: SupervisionBuildConfig,
     *,
@@ -864,8 +883,14 @@ def generate_supervision_bundle(
 
     Returns:
         Path to the published ``manifest.json``.
+
+    Raises:
+        OSError: If the backbone's tokenizer is not in the local Hugging Face cache, before any
+            artifact is built; the message names the command that caches it.
     '''
 
+    if count_tokens is None:
+        count_tokens = token_counter(_cached_tokenizer(cfg.backbone))
     descriptions_path = Path(cfg.descriptions_parquet)
     index_roles_path = Path(cfg.index_roles_parquet)
     redirections_path = Path(cfg.redirections_parquet)
@@ -882,13 +907,6 @@ def generate_supervision_bundle(
     )
     relations = compute_structural_relations(str(descriptions_path), cfg.relation_id)
     pair_facts = build_pair_facts(distances, relations, descriptions, codebook)
-    if count_tokens is None:
-        # Imported here: only a real build loads the tokenizer
-        from transformers import AutoTokenizer
-
-        count_tokens = token_counter(
-            AutoTokenizer.from_pretrained(cfg.backbone, local_files_only=True)
-        )
     input_window = input_window_record(descriptions, cfg.backbone, count_tokens)
     logger.info(f'Input window: {input_window.window} tokens ({input_window.backbone})')
     for channel, overflow in input_window.channels.items():

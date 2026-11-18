@@ -5,6 +5,11 @@ provenance_json: ./conf/data/index_roles_provenance.json
 
 # Per code, stratified: largest-remainder quotas of these shares, remainder ties broken by a draw
 # seeded with (seed, code), at least examples_floor examples-channel entries (roadmap D4)
+#
+# examples_floor and near_duplicate_min_jaccard are frozen with the committed table. Only the
+# draw (data roles) reads them. The preprocess, bundle, loader and panel checks use the defaults
+# they were drawn with (1 and 9/10), and test_committed_index_roles.py pins all three to agree.
+# Changing either means a redraw, which unseals the splits.
 seed: 20260924
 fractions:
   examples: 0.30
