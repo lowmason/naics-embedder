@@ -288,18 +288,69 @@ def test_arms_scored_on_other_pairs_are_refused(tmp_path):
     reference = [_stub(tmp_path)]
     candidate = _candidate_seeds(tmp_path)
     candidate[1] = _without(candidate[1], 'p03')
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='items'):
         _compare(candidate, reference)
 
 def test_a_later_reference_seed_on_other_pairs_is_refused(tmp_path):
     stub = _stub(tmp_path)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='items'):
         _compare([stub], [stub, _without(stub, 'p03')])
 
 def test_the_first_candidate_seed_on_other_pairs_is_refused(tmp_path):
     stub = _stub(tmp_path)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='items'):
         _compare([_without(stub, 'p03')], [stub])
+
+def _rebuilt_stub(tmp_path) -> ItaResult:
+    # The same pair ids and description keys, but p03, a validation headline pair, reports another
+    # code: a later table build that the items check alone cannot tell apart
+    pairs, codes = ita_tables(
+        replace_codes={
+            'p03': [
+                {
+                    'naics_code': '111110',
+                    'naics_year': 2022,
+                    'naics_2022_node_id': 'naics:2022:national_industry:111110',
+                    'flag_headline_basis': True,
+                }
+            ]
+        }
+    )
+    log = SelectionLog(tmp_path / 'rebuilt_log.jsonl')
+    panel = ItaPanel(pairs, codes, ITA_CANDIDATES, ITA_SETTINGS, log)
+    return panel.score(AssignedStubEncoder(), 'validation', 'check')
+
+def test_a_rebuilt_table_keeps_the_items_and_changes_the_data_fingerprint(tmp_path):
+    stub, rebuilt = _stub(tmp_path), _rebuilt_stub(tmp_path)
+    assert headline_values(rebuilt).select('unit', 'item').equals(
+        headline_values(stub).select('unit', 'item')
+    )
+    assert rebuilt.data_fingerprint != stub.data_fingerprint
+
+@pytest.mark.parametrize(
+    'candidate_builds, reference_builds, arm, position',
+    [
+        (['rebuilt'], ['first'], 'c', 0),
+        (['first', 'rebuilt'], ['first'], 'c', 1),
+        (['first'], ['first', 'rebuilt'], LEXICAL_STUB, 1),
+    ],
+)
+def test_arms_read_on_another_table_build_are_refused(
+    tmp_path, candidate_builds, reference_builds, arm, position
+):
+    builds = {'first': _stub(tmp_path), 'rebuilt': _rebuilt_stub(tmp_path)}
+    candidate = [builds[build] for build in candidate_builds]
+    reference = [builds[build] for build in reference_builds]
+    with pytest.raises(ValueError, match='data fingerprint') as raised:
+        _compare(candidate, reference)
+    assert f'arm {arm!r}' in str(raised.value)
+    assert f'seed {position}' in str(raised.value)
+    assert builds['rebuilt'].data_fingerprint in str(raised.value)
+
+def test_arms_read_on_the_same_table_build_are_compared(tmp_path):
+    rebuilt = _rebuilt_stub(tmp_path)
+    verdict = _compare([rebuilt, rebuilt], [rebuilt], candidate='copy')
+    assert verdict.delta == 0.0
 
 @pytest.mark.parametrize('side', ['candidate', 'reference'])
 def test_an_arm_with_no_seed_is_refused(tmp_path, side):

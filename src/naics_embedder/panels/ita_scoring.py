@@ -251,6 +251,9 @@ class ItaResult:
             mean over those groups of the group's mean over its non-copied pairs.
         counts: ``n_pairs``, ``n_groups``, ``n_copied``, ``n_conflict``, ``n_mojibake`` and
             ``n_company_fallback``, over every pair of the part, copied ones included.
+        data_fingerprint: The part's data fingerprint, which names the table build the scores were
+            read on. ``ItaPanel`` sets it from its read's logged detail. ``summarize_ita`` leaves
+            it None.
     '''
 
     per_pair: pl.DataFrame
@@ -259,6 +262,7 @@ class ItaResult:
     copied: Dict[str, Union[int, float, str, None]]
     phrasing: Dict[str, Union[int, float, str, None]]
     counts: Dict[str, int]
+    data_fingerprint: Optional[str] = None
 
 # The distinct per-pair columns the metrics average: ``top1`` and ``hit_at_1`` share one
 _METRIC_SOURCES = list(dict.fromkeys(_METRIC_COLUMNS.values()))

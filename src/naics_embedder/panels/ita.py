@@ -28,6 +28,7 @@ Panel
 # Imports and settings
 # -------------------------------------------------------------------------------------------------
 
+import dataclasses
 import hashlib
 import json
 import re
@@ -393,7 +394,8 @@ class ItaPanel:
                 seed, its role in ``READ_ROLES`` (``role``) and the run (``run``).
 
         Returns:
-            The part's ``ItaResult``. ``score_logged`` also returns the record the read logged.
+            The part's ``ItaResult``, its ``data_fingerprint`` the part's as the read logged it.
+            ``score_logged`` also returns the record the read logged.
         '''
 
         result, _ = self.score_logged(encoder, part, purpose, detail=detail)
@@ -423,7 +425,8 @@ class ItaPanel:
                 (``role``) and the run (``run``). A missing role is allowed.
 
         Returns:
-            The part's ``ItaResult``, and the read's record as the log appended it.
+            The part's ``ItaResult``, its ``data_fingerprint`` the part's as the read logged it, and
+            the read's record as the log appended it.
 
         Raises:
             ValueError: When the part is neither ``validation`` nor ``sealed``, ``detail`` names a
@@ -466,7 +469,8 @@ class ItaPanel:
             pairs.get_column('pair_id').to_list(),
             distance=distance,
         )
-        return summarize_ita(scores, pairs, name), record
+        result = summarize_ita(scores, pairs, name)
+        return dataclasses.replace(result, data_fingerprint=logged['data_fingerprint']), record
 
     def _part(self, part: ItaPart) -> pl.DataFrame:
         return self.pairs.filter(pl.col('part') == part.value)

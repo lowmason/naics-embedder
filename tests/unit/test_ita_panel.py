@@ -223,6 +223,19 @@ def test_an_opened_sealed_part_is_read_and_logged(tmp_path):
     assert read['detail']['data_fingerprint'] == panel.data_fingerprint('sealed')
     assert result.per_pair.get_column('pair_id').to_list() == ['p08', 'p09', 'p10', 'p11']
 
+def test_a_result_carries_the_data_fingerprint_its_read_logged(tmp_path):
+    # The decision compares results alone, so each one names the table build it was read on
+    log = SelectionLog(tmp_path / 'log.jsonl')
+    panel = _panel(log)
+
+    validation, record = panel.score_logged(AssignedStubEncoder(), 'validation', 'check')
+    assert validation.data_fingerprint == panel.data_fingerprint('validation')
+    assert validation.data_fingerprint == record['detail']['data_fingerprint']
+    panel.open_sealed('decision')
+    sealed = panel.score(AssignedStubEncoder(), 'sealed', 'decision')
+    assert sealed.data_fingerprint == panel.data_fingerprint('sealed')
+    assert sealed.data_fingerprint != validation.data_fingerprint
+
 def test_an_opening_by_another_panel_object_does_not_unseal_this_one(tmp_path):
     log = SelectionLog(tmp_path / 'log.jsonl')
     _panel(log).open_sealed('decision')

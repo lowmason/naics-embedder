@@ -220,12 +220,23 @@ def compare_to_reference(
         The verdict on Δ = candidate − reference.
 
     Raises:
-        ValueError: If an arm has no seed, or a seed of either arm is scored on other headline
-            pairs than the reference's first seed, or groups them otherwise.
+        ValueError: If an arm has no seed; if a seed of either arm was read on another table build
+            than the reference's first seed, its ``data_fingerprint`` differing, naming the arm and
+            the seed's position; or if a seed of either arm is scored on other headline pairs than
+            the reference's first seed, or groups them otherwise.
     '''
 
     if not reference_seeds:
         raise ValueError(f'arm {reference!r} has no seed')
+    expected = reference_seeds[0].data_fingerprint
+    for arm, seeds in ((candidate, candidate_seeds), (reference, reference_seeds)):
+        for position, seed in enumerate(seeds):
+            if seed.data_fingerprint != expected:
+                raise ValueError(
+                    f'arm {arm!r} seed {position} was read on data fingerprint '
+                    f"{seed.data_fingerprint}, not the reference's {expected}: paired arms must be "
+                    'read on the same table build'
+                )
     items = PanelItems.from_values(headline_values(reference_seeds[0]))
     settings = {'replicates': replicates, 'bootstrap_seed': bootstrap_seed}
     candidate_point, candidate_draws = arm_replicates(items, candidate, candidate_seeds, **settings)
