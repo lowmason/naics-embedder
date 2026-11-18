@@ -24,3 +24,24 @@ Closed earlier deferred items:
 - "Economic stored-scores check (plan 14 final review, Minor, triaged defer):" (deferred by 14-economic-decision-tooling).
 - "Economic predictions-to-table binding (plan 14 final review, Minor, triaged defer):" (deferred by 14-economic-decision-tooling).
 - "Economic decision test gaps (plan 14 final review, Minors, triaged defer): enforced but" (deferred by 14-economic-decision-tooling).
+
+## 17-text-to-code-ita-panel — 2026-11-17
+Plan: specs/plans/completed/17-text-to-code-ita-panel.md · Spec: specs/completed/text-to-code-ita-panel.md (retired) · Roadmap: specs/naics-artifact-redesign-roadmap.md, Stage 2
+
+Differences from the design:
+- Ruling, contradicts spec (Task 1): split_rule keeps the plan's seven keys (prefix_bytes, byteorder included); P1 pins them, O1 approved, spec 134 makes byte detail part of the rule.
+- Ruling (Task 2): keep the extra null guards and the table-wide repeated pair_id refusal (Global Constraint "Refuse, never drop"); accept Withdrawn 28 (.value equivalent under polars); empty headline set returns an empty frame, Task 4 refuses an empty part — cost if wrong: a Stage 10 table with nulls in unread non-headline rows would be refused at Stage 4, loudly.
+- Ruling (Task 4): fsum-based _mean replaces maintain_order (root cause is chunked Polars mean, not group order); null score refusal kept (refuse, never drop) — cost if wrong: Task 6's point-statistic equality may need approx if resampling sums differently (watch in Task 6).
+- Ruling (Task 5): public ItaPanel.pairs accepted (row-order plan test needs it); role=None refused (stricter than P5, fails closed); row-order test owned by Task 2 code; three commits fine — cost if wrong: a caller passing role=None gets a refusal instead of a candidate read.
+- Ruling (Task 7): no-seed refusal kept; margin-first check counts every earlier ita_text validation candidate/no-role read regardless of split fingerprint (conservative) — cost if wrong: a stale read under an old split would block a margin, loudly.
+- Ruling (final review): None-vs-None fingerprints still pair (raw summarize_ita results, fixture-only); Stage 5's caller must compare ItaMarginRecord.data_fingerprint with the results' (handoff bullet) — cost if wrong: a delta fixed on an old build used against a new-build candidate.
+- Ruling (final review): test_earlier_reference_reads_and_later_candidate_reads_pass logs its earlier reference read with arm euclidean-d16 instead of c; assertions unchanged — owner's gate decision "role label trusted" makes a reference-role read of a non-reference arm a candidate read — cost if wrong: none, the test still pins earlier-reference/later-candidate passing.
+- Decision (owner, completion gate, 2026-11-17): fix now — repeated seeds, the margin record self-check and reference reads of a non-reference arm; three other review lines deferred to Stage 5. Source: specs/deferred_items.md, § 17-text-to-code-ita-panel.
+- Deviation (Task 1): fixture-only tests are proven by a hand harness (`mutant-run` refuses `tests/` patches), plus process-seed and as-given key tests. Source: plan, Task 1.
+- Deviation (Task 2): `panel_pairs` also refuses nulls in read columns and a repeated `pair_id` anywhere in the pair table. Source: plan, Task 2.
+- Deviation (Task 4): every report mean is `math.fsum(values) / len(values)` (Polars chunked means were not bit-reproducible), and null scores are refused. Source: plan, Task 4.
+- Deviation (Task 5): `ItaPanel.pairs` is public, a present `role=None` is refused, and after the final review the result carries `data_fingerprint`. Source: plan, Task 5.
+- Deviation (Task 6): an arm with no seed is refused, and after the final review `compare_to_reference` refuses seeds read on another table build. Source: plan, Task 6.
+- Deviation (Task 7): owner gate added refusals of repeated seeds, `check_ita_margin` (record self-check) and reference reads of a non-reference arm. Source: plan, Task 7.
+- Deviation (Task 8): `README.md` and `tests/README.md` counts also updated, and `ItaPanelSettings` documents its fields as `Attributes:` for the strict build. Source: plan, Task 8.
+- Deferred: 5 items. Source: specs/deferred_items.md, § 17-text-to-code-ita-panel.

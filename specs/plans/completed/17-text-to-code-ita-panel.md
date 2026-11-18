@@ -1,5 +1,7 @@
 # Text→code ITA Panel Implementation Plan
 
+**Status: COMPLETE (2026-11-17)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -26,7 +28,7 @@ rule as code.
 **Tech Stack:** Python 3.10+ (locked env 3.12), PyTorch (float64 CPU distances), Polars, numpy,
 Pydantic v2, PyYAML, pytest, mkdocstrings. No new dependency.
 
-**Spec:** `specs/text-to-code-ita-panel.md` (APPROVED 2026-11-17, U41; merged by PR #163 as
+**Spec:** `specs/completed/text-to-code-ita-panel.md` (APPROVED 2026-11-17, U41; merged by PR #163 as
 `4fa2857`). Read it with this plan. §n cites that spec. Stage 10 cites embedding-data's
 `specs/ita-establishment-targets.md` at `ec6fb29` ("Tables" section).
 
@@ -173,7 +175,7 @@ row; `description_key` parts are fixed by P1's salt):
 | p10 | sawmill | Sawmill | sealed | 321113 | mojibake | 321113 |
 | p11 | dental office | Dental office | sealed | 621210 | copied_index_any | 621210 |
 
-- [ ] **Step 1: Write the failing tests** in `tests/unit/test_ita_split.py`:
+- [x] **Step 1: Write the failing tests** in `tests/unit/test_ita_split.py`:
 
 ```python
 GOLDEN = {
@@ -215,10 +217,10 @@ def test_fixture_tables_carry_every_stage_10_column():
     assert dict(pairs.schema) == ITA_PAIRS_SCHEMA and dict(codes.schema) == ITA_PAIR_CODES_SCHEMA
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_split.py -q`.
+- [x] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_split.py -q`.
   Expected: FAIL with `ModuleNotFoundError: No module named 'naics_embedder.panels.ita_split'`.
 
-- [ ] **Step 3: Write `conf/data/ita_panel.yaml`** with the four keys and a comment that the salt
+- [x] **Step 3: Write `conf/data/ita_panel.yaml`** with the four keys and a comment that the salt
   was drawn once at plan 17 and never changes, because openings of the sealed part are keyed on
   the split fingerprint (§4.2, §4.4):
 
@@ -229,13 +231,14 @@ salt: '9986637c5a4468938b7bd5c4f1e8a4cd'
 relative_margin: 0.05
 ```
 
-- [ ] **Step 4: Implement `panels/ita_split.py` and `tests/fixtures/ita.py`** with the interfaces
+- [x] **Step 4: Implement `panels/ita_split.py` and `tests/fixtures/ita.py`** with the interfaces
   above and P1's encoding.
+  > Deviation: fixture-only tests are proven by a hand harness (`mutant-run` refuses `tests/` patches), plus process-seed and as-given key tests.
 
-- [ ] **Step 5: Run the tests.** Run: `uv run pytest tests/unit/test_ita_split.py -q`.
+- [x] **Step 5: Run the tests.** Run: `uv run pytest tests/unit/test_ita_split.py -q`.
   Expected: PASS.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add conf/data/ita_panel.yaml src/naics_embedder/panels/ita_split.py tests/fixtures/ita.py tests/unit/test_ita_split.py
@@ -275,7 +278,7 @@ table (naming it); a repeated `pair_id`; a headline pair with a null `representa
 headline pair with no `flag_headline_basis` row; a basis row with a null node id; `node_code`'s
 refusals; a code not among `candidates`; P3's conflict disagreement. Extra columns are ignored.
 
-- [ ] **Step 1: Write the failing tests** in `tests/unit/test_ita_inputs.py`:
+- [x] **Step 1: Write the failing tests** in `tests/unit/test_ita_inputs.py`:
 
 ```python
 def test_panel_pairs_are_the_headline_pairs_with_their_parts():
@@ -310,16 +313,17 @@ def test_a_missing_or_retyped_column_is_refused():
 def test_a_repeated_pair_id_is_refused(): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_inputs.py -q`.
+- [x] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_inputs.py -q`.
   Expected: FAIL with `ModuleNotFoundError: No module named 'naics_embedder.panels.ita'`.
 
-- [ ] **Step 3: Implement `node_code` and `panel_pairs`** in `panels/ita.py` under an "Inputs"
+- [x] **Step 3: Implement `node_code` and `panel_pairs`** in `panels/ita.py` under an "Inputs"
   divider.
+  > Deviation: `panel_pairs` also refuses nulls in read columns and a repeated `pair_id` anywhere in the pair table.
 
-- [ ] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_ita_inputs.py -q`.
+- [x] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_ita_inputs.py -q`.
   Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/ita.py tests/unit/test_ita_inputs.py
@@ -355,7 +359,7 @@ level-L ancestor is}. It raises `ValueError` as `score_decoding` does on shapes,
 candidates and non-finite distances, and on an empty `codes` entry or a code that is not a
 candidate.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_single_code_pairs_rank_as_score_decoding_ranks_them():
@@ -380,17 +384,17 @@ def test_coarser_levels_read_the_lineage_with_combined_sectors():
 def test_a_code_that_is_not_a_candidate_or_an_empty_code_list_is_refused(): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_scoring.py -q`.
+- [x] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_scoring.py -q`.
   Expected: FAIL with `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement `score_shortlist`.** Compute the (Q, C) distance matrix once, then
+- [x] **Step 3: Implement `score_shortlist`.** Compute the (Q, C) distance matrix once, then
   boolean (Q, C) masks for "reported" and for each level's "shares an ancestor"; each rank is
   `1 + (masked_out & (d <= min_in[:, None])).sum(1)`.
 
-- [ ] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_ita_scoring.py -q`.
+- [x] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_ita_scoring.py -q`.
   Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/ita_scoring.py tests/unit/test_ita_scoring.py
@@ -423,7 +427,7 @@ mean. `counts`: `n_pairs`, `n_groups`, `n_copied`, `n_conflict`, `n_mojibake`,
 `n_company_fallback` over the part's panel pairs. A part with no non-copied pair raises
 `ValueError('… has no headline pair …')`.
 
-- [ ] **Step 1: Write the failing tests.** Build the result without `ItaPanel` (Task 5): take
+- [x] **Step 1: Write the failing tests.** Build the result without `ItaPanel` (Task 5): take
   `panel_pairs(*ita_tables(), ITA_CANDIDATES, ITA_SETTINGS.salt)` filtered to `part ==
   'validation'`, encode its queries and `ITA_CANDIDATES` with `AssignedStubEncoder`, call
   `score_shortlist(..., distance='cosine')`, then `summarize_ita(scores, pairs, 'cosine')`.
@@ -450,14 +454,15 @@ def test_a_part_with_no_headline_pair_is_refused():
     # every pair copied → ValueError matching 'no headline pair'
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_scoring.py -q`.
+- [x] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_scoring.py -q`.
   Expected: FAIL with `ImportError` on `summarize_ita`.
 
-- [ ] **Step 3: Implement `ItaResult` and `summarize_ita`.**
+- [x] **Step 3: Implement `ItaResult` and `summarize_ita`.**
+  > Deviation: every report mean is `math.fsum(values) / len(values)` (Polars chunked means were not bit-reproducible), and null scores are refused.
 
-- [ ] **Step 4: Run the tests.** Expected: PASS.
+- [x] **Step 4: Run the tests.** Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/ita_scoring.py tests/unit/test_ita_scoring.py
@@ -501,7 +506,7 @@ git commit -m "feat(panels): add the ITA headline, copied, phrasing and count re
 only then encodes. The distance is `getattr(encoder, 'distance', 'cosine')` (P4). `open_sealed`
 follows `OutcomePanel.open_test` with panel `ita_text`, split `sealed`, and the split fingerprint.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_a_validation_read_is_logged_before_any_query_is_encoded():
@@ -543,15 +548,16 @@ def test_from_files_reads_the_tables_and_the_bundle_codebook():
     assert panel.candidates == ('111111', '111112', '111113', '222222', '333333')
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_panel.py -q`.
+- [x] **Step 2: Run them to see them fail.** Run: `uv run pytest tests/unit/test_ita_panel.py -q`.
   Expected: FAIL with `ImportError` on `ItaPanel`.
 
-- [ ] **Step 3: Implement `ItaPanel`** under a "Panel" divider in `panels/ita.py`.
+- [x] **Step 3: Implement `ItaPanel`** under a "Panel" divider in `panels/ita.py`.
+  > Deviation: `ItaPanel.pairs` is public, a present `role=None` is refused, and after the final review the result carries `data_fingerprint`.
 
-- [ ] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_ita_panel.py
+- [x] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_ita_panel.py
   tests/unit/test_ita_inputs.py -q`. Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/ita.py tests/unit/test_ita_panel.py
@@ -592,7 +598,7 @@ git commit -m "feat(panels): add ItaPanel with logged reads and one logged seale
 `choose_reference` raises `ValueError` unless the keys are exactly `REFERENCE_ARMS` and both
 values are finite. The higher MRR wins; a tie goes to `lexical-stub`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_the_reference_is_the_higher_mrr_and_a_tie_goes_to_the_stub():
@@ -618,15 +624,16 @@ def test_arms_scored_on_other_pairs_are_refused():
     # a candidate seed missing p03 → ValueError from PanelItems.values
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run:
+- [x] **Step 2: Run them to see them fail.** Run:
   `uv run pytest tests/unit/test_decision_text_to_code.py -q`. Expected: FAIL with
   `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement the module's "Reference and verdict" section.**
+- [x] **Step 3: Implement the module's "Reference and verdict" section.**
+  > Deviation: an arm with no seed is refused, and after the final review `compare_to_reference` refuses seeds read on another table build.
 
-- [ ] **Step 4: Run the tests.** Expected: PASS.
+- [x] **Step 4: Run the tests.** Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/decision/text_to_code.py tests/unit/test_decision_text_to_code.py
@@ -664,7 +671,7 @@ record's own reads is later than `fixed_at`; or when the log holds an `ita_text`
 `read` whose `detail.role` is not `reference` (a missing role included) at a time before
 `fixed_at`, naming the read's purpose and time.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_the_margin_is_r_times_the_chosen_references_validation_mrr():
@@ -692,15 +699,16 @@ def test_a_naive_fixed_at_or_a_read_after_fixed_at_is_refused():
 def test_the_record_round_trips_through_json(): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Expected: FAIL with `ImportError` on
+- [x] **Step 2: Run them to see them fail.** Expected: FAIL with `ImportError` on
   `fix_ita_margin`.
 
-- [ ] **Step 3: Implement the "Margin" section.**
+- [x] **Step 3: Implement the "Margin" section.**
+  > Deviation: owner gate added refusals of repeated seeds, `check_ita_margin` (record self-check) and reference reads of a non-reference arm.
 
-- [ ] **Step 4: Run the tests.** Run:
+- [x] **Step 4: Run the tests.** Run:
   `uv run pytest tests/unit/test_decision_text_to_code.py -q`. Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/decision/text_to_code.py tests/unit/test_decision_text_to_code.py
@@ -715,7 +723,7 @@ git commit -m "feat(decision): fix text→code's margin from reference reads, ch
 - Create: `docs/api/ita_panel.md`
 - Modify: `docs/.nav.yml`, `docs/api/decision.md`, `CLAUDE.md`
 
-- [ ] **Step 1: Write `docs/api/ita_panel.md`.** A one-paragraph intro (judged on ITA
+- [x] **Step 1: Write `docs/api/ita_panel.md`.** A one-paragraph intro (judged on ITA
   employer-written descriptions, §1; the outcome panel's validation split is reported beside it
   and decides nothing, and its test split stays sealed, §4.6), §5's role table copied as written,
   then `:::` blocks for `naics_embedder.panels.ita_split`, `naics_embedder.panels.ita` and
@@ -723,14 +731,15 @@ git commit -m "feat(decision): fix text→code's margin from reference reads, ch
   Panel entry in `docs/.nav.yml`. Add a "Text→code margin" section with
   `::: naics_embedder.decision.text_to_code` to `docs/api/decision.md`.
 
-- [ ] **Step 2: Update `CLAUDE.md`.** Add the four modules to the directory tree and one
+- [x] **Step 2: Update `CLAUDE.md`.** Add the four modules to the directory tree and one
   sentence each under "Monitor, Epoch Summary and Selection" (the ITA panel and its sealed part)
   and "Testing and Validation" (the five test files). Recount: `find src -name '*.py' | wc -l`,
   `ls tests/unit/test_*.py | wc -l`, and `uv run pytest --collect-only -q -q | tail -1`; write
   those numbers where `CLAUDE.md` states them (at `4fa2857` the first two give 124 and 107). Update
   `tests/README.md` too where it states the same counts or lists test files.
+  > Deviation: `README.md` and `tests/README.md` counts also updated, and `ItaPanelSettings` documents its fields as `Attributes:` for the strict build.
 
-- [ ] **Step 3: Check the untouched seams and the lock.** Run:
+- [x] **Step 3: Check the untouched seams and the lock.** Run:
 
 ```bash
 git diff --exit-code 4fa2857 -- src/naics_embedder/panels/outcome.py src/naics_embedder/panels/decoding.py src/naics_embedder/panels/selection_log.py src/naics_embedder/decision/rule.py src/naics_embedder/decision/resampling.py src/naics_embedder/decision/records.py src/naics_embedder/decision/decide.py src/naics_embedder/decision/economic.py uv.lock; echo exit=$?
@@ -738,7 +747,7 @@ git diff --exit-code 4fa2857 -- src/naics_embedder/panels/outcome.py src/naics_e
 
 Expected: `exit=0`.
 
-- [ ] **Step 4: Run the gates.** Run each, and each must pass:
+- [x] **Step 4: Run the gates.** Run each, and each must pass:
 
 ```bash
 uv run pytest -n auto -q
@@ -750,11 +759,11 @@ uv run mkdocs build --strict
 Expected: no failures; Ruff `All checks passed!`; the style gate exits 0; MkDocs builds with no
 warning. Check the rendered `site/api/ita_panel/index.html` has the three modules' headings.
 
-- [ ] **Step 5: Confirm no real pair was read.** Run:
+- [x] **Step 5: Confirm no real pair was read.** Run:
   `grep -rn "embedding-data\|ita_text_pairs.parquet" src/ tests/ | grep -v "tests/fixtures/ita.py"`.
   Expected: only docstrings and `write_ita_tables`' file names, no absolute path.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add docs/api/ita_panel.md docs/.nav.yml docs/api/decision.md CLAUDE.md
@@ -775,3 +784,29 @@ git commit -m "docs: add the ITA panel and text→code margin API pages"
 | §4.6 and §5 roles | 8 (API page) |
 | §6 constraints | Global Constraints, 8 |
 | §9 verification items 1–11 | 1; 4; 3; 2 and 5; 7; 5; 6; 8 step 3; 8 step 1; 8 step 5; 8 step 4 |
+
+## Handoff to later stages
+
+- **Stage 4 (reference read and gap).** It consumes the panel as built:
+  - `ItaPanel.from_files(pairs_parquet, pair_codes_parquet, bundle, settings_path, log_path)`
+    (`panels/ita.py`), with settings `conf/data/ita_panel.yaml` (salt fixed at plan 17).
+  - `score_logged(encoder, 'validation', purpose, detail)`, with detail `arm`, `seed`, `role`
+    (`reference`) and a fresh `run`. A `role` of `None` or another word is refused before logging.
+  - `ItaResult` (`panels/ita_scoring.py`) holds `headline`, `copied`, `phrasing`, `counts` and
+    `per_code`, and its `data_fingerprint` names the table build. All report means use `math.fsum`.
+  - Traps: `panel_pairs` refuses any disagreement with spec §4.1, also nulls in the read columns
+    and a repeated `pair_id` anywhere in the pair table. A real Stage 10 build that fails these
+    refuses at construction and logs nothing.
+- **Stage 5 (candidates and decision).** It consumes the margin rule as built in
+  `decision/text_to_code.py`:
+  - `fix_ita_margin` refuses repeated seeds and seedless arms before any read.
+  - `check_ita_margin` checks the record's own consistency, and `check_ita_margin_first` calls it.
+    The first-read check also counts a reference-role read of a non-reference arm as a candidate
+    read.
+  - `compare_to_reference` refuses seeds read on another table build, but takes δ as a float.
+  - Deferred into this stage, in `specs/deferred_items.md` § 17-text-to-code-ita-panel:
+    - the δ build check;
+    - margin-first across several selection logs;
+    - the permanent block after an early candidate read;
+    - checkpoint fingerprints in the margin reads;
+    - two self-check gaps.

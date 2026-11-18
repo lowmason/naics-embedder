@@ -722,3 +722,33 @@
       `docs/quickstart.md` and `docs/overview.md` do not name `tools economic-build`,
       `tools economic-read` or `tools decide --candidates`. Size: quick-fix. Done when: the counts
       match `CLAUDE.md`'s and each page that lists the `tools` commands names the three.
+      → progress 2026-11-17 (plan 17): the counts now match in `README.md`, `CLAUDE.md` and
+      `tests/README.md`. The `tools` command names remain.
+
+## 17-text-to-code-ita-panel — 2026-11-17
+- [ ] Margin δ against the candidate's table build (plan 17 final review, controller ruling):
+      `compare_to_reference` (src/naics_embedder/decision/text_to_code.py) refuses seeds read on
+      another ITA table build through `ItaResult.data_fingerprint`, but it takes δ as a float, so
+      it cannot check that `ItaMarginRecord.data_fingerprint` matches the results' build. Stage 5's
+      decision caller must compare them. See specs/plans/completed/17-text-to-code-ita-panel.md
+      (Handoff). Size: quick-fix. Done when: Stage 5's decision path refuses a margin record whose
+      data fingerprint differs from the compared results', with a test.
+- [ ] Margin-first across selection logs (plan 17 final review, owner deferred to Stage 5):
+      `check_ita_margin_first` reads only the one `SelectionLog` it is given, so training-monitor
+      ITA validation reads logged in a remote instance's separate log are not seen. Size: plan.
+      Done when: Stage 5's margin-first check reads every log that holds ITA validation reads
+      (the Mac's and each pulled run's), with a test.
+- [ ] A candidate read before any margin blocks every later margin (plan 17 final review, owner
+      deferred to Stage 5): the log is append-only and `check_ita_margin_first` counts any earlier
+      `ita_text` validation candidate or no-role read whatever its split fingerprint, so one early
+      read refuses every margin record. This follows spec §4.5. Size: design. Revisit if: Stage 5
+      needs a margin record after an `ita_text` validation candidate read is logged.
+- [ ] Margin reads name no checkpoint (plan 17 final review, owner deferred to Stage 5): the
+      margin record's reads log no table or checkpoint fingerprint for `euclidean-d16`'s seeds, so
+      the record cannot show the outcome-selected checkpoints of spec §4.5 were the ones read.
+      Size: quick-fix. Done when: each reference read in Stage 5's margin record names its seed's
+      checkpoint or table sha256, with a test.
+- [ ] Margin record self-check gaps (plan 17 gate-fix review, controller deferred):
+      `check_ita_margin` does not require reads of both reference arms nor refuse a repeated seed
+      among `log_records`, so a hand-edited record can pass it. Size: quick-fix. Done when: both are
+      refused, with tests, before Stage 5 writes its margin record.
