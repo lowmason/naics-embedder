@@ -475,6 +475,26 @@ def test_a_margin_after_a_read_with_no_role_is_refused(tmp_path):
         check_ita_margin_first(margin, panel.log)
     assert read['time'] in str(refused.value)
 
+def test_a_margin_after_a_read_with_another_role_is_refused(tmp_path):
+    panel = _panel(tmp_path)
+    # The panel refuses such a role, but an outside caller can append the read to the log
+    panel.log.append(
+        SelectionEvent.READ,
+        panel='ita_text',
+        split='validation',
+        purpose='an outside monitor read',
+        fingerprint=panel.fingerprint,
+        n_queries=3,
+        detail={
+            'arm': 'c',
+            'role': 'monitor',
+            'run': 'outside/c'
+        },
+    )
+    margin = _fix(panel)
+    with pytest.raises(ValueError, match='an outside monitor read'):
+        check_ita_margin_first(margin, panel.log)
+
 def test_earlier_reference_reads_and_later_candidate_reads_pass(tmp_path):
     panel = _panel(tmp_path)
     _read(panel, role='reference', purpose='stage 4 gap evidence')
