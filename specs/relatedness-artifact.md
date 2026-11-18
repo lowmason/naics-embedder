@@ -1,6 +1,6 @@
 # Relatedness artifact — Design Spec
 
-**Status:** DRAFT (2026-11-18), for the user's review. Written in a brainstorming session. A
+**Status:** APPROVED (2026-11-18, U48). Written in a brainstorming session. A
 builder check raised five points. One was the user's to rule (U47, the relevance floor). The other
 four are folded in as my calls: the gain's base (§4.4), five seeds (§4.6, §4.7), when TRI may join
 (§4.1, §4.6) and the centered text reference (§4.4).
@@ -51,6 +51,7 @@ For a multiple-choice question, the ruling is the chosen option's label.
 | U45 | Where does relatedness's one sealed opening live: in its own chain, after Stage 7, or in embedding roadmap Stage 12 with the other two artifacts? | "Own chain (Recommended)" |
 | U46 | How does Stage 7 build the embedding: GraphSAGE, a blended factorization, or both as candidates? | "A. GraphSAGE (Recommended)" |
 | U47 | Which co-owned pairs count as related: every published pair (J ≥ 1, as the V9 decision set the minimum), or only pairs with two or more shared employers (J ≥ 2, the draft)? The draft's J ≥ 2 had cited V9's unfiltered design-time curve. The decision's testable curve shows 94.84 % of single-employer cells recurring from 2023 to 2024 | "J ≥ 1, as V9 (Recommended)" |
+| U48 | Do you approve the committed spec? | "Approve the spec" |
 
 ## 1. Intent
 
