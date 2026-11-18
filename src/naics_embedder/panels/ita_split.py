@@ -51,7 +51,7 @@ class ItaPanelSettings(BaseModel):
     '''
     ``conf/data/ita_panel.yaml``.
 
-    Args:
+    Attributes:
         panel: The panel's name.
         rule_version: The version of the split rule.
         salt: The split's salt, 32 lowercase hexadecimal characters.
