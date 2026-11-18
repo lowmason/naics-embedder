@@ -164,6 +164,7 @@
       (Task 4). The other branches stay open.
       → partly done in plan 12: each geometry's coordinates are checked in the provenance (Task 4);
       `generated_at`, the exact key set and the other branches stay open.
+      → planned 2026-11-18: specs/plans/18-export-and-encoder-hardening.md
 - [ ] Review Minor: the export and the outcome read handle a few failures untidily.
       src/naics_embedder/text_model/export.py writes the table (:246) before it hashes the
       checkpoint and descriptions and writes the provenance (:273), so a failure between them
@@ -180,6 +181,7 @@
       each case is fixed or ruled no-action.
       → partly done in plan 9 (Task 7): the provenance records the tokenizer, and `from_files`
       refuses a table exported with another. The other cases stay open.
+      → planned 2026-11-18: specs/plans/18-export-and-encoder-hardening.md
 - [ ] Review Minor: the encoder, fusion and cache tests leave gaps.
       No test changes only the field markers in a tokenization cache's sidecar
       (`_cache_identity`, src/naics_embedder/text_model/dataloader/tokenization_cache.py).
@@ -198,6 +200,7 @@
       test, or a recorded ruling that it needs none.
       → partly done in plan 9 (Task 1): `test_a_cache_built_under_other_markers_is_rebuilt`
       (tests/unit/test_tokenization_cache.py) changes only the markers. The other gaps stay open.
+      → planned 2026-11-18: specs/plans/18-export-and-encoder-hardening.md
 - [ ] Review Minor: `_pool_present` breaks under true half precision.
       src/naics_embedder/text_model/shared_encoder.py allocates the pooled rows in the
       projection weight's dtype, but `_pool_chunk` returns float32 (its mask is cast with
