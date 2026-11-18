@@ -3,6 +3,8 @@
 #
 # - codebook_sha256, text_only_sha256: what every deterministic builder reads, bundle 301cce28's
 #   naics_codebook.parquet and the shared MiniLM text-only table (§4.3).
+#   text_only_provenance_sha256: the provenance file beside that table, which every record's
+#   text-only reference stores.
 # - checkpoint_contract: the contract a trained table's export provenance must name (§4.5).
 # - A trained candidate's record is its Stage 7/8 arm record under the artifact store's root,
 #   pinned by its sha256; run_directory is each seed's run directory under the runs root, which
@@ -10,6 +12,7 @@
 # - A deterministic candidate's table_sha256 pins its built table, as Stage 1 built it.
 codebook_sha256: 0f9e61343e673540e1e18ecc5581618be099c5d79531b68153496bf982d6e96d
 text_only_sha256: f4fb4f574f880c940ee8cf44c7f86615638e59f113b527d0b86973cd45ba32ff
+text_only_provenance_sha256: bd21c628d06b96c8a0ffe1318c18f81199cb00ca8862560dbdb8dc57887ea05e
 checkpoint_contract:
   bundle_id: 301cce28-539c-42ea-8781-496bbdcf511c
   contract_version: stage3-supervision-v2

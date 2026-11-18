@@ -146,6 +146,13 @@ def _check_source(
             f"{entry.name}: its source's text-only table {sha256[:12]} is not the shared "
             f'text-only table {candidates.text_only_sha256[:12]} that the frozen list pins'
         )
+    sha256 = source.text_only.provenance.sha256
+    pin = candidates.text_only_provenance_sha256
+    if sha256 != pin:
+        raise ValueError(
+            f"{entry.name}: its source's text-only provenance {sha256[:12]} is not the shared "
+            f"text-only table's provenance {pin[:12]} that the frozen list pins"
+        )
 
 def _seed_provenance(
     entry: CandidateEntry,

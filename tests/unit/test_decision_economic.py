@@ -74,6 +74,7 @@ from tests.fixtures.economic import (
     fixture_list,
     list_for,
     scaled_arm,
+    text_only_pins,
     trained_source,
     write_candidate,
     write_candidate_list,
@@ -275,7 +276,7 @@ def test_a_single_replicate_record_validates_and_pairs_with_the_reference(
 ):
     '''Verification "Deterministic arms": the reference predicts as in the margin read.'''
 
-    check_economic_arm(arm, store, list_for([arm], store, text_only_sha256=sha256_file(text_only)))
+    check_economic_arm(arm, store, list_for([arm], store, **text_only_pins(text_only)))
     check_reference_pairing(margins, arm, store)
 
     def reference(predictions):
@@ -370,9 +371,7 @@ def test_an_economic_arm_is_one_replicate_with_no_seed(arm, store, text_only):
 
     for record in (seeded, twice):
         with pytest.raises(ValueError, match='^tree: an economic arm is one deterministic'):
-            check_economic_arm(
-                record, store, list_for([arm], store, text_only_sha256=sha256_file(text_only))
-            )
+            check_economic_arm(record, store, list_for([arm], store, **text_only_pins(text_only)))
 
 def test_a_run_whose_reads_name_another_table_is_refused(arm, store, text_only):
     (run, ) = arm.runs
@@ -381,9 +380,7 @@ def test_a_run_whose_reads_name_another_table_is_refused(arm, store, text_only):
     edited = arm.model_copy(update={'runs': [run.model_copy(update={'log_records': reads})]})
 
     with pytest.raises(ValueError, match="^tree: a growth_seen read names another \\['arm'\\]"):
-        check_economic_arm(
-            edited, store, list_for([arm], store, text_only_sha256=sha256_file(text_only))
-        )
+        check_economic_arm(edited, store, list_for([arm], store, **text_only_pins(text_only)))
 
 def test_a_provenance_edited_after_it_was_stored_is_refused(arm, store, text_only):
     (run, ) = arm.runs
@@ -392,9 +389,7 @@ def test_a_provenance_edited_after_it_was_stored_is_refused(arm, store, text_onl
     edited = arm.model_copy(update={'runs': [run.model_copy(update={'provenance': provenance})]})
 
     with pytest.raises(ValueError, match="^tree: the record's provenance differs from its stored"):
-        check_economic_arm(
-            edited, store, list_for([arm], store, text_only_sha256=sha256_file(text_only))
-        )
+        check_economic_arm(edited, store, list_for([arm], store, **text_only_pins(text_only)))
 
 def test_reference_predictions_that_differ_from_the_margin_reads_do_not_pair(arm, margins, store):
     '''Req 24: only the predictions decide; the environments name where each read ran.'''
@@ -486,7 +481,7 @@ def test_a_reference_prediction_one_ulp_from_the_margin_reads_does_not_pair(
 def frozen(arm, store, text_only):
     '''The frozen list of exactly the fixture candidate, pinned to its table.'''
 
-    return list_for([arm], store, text_only_sha256=sha256_file(text_only))
+    return list_for([arm], store, **text_only_pins(text_only))
 
 @pytest.fixture
 def text_table(text_only, tmp_path):
@@ -565,7 +560,7 @@ def test_a_text_only_candidate_passes_its_checks_and_is_d9_checked(
     frozen = list_for(
         [arm],
         store,
-        text_only_sha256=sha256_file(text_only),
+        **text_only_pins(text_only),
         codebook_sha256=sha256_file(codebook),
     )
     other = TEXT_ONLY_D3.model_copy(update={'backbone_revision': 'other'})
@@ -593,7 +588,7 @@ def test_a_text_only_candidate_reads_the_backbone(
     frozen = list_for(
         [arm],
         store,
-        text_only_sha256=sha256_file(text_only),
+        **text_only_pins(text_only),
         codebook_sha256=sha256_file(codebook),
     )
 
@@ -625,7 +620,7 @@ def test_a_smoothed_candidate_reads_the_backbone(
     frozen = list_for(
         [text, smoothed],
         store,
-        text_only_sha256=sha256_file(text_only),
+        **text_only_pins(text_only),
         codebook_sha256=sha256_file(codebook),
     )
 
@@ -653,7 +648,7 @@ def test_a_tree_candidate_reads_no_backbone_and_only_the_shared_text_only_table(
         check_economic_arm(
             backboned,
             store,
-            list_for([backboned], store, text_only_sha256=sha256_file(text_only)),
+            list_for([backboned], store, **text_only_pins(text_only)),
         )
     with pytest.raises(ValueError, match='^tree: .*the shared text-only table'):
         check_economic_arm(arm, store, list_for([arm], store, text_only_sha256='f' * 64))
@@ -663,7 +658,9 @@ def test_a_tree_candidate_is_not_d9_checked(
 ):
     '''
     A tree candidate reads no backbone, so a text-only table from another revision is read beside
-    it, and its check reads that table's bytes alone: here they are the shared table's.
+    it, and its check reads that table's bytes alone: here they are the shared table's. The list
+    pins the provenance file as well, so the gate refuses another revision's provenance unless
+    the list pins that one.
     '''
 
     other = write_text_only(tmp_path / 'other', revision='other', codes=CODEBOOK)
@@ -671,7 +668,9 @@ def test_a_tree_candidate_is_not_d9_checked(
     arm = _read(candidate, growth_panel, other, margins, store, lock)
 
     assert arm.text_only.revision == 'other'
-    check_economic_arm(arm, store, frozen)
+    with pytest.raises(ValueError, match='^tree: its text-only provenance'):
+        check_economic_arm(arm, store, frozen)
+    check_economic_arm(arm, store, frozen.model_copy(update=text_only_pins(other)))
 
 def test_a_recorded_text_only_field_that_differs_from_its_stored_provenance_is_refused(
     arm, store, frozen
@@ -739,9 +738,7 @@ def test_a_candidate_whose_provenance_breaks_the_rule_is_refused(
     arm = _read(table, growth_panel, text_only, margins, store, lock)
 
     with pytest.raises(ValueError, match='^tree: entries: .*\\(Req 29'):
-        check_economic_arm(
-            arm, store, list_for([arm], store, text_only_sha256=sha256_file(text_only))
-        )
+        check_economic_arm(arm, store, list_for([arm], store, **text_only_pins(text_only)))
 
 @pytest.mark.parametrize(
     'target, update',
@@ -1147,13 +1144,16 @@ def _decide(arms, margins, store, codebook_sha256=CODEBOOK_SHA256):
     '''
 
     distinct = list({arm.spec.name: arm for arm in arms}.values())
-    # The arms share one text-only table; a list over no arms pins one that no check reads
+    # The arms share one text-only table and its provenance; a list over no arms pins ones that
+    # no check reads
     (text_only_sha256, ) = {arm.text_only.table.sha256 for arm in arms} or {'0' * 64}
+    (provenance_sha256, ) = {arm.text_only.provenance.sha256 for arm in arms} or {'0' * 64}
     listed = write_candidate_list(
         store.root.parent / 'candidates.yaml',
         distinct,
         store,
         text_only_sha256=text_only_sha256,
+        text_only_provenance_sha256=provenance_sha256,
         codebook_sha256=codebook_sha256,
     )
     return decide_economic(
@@ -1174,7 +1174,7 @@ def test_a_record_whose_predictions_belong_to_another_table_is_refused(
     swapped = a.model_copy(
         update={'runs': [a.runs[0].model_copy(update={'predictions': b.runs[0].predictions})]}
     )
-    frozen = list_for([a, b], store, text_only_sha256=sha256_file(text_only))
+    frozen = list_for([a, b], store, **text_only_pins(text_only))
     with pytest.raises(ValueError, match='^a: its predictions belong to another table'):
         check_economic_arm(swapped, store, frozen)
 
@@ -1183,7 +1183,7 @@ def test_the_decision_reads_exactly_the_frozen_lists_candidates(
 ):
     a, b = candidates('a', _both(0.5)), candidates('b', _both(1.0))
     listed = write_candidate_list(
-        tmp_path / 'list.yaml', [a, b], store, text_only_sha256=sha256_file(text_only)
+        tmp_path / 'list.yaml', [a, b], store, **text_only_pins(text_only)
     )
     settings = {'candidates': listed, 'replicates': REPLICATES, 'bootstrap_seed': BOOTSTRAP_SEED}
     with pytest.raises(ValueError, match="'b'.*missing"):
@@ -1202,12 +1202,8 @@ def test_the_decision_reads_the_lists_names_before_any_other_check(
     a, c = candidates('a', _both(0.5)), candidates('c', _both(0.5))
     broken = margins.model_copy(update={'reference': 'covariates+one_hot'})
     settings = {'replicates': REPLICATES, 'bootstrap_seed': BOOTSTRAP_SEED}
-    only_a = write_candidate_list(
-        tmp_path / 'a.yaml', [a], store, text_only_sha256=sha256_file(text_only)
-    )
-    a_and_c = write_candidate_list(
-        tmp_path / 'ac.yaml', [a, c], store, text_only_sha256=sha256_file(text_only)
-    )
+    only_a = write_candidate_list(tmp_path / 'a.yaml', [a], store, **text_only_pins(text_only))
+    a_and_c = write_candidate_list(tmp_path / 'ac.yaml', [a, c], store, **text_only_pins(text_only))
 
     with pytest.raises(ValueError, match="^'c' is not on the frozen candidate list"):
         decide_economic('d', 'q', [a, c], broken, store, candidates=only_a, **settings)
@@ -1505,7 +1501,7 @@ def test_a_candidate_whose_statistics_are_not_its_predictions_is_refused(
         check_economic_arm(
             arm.model_copy(update={'runs': [moved]}),
             store,
-            list_for([arm], store, text_only_sha256=sha256_file(text_only)),
+            list_for([arm], store, **text_only_pins(text_only)),
         )
 
 def test_a_decision_reads_distinct_candidates_none_named_for_the_reference(
@@ -1541,7 +1537,7 @@ def _read_trained(imported, panel, margins, store, lock):
 
 def _import(trained, store, text_only):
     entry, runs_root = trained
-    frozen = fixture_list([entry], text_only_sha256=sha256_file(text_only))
+    frozen = fixture_list([entry], **text_only_pins(text_only))
     return import_trained_candidate(entry, frozen, store, runs_root)
 
 @pytest.fixture
@@ -1554,9 +1550,7 @@ def trained_read(trained, margins, growth_panel, store, lock, text_only):
 
     imported = _import(trained, store, text_only)
     arm = _read_trained(imported, growth_panel, margins, store, lock)
-    return TrainedRead(
-        arm, fixture_list([trained[0]], text_only_sha256=sha256_file(text_only)), imported
-    )
+    return TrainedRead(arm, fixture_list([trained[0]], **text_only_pins(text_only)), imported)
 
 def _trained_with(arm, index, **update):
     '''The arm with run ``index`` updated.'''
@@ -1599,7 +1593,7 @@ def test_a_trained_candidate_is_read_once_per_seed_on_each_growth_panel(
     trained, margins, growth_panel, store, lock, log, text_only
 ):
     entry, runs_root = trained
-    frozen = fixture_list([entry], text_only_sha256=sha256_file(text_only))
+    frozen = fixture_list([entry], **text_only_pins(text_only))
     imported = import_trained_candidate(entry, frozen, store, runs_root)
     arm = read_trained_arm(
         imported,
@@ -1681,7 +1675,7 @@ def test_a_trained_candidate_is_read_in_seed_order_whatever_its_records_order(
             'record_sha256': sha256_file(path)
         }
     )
-    frozen = fixture_list([repinned], text_only_sha256=sha256_file(text_only))
+    frozen = fixture_list([repinned], **text_only_pins(text_only))
 
     arm = _read_trained(
         import_trained_candidate(repinned, frozen, store, runs_root), growth_panel, margins, store,
@@ -1701,7 +1695,7 @@ def test_a_trained_candidate_takes_its_economic_name_from_its_row(
         store, tmp_path / 'stage7', 'reference', text_only=text_only
     )
     entry = source_row.model_copy(update={'name': 'euclidean-d3'})
-    frozen = fixture_list([entry], text_only_sha256=sha256_file(text_only))
+    frozen = fixture_list([entry], **text_only_pins(text_only))
 
     imported = import_trained_candidate(entry, frozen, store, runs_root)
     arm = _read_trained(imported, growth_panel, margins, store, lock)
@@ -1712,7 +1706,7 @@ def test_a_trained_candidate_takes_its_economic_name_from_its_row(
             for run in arm.runs
             for read in run.log_records} == {'euclidean-d3'}
     check_economic_arm(arm, store, frozen)
-    assert list_for([arm], store, text_only_sha256=sha256_file(text_only)) == frozen
+    assert list_for([arm], store, **text_only_pins(text_only)) == frozen
 
 @pytest.mark.parametrize(
     'cut',
@@ -1763,9 +1757,7 @@ def six_seed_read(six_seeds, margins, growth_panel, store, lock, text_only):
 
     imported = _import(six_seeds, store, text_only)
     arm = _read_trained(imported, growth_panel, margins, store, lock)
-    return TrainedRead(
-        arm, fixture_list([six_seeds[0]], text_only_sha256=sha256_file(text_only)), imported
-    )
+    return TrainedRead(arm, fixture_list([six_seeds[0]], **text_only_pins(text_only)), imported)
 
 @pytest.mark.parametrize('dropped', [5, LATER_SEED], ids=['the-last-seed', 'a-middle-seed'])
 def test_a_trained_arm_that_reads_only_some_of_its_sources_seeds_is_refused(
@@ -1939,6 +1931,25 @@ def test_a_trained_arms_text_only_table_is_the_lists(trained_read, store):
 
     with pytest.raises(ValueError, match='^euclidean-d3: .*the shared text-only table'):
         check_economic_arm(arm, store, frozen.model_copy(update={'text_only_sha256': 'f' * 64}))
+
+REFUSED = (
+    "its text-only provenance .* is not the shared text-only table's provenance "
+    'ffffffffffff that the frozen list pins'
+)
+
+def test_a_deterministic_arms_text_only_provenance_is_the_lists(arm, frozen, store):
+    check_economic_arm(arm, store, frozen)  # the fixture list's two pins pass
+    with pytest.raises(ValueError, match=f'^tree: {REFUSED}'):
+        check_economic_arm(
+            arm, store, frozen.model_copy(update={'text_only_provenance_sha256': 'f' * 64})
+        )
+
+def test_a_trained_arms_text_only_provenance_is_the_lists(trained_read, store):
+    arm, frozen, _ = trained_read
+    with pytest.raises(ValueError, match=f'^euclidean-d3: {REFUSED}'):
+        check_economic_arm(
+            arm, store, frozen.model_copy(update={'text_only_provenance_sha256': 'f' * 64})
+        )
 
 def test_a_trained_runs_provenance_names_its_checkpoint(trained_read, store, tmp_path):
     arm, frozen, _ = trained_read
@@ -2310,7 +2321,7 @@ def test_a_trained_table_that_lacks_a_panel_code_is_refused_before_any_read(
     entry, runs_root = trained_source(
         store, tmp_path / 'subset', 'euclidean-d3', text_only=text, codes=codes
     )
-    frozen = fixture_list([entry], text_only_sha256=sha256_file(text))
+    frozen = fixture_list([entry], **text_only_pins(text))
     imported = import_trained_candidate(entry, frozen, store, runs_root)
 
     with pytest.raises(ValueError, match=f"no coordinates for 1 codes: \\['{OUTER_ONLY_CODE}'\\]"):
@@ -2505,11 +2516,13 @@ def test_the_propagation_pairs_follow_the_lists_kinds_and_dimensions_and_its_ord
     plain_four = built('text-only', 4, _both(1.0), name='plain-4')
     listed_arms = [plain_three, sm_c, plain_four, sm_a, sm_b, plain_two]
     (text_only_sha256, ) = {arm.text_only.table.sha256 for arm in listed_arms}
+    (provenance_sha256, ) = {arm.text_only.provenance.sha256 for arm in listed_arms}
     listed = write_candidate_list(
         tmp_path / 'three-pairs.yaml',
         listed_arms,
         store,
         text_only_sha256=text_only_sha256,
+        text_only_provenance_sha256=provenance_sha256,
         codebook_sha256=sha256_file(built_codebook),
     )
 

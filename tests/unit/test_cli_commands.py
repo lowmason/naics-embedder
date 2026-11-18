@@ -50,6 +50,7 @@ from tests.fixtures.economic import (
     candidate_spec,
     fixture_list,
     scaled_arm,
+    text_only_pins,
     trained_source,
     write_candidate,
     write_candidate_list,
@@ -560,7 +561,7 @@ def test_decide_reads_an_economic_decision_from_relative_margins(runner, tmp_pat
     assert _growth_margins(runner, tmp_path, store).exit_code == 0
     candidate, text_only = _economic_candidate(tmp_path, panel, store)
     listed = write_candidate_list(
-        tmp_path / 'candidates.yaml', [candidate], store, text_only_sha256=sha256_file(text_only)
+        tmp_path / 'candidates.yaml', [candidate], store, **text_only_pins(text_only)
     )
 
     result = _decide(
@@ -647,7 +648,7 @@ def _decide_built(runner, tmp_path, panel, store, candidates):
         tmp_path / 'candidates.yaml',
         arms,
         store,
-        text_only_sha256=sha256_file(text_only),
+        **text_only_pins(text_only),
         codebook_sha256=sha256_file(codebook),
     )
     paths = [write_record(arm, tmp_path / f'{arm.spec.name}.json') for arm in arms]
@@ -1469,7 +1470,7 @@ def _economic_inputs(tmp_path, store):
         )
     frozen = fixture_list(
         [*entries, trained],
-        text_only_sha256=sha256_file(text_only),
+        **text_only_pins(text_only),
         codebook_sha256=sha256_file(codebook),
     )
     candidates = _write_list(tmp_path / 'candidates.yaml', frozen)
@@ -1792,6 +1793,56 @@ def test_economic_read_refuses_a_text_only_table_other_than_the_lists(
     assert not (tmp_path / 'read.json').exists()
 
 @pytest.mark.unit
+@pytest.mark.parametrize('name', DETERMINISTIC)
+@pytest.mark.parametrize('extra', [[], ['--dry-run']], ids=['read', 'dry-run'])
+def test_economic_read_refuses_a_text_only_provenance_other_than_the_lists(
+    runner, tmp_path, growth_panel, name, extra
+):
+    '''Review Focus 1: the list's table bytes, beside a regenerated provenance.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    copy = tmp_path / 'copy' / 'text_only.parquet'
+    copy.parent.mkdir()
+    shutil.copyfile(inputs.text_only, copy)
+    # The same content in other bytes: the table's pin and provenance_fields both pass
+    content = json.loads(provenance_path(inputs.text_only).read_text())
+    provenance_path(copy).write_text(json.dumps(content, indent=4) + '\n')
+
+    result = _economic_read(runner, inputs._replace(text_only=copy), name, *extra)
+
+    _refused_read(
+        result,
+        f"{provenance_path(copy)} is not the shared text-only table's provenance that the frozen "
+        'list pins',
+    )
+    _untouched(panel, loaded)
+    assert not (tmp_path / 'read.json').exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize('extra', [[], ['--dry-run']], ids=['read', 'dry-run'])
+def test_economic_read_refuses_a_trained_source_with_another_text_only_provenance(
+    runner, tmp_path, growth_panel, extra
+):
+    '''Review Focus 2: the list pins another provenance than the one every source record stores.'''
+
+    panel, loaded = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    frozen = inputs.frozen.model_copy(update={'text_only_provenance_sha256': 'f' * 64})
+    repinned = inputs._replace(
+        candidates=_write_list(tmp_path / 'repinned.yaml', frozen), frozen=frozen
+    )
+
+    result = _economic_read(runner, repinned, 'euclidean-d3', *extra)
+
+    assert result.exit_code == 1, result.output
+    output = _output(result)
+    assert "euclidean-d3: its source's text-only provenance" in output
+    assert 'ffffffffffff that the frozen list pins' in output
+    _untouched(panel, loaded)
+    assert not (tmp_path / 'read.json').exists()
+
+@pytest.mark.unit
 @pytest.mark.parametrize('extra', [[], ['--dry-run']], ids=['read', 'dry-run'])
 def test_economic_read_refuses_a_table_that_differs_from_its_pin_before_loading_the_panel(
     runner, tmp_path, growth_panel, extra
@@ -1902,6 +1953,35 @@ def test_economic_reads_and_decide_record_a_decision_over_both_kinds(
     assert 'Chosen:' in _output(result)
 
 @pytest.mark.unit
+def test_decide_refuses_a_record_that_stores_another_text_only_provenance(
+    runner, tmp_path, growth_panel
+):
+    '''Review Focus 3: the same table bytes under another provenance, in a hand-built record.'''
+
+    panel, _ = growth_panel
+    inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
+    names = (*DETERMINISTIC, 'euclidean-d3')
+    for name in names:
+        result = _economic_read(runner, inputs, name, output=tmp_path / f'{name}.json')
+        assert result.exit_code == 0, result.output
+    other = inputs.store.put_text_only(
+        write_text_only(tmp_path / 'other', revision='other', codes=CODEBOOK)
+    )
+    tree = read_record(tmp_path / 'tree-d3.json', EconomicArmRecord)
+    assert other.table.sha256 == tree.text_only.table.sha256
+    assert other.provenance.sha256 != tree.text_only.provenance.sha256
+    edited = write_record(tree.model_copy(update={'text_only': other}), tmp_path / 'edited.json')
+    arms = [edited if name == 'tree-d3' else tmp_path / f'{name}.json' for name in names]
+
+    result = _decide(runner, tmp_path, inputs.store, arms, candidates=inputs.candidates)
+
+    assert result.exit_code == 1, result.output
+    output = _output(result)
+    assert 'Decision failed:' in output
+    assert 'tree-d3: its text-only provenance' in output
+    assert not (tmp_path / 'decision.json').exists()
+
+@pytest.mark.unit
 @pytest.mark.parametrize('name', DETERMINISTIC)
 def test_economic_read_writes_a_deterministic_record_with_the_text_only_tables_d9_fields(
     runner, tmp_path, growth_panel, name
@@ -1985,7 +2065,10 @@ def test_economic_read_refuses_a_provenance_that_describes_another_table(
 def test_economic_read_refuses_a_text_only_table_whose_provenance_does_not_describe_it(
     runner, tmp_path, growth_panel
 ):
-    '''The list's table, whose provenance names other bytes: even the tree read refuses it.'''
+    '''
+    The list's table, whose provenance names other bytes: even the tree read refuses it, at the
+    list's pin of the provenance file, before the provenance is parsed.
+    '''
 
     panel, loaded = growth_panel
     inputs = _economic_inputs(tmp_path, ArtifactStore(tmp_path / 'store'))
@@ -1997,7 +2080,11 @@ def test_economic_read_refuses_a_text_only_table_whose_provenance_does_not_descr
 
     result = _economic_read(runner, inputs._replace(text_only=copy), 'tree-d3')
 
-    _refused_read(result, f'{provenance_path(copy)} describes another file than the table')
+    _refused_read(
+        result,
+        f"{provenance_path(copy)} is not the shared text-only table's provenance that the frozen "
+        'list pins',
+    )
     _untouched(panel, loaded)
 
 @pytest.mark.unit
