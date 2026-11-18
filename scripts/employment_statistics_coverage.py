@@ -464,7 +464,8 @@ def check_invariants(frame: pl.DataFrame, year: int) -> list[str]:
 
     Disclosed private detail never sums past a published total: six-digit cells against the
     national private total, states (50 plus DC) against the nation per code, and counties
-    (unknown locations included) against their state per code.
+    (unknown locations included) against their state per code. Employment allows annual-average
+    rounding of half an employee per detail cell plus one; wages allow none.
     '''
     total = frame.filter(
         (pl.col('agglvl_code') == NATIONAL_TOTAL_AGGLVL)
@@ -476,9 +477,10 @@ def check_invariants(frame: pl.DataFrame, year: int) -> list[str]:
         return [f'{year}: expected one national private total row, found {total.height}']
     failures = []
     national = _disclosed_private(frame, GRAINS['national'][0])
-    for column in ('emp', 'wages'):
+    allowances = {'emp': national.height / 2 + 1, 'wages': 0}
+    for column, allowance in allowances.items():
         detail, whole = national.get_column(column).sum(), total.get_column(column).item()
-        if detail > whole:
+        if detail > whole + allowance:
             failures.append(f'{year}: disclosed six-digit {column} {detail} exceeds total {whole}')
     states = _disclosed_private(frame, GRAINS['state'][0])
     failures += _nested_excess(
