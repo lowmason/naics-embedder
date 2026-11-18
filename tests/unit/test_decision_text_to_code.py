@@ -348,8 +348,10 @@ def test_arms_read_on_another_table_build_are_refused(
     assert builds['rebuilt'].data_fingerprint in str(raised.value)
 
 def test_arms_read_on_the_same_table_build_are_compared(tmp_path):
-    rebuilt = _rebuilt_stub(tmp_path)
-    verdict = _compare([rebuilt, rebuilt], [rebuilt], candidate='copy')
+    # Each read is a separate panel's, so the fingerprints are equal but not the same object
+    candidate = [_rebuilt_stub(tmp_path), _rebuilt_stub(tmp_path)]
+    reference = [_rebuilt_stub(tmp_path)]
+    verdict = _compare(candidate, reference, candidate='copy')
     assert verdict.delta == 0.0
 
 @pytest.mark.parametrize('side', ['candidate', 'reference'])
