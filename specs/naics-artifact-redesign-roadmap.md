@@ -10,8 +10,10 @@ human checkpoint ("Approve, hand off Stage 1"). Stages 1 and 2 are COMPLETE. The
 2026-11-17 amended Stage 3 from plan 16's Handoff, re-read the gates at embedding-data ec6fb29 and,
 on the owner's answer ("Yes, re-pin"), re-pinned Stage 2 there. The resume of 2026-11-18 amended
 Stages 4 and 5 from plan 17's Handoff, re-read the gates at embedding-data fd9e495 and lifted the
-HELD stamps of Stages 4 and 5. Stages 6 and 7 stay HELD on gates in embedding-data (Gates, under
-Stages). `uv.lock` is still 6de4fbdc at b304dbd.
+HELD stamps of Stages 4 and 5. On the owner's answer ("Approve split (Recommended)"), it split
+Stage 6: Stage 6 writes the relatedness spec and builds its panel on fixtures, with no gate, and
+the new Stage 6b reads the reference and records the margins. Stages 6b and 7 are HELD on gates in
+embedding-data (Gates, under Stages). `uv.lock` is still 6de4fbdc at b304dbd.
 
 **Basis.** Source spec `specs/naics-artifact-redesign.md` (user adjudication Q4, approved as U31),
 merged as PR #156 (beaee8f), under ADRs 0001 and 0002 (`specs/adr/`, accepted 2026-11-14).
@@ -76,13 +78,13 @@ outcome panel stays under Req 28.
 ## Stages
 
 **Sequencing.** The stages form one chain per artifact (ADR 0002): economic (Stages 1 and 3),
-text→code (Stages 2, 4 and 5) and relatedness (Stages 6 and 7). They follow the Rollout note's
+text→code (Stages 2, 4 and 5) and relatedness (Stages 6, 6b and 7). They follow the Rollout note's
 items 2–4, and item 1 was done at derivation (Decisions). The spec ranks nothing beyond that
 order, so this order follows the spec's. The stages with no gate come first: Stages 1 and 2 need
 nothing from embedding-data, and Stage 3 needs only Stage 1. Each chain measures before it builds
 models (split Core principle). The economic margins exist already. Stage 2 fixes text→code's
 scoring and margin rule, and Stage 5 records the margins before its first candidate read. Stage
-4's gap read selects nothing, so G2 does not hold it (Rollout note, item 3). Stage 6 fixes
+4's gap read selects nothing, so G2 does not hold it (Rollout note, item 3). Stage 6b fixes
 relatedness's margins before Stage 7 trains. No stage's `Consumes` names a stage of another
 chain. The sealed openings are not stages here. Text→code's and the economic artifact's stay in
 embedding roadmap Stage 12 (Req 28, ninth resume), and relatedness's goes where Stage 6's spec
@@ -119,7 +121,7 @@ cite text→code's spec as `specs/text-to-code-ita-panel.md`, which is now
   open. V9 sets each family's gate after that family's first full build (spec `:613-619`,
   `:682-683`). The V9 ITA NAICS decision (`specs/findings/v9-ita-naics-minimum-counts.md`,
   2026-11-17) sets a minimum of 1 for ITA co-ownership, the 2023 ITA area mix and the ITA
-  text–code pairs. Holds Stages 6 and 7 for families with no decision.
+  text–code pairs. Holds Stages 6b and 7 for families with no decision.
 - **G4, the successor evaluation-protocol spec** (Decisions). For text→code, it assigns ITA
   scoring and splitting to text→code's spec. For relatedness, it covers the families that Stage
   6's spec names, because the protocol for tables other than the ITA pairs stays with
@@ -127,7 +129,7 @@ cite text→code's spec as `specs/text-to-code-ita-panel.md`, which is now
   2026-11-18. Its Section 1 opens G4 for the ITA text–code pairs. It assigns their split and
   scoring to text→code's spec, pins the run and table hashes that a read uses, and keeps read
   conditions C1–C6. No other family has a section, so G4 stays closed for relatedness. Holds
-  Stages 6 and 7.
+  Stages 6b and 7.
 - **G5, each family's build and count gate** (Req 26, U29). A family is read only after it is
   built and has passed its own V9 count gate under G3. State per family:
   - ITA text–code pairs: open. Built (embedding-data Stage 1, complete 2026-11-16), count gate
@@ -138,7 +140,7 @@ cite text→code's spec as `specs/text-to-code-ita-panel.md`, which is now
   - ACS families (old Stage 9) and CPS job-change flows (old Stage 11): not built, and now
     deferred items in embedding-data.
 
-  The families that Stage 6's spec names hold Stages 6 and 7.
+  The families that Stage 6's spec names hold Stages 6b and 7.
 
 **Deferred items.** `specs/deferred_items.md` was read, not edited. The entries that the spec
 names (Deferred items this touches) go with their chains. Stage 1 takes trained economic
@@ -299,29 +301,47 @@ qualification (`:560`).
       through `specs/evaluation-protocol.md` Section 1, whose pinned run and conditions C1–C6 bind
       every read. G5 is open for the ITA pairs.
 
-- [ ] Stage 6: Relatedness — judging panel and margins
-      Objective: Write the relatedness stage spec and build its judging panel on whole held-out
-      embedding-data families. Then, with the user's approval at the time, read the reference
-      (the better of the tree's distance and the text-only table) and record the margins before
-      any model exists.
+- [ ] Stage 6: Relatedness — stage spec and judging panel
+      Objective: Write the relatedness stage spec and build its judging panel on fixtures of
+      whole held-out embedding-data families, with no real read.
       Spec: Req 27 (all but Training input), Req 26, Req 25, U18–U22, U29, U30, Verification "One
-      role per table or part" and "Gates held", Rollout note item 4.
-      Gap closed: Req 27 (the judging panel, the reference and the margins).
+      role per table or part", Rollout note item 4.
+      Gap closed: Req 27 (the judging panel, on fixtures).
       Consumes: The codebook and its tree metric. The frozen text-only table (roadmap D9,
       `panels/text_only.py`). The decision tooling (`decision/resampling.py`,
       `decision/rule.py`) and the selection log. `graph_model/`, which the relatedness stages may
       reuse (Req 27, ADR 0001). The deferred entries that Deferred items names.
       Produces: The relatedness stage spec: the families that train and those that judge, the
-      split unit where one family is split, the scores, the margins, the method and the place of
-      the sealed opening. The judging panel and its margin record. Stage 7 reads them.
+      split unit where one family is split, the scores, the margin rule, the method and the place
+      of the sealed opening. The judging panel on fixtures. Stages 6b and 7 read them. The
+      families that the spec names to train are the input to the owner's R8.4 decision (G1).
       Exit: The stage spec names every family it reads, with its one role. The panel reads only
-      the families that the spec names as judging, under a committed fingerprint (test). The
-      margin record exists, from reads of the tree's distance and the text-only table only. Each
-      family that was read had passed its count gate. The suite, Ruff, the style gate and the
-      strict docs build pass.
+      the families that the spec names as judging, under a committed fingerprint (test). No real
+      embedding-data table was read. The suite, Ruff, the style gate and the strict docs build
+      pass.
       ROUTING: brainstorming
-      Stage 6: HELD (2026-11-14) — waits on G3, G4 and G5 for the families its spec would name
-      (Gates, above). Req 27 lets this spec be written before G1 opens.
+      Split at resume (2026-11-18, owner: "Approve split (Recommended)"). The real reference read
+      and the margin record moved to Stage 6b. Stage 6 reads no embedding-data table, so no gate
+      holds it, and its spec gives the input that G1 and the relatedness half of G4 wait on.
+
+- [ ] Stage 6b: Relatedness — reference read and margins
+      Objective: With the user's approval at the time, read the reference (the better of the
+      tree's distance and the text-only table) on the judging families, and record the margins
+      before any model exists.
+      Spec: Req 27 (Judging), Req 26, Req 25, U29, U30, Verification "One role per table or part"
+      and "Gates held".
+      Gap closed: Req 27 (the reference and the margins).
+      Consumes: Stage 6's stage spec and judging panel, through its Handoff. The codebook and its
+      tree metric, the frozen text-only table, the decision tooling and the selection log, as for
+      Stage 6.
+      Produces: The relatedness margin record, from reference reads only. Stage 7 reads it.
+      Exit: The margin record exists, from reads of the tree's distance and the text-only table
+      only. Each family that was read had passed its count gate and has a section in
+      embedding-data's protocol spec. The record names the embedding-data commit and each table
+      that it read. No model was read.
+      ROUTING: writing-plans
+      Stage 6b: HELD (2026-11-18) — waits on G3, G4 and G5 for the judging families that Stage
+      6's spec names (Gates, above).
 
 - [ ] Stage 7: Relatedness — model and decision
       Objective: Train the relatedness embedding on the tree's edges and the families that Stage
@@ -329,14 +349,14 @@ qualification (`:560`).
       Spec: Req 27 (Training input, Judging and Output), Req 26, U17, U22, U30, Verification
       "Gates held".
       Gap closed: Req 27 (the artifact and its decision).
-      Consumes: Stage 6's stage spec, panel and margin record, through its Handoff.
-      `graph_model/`, as for Stage 6.
+      Consumes: Stage 6's stage spec and panel, and Stage 6b's margin record, through their
+      Handoffs. `graph_model/`, as for Stage 6.
       Produces: The flat relatedness embedding of the 2,125 codes, with its provenance, and its
       decision record, which names the adopted embedding or says that the reference stands. The
       sealed opening that Stage 6's spec places reads both.
       Exit: No embedding-data table entered training before G1 opened, and each training family
       had passed its count gate. No judging family was read for training or selection. The
-      decision record exists, against Stage 6's margins. The suite, Ruff, the style gate and the
+      decision record exists, against Stage 6b's margins. The suite, Ruff, the style gate and the
       strict docs build pass.
       ROUTING: writing-plans
       Stage 7: HELD (2026-11-14) — waits on G1, G3, G4 and G5 for its training families (Gates,
@@ -372,5 +392,5 @@ embedding roadmap Stage 12 are not part of this audit.
 Parking is a first-class exit. If G1 never opens, the relatedness chain's unticked stages park
 alone (Req 27, ADR 0002). Each appends to `specs/deferred_items.md` as a self-contained item, and
 the other chains stay live. If the whole roadmap parks, its unticked stages append in the same
-way, and this file moves to `specs/completed/` marked `PARKED (date) — N of 7 stages complete`.
+way, and this file moves to `specs/completed/` marked `PARKED (date) — N of 8 stages complete`.
 The spec stays in `specs/` while a stage spec or embedding roadmap Stage 12 cites it.
