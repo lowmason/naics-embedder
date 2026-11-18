@@ -474,11 +474,12 @@ The command runs these checks before it loads the panel. The order is:
 The inputs in step 4 depend on the candidate:
 
 - A deterministic candidate: its list row pins its built table, and its stored table matches that
-  pin. Its provenance describes that table and comes from text and tree only. `--text-only`
-  matches the list's pin.
+  pin. Its provenance describes that table and comes from text and tree only. `--text-only` and
+  the provenance beside it match the list's two pins.
 - A trained candidate: its import passes. The import runs `check_arm` on the source record. It
   checks each seed's export provenance and checkpoint sha256. It also checks the identity of the
-  descriptions, the summaries and the window.
+  descriptions, the summaries and the window. The source record's text-only table and its
+  provenance are the ones the list pins.
 
 A deterministic row must pin its built table's sha256 in `conf/data/economic_candidates.yaml`
 before `tools economic-read` accepts it. Use the sha256 that `tools economic-build` prints.

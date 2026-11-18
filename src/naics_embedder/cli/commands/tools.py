@@ -953,8 +953,9 @@ def _deterministic_candidate(
 
     In this order: the stored table at ``candidate_table_path`` is the one its row pins; the
     provenance beside it describes it and comes from text and tree only (Req 29); ``text_only``
-    is the shared table the list pins, and its provenance describes it. The spec takes the D9
-    fields from that provenance (``economic_spec``).
+    is the shared table the list pins, the provenance beside it is the file the list pins, and
+    it describes the table. The spec takes the D9 fields from that provenance
+    (``economic_spec``).
 
     Raises:
         ValueError: On the first check that fails.
@@ -982,6 +983,10 @@ def _deterministic_candidate(
         )
     text_digest = _require_pin(text_only, frozen.text_only_sha256, 'the shared text-only table')
     text_provenance = provenance_path(Path(text_only))
+    _require_pin(
+        str(text_provenance), frozen.text_only_provenance_sha256,
+        "the shared text-only table's provenance"
+    )
     fields = provenance_fields(
         json.loads(text_provenance.read_text(encoding='utf-8')),
         text_digest,
@@ -1066,9 +1071,10 @@ def economic_read_command(
        checks.
     4. The candidate's inputs. A deterministic candidate's stored table is the one its row pins,
        and its provenance describes it and comes from text and tree only (Req 29). Its
-       ``--text-only`` is the shared table the list pins, and gives its spec the D9 fields. A
-       trained candidate is imported from its pinned source record and the seeds' run
-       directories under ``--runs-root``.
+       ``--text-only`` and the provenance beside it are the shared table and provenance file
+       the list pins, and give its spec the D9 fields. A trained candidate is imported from its
+       pinned source record, whose text-only table and provenance are the ones the list pins,
+       and the seeds' run directories under ``--runs-root``.
     5. ``--lock`` names a file.
 
     ``--dry-run`` stops there: it loads no panel and no QCEW file, and logs nothing. A read loads

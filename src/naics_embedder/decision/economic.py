@@ -488,9 +488,10 @@ def check_economic_arm(
     First, the record's dimension, components and geometry are its list row's. A deterministic
     candidate's checks then run in this order:
 
-    1. Its text-only table: the shared one the list pins, with the recorded fields of its stored
-       provenance. A candidate that reads a backbone is D9-checked against it. The tree candidate
-       reads none, and every other kind reads one (P7).
+    1. Its text-only table: the shared one the list pins, with the provenance file that the list
+       pins, and the recorded fields of that stored provenance. A candidate that reads a backbone
+       is D9-checked against it. The tree candidate reads none, and every other kind reads one
+       (P7).
     2. Its shape: one seedless run with no source or selection evidence, whose table is the one
        its row pins.
 
@@ -500,7 +501,7 @@ def check_economic_arm(
        loads from the store as an arm record of the row's arm and passes ``check_arm``. Its seeds
        are the ones the row names.
     2. Its spec and text-only table: the source's spec under its economic name, and the source's
-       text-only table, which is the shared one the list pins.
+       text-only table and provenance, which are the shared ones the list pins.
     3. Its shape: each of the source's seeds, once. The source passed ``check_arm``, so these are
        at least ``MIN_SEEDS`` runs with distinct seeds.
     4. Its evidence: each run's table, checkpoint, training run, checkpoint epoch and monitor
@@ -618,13 +619,23 @@ def _check_deterministic_shape(arm: EconomicArmRecord, entry: CandidateEntry) ->
         )
 
 def _require_shared_text_only(name: str, text_only: TextOnlyRef, candidates: CandidateList) -> None:
-    '''Require the text-only table to be the shared one that the frozen list pins.'''
+    '''
+    Require the text-only table and the provenance beside it to be the shared ones that the
+    frozen list pins.
+    '''
 
     sha256 = text_only.table.sha256
     if sha256 != candidates.text_only_sha256:
         raise ValueError(
             f'{name}: its text-only table {sha256[:12]} is not the shared text-only table '
             f'{candidates.text_only_sha256[:12]} that the frozen list pins'
+        )
+    sha256 = text_only.provenance.sha256
+    pin = candidates.text_only_provenance_sha256
+    if sha256 != pin:
+        raise ValueError(
+            f"{name}: its text-only provenance {sha256[:12]} is not the shared text-only table's "
+            f'provenance {pin[:12]} that the frozen list pins'
         )
 
 # What a trained run copies from its Stage 7/8 seed run (spec 4.4)

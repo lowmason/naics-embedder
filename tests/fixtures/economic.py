@@ -44,6 +44,7 @@ DIMENSION = 3
 # A trained source's monitor MRRs by epoch: its checkpoint is epoch 1's
 MONITOR_MRRS = (0.1, 0.3, 0.2)
 CODEBOOK_SHA256 = 'c' * 64
+TEXT_ONLY_PROVENANCE_SHA256 = 'd' * 64
 CONTRACT = CheckpointContract(bundle_id='fixture-bundle', contract_version='fixture-v1')
 CODEBOOK_INPUT = {'path': 'naics_codebook.parquet', 'sha256': CODEBOOK_SHA256}
 # A spec that reads no backbone: all five D9 fields null (P7)
@@ -129,22 +130,38 @@ def write_candidate(
     provenance_path(path).write_text(json.dumps(provenance, indent=2) + '\n')
     return path
 
+def text_only_pins(path: Path) -> Dict[str, str]:
+    '''
+    The two pins of a stored text-only table, as the list takes them: the sha256 of the table
+    and of the provenance beside it. Use it as ``**text_only_pins(table)`` in a list helper.
+    '''
+
+    path = Path(path)
+    return {
+        'text_only_sha256': sha256_file(path),
+        'text_only_provenance_sha256': sha256_file(provenance_path(path)),
+    }
+
 def fixture_list(
     entries: Sequence[CandidateEntry],
     *,
     text_only_sha256: str,
     codebook_sha256: str = CODEBOOK_SHA256,
+    text_only_provenance_sha256: str = TEXT_ONLY_PROVENANCE_SHA256,
 ) -> CandidateList:
     '''
     A frozen candidate list over the entries, with the fixture checkpoint contract.
 
     A test whose candidates come from ``build_candidate`` passes the written codebook's
-    ``sha256_file``, which the builder records, as ``codebook_sha256``.
+    ``sha256_file``, which the builder records, as ``codebook_sha256``. A test whose candidates
+    read a stored text-only table passes ``text_only_pins`` of it: its table's pin and its
+    provenance's.
     '''
 
     return CandidateList(
         codebook_sha256=codebook_sha256,
         text_only_sha256=text_only_sha256,
+        text_only_provenance_sha256=text_only_provenance_sha256,
         checkpoint_contract=CONTRACT,
         candidates=list(entries),
     )
@@ -155,6 +172,7 @@ def list_for(
     *,
     text_only_sha256: str,
     codebook_sha256: str = CODEBOOK_SHA256,
+    text_only_provenance_sha256: str = TEXT_ONLY_PROVENANCE_SHA256,
 ) -> CandidateList:
     '''
     The frozen list of exactly the arms' candidates, with the fixture checkpoint contract.
@@ -197,7 +215,12 @@ def list_for(
                 table_sha256=run.table.sha256,
             )
         )
-    return fixture_list(entries, text_only_sha256=text_only_sha256, codebook_sha256=codebook_sha256)
+    return fixture_list(
+        entries,
+        text_only_sha256=text_only_sha256,
+        codebook_sha256=codebook_sha256,
+        text_only_provenance_sha256=text_only_provenance_sha256,
+    )
 
 def write_candidate_list(
     path: Path,
@@ -206,13 +229,18 @@ def write_candidate_list(
     *,
     text_only_sha256: str,
     codebook_sha256: str = CODEBOOK_SHA256,
+    text_only_provenance_sha256: str = TEXT_ONLY_PROVENANCE_SHA256,
 ) -> Path:
     '''``list_for``'s list, written as the YAML that ``load_candidate_list`` reads.'''
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     frozen = list_for(
-        arms, store, text_only_sha256=text_only_sha256, codebook_sha256=codebook_sha256
+        arms,
+        store,
+        text_only_sha256=text_only_sha256,
+        codebook_sha256=codebook_sha256,
+        text_only_provenance_sha256=text_only_provenance_sha256,
     )
     path.write_text(yaml.safe_dump(frozen.model_dump(mode='json'), sort_keys=False))
     return path

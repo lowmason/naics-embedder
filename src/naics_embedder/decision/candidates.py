@@ -150,6 +150,8 @@ class CandidateList(_Record):
         codebook_sha256: The codebook every deterministic builder reads.
         text_only_sha256: The shared text-only table that every candidate reading a backbone is
             checked against.
+        text_only_provenance_sha256: The provenance file beside the shared text-only table, which
+            every candidate's text-only reference must store.
         checkpoint_contract: The contract a trained table's export provenance must name.
         candidates: The candidates, in the list's order. Their names are distinct, and each
             smoothed one has exactly one text-only candidate at its dimension.
@@ -157,6 +159,7 @@ class CandidateList(_Record):
 
     codebook_sha256: str
     text_only_sha256: str
+    text_only_provenance_sha256: str = Field(pattern=_SHA256)
     checkpoint_contract: CheckpointContract
     candidates: List[CandidateEntry]
 

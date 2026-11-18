@@ -43,6 +43,7 @@ from tests.fixtures.economic import (
     CONTRACT,
     export_provenance,
     fixture_list,
+    text_only_pins,
     trained_source,
     write_candidate,
     write_codebook,
@@ -89,6 +90,9 @@ def test_the_committed_list_is_the_specs_eighteen_candidates():
     assert committed.text_only_sha256 == (
         'f4fb4f574f880c940ee8cf44c7f86615638e59f113b527d0b86973cd45ba32ff'
     )
+    assert committed.text_only_provenance_sha256 == (
+        'bd21c628d06b96c8a0ffe1318c18f81199cb00ca8862560dbdb8dc57887ea05e'
+    )
     assert committed.checkpoint_contract == CheckpointContract(
         bundle_id='301cce28-539c-42ea-8781-496bbdcf511c', contract_version='stage3-supervision-v2'
     )
@@ -106,6 +110,20 @@ def test_the_committed_list_is_the_specs_eighteen_candidates():
             'stage7-reference-s{seed}' if stage7 else f'stage8-{entry.name}-s{{seed}}'
         )
         assert entry.record_sha256 == RECORD_SHA256[entry.name]
+
+def test_a_list_without_the_text_only_provenance_pin_is_refused(tmp_path):
+    '''Review Focus 4: a list file from before the pin.'''
+
+    content = yaml.safe_load((ROOT / ECONOMIC_CANDIDATES).read_text())
+    del content['text_only_provenance_sha256']
+    old = tmp_path / 'old.yaml'
+    old.write_text(yaml.safe_dump(content, sort_keys=False))
+    with pytest.raises(ValidationError, match='text_only_provenance_sha256'):
+        load_candidate_list(old)
+    content['text_only_provenance_sha256'] = 'not-a-sha256'
+    old.write_text(yaml.safe_dump(content, sort_keys=False))
+    with pytest.raises(ValidationError, match='text_only_provenance_sha256'):
+        load_candidate_list(old)
 
 def test_the_committed_list_names_no_user_path():
     assert '/Users/' not in (ROOT / ECONOMIC_CANDIDATES).read_text()
@@ -155,6 +173,7 @@ def _list(*entries: dict, **edits) -> dict:
     return {
         'codebook_sha256': '1' * 64,
         'text_only_sha256': '2' * 64,
+        'text_only_provenance_sha256': '3' * 64,
         'checkpoint_contract': {
             'bundle_id': 'bundle',
             'contract_version': 'contract'
@@ -629,7 +648,7 @@ def _build_every_kind(directory: Path) -> Built:
         contents[kind] = json.loads(provenance_path(table).read_text())
     frozen = fixture_list(
         list(DETERMINISTIC.values()),
-        text_only_sha256=sha256_file(text_only),
+        **text_only_pins(text_only),
         codebook_sha256=sha256_file(codebook),
     )
     return Built(contents, frozen)
@@ -1265,9 +1284,7 @@ def source(store, shared_text_only, tmp_path) -> Source:
     entry, runs_root = trained_source(
         store, tmp_path / 'trained', 'euclidean-d3', text_only=shared_text_only
     )
-    return Source(
-        entry, runs_root, fixture_list([entry], text_only_sha256=sha256_file(shared_text_only))
-    )
+    return Source(entry, runs_root, fixture_list([entry], **text_only_pins(shared_text_only)))
 
 def _record(store, entry) -> ArmRecord:
     return read_record(store.root / entry.record, ArmRecord)
@@ -1410,9 +1427,7 @@ def six_seeds(store, shared_text_only, tmp_path) -> Source:
         text_only=shared_text_only,
         offsets=(*SEED_OFFSETS, 0.5),
     )
-    return Source(
-        entry, runs_root, fixture_list([entry], text_only_sha256=sha256_file(shared_text_only))
-    )
+    return Source(entry, runs_root, fixture_list([entry], **text_only_pins(shared_text_only)))
 
 @pytest.mark.parametrize(
     'seeds', [[0, 1, 2, 3, 4], [0, 1, 2, 4, 5]], ids=['the-last-seed', 'a-middle-seed']
