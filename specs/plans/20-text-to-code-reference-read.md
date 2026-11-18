@@ -183,8 +183,12 @@ below equals the Stage 8 record's (checked at plan time):
 - **D3** (owner, roadmap session, 2026-11-18): "Yes, same hold". Text→code's code PRs, real ITA
   reads and Stage 4 finding wait for Stage 3's COMPLETE stamp. Applied in: Global Constraints,
   Pre-flight.
+- **D4** (owner, plan review, 2026-11-18): "Approve plan (Recommended)": the plan as written,
+  P1–P10 included, at PR #169. Applied in: all tasks.
+- **D5** (owner, plan review, 2026-11-18): "Inline (Recommended)": executing-plans in a fresh
+  Sonnet session. Applied in: Execution.
 
-This plan's choices, for the owner's review at the plan PR:
+This plan's choices, approved by D4:
 
 - **P1:** a command, not a scratch script. Spec §2 and §7 give Stage 4 the read command. The logic
   is in `decision/ita_reads.py` and `decision/ita_gap.py`. `tools.py` holds two thin adapters,
@@ -1208,5 +1212,5 @@ Run the writing-plans Plan Completion Protocol on PR B's branch, before it is pu
 ## Execution
 
 Planning ran on Opus. Execute in a fresh session on Sonnet (`claude --model sonnet`), inline with
-executing-plans (P10), from an app worktree, with this file as the handoff. Start no task before
+executing-plans (P10, D5), from an app worktree, with this file as the handoff. Start no task before
 Pre-flight Step 1 finds Stage 3's COMPLETE stamp.
