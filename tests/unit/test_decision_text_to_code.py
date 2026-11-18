@@ -11,13 +11,16 @@ scored on the fixture panel of ``tests/fixtures/ita.py``, with its log under ``t
 
 import dataclasses
 import math
+from datetime import datetime, timedelta, timezone
 from typing import Mapping, Sequence
 
 import numpy as np
 import polars as pl
 import pytest
 import torch
+from pydantic import ValidationError
 
+from naics_embedder.decision.decide import read_time
 from naics_embedder.decision.resampling import (
     PanelItems,
     percentile_interval,
@@ -30,16 +33,19 @@ from naics_embedder.decision.text_to_code import (
     EUCLIDEAN_D16,
     LEXICAL_STUB,
     REFERENCE_ARMS,
+    ItaMarginRecord,
     ItaVerdict,
     arm_replicates,
     beat_by_margin,
+    check_ita_margin_first,
     choose_reference,
     compare_to_reference,
+    fix_ita_margin,
     headline_values,
 )
 from naics_embedder.panels.ita import ItaPanel
 from naics_embedder.panels.ita_scoring import ItaResult
-from naics_embedder.panels.selection_log import SelectionLog
+from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog
 from tests.fixtures.ita import (
     ASSIGNED,
     ITA_CANDIDATES,
@@ -302,3 +308,222 @@ def test_an_arm_with_no_seed_is_refused(tmp_path, side):
     seeds[side] = []
     with pytest.raises(ValueError, match='has no seed'):
         _compare(seeds['candidate'], seeds['reference'])
+
+# -------------------------------------------------------------------------------------------------
+# Margin
+# -------------------------------------------------------------------------------------------------
+
+PURPOSE = 'fix the text→code margin'
+
+def _margin_arms() -> dict:
+    # The stub as lexical-stub; euclidean-d16's two seeds decode p03 right, so its MRR is higher
+    return {
+        LEXICAL_STUB: [(None, AssignedStubEncoder())],
+        EUCLIDEAN_D16: [
+            (1, ReassignedStub(CANDIDATE_CHANGES[0])),
+            (2, ReassignedStub(CANDIDATE_CHANGES[0])),
+        ],
+    }
+
+def _read(panel: ItaPanel, role=None, part='validation', purpose='a stage 5 read') -> dict:
+    detail = {'arm': 'c', 'seed': 1, 'run': 'stage5/c'}
+    if role is not None:
+        detail['role'] = role
+    if part == 'sealed':
+        panel.open_sealed('the decision')
+    _, record = panel.score_logged(ReassignedStub(CANDIDATE_CHANGES[1]), part, purpose, detail)
+    return record
+
+def _fix(panel: ItaPanel) -> ItaMarginRecord:
+    return fix_ita_margin(panel, _margin_arms(), 0.05, 'ita-margins', purpose=PURPOSE)
+
+def test_the_margin_is_r_times_the_chosen_references_validation_mrr(tmp_path):
+    panel = _panel(tmp_path)
+    arms = _margin_arms()
+
+    record = fix_ita_margin(panel, arms, 0.05, 'ita-margins', purpose='fix the text→code margin')
+
+    assert record.reference == choose_reference(record.reference_mrr)
+    assert record.margin == pytest.approx(0.05 * record.reference_mrr[record.reference])
+    assert record.split_fingerprint == panel.fingerprint
+    assert {r['detail']['role'] for r in record.log_records} == {'reference'}
+    assert len(record.log_records) == 3
+
+def test_the_margin_records_each_arms_mean_mrr_and_its_reads(tmp_path):
+    panel = _panel(tmp_path)
+    stub = panel.score(AssignedStubEncoder(), 'validation', 'check').headline['mrr']
+    better = panel.score(ReassignedStub(CANDIDATE_CHANGES[0]), 'validation', 'check').headline['mrr']
+    assert better > stub
+
+    record = _fix(panel)
+
+    assert record.kind == 'ita_margin'
+    assert record.name == 'ita-margins' and record.r == 0.05
+    assert record.reference_mrr == {LEXICAL_STUB: stub, EUCLIDEAN_D16: better}
+    assert record.reference == EUCLIDEAN_D16
+    assert record.margin == 0.05 * better
+    assert record.data_fingerprint == panel.data_fingerprint('validation')
+    assert record.run_id.startswith('ita-margin/') and len(record.run_id) == len('ita-margin/') + 32
+    assert record.fixed_at.utcoffset() is not None
+    reads = [r for r in panel.log.records() if r['detail'].get('run') == record.run_id]
+    assert record.log_records == reads
+    assert [(r['detail']['arm'], r['detail'].get('seed')) for r in reads] == [
+        (LEXICAL_STUB, None),
+        (EUCLIDEAN_D16, 1),
+        (EUCLIDEAN_D16, 2),
+    ]
+    assert 'seed' not in reads[0]['detail']
+    for read in reads:
+        assert (read['event'], read['panel'], read['split'], read['purpose']) == (
+            'read',
+            'ita_text',
+            'validation',
+            PURPOSE,
+        )
+        assert read['detail']['role'] == 'reference'
+
+def test_each_margin_reads_under_a_fresh_run_id(tmp_path):
+    panel = _panel(tmp_path)
+    assert _fix(panel).run_id != _fix(panel).run_id
+
+def test_the_stub_is_the_reference_when_d16_reads_worse(tmp_path):
+    panel = _panel(tmp_path)
+    arms = {
+        LEXICAL_STUB: [(None, ReassignedStub(CANDIDATE_CHANGES[0]))],
+        EUCLIDEAN_D16: [(1, AssignedStubEncoder()), (2, ReassignedStub(CANDIDATE_CHANGES[1]))],
+    }
+    record = fix_ita_margin(panel, arms, 0.05, 'ita-margins', purpose=PURPOSE)
+    seeds = [
+        panel.score(AssignedStubEncoder(), 'validation', 'check').headline['mrr'],
+        panel.score(ReassignedStub(CANDIDATE_CHANGES[1]), 'validation', 'check').headline['mrr'],
+    ]
+    assert record.reference_mrr[EUCLIDEAN_D16] == math.fsum(seeds) / 2
+    assert record.reference == LEXICAL_STUB
+    assert record.margin == 0.05 * record.reference_mrr[LEXICAL_STUB]
+
+@pytest.mark.parametrize(
+    'r, arms',
+    [
+        (0.0, None),
+        (-0.05, None),
+        (math.nan, None),
+        (math.inf, None),
+        (0.05, {
+            LEXICAL_STUB: [(None, AssignedStubEncoder())]
+        }),
+        (
+            0.05,
+            {
+                LEXICAL_STUB: [(None, AssignedStubEncoder())],
+                'euclidean-d32': [(1, AssignedStubEncoder())],
+            },
+        ),
+        (
+            0.05,
+            {
+                LEXICAL_STUB: [(None, AssignedStubEncoder())],
+                EUCLIDEAN_D16: [(1, AssignedStubEncoder())],
+                'euclidean-d32': [(1, AssignedStubEncoder())],
+            },
+        ),
+        (0.05, {
+            LEXICAL_STUB: [(None, AssignedStubEncoder())],
+            EUCLIDEAN_D16: []
+        }),
+    ],
+    ids=['zero', 'negative', 'nan', 'inf', 'one-arm', 'another-arm', 'a-third-arm', 'no-seed'],
+)
+def test_fix_ita_margin_refuses_a_bad_r_or_other_arms_before_reading(tmp_path, r, arms):
+    panel = _panel(tmp_path)
+    with pytest.raises(ValueError):
+        fix_ita_margin(
+            panel, _margin_arms() if arms is None else arms, r, 'ita-margins', purpose=PURPOSE
+        )
+    assert not panel.log.path.exists()
+
+def test_a_margin_after_a_candidate_read_is_refused(tmp_path):
+    panel = _panel(tmp_path)
+    read = _read(panel, role='candidate', purpose='an early candidate read')
+    margin = _fix(panel)
+    with pytest.raises(ValueError, match='an early candidate read') as refused:
+        check_ita_margin_first(margin, panel.log)
+    assert read['time'] in str(refused.value)
+
+def test_a_margin_after_a_read_with_no_role_is_refused(tmp_path):
+    panel = _panel(tmp_path)
+    read = _read(panel, role=None, purpose='a monitor read')
+    assert 'role' not in read['detail']
+    margin = _fix(panel)
+    with pytest.raises(ValueError, match='a monitor read') as refused:
+        check_ita_margin_first(margin, panel.log)
+    assert read['time'] in str(refused.value)
+
+def test_earlier_reference_reads_and_later_candidate_reads_pass(tmp_path):
+    panel = _panel(tmp_path)
+    _read(panel, role='reference', purpose='stage 4 gap evidence')
+    margin = _fix(panel)
+    _read(panel, role='candidate')
+    _read(panel, role=None)
+    check_ita_margin_first(margin, panel.log)
+
+def test_earlier_sealed_reads_and_other_panels_reads_do_not_count(tmp_path):
+    panel = _panel(tmp_path)
+    _read(panel, role='candidate', part='sealed')
+    panel.log.append(
+        SelectionEvent.READ,
+        panel='outcome',
+        split='validation',
+        purpose='a stage 7 read',
+        fingerprint='f' * 64,
+        n_queries=3,
+        detail={'run': 'stage7/x'},
+    )
+    margin = _fix(panel)
+    check_ita_margin_first(margin, panel.log)
+
+def test_a_candidate_read_before_fixed_at_is_refused_when_fixed_at_is_moved_later(tmp_path):
+    panel = _panel(tmp_path)
+    margin = _fix(panel)
+    read = _read(panel, role='candidate', purpose='a later candidate read')
+    later = margin.model_copy(update={'fixed_at': read_time(read, 'read') + timedelta(seconds=1)})
+    with pytest.raises(ValueError, match='a later candidate read'):
+        check_ita_margin_first(later, panel.log)
+
+def test_a_naive_fixed_at_or_a_read_after_fixed_at_is_refused(tmp_path):
+    panel = _panel(tmp_path)
+    margin = _fix(panel)
+    naive = margin.model_copy(update={'fixed_at': margin.fixed_at.replace(tzinfo=None)})
+    with pytest.raises(ValueError, match='timezone'):
+        check_ita_margin_first(naive, panel.log)
+    first = read_time(margin.log_records[0], 'read')
+    early = margin.model_copy(update={'fixed_at': first - timedelta(seconds=1)})
+    with pytest.raises(ValueError, match='before'):
+        check_ita_margin_first(early, panel.log)
+    check_ita_margin_first(margin, panel.log)
+
+def test_the_record_round_trips_through_json(tmp_path):
+    margin = _fix(_panel(tmp_path))
+    assert ItaMarginRecord.model_validate_json(margin.model_dump_json()) == margin
+
+def test_the_record_refuses_extra_keys_a_bad_r_and_a_nan():
+    fields = {
+        'name': 'ita-margins',
+        'r': 0.05,
+        'run_id': 'ita-margin/x',
+        'reference_mrr': {
+            LEXICAL_STUB: 0.5,
+            EUCLIDEAN_D16: 0.6
+        },
+        'reference': EUCLIDEAN_D16,
+        'margin': 0.03,
+        'split_fingerprint': 'a' * 64,
+        'data_fingerprint': 'b' * 64,
+        'log_records': [],
+        'fixed_at': datetime(2026, 11, 17, tzinfo=timezone.utc),
+    }
+    record = ItaMarginRecord(**fields)
+    with pytest.raises(ValidationError):
+        record.margin = 0.1
+    for bad in ({'extra': 1}, {'r': 0.0}, {'margin': math.nan}, {'kind': 'relative_margins'}):
+        with pytest.raises(ValidationError):
+            ItaMarginRecord(**{**fields, **bad})
