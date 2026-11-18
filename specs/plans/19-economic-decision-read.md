@@ -143,7 +143,7 @@ Constraints), with this plan's values:
    deferred item's case). `tools decide` exits 1, names the candidate and writes no decision
    record. Test: Task 1, `test_decide_refuses_a_record_that_stores_another_text_only_provenance`.
 4. **A list file from before the pin**, with no `text_only_provenance_sha256`. Loading it
-   refuses and names the field, so `tools decide --candidates OLD` refuses before it reads an arm.
+   refuses and names the field, so `tools decide --candidates OLD` refuses before any comparison.
    Test: Task 1, `test_a_list_without_the_text_only_provenance_pin_is_refused`.
 5. **A real read whose reference does not pair with the margin read** (BLAS threading, a changed
    environment). It shows after the first candidate, not after 118 logged reads, and the plan
@@ -221,6 +221,8 @@ Stop, report and wait for your human partner when any of these happens:
 - An output path exists, or the store is not writable.
 - `log_state.py` exits 1 at any step.
 - A dry run exits non-zero.
+- MAIN's HEAD or its `conf/data/economic_candidates.yaml` moved during Tasks 3–5 (the drift
+  guard, Task 4 Step 2). Stop before the next read or the decision.
 - A read exits non-zero, or `check_arm.py` fails after it. Record what it printed first, and
   never re-run the read.
 - `tools decide` exits non-zero: a pairing refusal, `TieUnresolvedError` or anything else.
@@ -305,8 +307,8 @@ Nothing in this task reads real data.
 - Modify: `tests/fixtures/economic.py`
 - Test: `tests/unit/test_economic_candidates.py`, `tests/unit/test_decision_economic.py`,
   `tests/unit/test_cli_commands.py`
-- Modify: `docs/usage.md` (`tools economic-read`, the inputs of step 4), and the test counts in
-  `CLAUDE.md:379`, `README.md:261` and `tests/README.md:5`
+- Modify: `docs/usage.md` (`tools economic-read`, the inputs of step 4), and the collected-test
+  count in `CLAUDE.md`, `README.md` and `tests/README.md`
 
 **Interfaces:**
 - Consumes: nothing from an earlier task.
@@ -467,8 +469,10 @@ uv run --locked --no-sync ruff check src/ tests/; echo "exit=$?"
 uv run --locked --no-sync mkdocs build --strict; echo "exit=$?"
 ```
 
-Expected: every `exit=0`. Put the collected count in `CLAUDE.md:379`, `README.md:261` and
-`tests/README.md:5` in place of 4,479. The unit file count stays 112.
+Expected: every `exit=0`. Find the stated count (the number beside "collect") with
+`grep -n 'collect' CLAUDE.md README.md tests/README.md` (4,479 at plan time; plan 18 may change
+it first), and put the new collected count in its place in all three files. The unit file count
+stays as the files state it.
 
 - [ ] **Step 7: Commit**
 
@@ -644,15 +648,24 @@ their objects in the store.
 
 - [ ] **Step 1: Ask for Gate B**
 
-Show the user Task 3's results, the read command and the order. Say that the reads append 118
-growth validation reads to MAIN's log, open no outer set, and are never re-run, and that no
-other session should read a panel into MAIN's log while they run. Ask for a go, and wait for a
-clear yes.
+First run `mcp__ccd_session_mgmt__list_sessions` and note each running session whose `cwd` is
+under MAIN. Show the user Task 3's results, the read command, the order and those sessions. Say
+that the reads append 118 growth validation reads to MAIN's log, open no outer set and are never
+re-run. Ask that, until Task 6 passes, no other session merges a PR or syncs MAIN, and none
+reads a panel into MAIN's log. Ask for a go, and wait for a clear yes.
 
 - [ ] **Step 2: Read each candidate**
 
 Right before the first read, run `log_state.py` again with `LINES_BEFORE SHA_BEFORE`. Expected:
-`exit=0`, and no PURPOSE record. Then, for each candidate in the list's order, run Task 3 Step 3's
+`exit=0`, and no PURPOSE record. Then, for each candidate in the list's order, first run the
+drift guard:
+
+```bash
+cd /Users/lowell/Projects/naics-embedder && test "$(git rev-parse HEAD)" = READ_SHA && test "$(shasum -a 256 conf/data/economic_candidates.yaml | cut -d' ' -f1)" = LIST_SHA; echo "exit=$?"
+```
+
+Expected: `exit=0`. Another session's post-merge cleanup fast-forwards MAIN, and a read after
+that would run at another commit. On `exit=1`, stop before the read. Then run Task 3 Step 3's
 command without `--dry-run`, writing `/tmp/naics_plan19/read-NAME.txt`. Run it in the background
 and wait for it to exit. Never start a read before the previous one's Step 3 passes. Expected:
 `exit=0`, and `Economic read 'NAME': 1 run` (deterministic), `5 runs` or `10 runs`
@@ -711,7 +724,8 @@ list.
 test ! -e /Users/lowell/naics-artifacts/records/economic/decision.json; echo "absent=$?"
 ```
 
-Expected: `absent=0`. Then run, in the background, from MAIN's root:
+Expected: `absent=0`. Run Task 4 Step 2's drift guard: `exit=0`. Then run, in the background,
+from MAIN's root:
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && HF_HUB_OFFLINE=1 COLUMNS=200 uv run --locked --no-sync naics-embedder tools decide \
