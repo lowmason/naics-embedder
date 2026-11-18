@@ -19,7 +19,11 @@ import torch
 import torch.nn as nn
 from peft.tuners.lora import LoraLayer
 from transformers import PreTrainedModel
-from transformers.modeling_layers import GradientCheckpointingLayer
+
+try:
+    from transformers.modeling_layers import GradientCheckpointingLayer
+except ImportError:  # older than the lock's transformers, though within pyproject's floor
+    GradientCheckpointingLayer = None
 
 from naics_embedder.text_model.dataloader.datamodule import stack_text_inputs
 from naics_embedder.text_model.fields import CHANNELS, QUERY
@@ -581,6 +585,10 @@ def test_a_new_encoder_is_in_train_mode_throughout(make_encoder):
     encoder.train()
     assert {module.training for module in encoder.modules()} == {True}
 
+@pytest.mark.skipif(
+    GradientCheckpointingLayer is None,
+    reason='counts runs through transformers.modeling_layers.GradientCheckpointingLayer',
+)
 def test_train_mode_runs_the_backbone_layers_checkpointed(make_encoder):
     encoder = make_encoder(use_gradient_checkpointing=True)
     ran, checkpointed = _count_layer_runs(encoder)
