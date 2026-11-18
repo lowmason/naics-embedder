@@ -258,7 +258,7 @@ uv run ruff check src/ tests/
 uv run mkdocs build --strict
 ```
 
-The suite collects 4,428 tests in 112 unit files and two integration files. Skip counts depend on
+The suite collects 4,479 tests in 112 unit files and two integration files. Skip counts depend on
 local data and hardware, including MPS. See [tests/README.md](tests/README.md) for the test
 contracts, [CLAUDE.md](CLAUDE.md) for the project conventions and the
 [documentation site](https://lowmason.github.io/naics-embedder/) for the guides and API pages.
