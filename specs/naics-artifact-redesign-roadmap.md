@@ -167,7 +167,7 @@ qualification (`:560`).
       > Stage 1: COMPLETE (2026-11-15) — implemented by plan 16 (specs/plans/completed/16-economic-candidates.md). Its Handoff section names what Stage 3 consumes.
       > Next: resume the roadmap.
 
-- [ ] Stage 2: Text→code — ITA scoring and split
+- [x] Stage 2: Text→code — ITA scoring and split
       Objective: Write text→code's stage spec and build its ITA panel on a fixture: the grouped
       split into a validation and a sealed part, the shortlist scoring, the reference and margin
       rule, and the one logged opening of the sealed part.
@@ -196,6 +196,8 @@ qualification (`:560`).
       stage spec lists every table or part it reads, with its one role. No real ITA pair was
       read. The suite, Ruff, the style gate and the strict docs build pass.
       ROUTING: brainstorming
+      > Stage 2: COMPLETE (2026-11-17) — implemented by plan 17 (specs/plans/completed/17-text-to-code-ita-panel.md). Its Handoff section names what Stages 4 and 5 consume.
+      > Next: resume the roadmap.
 
 - [ ] Stage 3: Economic — decision read
       Objective: With the user's approval at the time, read every Stage 1 candidate on the growth

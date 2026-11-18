@@ -2,7 +2,7 @@
 
 Req 5's decision procedure over the three panels of roadmap D8, and the records that carry it
 (roadmap Stage 4); and the economic artifact's decision over the two growth panels, against the
-reference `covariates+ancestors` (Req 24).
+reference `covariates+ancestors` (Req 24); and text→code's margin on the ITA panel.
 
 ## Decision statistics
 
@@ -53,3 +53,10 @@ panel, QCEW file or selection log.
 The import of a trained candidate from its Stage 7/8 arm record and run directories.
 
 ::: naics_embedder.decision.trained
+
+## Text→code margin
+
+The text→code decision on the ITA panel's headline. It fixes the margin δ from the reference arms'
+own reads, before any candidate read, and compares a candidate with the reference.
+
+::: naics_embedder.decision.text_to_code

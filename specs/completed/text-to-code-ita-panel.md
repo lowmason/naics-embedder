@@ -1,6 +1,8 @@
 # Text→code ITA panel — Design Spec
 
-**Status:** APPROVED (2026-11-17, U41). Written in a brainstorming session. A
+**Status:** COMPLETE (2026-11-17) — implemented by
+`specs/plans/completed/17-text-to-code-ita-panel.md`; deferred items in
+`specs/deferred_items.md`. Approved 2026-11-17 (U41). Written in a brainstorming session. A
 builder check raised three points, none of them the user's to rule. They are folded into §4.1
 (the node-id level token), §4.4 and §4.5 (margin-first in code) and §4.5 (the reference's
 checkpoints).
