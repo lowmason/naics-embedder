@@ -92,7 +92,7 @@ Pre-flight checks the stamp first. Only this plan's own planning PR, which touch
 | ITA settings | `conf/data/ita_panel.yaml`, unchanged. Split fingerprint `8602ceb243722dc64e0a29a9ba444fe824baf209a848964d7ddf130a9db5cc7c`. r = 0.05 |
 | Bundle | `MAIN/data/supervision/stage3-supervision-v2/301cce28-539c-42ea-8781-496bbdcf511c/manifest.json`, named by MAIN's gitignored `conf/local.yaml` |
 | Stub code texts | `MAIN/data/naics_descriptions.parquet`, `fe8c54e36efb7470e46122c0071e16c03c3dba1c909073c84c91ec998a0fdc36` (the d16 spec's `descriptions_sha256`) |
-| Stub on the outcome panel | MRR 0.6165 on 4,042 validation queries (finding: outcome-panel-splits §5) |
+| Stub on the outcome panel | MRR 0.6165 on 4,042 validation queries (finding: outcome-panel-splits §5, 2026-09-24). That read came before plan 7 rebuilt the descriptions as `fe8c54e3` (2026-09-26), so this plan reports 0.6165 beside its own read and does not check against it |
 | Outcome panel | fingerprint `05099381db725244b54ee263222933568f82fd5b212064697e8c7b2cfa6e8a3a`, validation data fingerprint `ca91f2e0e361515070fee53a909bbf51ecae6019995b85a8062745185982e81f` (the Stage 8 record's `panels`) |
 | Stage 8 record | `STORE/records/stage8/euclidean-d16.json`, `3d5a80d5a3ac5466e10b019773fa09a21e2ad0592af32d7b22273fea3e1bab2c`. Its five `scores` objects hash as recorded (checked at plan time) |
 | `uv.lock` | `6de4fbdcde8a2e944c7a9daed21f09f8a01ed479052179994ba4b0d488fef948` |
@@ -199,8 +199,10 @@ This plan's choices, for the owner's review at the plan PR:
   beside carries the same detail. Applied in: Tasks 2, 7.
 - **P4:** d16 reads from its Stage 8 run directories, and every file is pinned to the Stage 8
   record. Its C comes from the record's stored `scores` (panel `outcome`, statistic `mrr`). The
-  stub's C comes from one logged outcome read beside its ITA read (`--outcome`), which must
-  reproduce §5's MRR. Applied in: Tasks 2, 3, 7.
+  stub's C comes from one logged outcome read beside its ITA read (`--outcome`). Its outcome
+  fingerprints must be the pinned ones, which fix the split and the candidates. The stub is the
+  current code over the pinned descriptions, as Stage 5's `fix_ita_margin` will read it, so §5's
+  older 0.6165 is reported, not checked. Applied in: Tasks 2, 3, 7, 9.
 - **P5:** the bootstrap. Each stratum has its own unit draws: H on `ita_text` (so it equals
   `arm_replicates`), K on `ita_text/copied`, C on `outcome`, and the matched pair on
   `ita_text/matched`. One seed draw per arm, on `(ita_text, arm)`, is shared by every stratum.
@@ -235,7 +237,8 @@ This plan's choices, for the owner's review at the plan PR:
 Stop, report and wait for your human partner when any of these happens:
 
 - Stage 3's COMPLETE stamp is not on `origin/main` (D3).
-- Pre-flight finds an open PR that touches a file this plan creates or modifies.
+- Pre-flight finds an open PR that touches a `src/`, `conf/data/` or `tests/` file that this plan
+  creates or modifies.
 - embedding-data's Section 1 Evidence values differ from the Pinned values (C5), or its Stage 10
   amendment or V9 decision changed since `fd9e495`.
 - A pinned SHA-256 differs from the file on disk, or `uv sync --locked --check` fails.
@@ -246,8 +249,8 @@ Stop, report and wait for your human partner when any of these happens:
 - A dry run or a read exits non-zero, or the panel refuses the real tables. A refusal means that
   the inputs disagree with spec §4.1. Report it, and never patch around it.
 - A check script exits 1 after a read. Record what it printed, and never re-run the read.
-- The stub's outcome MRR does not round to 0.6165, or its outcome fingerprints are not the
-  pinned ones.
+- The stub's outcome fingerprints are not the pinned ones, or its outcome read has other than
+  4,042 queries.
 - MAIN's HEAD moved during Tasks 6–8 (the drift guard, Task 7 Step 2).
 - An output path exists.
 - `log_state.py` finds an `ita_text` `open` or `reopen` record, or a run id that starts with
@@ -301,9 +304,11 @@ gh pr list --repo lowmason/naics-embedder --state open --json number,title,files
 git log --oneline 32e91c5..origin/main -- src/naics_embedder/panels src/naics_embedder/decision src/naics_embedder/cli/commands/tools.py conf/data tests/fixtures/ita.py uv.lock
 ```
 
-Expected: no open PR touches a file in File structure. List the commits, which are plan 19's and
-any others, in the ledger. Note any plan 18 change to `tools.py` or `text_model/export.py`.
-Worktrees under `~/Projects/copilot-worktrees/` are review tooling, not sessions.
+Expected: no open PR touches a `src/`, `conf/data/` or `tests/` path in File structure. An open
+PR that touches only its docs, count or `specs/` files is no stop: rebase on it if it lands first.
+List the commits, which are plan 19's and any others, in the ledger. Note any plan 18 change to
+`tools.py` or `text_model/export.py`. Worktrees under `~/Projects/copilot-worktrees/` are review
+tooling, not sessions.
 
 - [ ] **Step 3: Re-read the gates in embedding-data**
 
@@ -1013,8 +1018,9 @@ runs these checks in order:
 3. `split_fingerprint` is `8602ceb2…`, and `data_fingerprint` is DATA_FP.
 4. For d16, `checkpoint_sha256` is the seed's pinned checkpoint SHA-256. `table_fingerprint`
    equals the Stage 8 record's `matrix_fingerprint` for that seed.
-5. For the stub, `outcome` exists. Its `summary['mrr']` rounds to 0.6165 at four places,
-   `summary['n_queries']` is 4042, and its two fingerprints are the pinned outcome fingerprints.
+5. For the stub, `outcome` exists, `summary['n_queries']` is 4042, and its two fingerprints are
+   the pinned outcome fingerprints. It prints `summary['mrr']` beside §5's 0.6165, which is
+   reported and not checked (P4).
 6. `log_records` are exactly the log's records whose `detail.run` is RUN and whose arm and seed
    are this read's. Each has role `reference` and PURPOSE. There is one `ita_text` `validation`
    `read`, and for the stub one `outcome` `validation` `read` after it.
@@ -1136,7 +1142,7 @@ a development measurement on the ITA validation part, not evaluation (C3). Its s
    fallback.
 4. **Scores.** For each arm, the headline, copied and phrasing reports: MRR, top-1, hit@5,
    hit@10, mean LCA level and the coarser-level MRRs at levels 2–5. d16's are seed means. The
-   stub's outcome summary, which reproduces §5.
+   stub's outcome summary beside §5's 0.6165, which was read before the descriptions rebuild.
 5. **The gap (D1).** For each arm: C, K, H, the matched C and H, the four gaps with their 95 %
    intervals, `n_matched_codes` and `n_unmatched_codes`. Say what each gap isolates. C − H is
    held-out Census phrases against owners' own words. C − K is the same against owners who
