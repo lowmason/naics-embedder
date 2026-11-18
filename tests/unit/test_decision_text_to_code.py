@@ -390,13 +390,14 @@ def test_the_stub_is_the_reference_when_d16_reads_worse(tmp_path):
     panel = _panel(tmp_path)
     arms = {
         LEXICAL_STUB: [(None, ReassignedStub(CANDIDATE_CHANGES[0]))],
-        EUCLIDEAN_D16: [(1, AssignedStubEncoder()), (2, ReassignedStub(CANDIDATE_CHANGES[1]))],
+        EUCLIDEAN_D16: [(1, AssignedStubEncoder()), (2, ReassignedStub(CANDIDATE_CHANGES[2]))],
     }
     record = fix_ita_margin(panel, arms, 0.05, 'ita-margins', purpose=PURPOSE)
     seeds = [
         panel.score(AssignedStubEncoder(), 'validation', 'check').headline['mrr'],
-        panel.score(ReassignedStub(CANDIDATE_CHANGES[1]), 'validation', 'check').headline['mrr'],
+        panel.score(ReassignedStub(CANDIDATE_CHANGES[2]), 'validation', 'check').headline['mrr'],
     ]
+    assert seeds[0] != seeds[1]
     assert record.reference_mrr[EUCLIDEAN_D16] == math.fsum(seeds) / 2
     assert record.reference == LEXICAL_STUB
     assert record.margin == 0.05 * record.reference_mrr[LEXICAL_STUB]
