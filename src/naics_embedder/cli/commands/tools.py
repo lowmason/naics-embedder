@@ -1248,7 +1248,7 @@ def diagnostics_command(
     try:
         # Before the table is read: its export names the arm it came from (P9)
         _require_table_geometry(table, geometry)
-        codes = pl.read_parquet(codebook).get_column('code').to_list()
+        codes = pl.read_parquet(codebook).get_column('code').cast(pl.Utf8).to_list()
         report = diagnostics_report(
             pl.read_parquet(table), geometry, codebook_codes=codes, curvature=curvature
         )
@@ -1289,7 +1289,7 @@ def diagnostics_command(
         f'  • distance Pearson with D*: {formatted(report.distance_pearson.value)} over '
         f'{report.distance_pearson.pairs:,} pairs'
     )
-    at = ', '.join(f'@{k} {value:.4f}' for k, value in parents.at.items())
+    at = ', '.join(f'{k} {value:.4f}' for k, value in parents.at.items())
     console.print(
         f'  • parent retrieval: {at} over {parents.queries:,} queries '
         f'({parents.unary_pairs_excluded} unary pairs excluded)'
