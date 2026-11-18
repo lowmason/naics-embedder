@@ -534,6 +534,7 @@
       pins the provenance file's sha256, the gate refuses a record whose stored text-only
       provenance differs from it, with a test, and the list's sha256 is recorded again before the
       first real candidate read.
+      → planned 2026-11-18: specs/plans/19-economic-decision-read.md
 - [ ] Remaining economic decision test gaps (the rest of plan 14's item "Economic decision test
       gaps", which plan 16 closed in part): plan 16 tests the statistics-edit and key-set
       refusals, the logged read identities, the CLI's adopted path and `_margin_kind` on a
