@@ -1,13 +1,17 @@
 # Relatedness artifact — Design Spec
 
-**Status:** DRAFT (2026-11-18), for the user's review. Written in a brainstorming session.
+**Status:** DRAFT (2026-11-18), for the user's review. Written in a brainstorming session. A
+builder check raised five points. One was the user's to rule (U47, the relevance floor). The other
+four are folded in as my calls: the gain's base (§4.4), five seeds (§4.6, §4.7), when TRI may join
+(§4.1, §4.6) and the centered text reference (§4.4).
 
 **Roadmap:** `specs/naics-artifact-redesign-roadmap.md`, Stage 6 (ROUTING: brainstorming). This spec
 also fixes what Stages 6b and 7 and the relatedness opening read (§8). Source spec:
 `specs/naics-artifact-redesign.md` (Q4) Reqs 25–27, U17–U22, U29 and U30. Evidence was read at
 origin/main 8329e55, and in embedding-data (`~/Projects/embedding-data`) at 114f33a, which is past
-the roadmap's gate read at fd9e495. Paths are under `src/naics_embedder/` unless they start with
-`conf/`, `tests/`, `specs/` or `docs/`, or name a top-level file.
+the roadmap's gate read at fd9e495. embedding-data's main moved to e6e12b2 during the session, where
+the owner approved the TRI parent-links spec (Stage 5). Paths are under `src/naics_embedder/` unless
+they start with `conf/`, `tests/`, `specs/` or `docs/`, or name a top-level file.
 
 **Next skill after approval:** `writing-plans` (plan 20) in a fresh Opus session, with this file as
 the handoff. Execution then runs on Sonnet in its own fresh session.
@@ -15,11 +19,11 @@ the handoff. Execution then runs on Sonnet in its own fresh session.
 **Design provenance.** A brainstorming session with the user on 2026-11-18. The inputs read were:
 
 - Q4's spec, ADRs 0001 and 0002, and the roadmap's Stage 6, 6b and 7 entries and Gates paragraph.
-- the completed Stage 2 spec `specs/completed/text-to-code-ita-panel.md`, `panels/selection_log.py`,
+- The completed Stage 2 spec `specs/completed/text-to-code-ita-panel.md`, `panels/selection_log.py`,
   `panels/text_only.py`, `decision/resampling.py`, `decision/text_to_code.py`,
   `supervision/code_targets.py`, and the text-only table's provenance file in the main checkout's
   `checkpoints/plan9_exit/`.
-- in embedding-data at 114f33a: `specs/evaluation-protocol.md`,
+- In embedding-data at 114f33a: `specs/evaluation-protocol.md`,
   `specs/naics-evaluation-data-roadmap.md`, `specs/deliverable-map.md`, the source spec's R7.2,
   R7.4 and R8.4, methodology K5 and K6, `specs/completed/ita-establishment-targets.md` (its
   co-ownership target and its amendment of 2026-11-18),
@@ -46,6 +50,7 @@ For a multiple-choice question, the ruling is the chosen option's label.
 | U44 | Which headline score decides: NDCG@10 on each anchor's shortlist, AUC over each anchor's whole ranking, or both as two decision panels? | "Shortlist: NDCG@10 (Recommended)" |
 | U45 | Where does relatedness's one sealed opening live: in its own chain, after Stage 7, or in embedding roadmap Stage 12 with the other two artifacts? | "Own chain (Recommended)" |
 | U46 | How does Stage 7 build the embedding: GraphSAGE, a blended factorization, or both as candidates? | "A. GraphSAGE (Recommended)" |
+| U47 | Which co-owned pairs count as related: every published pair (J ≥ 1, as the V9 decision set the minimum), or only pairs with two or more shared employers (J ≥ 2, the draft)? The draft's J ≥ 2 had cited V9's unfiltered design-time curve. The decision's testable curve shows 94.84 % of single-employer cells recurring from 2023 to 2024 | "J ≥ 1, as V9 (Recommended)" |
 
 ## 1. Intent
 
@@ -152,13 +157,15 @@ Two methods were dropped before the choice:
   (`ita_area_mix.parquet`, run `stage6_ita_area_mix_20261014_1000_csv`). The area mix trains only
   after the owner's R8.4 decision allows it (G1). It never judges. No part of it selects, because
   selection reads co-ownership's validation part only (my call, from U43).
-- **A second judge, later: TRI parent links** (embedding-data Stage 5). TRI may join as a judging
-  family only through an amendment of this spec, made before Stage 6b's margin record. It must then
-  be built, count-gated and have a protocol section (my call, played back). Its split uses this
-  spec's rule and salt, so each industry sits in the same part in both families (my call). After
-  the margin record, the judging set is closed, and a late family is reported only. TRI never
-  trains relatedness, because it measures the relation that co-ownership judges (embedding-data's
-  `uncovered-uses-evidence-sources.md`, Rules for every new family).
+- **A second judge, later: TRI parent links** (embedding-data Stage 5, whose spec the owner approved
+  at e6e12b2). TRI may join as a judging family only through an amendment of this spec, made
+  before the sealed opening (§4.8). TRI must then be built, count-gated and have a protocol section.
+  Its own margin record must come before any candidate read on TRI (§4.6). A late join is safe,
+  because a candidate must beat the reference on every judging family, so a new family can only
+  make the test harder (my call, from the builder check: Stage 6b need not wait for TRI). Its split
+  uses this spec's rule and salt, so each industry sits in the same part in both families (my
+  call). TRI never trains relatedness, because it measures the relation that co-ownership judges
+  (embedding-data's `uncovered-uses-evidence-sources.md`, Rules for every new family).
 - **Training, later: the ACS workplace area mix.** It may join training through an amendment (my
   call, played back). It measures the relation that the ITA area mix measures, so it never judges.
 - **Unassigned:** CPS job-change flows, ACS staffing patterns and worker profiles, BEA input–output
@@ -166,7 +173,7 @@ Two methods were dropped before the choice:
   played back).
 - **Off-limits: the ITA text–code pairs.** They belong to text→code (protocol C3).
 - **Not read:** `co_ownership_support.parquet` and the cross-year link table. The panel needs J,
-  n(a) and the codes only (my call).
+  m(a) and the codes only (my call).
 
 ### 4.2 Inputs and code mapping
 
@@ -178,8 +185,9 @@ uses and refuses a table that lacks one.
   `n_unweighted` is J(a,b): the number of employers (EINs) with establishments in both industries
   in the same year (Stage 10). The panel refuses a row whose family is not `co_ownership`, whose
   measure is not `employer_share`, or whose unit types are not `naics_national_industry`.
-- **Marginals.** `co_ownership_marginals.parquet`. The panel reads `node_id` and `n_employers`,
-  which is n(a), the number of employers in industry a.
+- **Marginals.** `co_ownership_marginals.parquet`. The panel reads `node_id` and
+  `n_multi_industry_employers`, which is m(a): the employers in industry a that also operate in
+  another industry in the same year (Stage 10).
 - **Node ids.** A node id has the form `naics:2022:national_industry:<code>`, as in the text pairs.
   The panel takes `<code>` and refuses, before any read:
   - a node id of another system, vintage or level.
@@ -187,6 +195,8 @@ uses and refuses a table that lacks one.
   - a target row whose industry has no marginal row.
   - a pair emitted in one direction only, or with two different J values. Stage 10 emits both
     directions with one J (my call: the check costs nothing and catches a broken build).
+  - a pair whose J exceeds m of either industry. Every employer counted in J(a,b) is counted in
+    m(a) and m(b) (my call, the same reason).
 - **Pins.** The read command (Stage 6b) takes each table's expected SHA-256 from the protocol
   section that embedding-data's Stage 16 writes (§7). The panel refuses a mismatch before it scores
   (protocol C1's form, my call).
@@ -200,7 +210,7 @@ uses and refuses a table that lacks one.
   of the hash, as an unsigned integer modulo 2, give the part: 0 is validation, 1 is sealed. This is
   the ITA rule of the Stage 2 spec, §4.2 (my call, played back).
 - **Config.** `conf/data/relatedness_panel.yaml` holds the panel name (`relatedness_co_ownership`),
-  the rule version, the salt, r, the relevance floor and k. The salt is chosen once, when the file
+  the rule version, the salt, r and k. The salt is chosen once, when the file
   is first committed, and never changes (my call).
 - **Stability.** The rule depends on the code alone. A rebuilt table keeps each industry in its
   part.
@@ -217,25 +227,30 @@ An **arm** gives a similarity between any two six-digit codes. There are three k
 
 - **Tree:** −D*, the tree metric (naics-embedding Req 7, `supervision/code_targets.py`). Between
   six-digit codes, D* takes 5 values: 2, 4, 6, 8 and 10.
-- **Text-only:** cosine over the frozen D9 table's 384-dimension vectors, unreduced (table SHA-256
-  f4fb4f57…, the economic list's `text_only_sha256`). My call: D9 reduces the table by PCA to an
-  arm's dimension, but this reference is fixed before any model exists, so no model's dimension can
-  set the cut. The full table is also the stronger bar.
+- **Text-only:** the frozen D9 table's 384-dimension vectors, unreduced (table SHA-256 f4fb4f57…,
+  the economic list's `text_only_sha256`). It gives two reference arms: plain cosine, and cosine
+  after the mean vector of the bundle's six-digit codes is subtracted. My calls: D9 reduces the
+  table by PCA to an arm's dimension, but this reference is fixed before any model exists, so no
+  model's dimension can set the cut. Mean-pooled sentence vectors share a common direction, which
+  can weaken plain cosine, so the centered arm keeps a scoring choice from making the bar easy
+  (builder check).
 - **Model:** cosine over a relatedness table's d-dimension vectors (§4.7).
 
 For each anchor in a part:
 
 - **Candidates.** The six-digit codes that have a marginal row, other than the anchor itself (my
   call, played back). An industry that ITA never sees cannot count against an arm.
-- **Relevant partner.** Industry b is a relevant partner of anchor a when J(a,b) ≥ 2 (my call,
-  played back). In the V9 decision's design-time curves, only 29 % of single shared employers
-  recurred from 2023 to 2024.
-- **Gain.** The lift over the hypergeometric expectation given industry sizes,
-  J(a,b) · N / (n(a) · n(b)) (K6-Q1). Within one anchor, n(a) and N are constant, and NDCG divides
-  by the anchor's ideal DCG. So the gain reduces to J(a,b) / n(b), which is the target value of the
-  mirror row (b, a), and N is never needed. Candidates that are not relevant have gain 0. My call:
-  this replaces the played-back positive PMI among multi-industry employers, because the bundle
-  ships no count of multi-industry employers, and a log gain would need that constant.
+- **Relevant partner.** Industry b is a relevant partner of anchor a when J(a,b) ≥ 1, that is,
+  when a target row joins them (U47). This is the V9 decision's minimum count for co-ownership.
+- **Gain.** The lift among multi-industry employers over the expectation given each industry's
+  count of them, J(a,b) · M / (m(a) · m(b)), where M is the number of multi-industry employers
+  (K6-Q1). Within one anchor, m(a) and M are constant, and NDCG divides by the anchor's ideal DCG.
+  So the gain reduces to J(a,b) / m(b): of b's multi-industry employers, the share that also
+  operate in a. It lies in (0, 1]. Candidates that are not relevant have gain 0. My call, from the
+  builder check: the played-back base, multi-industry employers, stays, and only the log goes. The
+  bundle ships m(a) for each industry but not the total M, which a log gain would need. Without
+  M, no co-owned pair can be marked as below chance, so every relevant partner has a positive
+  gain.
 - **Anchors.** An industry of the part with at least one relevant partner. The part's other
   industries are counted, not scored.
 - **Ties** (my call, played back). Each arm's DCG@10 is its expected value over all orders within
@@ -250,7 +265,6 @@ Over a part:
 - **Headline (U44).** The mean NDCG@10 over the part's anchors, each anchor once.
 - **Reports.** These never decide, and never add to n:
   - AUC per anchor: relevant partners against candidates with J = 0, ties counted one half.
-    Candidates with J = 1 are left out (my call).
   - NDCG@20.
   - the headline by the anchor's sector.
   - counts: anchors, candidates, relevant partners, industries with no relevant partner, and
@@ -284,33 +298,37 @@ it (my call, as U39 ruled for text→code). It writes to the same `SelectionLog`
 
 ### 4.6 Reference and margin rule
 
-- **Reference arms (U30).** The tree and the text-only table. Neither has seeds, so each is one
-  replicate.
-- **Choosing the reference.** For each judging family, the arm with the higher validation headline,
-  as a point estimate. A tie goes to the tree, the simpler arm (my call). The choice is a selection
-  read, so it waits for G6 (§6).
+- **Reference arms (U30).** The tree, and the text-only table under plain and centered cosine
+  (§4.4). None has seeds, so each is one replicate.
+- **Choosing the reference.** For each judging family, the arm with the highest validation
+  headline, as a point estimate. A tie goes to the tree, then to plain cosine, the simpler arms
+  (my call). The choice is a selection read, so it waits for G6 (§6).
 - **The margin.** δ = r × the chosen reference's validation headline, with r = 0.05 (my call, played
-  back, as U38 set for text→code). The margin is relative because neither reference has seeds. It is
+  back, as U38 set for text→code). The margin is relative because no reference arm has seeds. It is
   fixed from reference reads only, before any candidate read.
-- **The margin record.** It holds r, both arms' validation headlines, the chosen arm and δ for each
-  judging family, the split fingerprint, each family's data fingerprint, the embedding-data commit,
-  the tables' SHA-256 values and `fixed_at`.
+- **The margin record.** One for each judging family. It holds r, every reference arm's validation
+  headline, the chosen arm, δ, the split fingerprint, the family's data fingerprint, the
+  embedding-data commit, the tables' SHA-256 values and `fixed_at`.
 - **Margin-first, in code** (my call, after the ITA pattern). The margin record makes its own fresh
   reference reads under a new run id. A check refuses a margin record when the log holds any
-  `relatedness_co_ownership` validation read with role `candidate`, or with no role, made before
-  `fixed_at`. Training-monitor reads count as candidate reads.
+  validation read of that family's panel with role `candidate`, or with no role, made before
+  `fixed_at`. Training-monitor reads count as candidate reads. A family that joins later (§4.1)
+  gets its own record under the same check.
 - **The test (U40's pattern).** For each judging family, Δ = candidate headline − reference
   headline. A candidate beats the reference when the lower bound of the interval on Δ exceeds +δ on
   every judging family. The level is `superiority_level(n)`, 1 − 0.05/n, where n is the number of
-  judging families: 95 % with co-ownership alone, 97.5 % if TRI joins.
+  judging families when the test runs: 95 % with co-ownership alone, 97.5 % if TRI joins.
 - **Intervals.** The paired bootstrap of `decision/resampling.py`. Anchors are the units, with one
   item each. A candidate's seeds are nested within each resample. The replicates and the bootstrap
   seed come from `conf/data/decision.yaml`, as the existing decisions use them.
+- **Seeds.** A candidate has at least `min_seeds` seeds, 5 in `conf/data/decision.yaml` (Req 5). The
+  test refuses fewer. The reference arms are deterministic (builder check, answered by Req 5).
 - **Which read decides.** Stage 7 chooses one forward candidate on validation. If it does not beat
   the reference by δ on validation, it does not go forward, the sealed part stays sealed, and the
-  reference stands (my call: an unspent sealed part can still judge a later candidate). At the
-  opening (§4.8), the same test runs on the sealed part with the δ fixed on validation. If it fails
-  there, the reference stands.
+  reference stands (my call: an unspent sealed part can still judge a later candidate). If a
+  family joins after Stage 7, the forward candidate must also pass the validation test on it, at the
+  new n, before the opening. At the opening (§4.8), the same test runs on every family's sealed part
+  with the δ fixed on validation. If it fails there, the reference stands.
 - **Provenance** (my call). The decision refuses a candidate table whose provenance names any input
   other than the codebook, the text-only table and the training families of §4.1. This enforces the
   first anti-goal in code, as `decision/provenance.py` does for economic candidates.
@@ -343,8 +361,8 @@ the model on fixtures earlier is the roadmap resume's call.
   messages. Whether they also count as positives, and with what weight, is a hyperparameter (my
   call).
 - **Hyperparameters and seeds.** Stage 7's plan fixes the grid (d, layers, hidden width, tree-edge
-  weight, edge threshold and learning rate) and the seeds, at least 3 for each configuration,
-  before the first candidate read (my call).
+  weight, edge threshold and learning rate) and the seeds before the first candidate read (my
+  call). Each configuration runs at least `min_seeds` seeds, 5 (Req 5).
 - **Selection on the validation part (U43).** For each seed, the checkpoint is the earliest epoch
   with the highest validation headline, as the text monitor selects. The forward candidate is the
   configuration with the highest mean over its seeds. Each epoch's read is logged with role
@@ -375,13 +393,13 @@ keeps the text→code and economic openings only, so a parked relatedness chain 
 |---|---|---|
 | Codebook codes and lineage | Panel, model | The codebook (P1), no role: candidates, D* and tree edges |
 | The tree's parent–child edges | Stage 7 | Training |
-| The text-only table (D9), unreduced | Stage 7, panel | Training input (node features), and the text reference arm. It is codebook text, not an embedding-data table |
+| The text-only table (D9), unreduced | Stage 7, panel | Training input (node features), and the two text reference arms. It is codebook text, not an embedding-data table |
 | `ita_area_mix.parquet`, 2023 | Stage 7 | Training, after G1 |
 | `ita_co_ownership.parquet` and `co_ownership_marginals.parquet`, validation part | Stages 6b and 7 | Selection: the reference, the margin, checkpoints and the forward candidate, after G6 |
 | The same tables, sealed part | The opening stage (§4.8) | Judging, read once |
 | `co_ownership_support.parquet`, the cross-year link table | Nothing | Not read |
 | ITA text–code pairs | Nothing | Off-limits: text→code's (protocol C3) |
-| TRI parent links | Nothing yet | Judging, only through an amendment before the margin record (§4.1) |
+| TRI parent links | Nothing yet | Judging, only through an amendment before the sealed opening, with its own margin record first (§4.1) |
 | ACS, CPS, BEA and USAspending families | Nothing | Unassigned (§4.1) |
 
 Stage 6 reads fixture tables only. Split Req 23's time-window rule for employment data does not
@@ -418,8 +436,8 @@ apply, because no economic panel reads the relatedness artifact (Req 29).
   checks.
 - **Fixtures.** A fixture builds the two co-ownership tables with Stage 10's exact columns and
   types. It holds a mirror pair split across the parts, ties in the tree arm, a target row whose
-  industry has no marginal row, a node id of another level, an anchor with no relevant partner, and
-  pairs with J = 1. Its outputs go under `tmp_path`.
+  industry has no marginal row, a node id of another level, an industry with no relevant partner,
+  and a pair whose J exceeds a marginal count. Its outputs go under `tmp_path`.
 - **Style and docs.** The repository's conventions apply. The new modules get API pages in `docs/`
   and entries in `docs/.nav.yml`.
 
@@ -467,10 +485,10 @@ spec edits nothing there.
 - [ ] The split fingerprint comes from the committed `conf/data/relatedness_panel.yaml`, and a
       changed salt changes it (test).
 - [ ] The panel reads only the co-ownership target and marginal tables. It refuses another family,
-      measure, unit type or node-id level, a one-way or unequal mirror pair, and a table whose
-      SHA-256 differs from its pin (test).
-- [ ] Only pairs with J ≥ 2 are relevant, each gain equals J(a,b) / n(b), and the candidates are the
-      industries with a marginal row (test).
+      measure, unit type or node-id level, a one-way or unequal mirror pair, a J above either
+      industry's m, and a table whose SHA-256 differs from its pin (test).
+- [ ] Every pair with a target row is relevant (J ≥ 1), each gain equals J(a,b) / m(b), and the
+      candidates are the industries with a marginal row (test).
 - [ ] For the tree arm on a small fixture, the expected NDCG@10 equals the mean over every order
       within tied groups, found by brute force (test).
 - [ ] The headline counts each anchor once, and no report changes it (test).
@@ -478,9 +496,14 @@ spec edits nothing there.
       `candidate` or no role (test).
 - [ ] A second opening of the sealed part is refused without a reason, also after the fixture tables
       are rebuilt. With a reason, it logs `reopen` (test).
-- [ ] The reference choice, δ = 0.05 × the headline and the beat-by-δ test at 1 − 0.05/n give the
-      expected verdicts on fixture replicates, for n = 1 and n = 2. This includes a candidate that
-      is superior to the reference but does not beat it by δ (test).
+- [ ] The reference choice among the tree and the plain and centered text arms, δ = 0.05 × the
+      headline and the beat-by-δ test at 1 − 0.05/n give the expected verdicts on fixture
+      replicates, for n = 1 and n = 2. This includes a candidate that is superior to the reference
+      but does not beat it by δ (test).
+- [ ] The test refuses a candidate with fewer than `min_seeds` seeds (test).
+- [ ] A second family's margin record is accepted after candidate reads on the first family, and
+      refused when the log holds a candidate read on the second family before its `fixed_at`
+      (test).
 - [ ] A candidate table whose provenance names co-ownership is refused (test).
 - [ ] `OutcomePanel`, `ItaPanel`, `score_decoding`, `compare_panel` and
       `decision/text_to_code.py` are unchanged, and their tests pass unchanged.
