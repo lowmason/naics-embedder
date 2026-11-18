@@ -113,6 +113,8 @@ Dropped sub-cases, each already settled:
   Applied in: Global Constraints.
 - **D3** (owner, brief, 2026-11-18): edits to `specs/deferred_items.md` touch only these three
   items, since other sessions edit the file. Applied in: Task 5 and the plan's own commit.
+- **D4** (owner, plan review, 2026-11-18): "Approve plan": the plan as written at `06d64cc`.
+  Applied in: all tasks.
 
 ---
 
