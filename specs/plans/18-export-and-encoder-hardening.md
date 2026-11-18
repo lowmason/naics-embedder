@@ -223,9 +223,12 @@ Dropped sub-cases, each already settled:
     summaries=summaries_identity(MINILM))` raises `ValueError, match='is not a readable
     checkpoint'`, and the message holds `path.name`.
 
-  In `tests/unit/test_cli_commands.py`, read every message as
-  `click.unstyle(result.output).replace('\n', '')`, because Rich folds lines at 80 columns on CI.
-  Every refusal asserts `isinstance(result.exception, SystemExit)` and `exit_code == 1`.
+  In `tests/unit/test_cli_commands.py`, Rich wraps output at 80 columns on CI. It wraps a phrase
+  at a space and folds a long path inside the path. So assert phrases on
+  `' '.join(click.unstyle(result.output).split())`, and assert path fragments (`[/x]arm.parquet`,
+  `[red]/arm_provenance.json`) on `click.unstyle(result.output).replace('\n', '')`. A test that
+  checks both kinds reads the output both ways. Every refusal asserts
+  `isinstance(result.exception, SystemExit)` and `exit_code == 1`.
   - Extend `test_export_table_refuses_the_removed_supervision_mode` (`:1270`): assert
     `'Export failed'` and `"input_value='legacy_containment'"` in the message. Rich swallows the
     second today.
@@ -299,6 +302,14 @@ Dropped sub-cases, each already settled:
   ```
 
   Expected: all PASS. `test_monitor.py:395` still matches `'needs a purpose'`.
+
+  Then reproduce CI's wrapping on the Mac, where `COLUMNS` is unset:
+
+  ```bash
+  COLUMNS=80 uv run pytest tests/unit/test_cli_commands.py -q -q --basetemp=/tmp/p18-cli -k "unreadable or supervision_mode or configured_bundle or unwritable or bad_overrides or blank_purpose or reads_validation"
+  ```
+
+  Expected: PASS. Then delete `/tmp/p18-cli`.
 
 - [ ] **Step 5: Sabotage the three pinning tests, one at a time**
 
@@ -413,7 +424,9 @@ Dropped sub-cases, each already settled:
     `loss = encoder(stack_text_inputs(CODES))['tangent'].sum()`. Run
     `loss.backward(retain_graph=True)` and record `first = set_state.call_count`, then run
     `loss.backward()`. Assert `set_state.call_count == 2 * first > 0`. A probe at `ca85e81` gave
-    3 recorded states and 6 then 12 calls. The test runs on CI, since it needs no MPS device.
+    3 recorded states and 6 then 12 calls. It is meant to run on CI, since it needs no MPS device,
+    but the probe ran only on the Mac. If CI fails it, replace it with a direct test that enters
+    one `_MpsStateReplay` twice with mocked `get_rng_state` and `set_rng_state`.
 
 - [ ] **Step 3: Run them**
 
