@@ -493,13 +493,21 @@ class OutcomePanelConfig(BaseModel):
         description="Target share of each code's index entries per role",
     )
     examples_floor: int = Field(
-        default=1, ge=0, description='Minimum examples-channel entries for a code with entries'
+        default=1,
+        ge=0,
+        description=(
+            'Minimum examples-channel entries for a code with entries; frozen with the committed '
+            'table, since only the draw reads it'
+        ),
     )
     near_duplicate_min_jaccard: float = Field(
         default=0.9,
         gt=0.0,
         le=1.0,
-        description='Character-trigram Jaccard similarity at which two texts are near-duplicates',
+        description=(
+            'Character-trigram Jaccard similarity at which two texts are near-duplicates; frozen '
+            'with the committed table, since only the draw reads it'
+        ),
     )
     selection_log: str = Field(
         default='./logs/selection_log.jsonl',
