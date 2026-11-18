@@ -13,7 +13,7 @@ the roadmap's gate read at fd9e495. embedding-data's main moved to e6e12b2 durin
 the owner approved the TRI parent-links spec (Stage 5). Paths are under `src/naics_embedder/` unless
 they start with `conf/`, `tests/`, `specs/` or `docs/`, or name a top-level file.
 
-**Next skill after approval:** `writing-plans` (plan 20) in a fresh Opus session, with this file as
+**Next skill after approval:** `writing-plans` in a fresh Opus session, with this file as
 the handoff. Execution then runs on Sonnet in its own fresh session.
 
 **Design provenance.** A brainstorming session with the user on 2026-11-18. The inputs read were:
@@ -460,7 +460,7 @@ spec edits nothing there.
 
 ## 8. Handoff to later stages
 
-- **Stage 6 (plan 20)** builds the panel (§4.2–§4.5), its config and the margin-rule module (§4.6),
+- **Stage 6's plan** builds the panel (§4.2–§4.5), its config and the margin-rule module (§4.6),
   on fixtures only.
 - **Stage 6b** adds the read command, pins the embedding-data commit and the tables' SHA-256 values
   in its finding, reads both reference arms on the validation part and records the margin. It waits
