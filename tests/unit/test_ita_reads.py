@@ -10,6 +10,8 @@ same panel, and Stage 5's margin-first check is run after two such reads.
 from datetime import timedelta
 
 import pytest
+from pydantic import ValidationError
+
 from naics_embedder.decision.ita_reads import (
     ITA_PER_PAIR_FILE,
     OUTCOME_SCORES_FILE,
@@ -17,8 +19,6 @@ from naics_embedder.decision.ita_reads import (
     ItaReferenceRead,
     read_reference,
 )
-from pydantic import ValidationError
-
 from naics_embedder.decision.records import read_record, write_record
 from naics_embedder.decision.scores import outcome_scores
 from naics_embedder.decision.store import ArtifactStore
