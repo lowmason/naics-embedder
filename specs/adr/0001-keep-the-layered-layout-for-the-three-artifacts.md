@@ -32,7 +32,10 @@ These facts drive the choice:
    pairs a candidate only where the reference predictions match that read's to within 1e-13
    (`decision/economic.py`; amended 2026-11-18 from "bit for bit": economic-candidates §4.8).
    The level-mode fixture is pinned at d61f49b. Sixteen test files
-   import `panels/regressor.py`, `panels/qcew_rows.py` or `decision/economic.py`.
+   import `panels/regressor.py`, `panels/qcew_rows.py` or `decision/economic.py`. Amended
+   2026-11-19: Stage 3 adopted no candidate, and no economic read is planned, so the pairing no
+   longer binds the other artifacts' `uv.lock` (`specs/naics-artifact-redesign-roadmap.md`,
+   Decisions, 2026-11-19). The level-mode fixture pin is a test pin and is unchanged.
 4. **Evidence roles are not import rules.** Req 25 says that no artifact's adoption decision reads
    another artifact's panel, and Req 26 gives each table or part one role. Data and records
    enforce this today, not packages. The selection log keys each opening on its panel and
