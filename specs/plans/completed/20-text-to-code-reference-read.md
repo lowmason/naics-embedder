@@ -1253,8 +1253,8 @@ Pre-flight Step 1 finds Stage 3's COMPLETE stamp.
   whose SHA-256 is not the bundle's description fingerprint, and a dry run creates nothing.
 - **Traps and deferred items.** `tools ita-read` takes `--outcome` on a d16 read and leaves it off
   by default for the stub, and it does not check a d16 seed's checkpoint and table against the
-  Stage 8 record before it logs; both are deferred into Stage 5 (`specs/deferred_items.md`
-  § 20-text-to-code-reference-read). Plan 17's items for Stage 5 stay open
+  Stage 8 record before it logs; both are deferred into Stage 5
+  → item: 20-text-to-code-reference-read — 2026-11-19. Plan 17's items for Stage 5 stay open
   (§ 17-text-to-code-ita-panel). The macOS level pin still fails locally
   (§ 19-economic-decision-read).
 - **Embedding roadmap Stage 12.** The ITA sealed part is unopened, under split fingerprint
