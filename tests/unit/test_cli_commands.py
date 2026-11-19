@@ -50,6 +50,7 @@ from naics_embedder.panels.window_summaries import SummariesPin
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.tree_model.builders import build_candidate
 from naics_embedder.utils.config import Config
+from naics_embedder.utils.validation import ValidationError
 from tests.fixtures.decision import spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import (
     candidate_spec,
@@ -2595,6 +2596,27 @@ def test_ita_read_prints_a_bracketed_error_literally(monkeypatch, runner, ita_fi
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert '[/x] bad' in _ita_output(result)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('dry_run', [False, True], ids=['read', 'dry-run'])
+def test_ita_read_reports_a_bundle_failure_and_logs_nothing(
+    monkeypatch, runner, ita_fixture, dry_run
+):
+
+    def refusing_gate(cfg):
+        raise ValidationError('Descriptions input does not match the supervision bundle')
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', refusing_gate)
+    arguments = ('--arm', 'lexical-stub', '--outcome') + (('--dry-run', ) if dry_run else ())
+
+    result = _ita_read(runner, ita_fixture, *arguments)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert 'Descriptions input does not match the supervision bundle' in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+    assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+    assert not ita_fixture.output.exists()
 
 # -------------------------------------------------------------------------------------------------
 # tools ita-gap (plan 20)
