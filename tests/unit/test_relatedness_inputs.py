@@ -204,7 +204,7 @@ CASES = [
     Case('one-way', one_way, 'one direction', (TARGETS, '(311211, 311212) in one direction')),
     Case(
         'unequal-mirror', unequal_mirror, 'mirror', (
-            TARGETS, '(311211, 311212) has J 3', '(311212, 311211) has J 2'
+            TARGETS, 'row (311211, 311212) has J 3, but its mirror (311212, 311211) has J 2'
         )
     ),
     Case(
@@ -590,7 +590,7 @@ MORE_CASES = [
     # a pair whose two directions hold different J, whichever direction is larger
     Case(
         'unequal-mirror-with-the-smaller-j-first', a_mirror_with_the_smaller_j_first, 'mirror', (
-            TARGETS, '(311211, 311212) has J 2', '(311212, 311211) has J 3'
+            TARGETS, 'row (311211, 311212) has J 2, but its mirror (311212, 311211) has J 3'
         )
     ),
     # a pair whose J exceeds m of either industry
