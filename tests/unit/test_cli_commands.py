@@ -11,6 +11,7 @@ import pytest
 import torch
 import typer
 import yaml
+from naics_embedder.decision.ita_gap import ItaGapRecord
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
@@ -64,6 +65,7 @@ from tests.fixtures.ita import (
     ITA_SETTINGS,
     AssignedStubEncoder,
     IdentifiedStubEncoder,
+    gap_fixture,
     ita_run_dir,
     ita_tables,
     outcome_beside_panel,
@@ -2535,3 +2537,75 @@ def test_ita_read_prints_a_bracketed_error_literally(monkeypatch, runner, ita_fi
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert '[/x] bad' in _ita_output(result)
+
+# -------------------------------------------------------------------------------------------------
+# tools ita-gap (plan 20)
+# -------------------------------------------------------------------------------------------------
+
+def _ita_gap(runner, paths, stage8_path, store, output):
+    reads = [argument for path in paths for argument in ('--read', str(path))]
+    return runner.invoke(
+        tools_cli.app,
+        [
+            'ita-gap', *reads, '--stage8',
+            str(stage8_path), '--store',
+            str(store.root), '--output',
+            str(output)
+        ],
+    )
+
+@pytest.mark.unit
+def test_ita_gap_writes_the_record_and_logs_nothing(runner, tmp_path):
+    store = ArtifactStore(tmp_path / 'store')
+    paths, stage8_path = gap_fixture(store, tmp_path / 'fixture')
+    logs_before = sorted((tmp_path / 'fixture' / 'logs').iterdir())
+    lines_before = {path: path.read_text() for path in logs_before}
+    output = tmp_path / 'gap' / 'gap.json'
+
+    result = _ita_gap(runner, paths, stage8_path, store, output)
+
+    assert result.exit_code == 0, result.output
+    record = read_record(output, ItaGapRecord)
+    assert [arm.arm for arm in record.arms] == ['lexical-stub', 'euclidean-d16']
+    assert (record.replicates, record.bootstrap_seed, record.r) == (10000, 20260924, 0.05)
+    printed = _ita_output(result)
+    answer = 'yes' if record.recommend_training_part else 'no'
+    assert f'Recommend a later ITA training part (D2): {answer}' in printed
+    for arm in record.arms:
+        assert f'matched codes: {arm.n_matched_codes}, unmatched codes: ' in printed
+        lower, upper = arm.matched_headline_gap.interval
+        assert (
+            f'matched_headline_gap: {arm.matched_headline_gap.point:.4f} '
+            f'[{lower:.4f}, {upper:.4f}]'
+        ) in printed
+    # No read: the fixture's logs are as they were, and no other log appeared
+    assert sorted((tmp_path / 'fixture' / 'logs').iterdir()) == logs_before
+    assert {path: path.read_text() for path in logs_before} == lines_before
+    assert not (tmp_path / 'logs').exists()
+
+@pytest.mark.unit
+def test_ita_gap_refuses_an_existing_output(runner, tmp_path):
+    store = ArtifactStore(tmp_path / 'store')
+    paths, stage8_path = gap_fixture(store, tmp_path / 'fixture')
+    output = tmp_path / 'gap.json'
+    output.write_text('{}\n', encoding='utf-8')
+
+    result = _ita_gap(runner, paths, stage8_path, store, output)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert 'exists' in _ita_output(result)
+    assert output.read_text(encoding='utf-8') == '{}\n'
+
+@pytest.mark.unit
+def test_ita_gap_refuses_reads_that_do_not_pair_without_writing(runner, tmp_path):
+    store = ArtifactStore(tmp_path / 'store')
+    paths, stage8_path = gap_fixture(store, tmp_path / 'fixture')
+    output = tmp_path / 'gap.json'
+
+    result = _ita_gap(runner, paths[1:], stage8_path, store, output)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "the reads hold arms ['euclidean-d16']" in _ita_output(result)
+    assert not output.exists()

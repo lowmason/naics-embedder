@@ -18,7 +18,8 @@ embedding-data. ``write_ita_tables`` writes under a directory the test gives, ``
 ``ita_run_dir`` writes them under a run directory beside an ``outputs.json``, and returns the
 evidence that pins the three files (C1, plan 20). ``IdentifiedStubEncoder`` is the stub with a d16
 read's identities, and ``outcome_beside_panel`` an outcome panel whose validation queries it
-decodes, for a read beside an ITA read.
+decodes, for a read beside an ITA read. ``gap_fixture`` writes Stage 4's six read records on the
+fixture panel and a Stage 8 record of ``euclidean-d16`` whose outcome rows are the fixture's codes.
 '''
 
 import json
@@ -28,11 +29,17 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import polars as pl
 import torch
 
+from naics_embedder.decision.ita_reads import read_reference
+from naics_embedder.decision.records import ArtifactRef, SeedRun, write_record
+from naics_embedder.decision.scores import outcome_scores
+from naics_embedder.decision.store import ArtifactStore
+from naics_embedder.panels.ita import ItaPanel
 from naics_embedder.panels.ita_evidence import OUTPUTS_FILE, ItaEvidence
 from naics_embedder.panels.ita_split import ItaPanelSettings
-from naics_embedder.panels.outcome import OutcomePanel
+from naics_embedder.panels.outcome import OUTCOME_PANEL, OutcomePanel
 from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.supervision.artifacts import sha256_file
+from tests.fixtures.decision import spec, synthetic_arm
 
 # Stage 10's ita_text_pairs.parquet: every column, in its order, with its dtype
 ITA_PAIRS_SCHEMA: Dict[str, pl.DataType] = {
@@ -480,3 +487,98 @@ def outcome_beside_panel(log: SelectionLog) -> OutcomePanel:
         orient='row',
     )
     return OutcomePanel(rows, ITA_CANDIDATES, log)
+
+# -------------------------------------------------------------------------------------------------
+# Stage 4's six reads and the Stage 8 record, for the gap
+# -------------------------------------------------------------------------------------------------
+
+GAP_RUN = 'ita-gap/00000000000000000000000000000000'
+GAP_PURPOSE = 'text-to-code reference gap read: fixture'
+
+def _stage8_scores(
+    store: ArtifactStore, run: SeedRun, factor: float, log: SelectionLog
+) -> ArtifactRef:
+    '''
+    A Stage 8 run's scores with its outcome rows over ``ITA_CANDIDATES``: the stub's decoding of
+    ``outcome_beside_panel``, its reciprocal ranks scaled by ``factor``.
+    '''
+
+    decoding = outcome_beside_panel(log).score(
+        AssignedStubEncoder(), 'validation', 'stage 8 fixture'
+    )
+    outcome = outcome_scores(decoding.per_query).with_columns(
+        value=pl.when(pl.col('statistic') == 'mrr').then(pl.col('value') * factor).otherwise(
+            pl.col('value')
+        )
+    )
+    others = store.read_frame(run.scores).filter(pl.col('panel') != OUTCOME_PANEL)
+    return store.put_frame(pl.concat([outcome, others]), 'scores.parquet')
+
+def gap_fixture(store: ArtifactStore, directory: Path) -> Tuple[List[Path], Path]:
+    '''
+    Stage 4's six read records on the fixture panel, and a Stage 8 record of ``euclidean-d16``.
+
+    The stub is read with an outcome read beside it, and ``euclidean-d16`` seeds 1–5 without. The
+    record is ``synthetic_arm``'s, its runs renumbered to seeds 1–5 with ``model_copy``. Its outcome
+    panel is ``outcome_beside_panel``'s, and each run's outcome rows are that panel's codes, so the
+    matched gap has codes. Each d16 read names its seed's checkpoint and table in the record.
+
+    Args:
+        store: The artifact store the reads and the record name.
+        directory: A new directory under ``tmp_path``.
+
+    Returns:
+        The six read records' paths, the stub's first, and the Stage 8 record's path.
+    '''
+
+    directory.mkdir(parents=True)
+    _, _, evidence = ita_run_dir(directory / 'edata', *ita_tables())
+    log = SelectionLog(directory / 'logs' / 'selection_log.jsonl')
+    panel = ItaPanel(*ita_tables(), ITA_CANDIDATES, ITA_SETTINGS, log)
+    beside = outcome_beside_panel(log)
+    arm = synthetic_arm(
+        store, directory / 'stage8', spec('euclidean-d16', geometry='euclidean'), {}
+    )
+    stage8_log = SelectionLog(directory / 'logs' / 'stage8_fixture.jsonl')
+    runs = [
+        run.model_copy(
+            update={
+                'seed': index + 1,
+                'scores': _stage8_scores(store, run, 1.0 - 0.1 * index, stage8_log),
+            }
+        ) for index, run in enumerate(arm.runs)
+    ]
+    panels = arm.panels.model_copy(
+        update={
+            'outcome': beside.fingerprint,
+            'outcome_data': beside.data_fingerprint('validation'),
+        }
+    )
+    stage8_path = write_record(
+        arm.model_copy(update={
+            'runs': runs,
+            'panels': panels
+        }),
+        directory / 'records' / 'stage8-euclidean-d16.json',
+    )
+    common = {'run': GAP_RUN, 'purpose': GAP_PURPOSE}
+    stub = read_reference(
+        panel,
+        AssignedStubEncoder(),
+        store,
+        evidence,
+        arm='lexical-stub',
+        seed=None,
+        outcome_panel=beside,
+        **common
+    )
+    paths = [write_record(stub, directory / 'records' / 'lexical-stub.json')]
+    for run in runs:
+        encoder = AssignedStubEncoder()
+        encoder.checkpoint_sha256 = run.checkpoint.sha256
+        encoder.table_fingerprint = run.table.matrix_fingerprint
+        read = read_reference(
+            panel, encoder, store, evidence, arm='euclidean-d16', seed=run.seed, **common
+        )
+        paths.append(write_record(read, directory / 'records' / f'euclidean-d16-s{run.seed}.json'))
+    return paths, stage8_path

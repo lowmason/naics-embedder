@@ -24,6 +24,7 @@ Commands:
     export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
     outcome-panel: Score an arm on the outcome panel's validation split (Stage 6).
     ita-read: Read a text→code reference arm on the ITA validation part (plan 20).
+    ita-gap: Measure the gap between Census phrases and owner text from those reads (plan 20).
     sweep: Read trained seeds on all three validation panels and write an arm record.
     radius-report: Check radius variation, geometry and loss gradients for a selected checkpoint.
 '''
@@ -60,12 +61,14 @@ from naics_embedder.decision.economic import (
     read_environment,
     read_trained_arm,
 )
+from naics_embedder.decision.ita_gap import gap_record
 from naics_embedder.decision.ita_reads import read_reference
 from naics_embedder.decision.provenance import check_candidate_provenance
 from naics_embedder.decision.records import (
     ArmRecord,
     ArmSpec,
     EconomicArmRecord,
+    Estimate,
     MarginRecord,
     RelativeMarginRecord,
     read_record,
@@ -80,7 +83,7 @@ from naics_embedder.metrics.diagnostics import GEOMETRIES, diagnostics_report
 from naics_embedder.panels.decoding import resolve_distance
 from naics_embedder.panels.ita import DEFAULT_DISTANCE, ItaPanel
 from naics_embedder.panels.ita_evidence import check_ita_run, load_ita_evidence
-from naics_embedder.panels.ita_split import ItaPart
+from naics_embedder.panels.ita_split import ItaPart, load_ita_settings
 from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
     code_texts_from_descriptions,
@@ -1912,3 +1915,83 @@ def _ita_report(report: Dict[str, Any]) -> str:
             value = report[key]
             shown.append(f'{key} {value:.4f}' if isinstance(value, float) else f'{key} {value}')
     return ', '.join(shown)
+
+@app.command('ita-gap')
+def ita_gap_command(
+    reads: Annotated[
+        List[str],
+        typer.Option('--read', help='A Stage 4 read record; repeat it for each of the six reads'),
+    ],
+    stage8: Annotated[
+        str,
+        typer.Option('--stage8', help="The Stage 8 record of euclidean-d16: d16's stored C"),
+    ],
+    store: Annotated[
+        str,
+        typer.Option('--store', help='Artifact store root the records name'),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where the gap record is written, once'),
+    ],
+    settings: Annotated[
+        str,
+        typer.Option('--settings', help="The ITA panel's settings, for r"),
+    ] = ITA_SETTINGS,
+):
+    '''
+    Measure the gap between Census phrases and owner text for both reference arms (D1, D2).
+
+    For each arm: C on the outcome validation queries, K on the ITA validation copied pairs and H
+    on its headline pairs, the gaps C − H, C − K and K − H, and the code-matched C − H, each with
+    its 95 % paired-bootstrap interval. It reads no panel and logs nothing: its inputs are the six
+    read records, the Stage 8 record and the store's frames.
+
+    Example:
+        Write the gap record from Stage 4's reads::
+
+            $ uv run naics-embedder tools ita-gap --read OUT/lexical-stub.json \\
+                --read OUT/euclidean-d16-s1.json ... --stage8 STORE/records/stage8/euclidean-d16.json \\
+                --store STORE --output OUT/gap.json
+    '''
+
+    configure_logging('tools_ita_gap.log')
+
+    try:
+        output_path = Path(output)
+        _require_new_record(output_path)
+        decision_cfg = load_config(DecisionConfig, DECISION_CONFIG)
+        r = load_ita_settings(settings).relative_margin
+        record = gap_record(
+            [Path(path) for path in reads],
+            ArtifactStore(store),
+            Path(stage8),
+            r=r,
+            replicates=decision_cfg.replicates,
+            bootstrap_seed=decision_cfg.bootstrap_seed,
+        )
+        write_record(record, output_path)
+    except (OSError, ValueError) as exc:
+        console.print(f'[bold red]ITA gap failed:[/bold red] {escape(str(exc))}')
+        raise typer.Exit(code=1)
+
+    console.print('\n[bold cyan]Text→code gap: Census phrases and owner text[/bold cyan]\n')
+    for arm in record.arms:
+        console.print(f'[bold]{escape(arm.arm)}[/bold] ({arm.n_seeds} seeds)')
+        for name in ('census', 'copied', 'headline', 'census_matched', 'headline_matched'):
+            console.print(f'  • {name}: {escape(_estimate_line(getattr(arm, name)))}')
+        for name in ('headline_gap', 'copied_gap', 'wording_gap', 'matched_headline_gap'):
+            console.print(f'  • {name}: {escape(_estimate_line(getattr(arm, name)))}')
+        console.print(
+            f'  • matched codes: {arm.n_matched_codes}, unmatched codes: {arm.n_unmatched_codes}'
+        )
+        console.print(f'  • threshold (r × C): {arm.threshold:.4f}, large: {arm.large}')
+    answer = 'yes' if record.recommend_training_part else 'no'
+    console.print(f'\nRecommend a later ITA training part (D2): {answer}')
+    console.print(f'Record written to {escape(str(output_path))}\n')
+
+def _estimate_line(estimate: Estimate) -> str:
+    '''An estimate's point and its interval, on one line.'''
+
+    lower, upper = estimate.interval
+    return f'{estimate.point:.4f} [{lower:.4f}, {upper:.4f}]'
