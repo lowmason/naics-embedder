@@ -1,5 +1,7 @@
 # Economic Decision Read Implementation Plan
 
+**Status: COMPLETE (2026-11-18)** — executed via executing-plans; deferred items in specs/deferred_items.md
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -151,9 +153,11 @@ Constraints), with this plan's values:
 
 ## Decisions
 
-No owner decision was taken after the roadmap's resume of 2026-11-18.
+- **D1** (owner, plan review, 2026-11-18): "Yes, they stand as written", answering "Do P1–P9 in plan 19 stand as written?": the plan as written at a5bcd54. Applied in: the whole plan.
+- **D2** (owner, execution, 2026-11-18): "Tolerance amendment", answering "The pairing check is too strict by 1e-16. Which way should Stage 3 go?": `check_reference_pairing` pairs the reference's predictions to within an absolute 1e-13, and `specs/completed/economic-candidates.md` §4.8 is amended (PR #172). Applied in: Task 4 Step 3 (spec amendment).
+- **D3** (owner, execution, 2026-11-18): "Approve, keep limit", answering "Merge PR 172 when CI passes, and what happens to text-only-d8's read?": PR #172 merges with the `decision/` hold lifted for it, and `text-only-d8.json` stays as read at 2f15310, with an exception to P2. The executor read "keep limit" as keeping the read and said so. Applied in: Tasks 2–6.
 
-This plan's choices, for the owner's review at the plan PR:
+This plan's own choices, approved by D1:
 
 - **P1:** the pin is a required list field, `text_only_provenance_sha256`, with the sha256
   pattern. Three places refuse another provenance: the decision's gate
@@ -250,7 +254,7 @@ No other source, config or lock file changes.
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: Confirm the workspace**
+- [x] **Step 1: Confirm the workspace**
 
 ```bash
 git -c core.fsmonitor=false fetch origin
@@ -260,7 +264,7 @@ git rev-parse origin/main
 
 Expected: `exit=0`, because this plan has merged. Record the SHA as BASE in the ledger.
 
-- [ ] **Step 2: Parallel work**
+- [x] **Step 2: Parallel work**
 
 ```bash
 git -c core.fsmonitor=false worktree list
@@ -271,7 +275,9 @@ git log --oneline 8329e55..origin/main -- src/naics_embedder/decision src/naics_
 Expected: no open PR and no commit touches the Stop-and-ask paths. Record any plan 18 change to
 `tools.py`. Worktrees under `~/Projects/copilot-worktrees/` are review tooling, not sessions.
 
-- [ ] **Step 3: The level pins, in this lock's environment**
+- [x] **Step 3: The level pins, in this lock's environment**
+
+> Deviation: the level pin `test_level_predictions_are_the_captured_ones_bit_for_bit` failed on macOS 27.2.1; the owner ruled "PR A first", and the pin is a deferred item (19-economic-decision-read).
 
 ```bash
 uv sync --locked
@@ -281,7 +287,7 @@ uv run --locked --no-sync pytest -q -rs -n auto tests/unit/test_regressor_panel.
 Expected: `exit=0`, and no skip reason reading "pinned where captured, on macOS arm64". A
 failure or that skip means that the environment changed since the pins were captured.
 
-- [ ] **Step 4: The ledger and SCRATCH**
+- [x] **Step 4: The ledger and SCRATCH**
 
 ```bash
 mkdir -p logs /tmp/naics_plan19
@@ -336,13 +342,15 @@ Nothing in this task reads real data.
   `fixture_list`, `list_for` and `write_candidate_list` gain the keyword
   `text_only_provenance_sha256: str = TEXT_ONLY_PROVENANCE_SHA256`.
 
-- [ ] **Step 1: Cut PR A's branch**
+- [x] **Step 1: Cut PR A's branch**
 
 ```bash
 git -c core.fsmonitor=false checkout --no-track -B claude/economic-text-only-provenance-pin origin/main
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
+
+> Deviation: the raw-dict builder `_list` gained the new key, and two tests changed their premise, each under a ledgered ruling.
 
 In `tests/unit/test_economic_candidates.py`:
 
@@ -417,7 +425,7 @@ In `tests/unit/test_cli_commands.py`, three tests over `_economic_inputs`:
   three. Assert exit 1, `'Decision failed:'` and `"tree-d3: its text-only provenance"` in
   `_output(result)`, and that the decision's `--output` does not exist.
 
-- [ ] **Step 3: Run the new tests to verify they fail**
+- [x] **Step 3: Run the new tests to verify they fail**
 
 ```bash
 uv run --locked --no-sync pytest -q tests/unit/test_economic_candidates.py tests/unit/test_decision_economic.py tests/unit/test_cli_commands.py -k 'text_only_provenance or committed_list'; echo "exit=$?"
@@ -426,7 +434,7 @@ uv run --locked --no-sync pytest -q tests/unit/test_economic_candidates.py tests
 Expected: FAIL. The committed list has no `text_only_provenance_sha256`, and the helpers do not
 take the keyword.
 
-- [ ] **Step 4: Implement the pin**
+- [x] **Step 4: Implement the pin**
 
 - `candidates.py`: add `text_only_provenance_sha256: str = Field(pattern=_SHA256)` after
   `text_only_sha256`, with its Attributes line: "The provenance file beside the shared text-only
@@ -450,7 +458,7 @@ take the keyword.
   match the list's two pins". A trained candidate's bullet adds: "the source record's text-only
   table and its provenance are the ones the list pins".
 
-- [ ] **Step 5: Run the touched tests to verify they pass**
+- [x] **Step 5: Run the touched tests to verify they pass**
 
 ```bash
 uv run --locked --no-sync pytest -q -n auto tests/unit/test_economic_candidates.py tests/unit/test_decision_economic.py tests/unit/test_cli_commands.py; echo "exit=$?"
@@ -458,7 +466,7 @@ uv run --locked --no-sync pytest -q -n auto tests/unit/test_economic_candidates.
 
 Expected: `exit=0`.
 
-- [ ] **Step 6: Run the full checks**
+- [x] **Step 6: Run the full checks**
 
 ```bash
 uv run --locked --no-sync pytest -n auto -q; echo "exit=$?"
@@ -474,14 +482,14 @@ Expected: every `exit=0`. Find the stated count (the number beside "collect") wi
 it first), and put the new collected count in its place in all three files. The unit file count
 stays as the files state it.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/naics_embedder/decision/candidates.py src/naics_embedder/decision/economic.py src/naics_embedder/decision/trained.py src/naics_embedder/cli/commands/tools.py conf/data/economic_candidates.yaml tests/fixtures/economic.py tests/unit/test_economic_candidates.py tests/unit/test_decision_economic.py tests/unit/test_cli_commands.py docs/usage.md CLAUDE.md README.md tests/README.md
 git commit -m "feat(decision): pin the shared text-only provenance in the frozen list"
 ```
 
-- [ ] **Step 8: Local review, then PR A**
+- [x] **Step 8: Local review, then PR A**
 
 ```bash
 mkdir -p /tmp/codex-review && codex exec review -m gpt-6-astra -c sandbox_mode=read-only --base origin/main -o /tmp/codex-review/plan19-pr-a.md; echo "exit=$?"
@@ -505,7 +513,9 @@ Nothing in this task reads real data.
 - Produces: READ_SHA, MAIN's HEAD at PR A's merge or later; LIST_SHA, the sha256 of MAIN's
   `conf/data/economic_candidates.yaml` at READ_SHA; the environment receipt; free output paths.
 
-- [ ] **Step 1: Merge PR A**
+- [x] **Step 1: Merge PR A**
+
+> Deviation: PR A stayed on base 32e91c5 (its files were disjoint and GitHub reported it clean); ledgered ruling.
 
 Wait for its checks with `gh pr checks <n> --watch`, run in the background. Once every listed
 check has passed on the head SHA, merge with
@@ -513,7 +523,7 @@ check has passed on the head SHA, merge with
 `gh pr view <n> --json state,mergeCommit` shows `MERGED`, and that the remote branch is gone.
 Report `CI passed, PR merged, remote deleted`.
 
-- [ ] **Step 2: Fast-forward MAIN with the guard**
+- [x] **Step 2: Fast-forward MAIN with the guard**
 
 Run plan 15's guard (Task 1 Step 1) in MAIN: on `main`, `git status --porcelain` empty,
 `git log --oneline origin/main..main` empty, then
@@ -525,7 +535,7 @@ cd /Users/lowell/Projects/naics-embedder && git rev-parse HEAD origin/main && gi
 
 Expected: two equal SHAs, then `exit=0`. Record HEAD as READ_SHA.
 
-- [ ] **Step 3: Sync MAIN's environment and record the list**
+- [x] **Step 3: Sync MAIN's environment and record the list**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && shasum -a 256 uv.lock conf/data/economic_candidates.yaml
@@ -538,7 +548,7 @@ Expected: `uv.lock`'s pinned sha256; `exit=0` twice; the pin line with `bd21c628
 list's sha256 as LIST_SHA: this is the Exit's "recorded again". It differs from plan 16's list
 (98c2b5c8…).
 
-- [ ] **Step 4: The environment receipt**
+- [x] **Step 4: The environment receipt**
 
 Write `SCRATCH/env.py` as plan 15's `env.py` (Task 1 Step 3), and run it from MAIN with
 `uv run --locked --no-sync python /tmp/naics_plan19/env.py`. Expected: the pinned read
@@ -546,7 +556,7 @@ environment, and every thread variable `unset`. A newer macOS point release chan
 platform string: record it and go on. If a thread variable is set, unset it in the shell of every
 later read.
 
-- [ ] **Step 5: The outputs**
+- [x] **Step 5: The outputs**
 
 ```bash
 ls /Users/lowell/naics-artifacts/records/economic
@@ -557,7 +567,7 @@ df -h /Users/lowell/naics-artifacts
 Expected: only `growth_margins.json`; `writable=0`; free space in gigabytes. If any candidate
 record or `decision.json` exists, stop and ask: something may already have read a candidate.
 
-- [ ] **Step 6: Ledger**
+- [x] **Step 6: Ledger**
 
 Copy Steps 1–5's outputs, READ_SHA and LIST_SHA into the ledger.
 
@@ -569,13 +579,13 @@ Copy Steps 1–5's outputs, READ_SHA and LIST_SHA into the ledger.
 - Consumes: READ_SHA, LIST_SHA (Task 2).
 - Produces: LINES_BEFORE and SHA_BEFORE, the log before the reads; 18 passing dry runs.
 
-- [ ] **Step 1: Ask for Gate A**
+- [x] **Step 1: Ask for Gate A**
 
 Tell the user: PR A merged at READ_SHA; LIST_SHA; the environment receipt. Ask for approval to
 start the stage's real-data steps: the log check and 18 dry runs, which load no panel and log
 nothing. Wait for a clear yes.
 
-- [ ] **Step 2: The log's state**
+- [x] **Step 2: The log's state**
 
 Write `SCRATCH/log_state.py` from plan 15's `log_state.py` (Task 2 Step 4), with these changes.
 It takes the log, and optionally `PREFIX_LINES PREFIX_SHA`:
@@ -600,7 +610,7 @@ read's two growth records and none with PURPOSE. Records that other sessions add
 time are no stop if they are validation reads of other panels: list them in the ledger. Record
 `lines` as LINES_BEFORE and `sha256` as SHA_BEFORE.
 
-- [ ] **Step 3: The 18 dry runs**
+- [x] **Step 3: The 18 dry runs**
 
 For each candidate, in the list's order, run from MAIN's root:
 
@@ -632,7 +642,7 @@ Expected: SHA_BEFORE, and only `growth_margins.json`. If the sha256 changed, run
 with `LINES_BEFORE SHA_BEFORE`: it must exit 0 with no PURPOSE record, and the new records are
 another session's. List them in the ledger.
 
-- [ ] **Step 4: Ledger**
+- [x] **Step 4: Ledger**
 
 Copy Steps 2–3's outputs into the ledger.
 
@@ -646,7 +656,7 @@ their objects in the store.
 - Produces: `STORE/records/economic/<name>.json` for the 18 candidates, each passing
   `check_arm.py`.
 
-- [ ] **Step 1: Ask for Gate B**
+- [x] **Step 1: Ask for Gate B**
 
 First run `mcp__ccd_session_mgmt__list_sessions` and note each running session whose `cwd` is
 under MAIN. Show the user Task 3's results, the read command, the order and those sessions. Say
@@ -654,7 +664,7 @@ that the reads append 118 growth validation reads to MAIN's log, open no outer s
 re-run. Ask that, until Task 6 passes, no other session merges a PR or syncs MAIN, and none
 reads a panel into MAIN's log. Ask for a go, and wait for a clear yes.
 
-- [ ] **Step 2: Read each candidate**
+- [x] **Step 2: Read each candidate**
 
 Right before the first read, run `log_state.py` again with `LINES_BEFORE SHA_BEFORE`. Expected:
 `exit=0`, and no PURPOSE record. Then, for each candidate in the list's order, first run the
@@ -672,7 +682,9 @@ and wait for it to exit. Never start a read before the previous one's Step 3 pas
 (`hyperbolic-d16`). Record the first read's wall time, and tell the user the estimate for the
 other 58 runs.
 
-- [ ] **Step 3: Check each record before the next read**
+- [x] **Step 3: Check each record before the next read**
+
+> Deviation: the first read, `text-only-d8`, failed `check_reference_pairing` (macOS 27.2.1 against 26.6.2, differences of at most 6.9e-16). The owner chose a tolerance (D2): PR #172 pairs within 1e-13 and amends spec 4.8. `text-only-d8` stays as read at 2f15310 (D3); the other 17 reads ran at 37b47c4.
 
 Write `SCRATCH/check_arm.py`. It takes a record path. It loads MAIN's list with
 `load_candidate_list`, the margins with `read_record(..., RelativeMarginRecord)`, the store and
@@ -695,7 +707,7 @@ cd /Users/lowell/Projects/naics-embedder && uv run --locked --no-sync python /tm
 Expected: `exit=0`. If the first read fails the pairing check, stop: suspect BLAS threading
 first (finding: growth-margins §4), and do not read another candidate.
 
-- [ ] **Step 4: The log after the reads**
+- [x] **Step 4: The log after the reads**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && uv run --locked --no-sync python /tmp/naics_plan19/log_state.py /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl LINES_BEFORE SHA_BEFORE > /tmp/naics_plan19/log_after.txt; echo "exit=$?"
@@ -704,7 +716,7 @@ cd /Users/lowell/Projects/naics-embedder && uv run --locked --no-sync python /tm
 Expected: `exit=0`; 118 PURPOSE growth records; the margin read's two; no opening. With no other
 session's records, the log has LINES_BEFORE + 118 lines.
 
-- [ ] **Step 5: Ledger**
+- [x] **Step 5: Ledger**
 
 Copy each read's output, each `check_arm.py` output and Step 4's output into the ledger, with
 `shasum -a 256` of the 18 records.
@@ -718,7 +730,7 @@ list.
 - Consumes: the 18 records (Task 4), LIST_SHA (Task 2).
 - Produces: DECISION_SHA, the sha256 of the decision record.
 
-- [ ] **Step 1: Run the decision**
+- [x] **Step 1: Run the decision**
 
 ```bash
 test ! -e /Users/lowell/naics-artifacts/records/economic/decision.json; echo "absent=$?"
@@ -759,7 +771,7 @@ Expected: `exit=0`. The output has each comparison with both intervals, three `P
 lines, `Adopted over the reference:`, `Non-dominated:`, `Tie order:` and `Chosen:`. A chosen
 candidate or `none; the reference covariates+ancestors stands` are both results, not failures.
 
-- [ ] **Step 2: Record it**
+- [x] **Step 2: Record it**
 
 ```bash
 shasum -a 256 /Users/lowell/naics-artifacts/records/economic/decision.json /Users/lowell/naics-artifacts/records/economic/growth_margins.json
@@ -776,7 +788,7 @@ sha256. Copy `decide.txt` and both values into the ledger.
 - Consumes: DECISION_SHA, LIST_SHA, READ_SHA, LINES_BEFORE, SHA_BEFORE.
 - Produces: the provenance table and the decision summary that the finding copies.
 
-- [ ] **Step 1: The decision record**
+- [x] **Step 1: The decision record**
 
 Write `SCRATCH/verify.py`. It reads the record with `read_record(...,
 EconomicDecisionRecord)` and exits 1 on the first check that fails:
@@ -803,7 +815,9 @@ cd /Users/lowell/Projects/naics-embedder && uv run --locked --no-sync python /tm
 
 Expected: `exit=0`.
 
-- [ ] **Step 2: Nothing else moved**
+- [x] **Step 2: Nothing else moved**
+
+> Deviation: MAIN's HEAD is 37b47c4, not READ_SHA 2f15310, because PR #172 merged between the two (D2, D3).
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && git rev-parse HEAD && shasum -a 256 uv.lock
@@ -821,14 +835,14 @@ Steps 1–2's outputs into the ledger. From here on MAIN may follow `origin/main
 - Modify: `CLAUDE.md` (the economic decision paragraph under "Reference Campaign and
   Verification")
 
-- [ ] **Step 1: Cut PR B's branch**
+- [x] **Step 1: Cut PR B's branch**
 
 ```bash
 git -c core.fsmonitor=false fetch origin
 git -c core.fsmonitor=false checkout --no-track -B claude/stage-3-economic-decision origin/main
 ```
 
-- [ ] **Step 2: Write the finding**
+- [x] **Step 2: Write the finding**
 
 `specs/findings/economic-decision.md`, in `specs/findings/growth-margins.md`'s form. It opens
 with `**Status: FINAL (<date>).**`, names roadmap Stage 3 and plan 19, and states the decision in
@@ -858,14 +872,18 @@ its first paragraph. Its sections:
 7. **What embedding roadmap Stage 12 reads.** The decision record's path and DECISION_SHA, the
    chosen candidate's table (or none), and the environment under which the opening must pair.
 
-- [ ] **Step 3: The `CLAUDE.md` sentence**
+- [x] **Step 3: The `CLAUDE.md` sentence**
+
+> Deviation: the sentence sits at the end of the economic decision paragraph, so "Never run `tools growth-margins` again" stays attached to the sentence it qualifies.
 
 After "The growth margins were fixed once, on 2026-10-17 (`specs/findings/growth-margins.md`).",
 add one sentence: "The economic decision was recorded on <date>
 (`specs/findings/economic-decision.md`): <the chosen candidate, or the reference
 `covariates+ancestors` stands>."
 
-- [ ] **Step 4: Check and commit**
+- [x] **Step 4: Check and commit**
+
+> Deviation: a second commit fixed the final review's three points (a blank line in the finding, the level pin named in it, one test docstring).
 
 Measure the finding's line lengths with Python: at most 100 outside code blocks and tables.
 Then:
@@ -903,3 +921,27 @@ Run the writing-plans Plan Completion Protocol on PR B's branch, before it is pu
 
 Planning ran on Opus. Execute in a fresh session on Sonnet (`claude --model sonnet`), inline with
 executing-plans (P9), from an app worktree, with this file as the handoff.
+
+## Handoff to later stages
+
+- **Embedding roadmap Stage 12 (the economic opening).** It consumes the decision record
+  `~/naics-artifacts/records/economic/decision.json` (name `economic`, SHA-256
+  3d510fa319865e84b0321435fe607081d0cbd5987768f68233650237bb69515d) and the finding
+  `specs/findings/economic-decision.md`. As built, **no candidate is adopted and the reference
+  `covariates+ancestors` stands**, so there is no economic table to open. The roadmap's Produces
+  allowed this: "names the adopted candidate or says that the reference stands". The propagation
+  answer is no at d = 8, 16 and 32 (finding §3), so the parked graph stage stays parked for this
+  artifact. The opening must pair under macOS arm64, Python 3.12.12, numpy 2.3.4 on Accelerate and
+  `uv.lock` 6de4fbdc.
+- **Differs from the roadmap's Produces and Consumes.** The reference pairs to within an absolute
+  1e-13 (`PAIRING_TOLERANCE`), not bit for bit: `specs/completed/economic-candidates.md` §4.8,
+  amended 2026-11-18 by PR #172 after the first real read differed in the last bits across macOS
+  versions. The roadmap's Stage 3 Consumes line now says so.
+- **Traps.** `tools growth-margins` never runs again: the margin record is the 2026-10-17 one.
+  Neither growth regime's outer set has an opening (277 log lines, 118 plan reads, finding §5),
+  so Stage 12 opens each once. `text-only-d8` was read at 2f15310 and the other 17 candidates at
+  37b47c4, and the `src/` difference between them is the pairing check alone. The level-mode
+  `CAPTURED_HERE` pin fails on macOS 27.2.1 and was not re-captured (deferred items,
+  `19-economic-decision-read`).
+- **Deferred items.** The `--dry-run` text of `tools economic-read` (§ 16-economic-candidates,
+  first item) stays open by P3. The level pin is the one new item.

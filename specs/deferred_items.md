@@ -523,7 +523,7 @@
       pins the printed line. See specs/plans/completed/16-economic-candidates.md. Size: quick-fix.
       Done when: the help text, the docstring and the printed line say which checks the dry run
       runs, and the test that pins the line is updated.
-- [ ] Pin the shared text-only table's provenance file in the frozen list (plan 16 execution,
+- [x] Pin the shared text-only table's provenance file in the frozen list (plan 16 execution,
       controller ruling): `conf/data/economic_candidates.yaml` pins the text-only table's bytes
       (`text_only_sha256`) but not its provenance file, so a hand-built deterministic record could
       store another provenance for the same bytes and pass the D9 comparison when its spec names
@@ -535,6 +535,7 @@
       provenance differs from it, with a test, and the list's sha256 is recorded again before the
       first real candidate read.
       → planned 2026-11-18: specs/plans/19-economic-decision-read.md
+      → done 2026-11-18 (plan 19): the list pins the provenance file's sha256 (`text_only_provenance_sha256`), three places refuse another provenance, and the list's sha256 f5a9223b was recorded again before the first real read.
 - [ ] Remaining economic decision test gaps (the rest of plan 14's item "Economic decision test
       gaps", which plan 16 closed in part): plan 16 tests the statistics-edit and key-set
       refusals, the logged read identities, the CLI's adopted path and `_margin_kind` on a
@@ -582,3 +583,17 @@
       `check_ita_margin` does not require reads of both reference arms nor refuse a repeated seed
       among `log_records`, so a hand-edited record can pass it. Size: quick-fix. Done when: both are
       refused, with tests, before Stage 5 writes its margin record.
+
+## 19-economic-decision-read — 2026-11-18
+- [ ] The level-mode `CAPTURED_HERE` pin fails on macOS 27.2.1 (plan 19 Pre-flight Step 3; the owner
+      ruled "PR A first" and the plan went on): `test_level_predictions_are_the_captured_ones_bit_for_bit`
+      in `tests/unit/test_regressor_panel.py` compares level-6 predictions to literals captured in an
+      earlier environment. It fails on this Mac, serially and with the BLAS thread variables set to
+      1, while the d61f49b oracle and the float-free digest pins pass. The test's own note says that
+      this means the environment changed, and CI on Linux skips it. Every full-suite run on this Mac
+      shows one failure, and a plan that reuses plan 15's level-pin pre-flight stops on it. Plan 19
+      did not re-capture the literals: that needs the owner's review of the change first. See
+      specs/plans/completed/19-economic-decision-read.md and specs/findings/economic-decision.md.
+      Size: quick-fix. Done when: the owner has reviewed the environment change and the literals
+      are re-captured on this macOS, or the pin takes a tolerance, and a full-suite run on the Mac
+      passes.
