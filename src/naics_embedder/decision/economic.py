@@ -8,7 +8,8 @@ and the decision over the two growth panels.
   (``decision.scores.regressor_scores``); a candidate's is ``covariates+embedding``'s MSE.
 - **Reference.** The comparator ``covariates+ancestors`` (U9). It reads no candidate, and the
   folds depend on the regime, level, repeat and group alone, so the margin read's row errors are
-  those every candidate's read computes, and they pair exactly.
+  those every candidate's read computes, and they pair to within ``PAIRING_TOLERANCE``, the last
+  bits' rounding (spec 4.8).
 - **Margins.** δ = r × the reference's validation MSE on each panel (U13), from a margin read that
   reads no candidate, fixed before any candidate is read.
 - **Candidates.** A deterministic candidate (a text-only, tree or smoothed table) is one
@@ -20,8 +21,8 @@ and the decision over the two growth panels.
   tree candidate reads none (P7). Each stored prediction names its table's ``matrix_fingerprint``
   in ``BINDING_COLUMN`` (P4), so a record whose predictions belong to another table is refused,
   and its stored scores must be the rescore of its predictions. Its reads pair with the margin
-  read only where the reference predicts bit for bit as it did there, compared in the margin
-  read's own columns.
+  read only where the reference's rows are the margin read's and its predictions are as there to
+  within ``PAIRING_TOLERANCE``, compared in the margin read's own columns.
 - **Decision.** It reads exactly the frozen list's candidates, and records the list as stored.
   Each candidate is compared against the reference on both panels, at 95 % non-inferiority and
   97.5 % superiority. Only a candidate adopted over the reference is eligible; among the eligible,
@@ -141,6 +142,8 @@ GROWTH_STATISTIC_DEFINITIONS = dict.fromkeys(
 )
 # A recomputed statistic agrees with a recorded one to within float summation order
 STATISTIC_TOLERANCE = 1e-12
+# The reference predicts as in the margin read to within this absolute difference per prediction
+PAIRING_TOLERANCE = 1e-13
 # Beside each stored prediction of a candidate's read: its table's matrix_fingerprint (P4)
 BINDING_COLUMN = 'table_fingerprint'
 # What identifies one stored score: the rows a rescore must give again
@@ -882,10 +885,13 @@ def check_reference_pairing(
 ) -> None:
     '''
     Require the arm to have read the growth panel the margins read, and the reference to predict
-    in each of its runs exactly as in the margin read, so its errors pair with δ's (Req 24).
+    in each of its runs as in the margin read, so its errors pair with δ's (Req 24).
 
-    Only the predictions decide, in the margin read's own columns; the environments name where
-    each read ran.
+    The reference's rows must be the margin read's: the same panels, repeats, folds, codes, years,
+    alphas and outcomes, exactly. Each prediction must be the margin read's to within
+    ``PAIRING_TOLERANCE``, an absolute difference, because another macOS version's math library
+    rounds the last bits of a ridge fit differently (spec 4.8, amended 2026-11-18). Only these
+    rows decide, in the margin read's own columns; the environments name where each read ran.
 
     Run it after ``check_economic_arm``, which requires the record to be intact and of its
     candidate's shape. Called alone, it still refuses an arm with no runs, since a loop over no
@@ -893,7 +899,8 @@ def check_reference_pairing(
 
     Raises:
         ValueError: If the arm holds no run, if the panels, data or fit settings differ, or if the
-            reference's predictions in a run differ from the margin read's.
+            reference's rows in a run are not the margin read's or one of its predictions differs
+            from the margin read's by more than ``PAIRING_TOLERANCE``.
     '''
 
     name = arm.spec.name
@@ -904,12 +911,34 @@ def check_reference_pairing(
     reference = _reference_rows(margin_read, margin_read.columns)
     for run in arm.runs:
         read = _reference_rows(store.read_frame(run.predictions), margin_read.columns)
-        if not read.equals(reference):
+        difference = _reference_difference(read, reference)
+        if difference is not None:
             raise ValueError(
-                f"{name}: its {REFERENCE_COMPARATOR} predictions differ from the margin read's, "
-                f'so its errors do not pair with the reference (Req 24). It was read on '
-                f'{_where(arm.environment)}; the margins on {_where(margins.read.environment)}'
+                f"{name}: its {REFERENCE_COMPARATOR} predictions differ from the margin read's "
+                f'({difference}), so its errors do not pair with the reference (Req 24). It was '
+                f'read on {_where(arm.environment)}; the margins on '
+                f'{_where(margins.read.environment)}'
             )
+
+def _reference_difference(read: pl.DataFrame, reference: pl.DataFrame) -> Union[str, None]:
+    '''
+    How ``read``'s reference rows differ from the margin read's, or None where they pair.
+
+    Every column but the prediction must be equal. A prediction pairs when it is within
+    ``PAIRING_TOLERANCE`` of the margin read's; a NaN never pairs.
+    '''
+
+    keys = [column for column in reference.columns if column != 'prediction']
+    if not read.select(keys).equals(reference.select(keys)):
+        return "its rows are not the margin read's: a panel, repeat, fold, code, year, alpha or outcome"
+    ours = read['prediction'].to_numpy()
+    theirs = reference['prediction'].to_numpy()
+    pairs = np.isclose(ours, theirs, rtol=0.0, atol=PAIRING_TOLERANCE)
+    if pairs.all():
+        return None
+    gap = np.abs(ours - theirs)
+    worst = np.max(np.where(np.isnan(gap), np.inf, gap)[~pairs])
+    return f'by up to {worst:.3g}, beyond the tolerance {PAIRING_TOLERANCE:g}'
 
 def _rescored(store: ArtifactStore, predictions: ArtifactRef, repeats: int) -> pl.DataFrame:
     '''A read's scores, from its stored predictions (D10's statistic on the growth panels).'''

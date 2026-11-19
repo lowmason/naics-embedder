@@ -28,7 +28,8 @@ These facts drive the choice:
    the derivation recorded the split as a resume of the embedding roadmap, merged with the new
    roadmap (`specs/completed/naics-representation-split-roadmap.md`, Decisions).
 4. **One constraint crosses artifacts.** Economic candidate reads pair only where the reference
-   predictions match the 2026-10-17 margin read bit for bit, under `uv.lock` 6de4fbdc (ADR 0001,
+   predictions match the 2026-10-17 margin read to within 1e-13 (economic-candidates §4.8,
+   amended 2026-11-18 from "bit for bit"), under `uv.lock` 6de4fbdc (ADR 0001,
    Context). A stage in another chain that changes the lock, for example to add a graph library
    for relatedness, can stop that pairing.
 5. **The embedding roadmap still holds related stages.** Stage 9 is held, Stages 10–11 are

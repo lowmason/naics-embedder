@@ -204,7 +204,7 @@ The deferred item's "Done when" is the target (`specs/deferred_items.md:622`).
     (`check_arm`'s monitor checks): the checkpoint is the earliest highest-MRR epoch, read on
     the outcome validation split only.
   - `check_reference_pairing` checks every run: the reference's predictions in each run equal the
-    margin read's bit for bit.
+    margin read's: the same rows, and each prediction within `PAIRING_TOLERANCE` (§4.8).
 - **Margin first.** It covers each run's growth reads. A trained seed's monitor reads are outcome
   reads from training, and they are not growth reads (split Req 24: "no candidate's growth error
   exists before δ is recorded"). Today's `check_margins_first` also times monitor reads, as D8
@@ -279,9 +279,27 @@ parked (U33).
 
 ### 4.8 The pinned economic path
 
-Stage 3's reads pair only where the reference predicts bit for bit as in the margin read, under
-`uv.lock` 6de4fbdc, on macOS arm64 with Python 3.12.12 (finding: growth-margins §4).
+Stage 3's reads pair only where the reference's rows are the margin read's and its predictions
+equal the margin read's to within `PAIRING_TOLERANCE` = 1e-13 (absolute, on the prediction alone),
+under `uv.lock` 6de4fbdc, on macOS arm64 with Python 3.12.12 (finding: growth-margins §4).
 
+- **Amended 2026-11-18 (owner, at plan 19's canary stop).** This section first required the
+  reference to predict bit for bit. Plan 19's first real read ran on macOS 27.2.1. The margin
+  read ran on macOS 26.6.2. Both used Python 3.12.12, numpy 2.3.4 on Accelerate and `uv.lock`
+  6de4fbdc. 11,406 of the 11,655 reference predictions differed, by at most 6.9e-16 (about three
+  times 2.2e-16, the spacing of floats at 1). The reference's validation MSE changed by 2.7e-16
+  relative on `growth_seen` and not at all on `growth_heldout`. Bit identity was a proxy for
+  "the reference's errors are the margin read's, so δ applies to this read". A different macOS
+  version's math library rounds the last bits differently, and the proxy fails there although δ
+  is unchanged.
+- **The tolerance.** `PAIRING_TOLERANCE` is an absolute 1e-13 per prediction, 145 times the
+  difference observed. A relative tolerance would fail on near-zero predictions (the observed
+  relative maximum is 5.2e-11). A difference of 1e-13 per prediction moves the reference's MSE by
+  at most 2 × RMSE × 1e-13, about 1.1e-14 on an MSE of 3.2e-3, which is 7e-11 of δ. A genuinely
+  different reference differs by far more.
+- **What stays exact.** The panel, repeat, fold, code, group, years, `alpha` and outcome of each
+  reference row. A missing row, another `alpha` or a NaN prediction never pairs. The margin
+  record and δ do not change, and nobody runs `tools growth-margins` again.
 - **`uv.lock` does not change.** Every method here uses packages that are already locked: numpy,
   scipy, scikit-learn and torch (verified locally: `uv.lock` at b4f8c9d, sha256 `6de4fbdc…`). If a
   change to the lock seems needed, stop and ask the user. No change keeps the reads pairing.

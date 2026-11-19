@@ -94,7 +94,8 @@ brainstorming. The next stage to hand off is the first unticked one whose `Consu
 that carries no HELD stamp. Plans start at 16.
 
 **Across chains.** Economic reads pair only where the reference predictions match the 2026-10-17
-margin read bit for bit, under `uv.lock` 6de4fbdc (finding: growth-margins). Until Stage 3's
+margin read to within 1e-13 (economic-candidates §4.8, amended 2026-11-18 from "bit for bit"),
+under `uv.lock` 6de4fbdc (finding: growth-margins). Until Stage 3's
 decision exists, a stage spec that changes `uv.lock` says how those reads still pair (ADR 0002,
 Negative). The text→code and economic chains both build on `text_model/` (ADR 0001), so a change
 that one chain makes there reaches the other chain's next training run.
@@ -224,7 +225,8 @@ qualification (`:560`).
       Consumes: Stage 1's candidates, read command and Handoff. The margin record, read at
       origin/main 30aeff6 on macOS arm64 with Python 3.12.12 under `uv.lock` 6de4fbdc (finding:
       growth-margins, Sources and §1). Every candidate read runs under the same three, because
-      `decide` pairs only bit-identical reference predictions (`check_reference_pairing` in
+      `decide` pairs only reference predictions equal to the margin read's to within 1e-13
+      (amended 2026-11-18 from bit-identical; `check_reference_pairing` in
       `decision/economic.py`; cite names, not lines: plan 16, Handoff, Resolved at resume,
       2026-11-17). The lock on main is still 6de4fbdc at 6e3ff00. The main checkout's selection
       log (`logs/selection_log.jsonl`), in which the margin read found no opening of either growth

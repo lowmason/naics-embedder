@@ -388,8 +388,9 @@ reference `covariates+ancestors`. The panel reads growth whatever the regressor 
 
 It had to run before any candidate was read on growth, because a decision refuses a candidate
 read from before its margins were fixed. The record names the platform, Python and `uv.lock`
-sha256 the read ran under. A decision pairs only bit-identical reference predictions, so every
-candidate read must run on the same platform and lock.
+sha256 the read ran under. A decision pairs only reference predictions that equal the margin
+read's to within 1e-13 (`PAIRING_TOLERANCE`), so every candidate read must run on macOS arm64
+under the same lock.
 
 **Generates:** the relative margin record (JSON), with the read's selection-log records, and its
 predictions and scores in the store
@@ -586,7 +587,8 @@ The decision requires exactly the candidates of the frozen list, given by `--can
 with `applies only to the economic decision`.
 
 Each candidate is compared with the reference `covariates+ancestors`, whose predictions in the
-margin read its read must reproduce bit for bit. Only a candidate adopted over the reference is
+margin read its read must reproduce, to within 1e-13 on each prediction and exactly on every
+other column of its rows. Only a candidate adopted over the reference is
 eligible, and the rule above picks among the eligible. Its last tie goes to the higher held-out
 gain over the reference. With none eligible, the reference stands, and there is no economic
 artifact.

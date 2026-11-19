@@ -634,8 +634,8 @@ def growth_margins_command(
 
     Fix the margins once, before any candidate is read on growth: a decision refuses a candidate
     read before its margins were fixed. The record names the platform, Python and ``uv.lock``
-    the read ran under, and every candidate read must run there too, since a decision pairs only
-    bit-identical reference predictions.
+    the read ran under, and every candidate read must run on macOS arm64 under that lock, since a
+    decision pairs only reference predictions equal to the margin read's to within 1e-13.
 
     Example:
         Fix the growth margins::

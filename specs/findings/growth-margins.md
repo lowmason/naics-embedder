@@ -56,8 +56,9 @@ cd /Users/lowell/Projects/naics-embedder && pwd && HF_HUB_OFFLINE=1 COLUMNS=200 
 
 The record names the platform, Python and lock. The rest is recorded here because the record does
 not, and a candidate read that fails to pair should check it first (plan 14's Handoff: BLAS
-threading is the first suspect). Pairing compares the reference's predictions bit for bit; the
-environments only name where each read ran (`check_reference_pairing`).
+threading is the first suspect). Pairing compares the reference's predictions to within 1e-13
+(amended 2026-11-18 from "bit for bit": economic-candidates §4.8); the environments only name
+where each read ran (`check_reference_pairing`).
 
 The command printed:
 
@@ -252,12 +253,15 @@ and no outer set was opened.
   already exists (`_require_new_record`), so the identical command fails while the record stays
   in place: never move or delete it. A run to another `--output` is not refused; it would log a
   second margin read, and a candidate read before a record's `fixed_at` is refused under it.
-- **Where candidates read.** `decide` pairs a candidate only where the reference's predictions are
-  bit-identical to this read's. Read candidates on the Mac, at the `uv.lock`
+- **Where candidates read.** `decide` pairs a candidate only where the reference's predictions
+  equal this read's to within 1e-13 (amended 2026-11-18 from bit-identical). Read candidates on
+  the Mac, at the `uv.lock`
   (6de4fbdcde8a2e944c7a9daed21f09f8a01ed479052179994ba4b0d488fef948) that
   30aeff652f7fa8a90715da831e9948c085c95e5d carries, with Python 3.12.12, numpy 2.3.4 on
-  Accelerate and no BLAS thread variable set. Bit identity was verified on fixtures only. If a
-  real candidate read fails to pair, suspect BLAS threading first. The check fails closed.
+  Accelerate and no BLAS thread variable set. Bit identity was verified on fixtures only, and it
+  failed on the first real read, on macOS 27.2.1 (rounding of at most 6.9e-16, with the margins'
+  MSE unchanged to one ulp), which is why the pairing has a tolerance. If a real candidate read
+  fails to pair, suspect BLAS threading first. The check fails closed.
 - **Open items.** The deferred items under `## 14-economic-decision-tooling` in
   `specs/deferred_items.md` go to the candidates' spec. Plan 15 checked this record's stored
   scores once; the stored-scores item stays open.
