@@ -23,6 +23,7 @@ Commands:
     diagnostics: Report Req 6's structural diagnostics over every codebook code.
     export-table: Export an arm's code table in Req 2's form, with its provenance (Stage 6).
     outcome-panel: Score an arm on the outcome panel's validation split (Stage 6).
+    ita-read: Read a text→code reference arm on the ITA validation part (plan 20).
     sweep: Read trained seeds on all three validation panels and write an arm record.
     radius-report: Check radius variation, geometry and loss gradients for a selected checkpoint.
 '''
@@ -32,12 +33,13 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import polars as pl
 import typer
 from rich.console import Console
+from rich.markup import escape
 from typing_extensions import Annotated
 
 from naics_embedder.decision.candidates import (
@@ -58,6 +60,7 @@ from naics_embedder.decision.economic import (
     read_environment,
     read_trained_arm,
 )
+from naics_embedder.decision.ita_reads import read_reference
 from naics_embedder.decision.provenance import check_candidate_provenance
 from naics_embedder.decision.records import (
     ArmRecord,
@@ -71,8 +74,13 @@ from naics_embedder.decision.records import (
 from naics_embedder.decision.rule import TieUnresolvedError
 from naics_embedder.decision.store import ArtifactStore, check_provenance, provenance_fields
 from naics_embedder.decision.sweep import run_seed_sweep
+from naics_embedder.decision.text_to_code import EUCLIDEAN_D16, LEXICAL_STUB, REFERENCE_ARMS
 from naics_embedder.decision.trained import import_trained_candidate
 from naics_embedder.metrics.diagnostics import GEOMETRIES, diagnostics_report
+from naics_embedder.panels.decoding import resolve_distance
+from naics_embedder.panels.ita import DEFAULT_DISTANCE, ItaPanel
+from naics_embedder.panels.ita_evidence import check_ita_run, load_ita_evidence
+from naics_embedder.panels.ita_split import ItaPart
 from naics_embedder.panels.lexical_encoder import (
     LexicalTrigramEncoder,
     code_texts_from_descriptions,
@@ -1683,3 +1691,224 @@ def outcome_panel(
             'summary': result.summary,
         }
         path.write_text(json.dumps(payload, indent=2) + '\n')
+
+# -------------------------------------------------------------------------------------------------
+# ITA reference reads and the gap (plan 20)
+# -------------------------------------------------------------------------------------------------
+
+ITA_EVIDENCE = 'conf/data/ita_evidence.yaml'
+ITA_SETTINGS = 'conf/data/ita_panel.yaml'
+
+def _check_ita_arm(
+    arm: str,
+    seed: Optional[int],
+    checkpoint: Optional[str],
+    table: Optional[str],
+) -> None:
+    '''
+    Refuse an arm outside ``REFERENCE_ARMS``, d16 options on the stub, or their absence on d16.
+
+    Raises:
+        ValueError: As above, or a d16 seed below 1.
+    '''
+
+    if arm not in REFERENCE_ARMS:
+        raise ValueError(f'--arm must be one of {list(REFERENCE_ARMS)}, not {arm!r}')
+    given = {
+        name
+        for name, value in (('--seed', seed), ('--checkpoint', checkpoint), ('--table', table))
+        if value is not None
+    }
+    if arm == LEXICAL_STUB and given:
+        raise ValueError(f'the stub takes no {", ".join(sorted(given))}: those are d16 options')
+    if arm == EUCLIDEAN_D16:
+        missing = {'--seed', '--checkpoint', '--table'} - given
+        if missing:
+            raise ValueError(f'a euclidean-d16 read needs {", ".join(sorted(missing))}')
+        if seed < 1:
+            raise ValueError(f'--seed must be 1 or more, got {seed}')
+
+@app.command('ita-read')
+def ita_read_command(
+    arm: Annotated[
+        str,
+        typer.Option('--arm', help='The reference arm: lexical-stub or euclidean-d16'),
+    ],
+    pairs: Annotated[
+        str,
+        typer.Option('--pairs', help="The pinned run's ita_text_pairs.parquet"),
+    ],
+    pair_codes: Annotated[
+        str,
+        typer.Option('--pair-codes', help="The pinned run's ita_text_pair_codes.parquet"),
+    ],
+    run: Annotated[
+        str,
+        typer.Option('--run', help='The run id every Stage 4 read is logged under'),
+    ],
+    purpose: Annotated[
+        str,
+        typer.Option('--purpose', help='Why this read happens; recorded in the selection log'),
+    ],
+    store: Annotated[
+        str,
+        typer.Option('--store', help='Artifact store root for the per-pair and per-query frames'),
+    ],
+    output: Annotated[
+        str,
+        typer.Option('--output', help='Where the read record is written, once'),
+    ],
+    seed: Annotated[
+        Optional[int],
+        typer.Option('--seed', help='The euclidean-d16 seed (d16 only)'),
+    ] = None,
+    checkpoint: Annotated[
+        Optional[str],
+        typer.Option('--checkpoint', help="The seed's selected checkpoint (d16 only)"),
+    ] = None,
+    table: Annotated[
+        Optional[str],
+        typer.Option('--table', help='The table exported from that checkpoint (d16 only)'),
+    ] = None,
+    outcome: Annotated[
+        bool,
+        typer.Option(
+            '--outcome/--no-outcome',
+            help="Also read the outcome panel's validation split with the same encoder",
+        ),
+    ] = False,
+    descriptions: Annotated[
+        Optional[str],
+        typer.Option(
+            '--descriptions',
+            help="The stub's code texts (default: the download config's descriptions parquet)",
+        ),
+    ] = None,
+    evidence_file: Annotated[
+        str,
+        typer.Option('--evidence', help='The ITA evidence pin (C1)'),
+    ] = ITA_EVIDENCE,
+    settings: Annotated[
+        str,
+        typer.Option('--settings', help="The ITA panel's settings"),
+    ] = ITA_SETTINGS,
+    log: Annotated[
+        Optional[str],
+        typer.Option('--log', help='Selection log (default: the outcome-panel config)'),
+    ] = None,
+    config_file: Annotated[
+        str,
+        typer.Option('--config', help='Config YAML naming the bundle and the token cache'),
+    ] = 'conf/config.yaml',
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            '--dry-run', help='Run every check, load the panel and the arm, and read nothing'
+        ),
+    ] = False,
+    overrides: Annotated[
+        Optional[List[str]],
+        typer.Argument(help="Config overrides, as train takes them (e.g., 'model.dimension=8')"),
+    ] = None,
+):
+    '''
+    Read one text→code reference arm on the ITA validation part, with role ``reference``.
+
+    The checks come first and log nothing: the arm and its options, a new ``--output``, and the
+    run's tables against the evidence pin (C1), before any table loads. Then the panel and the arm
+    load. Under ``--dry-run`` the command stops there, printing the validation part's pair count,
+    its data fingerprint and the split fingerprint: it logs nothing, stores nothing and writes no
+    record. Otherwise the read is logged and scored, its per-pair frame stored, and its record
+    written. ``--outcome`` also reads the outcome panel's validation split with the same encoder
+    and detail. The sealed part stays sealed: this command never opens it.
+
+    Example:
+        Check the stub's read, then make it::
+
+            $ uv run naics-embedder tools ita-read --arm lexical-stub --outcome \\
+                --pairs RUN_DIR/ita_text_pairs.parquet \\
+                --pair-codes RUN_DIR/ita_text_pair_codes.parquet \\
+                --run ita-gap/RUN --purpose 'text-to-code reference gap read' \\
+                --store STORE --output OUT/lexical-stub.json --dry-run
+    '''
+
+    configure_logging('tools_ita_read.log')
+
+    named = f'{arm} seed {seed}' if seed is not None else arm
+    try:
+        for name, value in (('--purpose', purpose), ('--run', run)):
+            if not value.strip():
+                raise ValueError(f'{name} must not be blank')
+        _check_ita_arm(arm, seed, checkpoint, table)
+        output_path = Path(output)
+        _require_new_record(output_path)
+        evidence = load_ita_evidence(evidence_file)
+        check_ita_run(pairs, pair_codes, evidence)
+        cfg = _run_config(config_file, overrides)
+        bundle = _run_bundle(cfg)
+        log_path = log or load_config(OutcomePanelConfig, 'data/outcome_panel.yaml').selection_log
+        panel = ItaPanel.from_files(pairs, pair_codes, bundle, settings, log_path)
+        outcome_panel = OutcomePanel.from_bundle(bundle, log_path) if outcome else None
+        if arm == LEXICAL_STUB:
+            descriptions_path = descriptions or load_config(
+                DownloadConfig, 'data/download.yaml'
+            ).output_parquet
+            encoder = LexicalTrigramEncoder(
+                code_texts_from_descriptions(pl.read_parquet(descriptions_path))
+            )
+        else:
+            encoder = ArmEncoder.from_files(
+                checkpoint, table, bundle, code_token_config(cfg), device=pick_device('auto')
+            )
+        if dry_run:
+            validation = panel.pairs.filter(pl.col('part') == ItaPart.VALIDATION.value).height
+            distance, _ = resolve_distance(getattr(encoder, 'distance', DEFAULT_DISTANCE))
+            console.print(f'Dry run: every check passed for {escape(named)}')
+            console.print(f'  • validation pairs: {validation:,}')
+            console.print(f'  • data fingerprint: {panel.data_fingerprint(ItaPart.VALIDATION)}')
+            console.print(f'  • split fingerprint: {panel.fingerprint}')
+            console.print(f'  • encoder: {type(encoder).__name__}, distance {distance}')
+            if outcome_panel is not None:
+                console.print(f'  • outcome fingerprint: {outcome_panel.fingerprint}')
+                console.print(
+                    '  • outcome validation data fingerprint: '
+                    f'{outcome_panel.data_fingerprint(IndexRole.VALIDATION)}'
+                )
+            console.print('Nothing was logged, stored or written.')
+            return
+        record = read_reference(
+            panel,
+            encoder,
+            ArtifactStore(store),
+            evidence,
+            arm=arm,
+            seed=seed,
+            run=run,
+            purpose=purpose,
+            outcome_panel=outcome_panel,
+        )
+        write_record(record, output_path)
+    except (OSError, ValueError, ValidationError, SealedSplitError) as exc:
+        console.print(f'[bold red]ITA read failed:[/bold red] {escape(str(exc))}')
+        raise typer.Exit(code=1)
+
+    console.print(f'\n[bold cyan]ITA validation read: {escape(named)}[/bold cyan]\n')
+    for name, report in (
+        ('headline', record.headline), ('copied', record.copied), ('phrasing', record.phrasing)
+    ):
+        console.print(f'  • {name}: {escape(_ita_report(report))}')
+    console.print(f'  • counts: {escape(json.dumps(record.counts, sort_keys=True))}')
+    if record.outcome is not None:
+        console.print(f'  • outcome: {escape(_ita_report(record.outcome.summary))}')
+    console.print(f'\nRead logged to {escape(str(panel.log.path))} under run {escape(run)}')
+    console.print(f'Record written to {escape(str(output_path))}\n')
+
+def _ita_report(report: Dict[str, Any]) -> str:
+    '''A report's MRR, top-1 and pair, group or query count, on one line.'''
+
+    shown = []
+    for key in ('mrr', 'top1', 'n_pairs', 'n_groups', 'n_queries'):
+        if key in report:
+            value = report[key]
+            shown.append(f'{key} {value:.4f}' if isinstance(value, float) else f'{key} {value}')
+    return ', '.join(shown)

@@ -16,7 +16,9 @@ A row an extra argument adds, or a replacement ``replace_codes`` gives, is compl
 values: false flags, zero counts, empty lists and null codes and years. Nothing here reads
 embedding-data. ``write_ita_tables`` writes under a directory the test gives, ``tmp_path``.
 ``ita_run_dir`` writes them under a run directory beside an ``outputs.json``, and returns the
-evidence that pins the three files (C1, plan 20).
+evidence that pins the three files (C1, plan 20). ``IdentifiedStubEncoder`` is the stub with a d16
+read's identities, and ``outcome_beside_panel`` an outcome panel whose validation queries it
+decodes, for a read beside an ITA read.
 '''
 
 import json
@@ -28,6 +30,8 @@ import torch
 
 from naics_embedder.panels.ita_evidence import OUTPUTS_FILE, ItaEvidence
 from naics_embedder.panels.ita_split import ItaPanelSettings
+from naics_embedder.panels.outcome import OutcomePanel
+from naics_embedder.panels.selection_log import SelectionLog
 from naics_embedder.supervision.artifacts import sha256_file
 
 # Stage 10's ita_text_pairs.parquet: every column, in its order, with its dtype
@@ -422,3 +426,57 @@ class AssignedStubEncoder:
 
     def encode_codes(self, codes: Sequence[str]) -> torch.Tensor:
         return self._one_hot([ITA_CANDIDATES.index(code) for code in codes])
+
+class IdentifiedStubEncoder(AssignedStubEncoder):
+    '''
+    The stub arm with the two identities a d16 read logs: a checkpoint's SHA-256 and a table's
+    matrix fingerprint, as ``ArmEncoder`` carries them (plan 20).
+    '''
+
+    checkpoint_sha256 = 'c' * 64
+    table_fingerprint = 't' * 64
+
+# -------------------------------------------------------------------------------------------------
+# The outcome panel beside an ITA read
+# -------------------------------------------------------------------------------------------------
+
+# Index entries over ITA_CANDIDATES: every validation text is a key of ASSIGNED, so the stub
+# decodes it; 'Oil and gas wells' decodes to 111110, not its 211120. 236220 and 321113 hold no
+# entry, and 621210's one query is in the sealed test split
+OUTCOME_BESIDE_ROWS = (
+    (0, '311111', 'Dog food manufacturing', 'examples'),
+    (1, '311111', 'We make dog food', 'validation'),
+    (2, '111110', 'Soybean farming', 'examples'),
+    (3, '111110', 'Soybean farm', 'validation'),
+    (4, '111120', 'Oilseed farming', 'examples'),
+    (5, '111120', 'Canola growers', 'validation'),
+    (6, '513210', 'Software publishers', 'examples'),
+    (7, '513210', 'Software publisher', 'validation'),
+    (8, '211120', 'Crude petroleum extraction', 'examples'),
+    (9, '211120', 'Oil and gas wells', 'validation'),
+    (10, '621210', 'Offices of dentists', 'examples'),
+    (11, '621210', 'Dental office', 'test'),
+)
+
+def outcome_beside_panel(log: SelectionLog) -> OutcomePanel:
+    '''
+    An outcome panel over ``ITA_CANDIDATES`` whose validation queries the stub arm decodes.
+
+    Args:
+        log: The selection log its reads go to, the ITA panel's in a read beside one.
+
+    Returns:
+        The panel, on ``OUTCOME_BESIDE_ROWS``.
+    '''
+
+    rows = pl.DataFrame(
+        list(OUTCOME_BESIDE_ROWS),
+        schema={
+            'entry_id': pl.Int64,
+            'code': pl.Utf8,
+            'text': pl.Utf8,
+            'role': pl.Utf8
+        },
+        orient='row',
+    )
+    return OutcomePanel(rows, ITA_CANDIDATES, log)
