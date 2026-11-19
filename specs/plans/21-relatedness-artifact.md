@@ -104,8 +104,10 @@ Every task's requirements include this section.
   where this plan was cut. Applied in: Spec line.
 - **D3** (owner, brief, 2026-11-19): the `uv.lock` constraint lapsed (roadmap Decisions,
   2026-11-19). Applied in: Global Constraints.
+- **O1** (owner, plan review, 2026-11-19): "Approve plan": the plan as written, with P1–P10
+  included. P3 settles the brief's D-A and P4 its D-B. Applied in: the whole plan.
 
-The plan's own calls. Each one is for the owner's review at plan review:
+The plan's own calls, approved by O1:
 
 - **P1** (plan, 2026-11-19): the split hashes `f'{salt}\x00{code}'` in UTF-8 with SHA-256, where
   `code` is the bare six digits, never the node id. It reads the first 8 bytes big-endian, modulo
