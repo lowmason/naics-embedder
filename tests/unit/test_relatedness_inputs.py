@@ -587,10 +587,14 @@ MORE_CASES = [
     # a pair whose J exceeds m of either industry
     Case(
         'j-above-the-smaller-codes-m', a_j_above_the_smaller_codes_m, 'exceeds', (
-            TARGETS, '111150', '311221'
+            TARGETS, '(111150, 311221) has J 3', 'exceeds m of 111150 (2)'
         )
     ),
-    Case('j-over-a-zero-m', a_j_over_a_zero_m, 'exceeds', (TARGETS, '311211', '445131')),
+    Case(
+        'j-over-a-zero-m', a_j_over_a_zero_m, 'exceeds', (
+            TARGETS, '(311211, 445131) has J 1', 'exceeds m of 445131 (0)'
+        )
+    ),
 ]
 
 @pytest.mark.parametrize('case', [*CASES, *MORE_CASES], ids=lambda case: case.id)
