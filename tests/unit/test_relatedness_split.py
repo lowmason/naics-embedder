@@ -458,6 +458,45 @@ def test_tables_round_trip_through_parquet(tmp_path):
     assert pl.read_parquet(marginals_path).equals(marginals)
     assert dict(pl.read_parquet(targets_path).schema) == CO_OWNERSHIP_TARGET_SCHEMA
 
+# Stage 10's two schemas, written out here from the brief (embedding-data e6e12b2), apart from the
+# fixture's constants: a wrong constant in the fixture must fail a test, not build a wrong table
+STAGE_10_TARGET_COLUMNS = [
+    ('source', pl.Utf8),
+    ('family', pl.Utf8),
+    ('unit_a_type', pl.Utf8),
+    ('unit_a', pl.Utf8),
+    ('unit_b_type', pl.Utf8),
+    ('unit_b', pl.Utf8),
+    ('measure', pl.Utf8),
+    ('value', pl.Float64),
+    ('se', pl.Float64),
+    ('se_method', pl.Utf8),
+    ('n_unweighted', pl.UInt64),
+    ('n_weighted', pl.Float64),
+    ('sample_set', pl.Utf8),
+    ('vintage', pl.Utf8),
+    ('universe', pl.Utf8),
+    ('flags', pl.List(pl.Utf8)),
+]
+STAGE_10_MARGINAL_COLUMNS = [
+    ('node_id', pl.Utf8),
+    ('n_employers', pl.UInt64),
+    ('n_multi_industry_employers', pl.UInt64),
+    ('n_records', pl.UInt64),
+    ('n_employers_including_padded', pl.UInt64),
+    ('n_employers_partial', pl.UInt64),
+]
+
+def test_the_stage_10_schemas_are_pinned_apart_from_the_fixtures_constants(tmp_path):
+    assert list(CO_OWNERSHIP_TARGET_SCHEMA.items()) == STAGE_10_TARGET_COLUMNS
+    assert list(CO_OWNERSHIP_MARGINAL_SCHEMA.items()) == STAGE_10_MARGINAL_COLUMNS
+    targets, marginals = co_ownership_tables()
+    assert list(targets.schema.items()) == STAGE_10_TARGET_COLUMNS
+    assert list(marginals.schema.items()) == STAGE_10_MARGINAL_COLUMNS
+    targets_path, marginals_path = write_co_ownership_tables(tmp_path, targets, marginals)
+    assert list(pl.read_parquet(targets_path).schema.items()) == STAGE_10_TARGET_COLUMNS
+    assert list(pl.read_parquet(marginals_path).schema.items()) == STAGE_10_MARGINAL_COLUMNS
+
 def test_tree_distance_is_twice_the_levels_below_the_common_ancestor():
     distance = tree_distance(['311111', '311119', '311211', '312111', '111110', '445110', '445131'])
     assert distance.shape == (7, 7) and distance.dtype == np.float64
