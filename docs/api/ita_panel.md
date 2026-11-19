@@ -23,6 +23,13 @@ No ITA pair enters training (U25). Stage 2 reads fixture tables only.
 
 ::: naics_embedder.panels.ita_split
 
+## Evidence pin
+
+The pinned run's tables are checked against `conf/data/ita_evidence.yaml` before any read
+(embedding-data's protocol, condition C1).
+
+::: naics_embedder.panels.ita_evidence
+
 ## Panel and selection log
 
 ::: naics_embedder.panels.ita

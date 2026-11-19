@@ -60,3 +60,17 @@ The text→code decision on the ITA panel's headline. It fixes the margin δ fro
 own reads, before any candidate read, and compares a candidate with the reference.
 
 ::: naics_embedder.decision.text_to_code
+
+## ITA reference reads
+
+Stage 4's reads of text→code's reference arms on the ITA validation part, with role
+`reference`, and the outcome panel's validation split beside them.
+
+::: naics_embedder.decision.ita_reads
+
+## Text→code gap
+
+The gap between Census phrases and owner text for each reference arm, with paired-bootstrap
+intervals, and the recommendation on a later ITA training part (D2).
+
+::: naics_embedder.decision.ita_gap

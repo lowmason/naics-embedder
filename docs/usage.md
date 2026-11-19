@@ -281,6 +281,52 @@ uv run naics-embedder tools outcome-panel --checkpoint checkpoints/reference/epo
 - `--output PATH` also writes JSON with panel/table/checkpoint identities and scores.
 - `KEY=VALUE ...` takes the same config overrides as export.
 
+### `tools ita-read`
+
+Read one text→code reference arm, `lexical-stub` or one `euclidean-d16` seed, on the ITA panel's
+validation part (redesign roadmap Stage 4). The read is logged with role `reference`, the arm, the
+run id and, for `euclidean-d16`, the seed, the checkpoint's SHA-256 and the table's matrix
+fingerprint. The command checks the run's tables against `conf/data/ita_evidence.yaml` (C1) before
+any table loads, so another run's tables, such as a replay, are refused and nothing is logged. It
+never opens the sealed part. `--dry-run` runs every check and loads the panel and the arm, then
+prints the validation part's pair count and fingerprints: it logs nothing, stores nothing and
+writes no record.
+
+```bash
+uv run naics-embedder tools ita-read --arm lexical-stub --outcome   --pairs RUN_DIR/ita_text_pairs.parquet --pair-codes RUN_DIR/ita_text_pair_codes.parquet   --run ita-gap/RUN_ID --purpose 'text-to-code reference gap read'   --store STORE --output OUT/lexical-stub.json --dry-run
+```
+
+- `--arm`, `--pairs`, `--pair-codes`, `--run`, `--purpose`, `--store` and `--output` are
+  required. `--output` must not exist: a record is written once.
+- `--seed N`, `--checkpoint PATH` and `--table PATH` are `euclidean-d16`'s, all three required for
+  it and refused for the stub.
+- `--outcome` also reads the outcome panel's validation split with the same encoder and detail,
+  for the Census-phrase MRR.
+- `--descriptions PATH` gives the stub's code texts (default: the download config's descriptions
+  parquet). `--evidence`, `--settings`, `--log` and `--config` default to
+  `conf/data/ita_evidence.yaml`, `conf/data/ita_panel.yaml`, the outcome-panel configuration's
+  selection log and `conf/config.yaml`.
+- `KEY=VALUE ...` takes the same config overrides as export.
+
+### `tools ita-gap`
+
+Measure the gap between Census phrases and owner text for both reference arms from Stage 4's
+read records and the `euclidean-d16` Stage 8 record. For each arm it reports C (outcome
+validation), K (ITA copied pairs) and H (ITA headline pairs), the gaps C − H, C − K and K − H, and
+a code-matched C − H, each with its 95 % paired-bootstrap interval, then whether to recommend a
+later ITA training part (D2). It reads no panel and logs nothing.
+
+```bash
+uv run naics-embedder tools ita-gap --read OUT/lexical-stub.json --read OUT/euclidean-d16-s1.json   --read OUT/euclidean-d16-s2.json --read OUT/euclidean-d16-s3.json   --read OUT/euclidean-d16-s4.json --read OUT/euclidean-d16-s5.json   --stage8 STORE/records/stage8/euclidean-d16.json --store STORE --output OUT/gap.json
+```
+
+- `--read` (repeated), `--stage8`, `--store` and `--output` are required. `--output` must not
+  exist.
+- `--settings PATH` gives r (default `conf/data/ita_panel.yaml`). Replicates and the bootstrap
+  seed come from `conf/data/decision.yaml`.
+- The reads must pair: one run, one pin, one table build, the stub with an outcome read beside it,
+  and `euclidean-d16`'s seeds with the Stage 8 record's checkpoints and tables.
+
 ### `tools sweep`
 
 Keep the store and JSON records under `~/naics-artifacts`, outside every worktree.
