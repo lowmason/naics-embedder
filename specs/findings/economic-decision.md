@@ -105,6 +105,12 @@ reference's rows to match exactly and each prediction to match to within 1e-13, 
 text, and `uv.lock` and `conf/` did not change. `text-only-d8` passes the amended check, and the
 other 17 reads ran at 37b47c4.
 
+One more pin fails on this Mac for the same kind of reason. The level-mode regressor test
+`test_level_predictions_are_the_captured_ones_bit_for_bit` compares predictions to literals captured
+in an earlier environment, and it fails on macOS 27.2.1. The test's own note says that such a
+failure means the environment changed. CI on Linux skips it. This plan did not re-capture the
+literals. `specs/deferred_items.md` lists it under `19-economic-decision-read`.
+
 ## 2. The decision
 
 The rule is Req 5's with the 2026-10-17 margins. A candidate is adopted over the reference when it
@@ -196,6 +202,7 @@ The comparison is a report and chooses nothing.
 |---|---|---|---|---|---|---|
 | growth_seen | +3.683e-05 | [-1.481e-05, +9.213e-05] | [-2.114e-05, +0.0001012] | 0.00015934 | yes | no |
 | growth_heldout | -2.08e-05 | [-8.022e-05, +3.622e-05] | [-8.772e-05, +4.482e-05] | 0.000161958 | yes | no |
+
 **Answer.** Propagation helps at none of d = 8, 16, 32. At each d the smoothed candidate is
 non-inferior to its twin on both panels and superior on neither. This finding records no evidence
 that smoothing over lineage helps, and the parked graph stage stays parked for this artifact.
