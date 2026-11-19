@@ -11,7 +11,6 @@ import pytest
 import torch
 import typer
 import yaml
-from naics_embedder.decision.ita_gap import ItaGapRecord
 from typer.testing import CliRunner
 
 from naics_embedder.cli.commands import data as data_cli
@@ -27,6 +26,7 @@ from naics_embedder.decision.economic import (
     check_economic_arm,
     read_deterministic_arm,
 )
+from naics_embedder.decision.ita_gap import ItaGapRecord
 from naics_embedder.decision.ita_reads import ItaReferenceRead
 from naics_embedder.decision.records import (
     ArmRecord,
@@ -2609,3 +2609,63 @@ def test_ita_gap_refuses_reads_that_do_not_pair_without_writing(runner, tmp_path
     assert isinstance(result.exception, SystemExit)
     assert "the reads hold arms ['euclidean-d16']" in _ita_output(result)
     assert not output.exists()
+
+@pytest.mark.unit
+def test_ita_gap_refuses_an_existing_output_before_reading(monkeypatch, runner, tmp_path):
+    calls = []
+    monkeypatch.setattr(tools_cli, 'gap_record', lambda *args, **kwargs: calls.append(args))
+    output = tmp_path / 'gap.json'
+    output.write_text('{}\n', encoding='utf-8')
+    store = ArtifactStore(tmp_path / 'store')
+
+    result = _ita_gap(runner, [tmp_path / 'read.json'], tmp_path / 'stage8.json', store, output)
+
+    assert result.exit_code == 1
+    assert calls == []
+
+@pytest.mark.unit
+def test_ita_gap_takes_r_from_the_settings(runner, tmp_path):
+    store = ArtifactStore(tmp_path / 'store')
+    paths, stage8_path = gap_fixture(store, tmp_path / 'fixture')
+    settings = tmp_path / 'ita_panel.yaml'
+    settings.write_text(
+        yaml.safe_dump({
+            **ITA_SETTINGS.model_dump(), 'relative_margin': 0.1
+        }), encoding='utf-8'
+    )
+    output = tmp_path / 'gap.json'
+    reads = [argument for path in paths for argument in ('--read', str(path))]
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'ita-gap', *reads, '--stage8',
+            str(stage8_path), '--store',
+            str(store.root), '--output',
+            str(output), '--settings',
+            str(settings)
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    record = read_record(output, ItaGapRecord)
+    assert record.r == 0.1
+    for arm in record.arms:
+        assert arm.threshold == pytest.approx(0.1 * arm.census.point)
+
+@pytest.mark.unit
+def test_ita_gap_prints_a_bracketed_error_literally(monkeypatch, runner, tmp_path):
+
+    def refusing(*_args, **_kwargs):
+        raise ValueError('[/x] bad')
+
+    monkeypatch.setattr(tools_cli, 'gap_record', refusing)
+    store = ArtifactStore(tmp_path / 'store')
+
+    result = _ita_gap(
+        runner, [tmp_path / 'read.json'], tmp_path / 'stage8.json', store, tmp_path / 'gap.json'
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert '[/x] bad' in _ita_output(result)
