@@ -292,7 +292,9 @@ Superiority is 1 − 0.05/n: 97.5 % over the two growth panels, 98⅓ % over D8'
 candidate adopted over the reference is eligible; with none, the reference stands. The growth
 margins were fixed once, on 2026-10-17 (`specs/findings/growth-margins.md`). Never run
 `tools growth-margins` again: nothing refuses a second run, and every economic candidate is
-decided against that record.
+decided against that record. The economic decision was recorded on 2026-11-18
+(`specs/findings/economic-decision.md`): no candidate is adopted, and the reference
+`covariates+ancestors` stands.
 
 ### Remote Workflow and Phase 2 Boundary
 
