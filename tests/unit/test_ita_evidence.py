@@ -133,6 +133,14 @@ def test_a_missing_table_is_refused(tmp_path, missing):
     with pytest.raises(FileNotFoundError, match=missing):
         check_ita_run(pairs, codes, evidence)
 
+def test_a_missing_table_is_reported_before_the_run_name(tmp_path):
+    pairs, codes, evidence = ita_run_dir(tmp_path, *ita_tables())
+    replay = tmp_path / 'stage10_fixture_r1_replay'
+    shutil.copytree(pairs.parent, replay)
+    (replay / PAIRS_FILE).unlink()
+    with pytest.raises(FileNotFoundError, match=PAIRS_FILE):
+        check_ita_run(replay / PAIRS_FILE, replay / PAIR_CODES_FILE, evidence)
+
 def test_tables_written_without_a_run_directory_are_refused(tmp_path):
     pairs, codes = write_ita_tables(tmp_path, *ita_tables())
     (tmp_path / OUTPUTS_FILE).write_text('{}\n', encoding='utf-8')
