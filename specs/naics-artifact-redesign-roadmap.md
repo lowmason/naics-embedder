@@ -216,7 +216,7 @@ qualification (`:560`).
       > Stage 2: COMPLETE (2026-11-17) — implemented by plan 17 (specs/plans/completed/17-text-to-code-ita-panel.md). Its Handoff section names what Stages 4 and 5 consume.
       > Next: resume the roadmap.
 
-- [ ] Stage 3: Economic — decision read
+- [x] Stage 3: Economic — decision read
       Objective: With the user's approval at the time, read every Stage 1 candidate on the growth
       validation splits on the Mac, and record the economic decision against the fixed margins.
       Spec: Req 29 (The test, and the margins of 2026-10-17), split Req 24, Supersessions
@@ -249,6 +249,8 @@ qualification (`:560`).
       selection log gained only validation reads, and no outer set opened. The finding cites the
       record's sha256 and the platform, Python and lock that it was read under.
       ROUTING: writing-plans
+      > Stage 3: COMPLETE (2026-11-18) — implemented by plan 19 (specs/plans/completed/19-economic-decision-read.md). Its Handoff section names what embedding roadmap Stage 12 consumes.
+      > Next: resume the roadmap.
 
 - [ ] Stage 4: Text→code — reference read and gap
       Objective: With the user's approval at the time, read the reference on the real ITA

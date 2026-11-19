@@ -3,7 +3,7 @@ The economic decision on the fixture growth panel (Req 24; roadmap Stage 2 Exit)
 
 The margin read scores the reference, ``covariates+ancestors``, beside the other comparators that
 read no candidate. Every candidate's read fits the same rows, folds and penalties, so the
-reference's errors pair exactly with each candidate's.
+reference's errors pair, to within ``PAIRING_TOLERANCE`` (spec 4.8), with each candidate's.
 '''
 
 import hashlib
