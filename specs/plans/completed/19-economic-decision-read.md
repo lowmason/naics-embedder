@@ -172,7 +172,7 @@ This plan's own choices, approved by D1:
   2–5.
 - **P3:** the dry-run text item (§ 16-economic-candidates, first item) stays deferred. Stage 3's
   Exit does not name it, and plan 18 is live in `cli/commands/tools.py`. The ledger says what the
-  dry run checks. Applied in: Task 3 Step 2.
+  dry run checks. Applied in: Task 3 Step 2. → item: 16-economic-candidates — 2026-11-15
 - **P4:** two gates, as plan 15 had. Gate A covers the read-only checks and the dry runs. Gate B
   covers the 18 reads and shows Gate A's results first. `tools decide` reads no panel and logs
   nothing, so it needs no gate of its own. Applied in: Tasks 3–5.
