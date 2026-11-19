@@ -15,15 +15,20 @@ the validation part and p08 through p11 in the sealed part.
 A row an extra argument adds, or a replacement ``replace_codes`` gives, is completed with neutral
 values: false flags, zero counts, empty lists and null codes and years. Nothing here reads
 embedding-data. ``write_ita_tables`` writes under a directory the test gives, ``tmp_path``.
+``ita_run_dir`` writes them under a run directory beside an ``outputs.json``, and returns the
+evidence that pins the three files (C1, plan 20).
 '''
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import polars as pl
 import torch
 
+from naics_embedder.panels.ita_evidence import OUTPUTS_FILE, ItaEvidence
 from naics_embedder.panels.ita_split import ItaPanelSettings
+from naics_embedder.supervision.artifacts import sha256_file
 
 # Stage 10's ita_text_pairs.parquet: every column, in its order, with its dtype
 ITA_PAIRS_SCHEMA: Dict[str, pl.DataType] = {
@@ -74,6 +79,9 @@ ITA_PAIR_CODES_SCHEMA: Dict[str, pl.DataType] = {
 
 PAIRS_FILE = 'ita_text_pairs.parquet'
 PAIR_CODES_FILE = 'ita_text_pair_codes.parquet'
+
+# The protocol commit a fixture run's evidence names: any 40 hexadecimal characters
+FIXTURE_PROTOCOL_COMMIT = '0' * 40
 
 # The panel's codes: the axes of the stub encoder, in order
 ITA_CANDIDATES = ('111110', '111120', '211120', '236220', '311111', '321113', '513210', '621210')
@@ -351,6 +359,46 @@ def write_ita_tables(directory: Path, pairs: pl.DataFrame, codes: pl.DataFrame) 
     pairs.write_parquet(pairs_path)
     codes.write_parquet(codes_path)
     return pairs_path, codes_path
+
+def ita_run_dir(
+    directory: Path,
+    pairs: pl.DataFrame,
+    codes: pl.DataFrame,
+    run: str = 'stage10_fixture_r1',
+) -> Tuple[Path, Path, ItaEvidence]:
+    '''
+    Write the two tables and an ``outputs.json`` under a run directory, and pin them (C1).
+
+    Args:
+        directory: An existing directory, ``tmp_path`` in a test.
+        pairs: The pair table.
+        codes: The pair-code table.
+        run: The run directory's name, created under ``directory``.
+
+    Returns:
+        The pair table's path, the pair-code table's path, and the evidence that pins the run's
+        three files.
+    '''
+
+    run_dir = directory / run
+    run_dir.mkdir(parents=True)
+    pairs_path, codes_path = write_ita_tables(run_dir, pairs, codes)
+    outputs = run_dir / OUTPUTS_FILE
+    outputs.write_text(
+        json.dumps({
+            'run': run,
+            'tables': [PAIRS_FILE, PAIR_CODES_FILE]
+        }, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
+    evidence = ItaEvidence(
+        protocol_commit=FIXTURE_PROTOCOL_COMMIT,
+        run=run,
+        outputs_sha256=sha256_file(outputs),
+        pairs_sha256=sha256_file(pairs_path),
+        pair_codes_sha256=sha256_file(codes_path),
+    )
+    return pairs_path, codes_path, evidence
 
 # -------------------------------------------------------------------------------------------------
 # The stub arm
