@@ -438,6 +438,9 @@ def a_pair_in_one_direction_from_the_smaller_code(s: Scenario) -> None:
 def a_j_of_zero_on_one_row(s: Scenario) -> None:
     s.targets(lambda t: edit(t, row_of('311212', '311211'), n_unweighted=0))
 
+def a_mirror_with_the_smaller_j_first(s: Scenario) -> None:
+    s.targets(lambda t: edit(t, row_of('311211', '311212'), n_unweighted=2))
+
 def a_j_above_the_smaller_codes_m(s: Scenario) -> None:
     s.set_j('111150', '311221', 3)  # m(111150) 2, m(311221) 3
 
@@ -583,6 +586,12 @@ MORE_CASES = [
     Case(
         'one-way-from-the-smaller-code', a_pair_in_one_direction_from_the_smaller_code,
         'one direction', (TARGETS, '311211', '311212')
+    ),
+    # a pair whose two directions hold different J, whichever direction is larger
+    Case(
+        'unequal-mirror-with-the-smaller-j-first', a_mirror_with_the_smaller_j_first, 'mirror', (
+            TARGETS, '(311211, 311212) has J 2', '(311212, 311211) has J 3'
+        )
     ),
     # a pair whose J exceeds m of either industry
     Case(
