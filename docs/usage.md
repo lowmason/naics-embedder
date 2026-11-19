@@ -303,7 +303,8 @@ uv run naics-embedder tools ita-read --arm lexical-stub --outcome   --pairs RUN_
 - `--outcome` also reads the outcome panel's validation split with the same encoder and detail,
   for the Census-phrase MRR.
 - `--descriptions PATH` gives the stub's code texts (default: the download config's descriptions
-  parquet). `--evidence`, `--settings`, `--log` and `--config` default to
+  parquet). Its SHA-256 must be the bundle's description fingerprint, or nothing is read.
+  `--evidence`, `--settings`, `--log` and `--config` default to
   `conf/data/ita_evidence.yaml`, `conf/data/ita_panel.yaml`, the outcome-panel configuration's
   selection log and `conf/config.yaml`.
 - `KEY=VALUE ...` takes the same config overrides as export.

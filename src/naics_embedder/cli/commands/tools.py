@@ -1856,6 +1856,13 @@ def ita_read_command(
             descriptions_path = descriptions or load_config(
                 DownloadConfig, 'data/download.yaml'
             ).output_parquet
+            descriptions_hash = sha256_file(Path(descriptions_path))
+            if descriptions_hash != bundle.manifest.description_fingerprint:
+                raise ValueError(
+                    f'the descriptions {descriptions_path} have SHA-256 {descriptions_hash}, not '
+                    f"the bundle's description fingerprint {bundle.manifest.description_fingerprint}"
+                    ": the stub's code texts must be the bundle's descriptions"
+                )
             encoder = LexicalTrigramEncoder(
                 code_texts_from_descriptions(pl.read_parquet(descriptions_path))
             )

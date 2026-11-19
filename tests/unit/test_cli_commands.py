@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import shutil
 from pathlib import Path
@@ -2298,7 +2299,8 @@ def ita_fixture(monkeypatch, tmp_path, default_config, validated_bundle):
     The pinned fixture run, its evidence file, and the panels and encoders the command loads.
 
     ``ItaPanel.from_files`` builds the fixture panel on the log the command names, and records the
-    call; the outcome panel and both encoders are the fixture's, on the same log.
+    call; the outcome panel and both encoders are the fixture's, on the same log. The gate returns
+    the fixture bundle with the descriptions file's SHA-256 as its description fingerprint.
     '''
 
     pairs, codes, evidence = ita_run_dir(tmp_path / 'edata', *ita_tables())
@@ -2306,6 +2308,12 @@ def ita_fixture(monkeypatch, tmp_path, default_config, validated_bundle):
     evidence_file.write_text(yaml.safe_dump(evidence.model_dump()), encoding='utf-8')
     descriptions = tmp_path / 'descriptions.parquet'
     pl.DataFrame({'code': ['311111'], 'title': ['Dog food']}).write_parquet(descriptions)
+    bundle = dataclasses.replace(
+        validated_bundle,
+        manifest=validated_bundle.manifest.model_copy(
+            update={'description_fingerprint': sha256_file(descriptions)}
+        ),
+    )
     calls = _ItaCalls([], [], [], [])
 
     def fake_ita_panel(pairs_path, codes_path, bundle, settings, log_path):
@@ -2324,7 +2332,7 @@ def ita_fixture(monkeypatch, tmp_path, default_config, validated_bundle):
         calls.stubs.append(code_texts)
         return AssignedStubEncoder()
 
-    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', lambda cfg: validated_bundle)
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', lambda cfg: bundle)
     monkeypatch.setattr(tools_cli.ItaPanel, 'from_files', staticmethod(fake_ita_panel))
     monkeypatch.setattr(tools_cli.OutcomePanel, 'from_bundle', staticmethod(fake_outcome_panel))
     monkeypatch.setattr(tools_cli.ArmEncoder, 'from_files', staticmethod(fake_arm))
@@ -2337,6 +2345,7 @@ def ita_fixture(monkeypatch, tmp_path, default_config, validated_bundle):
         evidence=evidence,
         evidence_file=evidence_file,
         descriptions=descriptions,
+        bundle=bundle,
         log=tmp_path / 'logs' / 'selection_log.jsonl',
         store=tmp_path / 'store',
         output=tmp_path / 'records' / 'read.json',
@@ -2389,11 +2398,11 @@ def test_ita_read_writes_the_record_and_logs_the_reads(runner, ita_fixture):
     assert f'outcome: mrr {record.outcome.summary["mrr"]:.4f}' in output
 
 @pytest.mark.unit
-def test_ita_read_reads_a_d16_seed_with_its_identities(runner, ita_fixture, validated_bundle):
+def test_ita_read_reads_a_d16_seed_with_its_identities(runner, ita_fixture):
     result = _ita_read(runner, ita_fixture, *_D16_OPTIONS)
 
     assert result.exit_code == 0, result.output
-    assert ita_fixture.calls.arms == [('arm.ckpt', 'arm.parquet', validated_bundle, 'cpu')]
+    assert ita_fixture.calls.arms == [('arm.ckpt', 'arm.parquet', ita_fixture.bundle, 'cpu')]
     assert ita_fixture.calls.stubs == []
     assert ita_fixture.calls.outcome_panels == []
     [entry] = SelectionLog(ita_fixture.log).records()
@@ -2445,6 +2454,30 @@ def test_ita_read_refuses_unpinned_tables_and_logs_nothing(runner, ita_fixture):
     assert 'C1' in _ita_output(result)
     assert ita_fixture.calls.panels == []
     assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+    assert not ita_fixture.output.exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize('dry_run', [False, True], ids=['read', 'dry-run'])
+def test_ita_read_refuses_stub_descriptions_that_are_not_the_bundles(
+    runner, ita_fixture, tmp_path, dry_run
+):
+    other = tmp_path / 'other_descriptions.parquet'
+    pl.DataFrame({'code': ['311111'], 'title': ['Cat food']}).write_parquet(other)
+    ita_fixture.descriptions = other
+    arguments = ('--arm', 'lexical-stub', '--outcome') + (('--dry-run', ) if dry_run else ())
+
+    result = _ita_read(runner, ita_fixture, *arguments)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    output = _ita_output(result)
+    assert 'descriptions' in output
+    assert sha256_file(other) in output
+    assert ita_fixture.bundle.manifest.description_fingerprint in output
+    assert 'Dry run' not in output
+    assert ita_fixture.calls.stubs == []
+    assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+    assert not ita_fixture.store.exists()
     assert not ita_fixture.output.exists()
 
 @pytest.mark.unit
