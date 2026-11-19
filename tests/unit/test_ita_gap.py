@@ -512,3 +512,51 @@ def test_two_reads_of_one_file_name_are_refused(fixture_reads, tmp_path):
 
     with pytest.raises(ValueError, match='file name'):
         gap_record([*paths, copy], store, stage8_path, r=0.05, replicates=100, bootstrap_seed=1)
+
+def test_gap_seeds_order_d16_by_seed_whatever_the_reads_order(fixture_reads):
+    store, _, _, reads, stage8 = fixture_reads
+
+    seeds = gap_seeds(list(reversed(reads)), store, stage8)
+
+    assert [seed.seed for seed in seeds['euclidean-d16']] == [1, 2, 3, 4, 5]
+    by_seed = {read.seed: read for read in reads if read.arm == 'euclidean-d16'}
+    for seed in seeds['euclidean-d16']:
+        assert seed.ita.equals(store.read_frame(by_seed[seed.seed].per_pair))
+
+def test_large_reads_the_lower_bound_not_the_upper():
+    # Two codes: a gap of 1 on one and 0 on the other, so a resample's matched gap is 0, 0.5 or 1
+    pairs = [
+        ('a', 'k1', False, 0.0, ['111110']),
+        ('b', 'k2', False, 0.0, ['311111']),
+        ('c', 'kc', True, 1.0, ['513210']),
+    ]
+    census = [('111110', 'q1', 1.0), ('311111', 'q2', 0.0)]
+
+    gap = _gap([GapSeed(None, _per_pair(pairs), _census(census))])
+
+    assert gap.matched_headline_gap.interval == (0.0, 1.0)
+    assert gap.threshold == pytest.approx(0.025)
+    assert gap.large is False
+
+def test_a_gap_equal_to_the_threshold_is_not_large():
+    # Exact binary values: C = 1, H = 0.9375, r = 0.0625, so the gap equals r × C exactly
+    pairs = [('a', 'k1', False, 0.9375, ['111110']), ('c', 'kc', True, 1.0, ['513210'])]
+    census = [('111110', 'q1', 1.0)]
+
+    gap = _gap([GapSeed(None, _per_pair(pairs), _census(census))], r=0.0625)
+
+    assert gap.matched_headline_gap.interval[0] == gap.threshold == 0.0625
+    assert gap.large is False
+
+def test_the_records_refuse_unknown_keys_and_assignment(fixture_reads):
+    store, paths, stage8_path, _, _ = fixture_reads
+    record = gap_record(paths, store, stage8_path, r=0.05, replicates=100, bootstrap_seed=1)
+
+    with pytest.raises(ValueError):
+        ItaGapRecord.model_validate({**record.model_dump(), 'chosen': 'lexical-stub'})
+    with pytest.raises(ValueError):
+        ita_gap.ArmGap.model_validate({**record.arms[0].model_dump(), 'reference': True})
+    with pytest.raises(ValueError):
+        record.recommend_training_part = True
+    with pytest.raises(ValueError):
+        record.arms[0].large = True
