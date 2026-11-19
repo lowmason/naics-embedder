@@ -223,7 +223,9 @@ for the candidates' decision.
       in its read's environment, the platform, Python and `uv.lock` sha256 it was read under.
       Every candidate read must share them, since `decide` pairs only bit-identical reference
       predictions; bit identity was verified on fixtures only, and BLAS threading is the first
-      suspect if real reads fail to pair (plan 14, Handoff; Resolved at resume, 2026-10-16). The
+      suspect if real reads fail to pair (plan 14, Handoff; Resolved at resume, 2026-10-16).
+      Amended 2026-11-18: `decide` pairs reference predictions to within 1e-13, so a read shares
+      the lock and Python and runs on macOS arm64 (economic-candidates §4.8). The
       command writes the record once, to `--output`, and the read's predictions and scores to
       `--store`; it neither stores the record nor prints its sha256, so this stage stores it
       outside any worktree and records its sha256 with `shasum -a 256` (plan 14, Handoff;

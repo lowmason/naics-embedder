@@ -322,8 +322,10 @@ class DecisionRecord(_Record):
 
 class ReadEnvironment(_Record):
     '''
-    Where a growth read ran. Decisions pair reads only on bit-identical rows and fits, so every
-    candidate read of an economic decision runs where its margin read ran (Req 24).
+    Where a growth read ran. Decisions pair reads only on identical rows and fits, and the
+    economic decision on reference predictions equal to within ``PAIRING_TOLERANCE``, so every
+    candidate read of an economic decision runs where its margin read ran, on macOS arm64
+    (Req 24).
 
     Attributes:
         platform: ``platform.platform()``.

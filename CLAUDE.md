@@ -285,7 +285,9 @@ from its Stage 7/8 arm record and run directories (`--runs-root`) and read once 
 the frozen list (default `conf/data/economic_candidates.yaml`). It requires exactly the list's
 candidates and records the list's sha256. It also reports whether each smoothed candidate is
 adopted over its text-only twin, and chooses nothing by it. It refuses a candidate whose reference
-predictions differ from the margin read's bit for bit, or that read before the margins.
+rows differ from the margin read's, or whose reference predictions differ from its by more than
+`PAIRING_TOLERANCE` (1e-13, absolute; the prediction alone has a tolerance), or that read before
+the margins.
 Superiority is 1 − 0.05/n: 97.5 % over the two growth panels, 98⅓ % over D8's three. Only a
 candidate adopted over the reference is eligible; with none, the reference stands. The growth
 margins were fixed once, on 2026-10-17 (`specs/findings/growth-margins.md`). Never run
@@ -329,8 +331,11 @@ closed.
 
 The `uv.lock` freeze held from Plan 10's first campaign launch through Stage 8's decision and was
 released when `specs/naics-representation-split.md` merged (Req 19). `decide` pairs reads only on
-bit-identical regressor rows, so the growth margin read and every economic candidate read share
-one platform and one `uv.lock`.
+identical regressor rows and reference predictions equal to within `PAIRING_TOLERANCE`, so the
+growth margin read and every economic candidate read share one `uv.lock` and run on macOS arm64.
+The tolerance exists because plan 19's first real read, on macOS 27.2.1 against the margin read's
+26.6.2, differed in the last bits (at most 6.9e-16) and moved the reference's validation MSE by
+one ulp.
 
 ## Development Setup
 
@@ -376,7 +381,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **4,491 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **4,509 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.

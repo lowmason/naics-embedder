@@ -345,6 +345,6 @@ Mac. Remote selection logs stay separate; sealed splits stay closed.
 
 The `uv.lock` freeze held through Stage 8's decision and was released when the representation
 split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on
-bit-identical regressor rows, so the growth margin read
+identical regressor rows and reference predictions equal to within 1e-13, so the growth margin read
 ([`tools growth-margins`](usage.md#tools-growth-margins)) and every economic candidate read share
-one platform and one `uv.lock`; the margin record names both.
+one `uv.lock` and run on macOS arm64; the margin record names the platform and the lock.

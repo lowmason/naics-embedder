@@ -29,8 +29,9 @@ These facts drive the choice:
    decision rule serve every artifact.
 3. **The economic path is pinned.** The growth margins were read once, on 2026-10-17, on the Mac
    with Python 3.12.12 and `uv.lock` 6de4fbdc (`specs/findings/growth-margins.md`). `decide`
-   pairs a candidate only where the reference predictions match that read's bit for bit
-   (`decision/economic.py`). The level-mode fixture is pinned at d61f49b. Sixteen test files
+   pairs a candidate only where the reference predictions match that read's to within 1e-13
+   (`decision/economic.py`; amended 2026-11-18 from "bit for bit": economic-candidates §4.8).
+   The level-mode fixture is pinned at d61f49b. Sixteen test files
    import `panels/regressor.py`, `panels/qcew_rows.py` or `decision/economic.py`.
 4. **Evidence roles are not import rules.** Req 25 says that no artifact's adoption decision reads
    another artifact's panel, and Req 26 gives each table or part one role. Data and records
@@ -83,8 +84,9 @@ beside them.
   follow two rules, so a reader could not predict where code lives. The ITA panel, for example,
   would sit apart from the outcome panel that it is reported beside (Req 28).
 - **A uv workspace: a core package plus one package per artifact.** Rejected now: it changes
-  `uv.lock` and the install path, and every economic candidate read must pair bit for bit with the
-  margin read made under lock 6de4fbdc. Each package would also need its own CI, coverage and docs
+  `uv.lock` and the install path, and every economic candidate read must pair, to within 1e-13,
+  with the margin read made under lock 6de4fbdc (economic-candidates §4.8). Each package would
+  also need its own CI, coverage and docs
   configuration.
 - **A separate repository for the relatedness artifact.** Rejected: it would copy the bundle
   loading and validation, the decision tooling and the remote workflow, and two repositories

@@ -25,6 +25,7 @@ from naics_embedder.decision.candidates import CandidateList
 from naics_embedder.decision.decide import check_arm, check_margins_first
 from naics_embedder.decision.economic import (
     GROWTH_PANELS,
+    PAIRING_TOLERANCE,
     REFERENCE_COMPARATOR,
     check_economic_arm,
     check_economic_margins_first,
@@ -450,28 +451,143 @@ def test_every_run_of_an_arm_pairs_with_the_margin_read(arm, margins, store):
     ):
         check_reference_pairing(margins, arm.model_copy(update={'runs': [run, moved]}), store)
 
-@pytest.mark.parametrize('runs', [1, 2], ids=['one-run', 'second-of-two'])
-def test_a_reference_prediction_one_ulp_from_the_margin_reads_does_not_pair(
-    arm, margins, store, runs
-):
-    '''Spec :283: the reference pairs bit for bit, so one ulp on one prediction is a difference.'''
+def _reference_rows_of(frame):
+    '''The positions of the reference's rows in a stored predictions frame.'''
+
+    return [
+        index for index, name in enumerate(frame.get_column('comparator').to_list())
+        if name == REFERENCE_COMPARATOR
+    ]
+
+def _arm_with_edited_reference(arm, store, column, edit, runs=1):
+    '''
+    The arm whose last run holds ``edit(values, reference_rows)``'s result in ``column``; with
+    ``runs`` of 2 the run before it is the arm's own, which pairs.
+    '''
 
     (run, ) = arm.runs
-    predictions = store.read_frame(run.predictions)
-    values = predictions.get_column('prediction').to_numpy().copy()
-    first = predictions.get_column('comparator').to_list().index(REFERENCE_COMPARATOR)
-    original = values[first]
-    values[first] = np.nextafter(original, np.inf)
-    assert values[first] > original
-    nudged = predictions.with_columns(prediction=pl.Series(values))
-    moved = run.model_copy(update={'predictions': store.put_frame(nudged, 'predictions.parquet')})
-    record = arm.model_copy(update={'runs': [run] * (runs - 1) + [moved]})
+    frame = store.read_frame(run.predictions)
+    values = frame.get_column(column).to_numpy().copy()
+    edit(values, _reference_rows_of(frame))
+    edited = frame.with_columns(pl.Series(column, values))
+    moved = run.model_copy(update={'predictions': store.put_frame(edited, 'predictions.parquet')})
+    return arm.model_copy(update={'runs': [run] * (runs - 1) + [moved]})
+
+def _one_ulp_on_the_first_row(values, rows):
+    values[rows[0]] = np.nextafter(values[rows[0]], np.inf)
+
+def _the_read_difference_on_every_row(values, rows):
+    '''6.9e-16: the largest difference plan 19's first real read found, on macOS 27.2.1.'''
+
+    values[rows] += 6.9e-16
+
+def _half_the_tolerance_up_and_down(values, rows):
+    values[rows] += np.where(np.arange(len(rows)) % 2, 1, -1) * PAIRING_TOLERANCE / 2
+
+def _one_and_a_half_tolerances_on_the_first_row(values, rows):
+    values[rows[0]] += 1.5 * PAIRING_TOLERANCE
+
+def _two_tolerances_on_the_last_row(values, rows):
+    values[rows[-1]] += 2 * PAIRING_TOLERANCE
+
+def _two_tolerances_down_on_the_first_row(values, rows):
+    values[rows[0]] -= 2 * PAIRING_TOLERANCE
+
+def _the_larger_gap_on_the_first_row(values, rows):
+    values[rows[0]] += 2 * PAIRING_TOLERANCE
+    values[rows[-1]] += 1.5 * PAIRING_TOLERANCE
+
+def _the_larger_gap_on_the_last_row(values, rows):
+    values[rows[0]] += 1.5 * PAIRING_TOLERANCE
+    values[rows[-1]] += 2 * PAIRING_TOLERANCE
+
+def _not_a_number_on_one_row(values, rows):
+    values[rows[1]] = np.nan
+
+@pytest.mark.parametrize('runs', [1, 2], ids=['one-run', 'second-of-two'])
+@pytest.mark.parametrize(
+    'edit', [
+        _one_ulp_on_the_first_row,
+        _the_read_difference_on_every_row,
+        _half_the_tolerance_up_and_down,
+    ]
+)
+def test_a_reference_prediction_within_the_pairing_tolerance_pairs(arm, margins, store, runs, edit):
+    '''
+    Spec 4.8 as amended 2026-11-18: the reference pairs where each prediction is the margin read's
+    to within PAIRING_TOLERANCE, so the last-bit differences of another macOS version pair.
+    '''
+
+    record = _arm_with_edited_reference(arm, store, 'prediction', edit, runs)
+
+    check_reference_pairing(margins, record, store)
+
+@pytest.mark.parametrize('runs', [1, 2], ids=['one-run', 'second-of-two'])
+@pytest.mark.parametrize(
+    'edit', [
+        _one_and_a_half_tolerances_on_the_first_row,
+        _two_tolerances_on_the_last_row,
+        _two_tolerances_down_on_the_first_row,
+        _not_a_number_on_one_row,
+    ]
+)
+def test_a_reference_prediction_beyond_the_pairing_tolerance_does_not_pair(
+    arm, margins, store, runs, edit
+):
+    '''Every row and every run counts, and a number against a NaN is never within a tolerance.'''
+
+    record = _arm_with_edited_reference(arm, store, 'prediction', edit, runs)
 
     with pytest.raises(
         ValueError,
         match="^tree: its covariates\\+ancestors predictions differ from the margin read's"
     ):
         check_reference_pairing(margins, record, store)
+
+@pytest.mark.parametrize(
+    'edit', [_the_larger_gap_on_the_first_row, _the_larger_gap_on_the_last_row]
+)
+def test_the_refusal_names_the_largest_difference_and_the_tolerance(arm, margins, store, edit):
+    '''Two rows are beyond the tolerance, so the largest gap is neither the first nor the last.'''
+
+    record = _arm_with_edited_reference(arm, store, 'prediction', edit)
+
+    with pytest.raises(ValueError, match='by up to 2e-13, beyond the tolerance 1e-13'):
+        check_reference_pairing(margins, record, store)
+
+@pytest.mark.parametrize('column', ['outcome', 'alpha'])
+def test_only_the_prediction_has_a_pairing_tolerance(arm, margins, store, column):
+    '''
+    The outcome is data and alpha is the fit's choice; a difference of one ulp in either means
+    another row or another fit, not another rounding.
+    '''
+
+    record = _arm_with_edited_reference(arm, store, column, _one_ulp_on_the_first_row)
+
+    with pytest.raises(
+        ValueError,
+        match="^tree: its covariates\\+ancestors predictions differ from the margin read's"
+    ):
+        check_reference_pairing(margins, record, store)
+
+@pytest.mark.parametrize('change', ['a-missing-row', 'another-repeat'])
+def test_a_reference_with_other_rows_does_not_pair(arm, margins, store, change):
+    (run, ) = arm.runs
+    frame = store.read_frame(run.predictions)
+    first = _reference_rows_of(frame)[0]
+    if change == 'a-missing-row':
+        edited = frame.with_row_index('_row').filter(pl.col('_row') != first).drop('_row')
+    else:
+        repeat = frame.get_column('repeat').to_numpy().copy()
+        repeat[first] += 1
+        edited = frame.with_columns(pl.Series('repeat', repeat))
+    moved = run.model_copy(update={'predictions': store.put_frame(edited, 'predictions.parquet')})
+
+    with pytest.raises(
+        ValueError,
+        match="^tree: its covariates\\+ancestors predictions differ from the margin read's"
+    ):
+        check_reference_pairing(margins, arm.model_copy(update={'runs': [moved]}), store)
 
 # -------------------------------------------------------------------------------------------------
 # A deterministic candidate against the frozen list (§4.3, §4.4, §4.5, §4.8)

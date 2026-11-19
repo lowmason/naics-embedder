@@ -229,5 +229,5 @@ and fixed each panel's δ = 3 SD on the Mac before configuration selection
 
 The `uv.lock` freeze held through Stage 8's decision and was released when the representation
 split merged (`specs/naics-representation-split.md`, Req 19). Decisions pair reads only on
-bit-identical regressor rows, so the growth margin read and every economic candidate read share
-one platform and one `uv.lock`.
+identical regressor rows and reference predictions equal to within 1e-13, so the growth margin
+read and every economic candidate read share one `uv.lock` and run on macOS arm64.

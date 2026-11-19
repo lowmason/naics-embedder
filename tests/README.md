@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **112 unit** test files and **2 integration** files, with **4,491 collected
+The suite contains **112 unit** test files and **2 integration** files, with **4,509 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -39,7 +39,7 @@ tests/
 | Cache and outcome monitor | `test_monitor.py`: eval/no-grad refresh, detached candidates, live-anchor replacement, validation reads and durable records |
 | Selection-log guard | `test_selection_log_guard.py`: fail-closed refusals before appending reads or openings |
 | Regressor panel | `test_regressor_panel.py`, `test_regressor_qcew_rows.py`: level mode pinned at d61f49b, the growth outcome on the same rows and folds, and one seal per regime's split (Reqs 21–22) |
-| Economic decision | `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates' records and bit-identical pairing, eligibility, the tie order, margin-first refusals and the decision record (Req 24) |
+| Economic decision | `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates' records and the reference's tolerance pairing, eligibility, the tie order, margin-first refusals and the decision record (Req 24) |
 | ITA panel and text→code margin | `test_ita_split.py`, `test_ita_inputs.py`, `test_ita_scoring.py`, `test_ita_panel.py`, `test_decision_text_to_code.py`: the salted `description_key` split, input refusals, shortlist ranks and summaries, logged reads and sealed opening, and the margin and decision on the headline. All read `tests/fixtures/ita.py` tables only |
 | Training and contracts | `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`, `test_export.py`, `test_arm_encoder.py`: objective refusal, settings/directory/seed guards, saved constructor controls, CPU/MPS float64 callback transport and export/read provenance |
 | Campaign runner | `test_checkpoint_runner.py`: all-seed preflight, earliest best, epoch coverage, saved-score/version-sibling refusals and monitor-record pass-through |
