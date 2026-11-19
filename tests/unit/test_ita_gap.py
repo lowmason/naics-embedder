@@ -560,3 +560,11 @@ def test_the_records_refuse_unknown_keys_and_assignment(fixture_reads):
         record.recommend_training_part = True
     with pytest.raises(ValueError):
         record.arms[0].large = True
+
+def test_a_seed_without_a_matched_code_is_refused():
+    first = GapSeed(1, _per_pair(BASE_PAIRS), _census(BASE_CENSUS))
+    # The second seed's census lacks 311111, which the first seed matches
+    second = GapSeed(2, _per_pair(BASE_PAIRS), _census([('111110', 'q1', 1.0)]))
+
+    with pytest.raises(ValueError, match='holds no value'):
+        _gap([first, second], arm='euclidean-d16')
