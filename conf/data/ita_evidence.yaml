@@ -1,0 +1,21 @@
+# The ITA evidence pin (plan 20). This file copies embedding-data's specs/evaluation-protocol.md,
+# Section 1, Evidence table: the run whose tables a text-to-code read uses, and the SHA-256 of its
+# detached pin (outputs.json) and of its two pair tables. C1 checks the files against these values
+# before every read (panels/ita_evidence.py). Under C5 a new run is a new pin: the owner amends the
+# protocol's Evidence table first, and only then does this file change.
+
+# The embedding-data commit that last changed specs/evaluation-protocol.md
+protocol_commit: '63c06664bdcce3867e2ec76c2607683de1c4320d'
+
+# The first run, in data/derived/osha/establishment-targets/ (not the replay: its values are equal,
+# its bytes are not)
+run: stage10_ita_establishment_20261116_r1
+
+# The detached pin: the SHA-256 of the run's outputs.json
+outputs_sha256: 'e19b0d58f61f106c3994aa6fe51f4fb71244188145dd90f8cccaa8dc8a8b09df'
+
+# ita_text_pairs.parquet, 644,265 rows
+pairs_sha256: '60aad7642961e70b987e9d3222d660147861458e12ac52d71d2739d2d21e1e1c'
+
+# ita_text_pair_codes.parquet, 771,971 rows
+pair_codes_sha256: 'c8084e4ad297e3f78391e035ebe51119b07982639ae4daf47f1d47caeb1f8916'

@@ -1,6 +1,8 @@
+import dataclasses
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NamedTuple, Optional
 
 import click
@@ -25,6 +27,8 @@ from naics_embedder.decision.economic import (
     check_economic_arm,
     read_deterministic_arm,
 )
+from naics_embedder.decision.ita_gap import ItaGapRecord
+from naics_embedder.decision.ita_reads import ItaReferenceRead
 from naics_embedder.decision.records import (
     ArmRecord,
     DecisionRecord,
@@ -37,6 +41,7 @@ from naics_embedder.decision.records import (
 )
 from naics_embedder.decision.store import ArtifactStore, provenance_fields
 from naics_embedder.metrics.diagnostics import DiagnosticsReport
+from naics_embedder.panels.ita import ItaPanel
 from naics_embedder.panels.qcew_rows import RegressorOutcome
 from naics_embedder.panels.regressor import Regime, RegressorPanel, reference_comparators
 from naics_embedder.panels.selection_log import SelectionLog
@@ -45,6 +50,7 @@ from naics_embedder.panels.window_summaries import SummariesPin
 from naics_embedder.supervision.artifacts import sha256_file
 from naics_embedder.tree_model.builders import build_candidate
 from naics_embedder.utils.config import Config
+from naics_embedder.utils.validation import ValidationError
 from tests.fixtures.decision import spec, synthetic_arm, write_text_only
 from tests.fixtures.economic import (
     candidate_spec,
@@ -55,6 +61,16 @@ from tests.fixtures.economic import (
     write_candidate,
     write_candidate_list,
     write_codebook,
+)
+from tests.fixtures.ita import (
+    ITA_CANDIDATES,
+    ITA_SETTINGS,
+    AssignedStubEncoder,
+    IdentifiedStubEncoder,
+    gap_fixture,
+    ita_run_dir,
+    ita_tables,
+    outcome_beside_panel,
 )
 from tests.fixtures.regressor_panel import (
     CODEBOOK,
@@ -2264,3 +2280,472 @@ def test_the_economic_commands_refuse_a_candidate_list_that_is_not_yaml(
     assert f'Economic {command.split("-")[1]} failed: {broken} is not safe YAML' in output
     assert not (fresh.root / 'candidates').exists()
     _untouched(panel, loaded)
+
+# -------------------------------------------------------------------------------------------------
+# tools ita-read (plan 20)
+# -------------------------------------------------------------------------------------------------
+
+ITA_RUN = 'ita-gap/0123456789abcdef0123456789abcdef'
+ITA_PURPOSE = 'text-to-code reference gap read: fixture'
+
+class _ItaCalls(NamedTuple):
+    panels: list
+    outcome_panels: list
+    arms: list
+    stubs: list
+
+@pytest.fixture
+def ita_fixture(monkeypatch, tmp_path, default_config, validated_bundle):
+    '''
+    The pinned fixture run, its evidence file, and the panels and encoders the command loads.
+
+    ``ItaPanel.from_files`` builds the fixture panel on the log the command names, and records the
+    call; the outcome panel and both encoders are the fixture's, on the same log. The gate returns
+    the fixture bundle with the descriptions file's SHA-256 as its description fingerprint.
+    '''
+
+    pairs, codes, evidence = ita_run_dir(tmp_path / 'edata', *ita_tables())
+    evidence_file = tmp_path / 'ita_evidence.yaml'
+    evidence_file.write_text(yaml.safe_dump(evidence.model_dump()), encoding='utf-8')
+    descriptions = tmp_path / 'descriptions.parquet'
+    pl.DataFrame({'code': ['311111'], 'title': ['Dog food']}).write_parquet(descriptions)
+    bundle = dataclasses.replace(
+        validated_bundle,
+        manifest=validated_bundle.manifest.model_copy(
+            update={'description_fingerprint': sha256_file(descriptions)}
+        ),
+    )
+    calls = _ItaCalls([], [], [], [])
+
+    def fake_ita_panel(pairs_path, codes_path, bundle, settings, log_path):
+        calls.panels.append((Path(pairs_path), Path(codes_path), bundle, Path(settings)))
+        return ItaPanel(*ita_tables(), ITA_CANDIDATES, ITA_SETTINGS, SelectionLog(Path(log_path)))
+
+    def fake_outcome_panel(bundle, log_path):
+        calls.outcome_panels.append(bundle)
+        return outcome_beside_panel(SelectionLog(Path(log_path)))
+
+    def fake_arm(checkpoint, table, bundle, token_config, *, device):
+        calls.arms.append((checkpoint, table, bundle, device))
+        return IdentifiedStubEncoder()
+
+    def fake_stub(code_texts):
+        calls.stubs.append(code_texts)
+        return AssignedStubEncoder()
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', lambda cfg: bundle)
+    monkeypatch.setattr(tools_cli.ItaPanel, 'from_files', staticmethod(fake_ita_panel))
+    monkeypatch.setattr(tools_cli.OutcomePanel, 'from_bundle', staticmethod(fake_outcome_panel))
+    monkeypatch.setattr(tools_cli.ArmEncoder, 'from_files', staticmethod(fake_arm))
+    monkeypatch.setattr(tools_cli, 'LexicalTrigramEncoder', fake_stub)
+    monkeypatch.setattr(tools_cli, 'code_texts_from_descriptions', lambda frame: {'311111': 'x'})
+    monkeypatch.setattr(tools_cli, 'pick_device', lambda *_args: 'cpu')
+    return SimpleNamespace(
+        pairs=pairs,
+        codes=codes,
+        evidence=evidence,
+        evidence_file=evidence_file,
+        descriptions=descriptions,
+        bundle=bundle,
+        log=tmp_path / 'logs' / 'selection_log.jsonl',
+        store=tmp_path / 'store',
+        output=tmp_path / 'records' / 'read.json',
+        calls=calls,
+    )
+
+def _ita_read(runner, fixture, *arguments, purpose=ITA_PURPOSE, run=ITA_RUN):
+    return runner.invoke(
+        tools_cli.app,
+        [
+            'ita-read', '--pairs',
+            str(fixture.pairs), '--pair-codes',
+            str(fixture.codes), '--run', run, '--purpose', purpose, '--store',
+            str(fixture.store), '--output',
+            str(fixture.output), '--evidence',
+            str(fixture.evidence_file), '--log',
+            str(fixture.log), '--descriptions',
+            str(fixture.descriptions), *arguments
+        ],
+    )
+
+_D16_OPTIONS = (
+    '--arm', 'euclidean-d16', '--seed', '2', '--checkpoint', 'arm.ckpt', '--table', 'arm.parquet'
+)
+
+def _ita_output(result) -> str:
+    return click.unstyle(result.output).replace('\n', '')
+
+@pytest.mark.unit
+def test_ita_read_writes_the_record_and_logs_the_reads(runner, ita_fixture):
+    result = _ita_read(runner, ita_fixture, '--arm', 'lexical-stub', '--outcome')
+
+    assert result.exit_code == 0, result.output
+    ita_entry, outcome_entry = SelectionLog(ita_fixture.log).records()
+    assert (ita_entry['panel'], outcome_entry['panel']) == ('ita_text', 'outcome')
+    for entry in (ita_entry, outcome_entry):
+        assert (entry['split'], entry['purpose']) == ('validation', ITA_PURPOSE)
+        assert (entry['detail']['arm'], entry['detail']['role'], entry['detail']['run']) == (
+            'lexical-stub', 'reference', ITA_RUN
+        )
+    record = read_record(ita_fixture.output, ItaReferenceRead)
+    assert (record.arm, record.seed, record.run) == ('lexical-stub', None, ITA_RUN)
+    assert record.evidence == ita_fixture.evidence
+    assert record.outcome is not None
+    assert record.log_records == [ita_entry, outcome_entry]
+    assert ita_fixture.calls.stubs == [{'311111': 'x'}]
+    assert ita_fixture.calls.arms == []
+    output = _ita_output(result)
+    assert f'headline: mrr {record.headline["mrr"]:.4f}' in output
+    assert f'outcome: mrr {record.outcome.summary["mrr"]:.4f}' in output
+
+@pytest.mark.unit
+def test_ita_read_reads_a_d16_seed_with_its_identities(runner, ita_fixture):
+    result = _ita_read(runner, ita_fixture, *_D16_OPTIONS)
+
+    assert result.exit_code == 0, result.output
+    assert ita_fixture.calls.arms == [('arm.ckpt', 'arm.parquet', ita_fixture.bundle, 'cpu')]
+    assert ita_fixture.calls.stubs == []
+    assert ita_fixture.calls.outcome_panels == []
+    [entry] = SelectionLog(ita_fixture.log).records()
+    assert (entry['detail']['seed'], entry['detail']['checkpoint'], entry['detail']['table']) == (
+        2, 'c' * 64, 't' * 64
+    )
+    record = read_record(ita_fixture.output, ItaReferenceRead)
+    assert (record.arm, record.seed, record.outcome) == ('euclidean-d16', 2, None)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('arm', ['lexical-stub', 'euclidean-d16'])
+def test_ita_read_dry_run_logs_and_writes_nothing(runner, ita_fixture, arm):
+    arguments = ('--arm', 'lexical-stub', '--outcome') if arm == 'lexical-stub' else _D16_OPTIONS
+
+    result = _ita_read(runner, ita_fixture, *arguments, '--dry-run')
+
+    assert result.exit_code == 0, result.output
+    output = _ita_output(result)
+    named = 'lexical-stub' if arm == 'lexical-stub' else 'euclidean-d16 seed 2'
+    assert f'Dry run: every check passed for {named}' in output
+    panel = ItaPanel(*ita_tables(), ITA_CANDIDATES, ITA_SETTINGS, SelectionLog(Path('unused')))
+    validation = panel.pairs.filter(pl.col('part') == 'validation').height
+    assert f'validation pairs: {validation}' in output
+    assert panel.data_fingerprint('validation') in output
+    assert panel.fingerprint in output
+    encoder = 'AssignedStubEncoder' if arm == 'lexical-stub' else 'IdentifiedStubEncoder'
+    assert f'encoder: {encoder}, distance cosine' in output
+    beside = outcome_beside_panel(SelectionLog(Path('unused')))
+    if arm == 'lexical-stub':
+        assert f'outcome fingerprint: {beside.fingerprint}' in output
+        assert f'outcome validation data fingerprint: {beside.data_fingerprint("validation")}' in (
+            output
+        )
+    else:
+        assert 'outcome fingerprint' not in output
+    assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+    assert not ita_fixture.output.exists()
+    assert not (ita_fixture.store / 'objects').exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize('arm', ['lexical-stub', 'euclidean-d16'])
+def test_ita_read_dry_run_creates_no_directory(runner, ita_fixture, arm):
+    # Gate A's dry runs name the real --output, whose directory must still be absent after them
+    arguments = ('--arm', 'lexical-stub', '--outcome') if arm == 'lexical-stub' else _D16_OPTIONS
+
+    result = _ita_read(runner, ita_fixture, *arguments, '--dry-run')
+
+    assert result.exit_code == 0, result.output
+    assert not ita_fixture.output.parent.exists()
+    assert not ita_fixture.store.exists()
+
+@pytest.mark.unit
+def test_ita_read_dry_run_refuses_an_existing_output(runner, ita_fixture):
+    ita_fixture.output.parent.mkdir(parents=True)
+    ita_fixture.output.write_text('{}\n', encoding='utf-8')
+
+    result = _ita_read(runner, ita_fixture, '--arm', 'lexical-stub', '--dry-run')
+
+    assert result.exit_code == 1
+    assert 'exists' in _ita_output(result)
+    assert 'Dry run' not in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+    assert ita_fixture.output.read_text(encoding='utf-8') == '{}\n'
+
+@pytest.mark.unit
+def test_ita_read_refuses_unpinned_tables_and_logs_nothing(runner, ita_fixture):
+    other = ita_fixture.evidence.model_copy(update={'pairs_sha256': 'f' * 64})
+    ita_fixture.evidence_file.write_text(yaml.safe_dump(other.model_dump()), encoding='utf-8')
+
+    result = _ita_read(runner, ita_fixture, '--arm', 'lexical-stub', '--outcome')
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert 'C1' in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+    assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+    assert not ita_fixture.output.exists()
+
+@pytest.mark.unit
+@pytest.mark.parametrize('dry_run', [False, True], ids=['read', 'dry-run'])
+def test_ita_read_refuses_stub_descriptions_that_are_not_the_bundles(
+    runner, ita_fixture, tmp_path, dry_run
+):
+    other = tmp_path / 'other_descriptions.parquet'
+    pl.DataFrame({'code': ['311111'], 'title': ['Cat food']}).write_parquet(other)
+    ita_fixture.descriptions = other
+    arguments = ('--arm', 'lexical-stub', '--outcome') + (('--dry-run', ) if dry_run else ())
+
+    result = _ita_read(runner, ita_fixture, *arguments)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    output = _ita_output(result)
+    assert 'descriptions' in output
+    assert sha256_file(other) in output
+    assert ita_fixture.bundle.manifest.description_fingerprint in output
+    assert 'Dry run' not in output
+    assert ita_fixture.calls.stubs == []
+    assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+    assert not ita_fixture.store.exists()
+    assert not ita_fixture.output.exists()
+
+@pytest.mark.unit
+def test_ita_read_refuses_the_replay_run_and_logs_nothing(runner, ita_fixture):
+    replay = ita_fixture.pairs.parent.with_name(ita_fixture.pairs.parent.name + '_replay')
+    shutil.copytree(ita_fixture.pairs.parent, replay)
+    ita_fixture.pairs = replay / ita_fixture.pairs.name
+    ita_fixture.codes = replay / ita_fixture.codes.name
+
+    result = _ita_read(runner, ita_fixture, '--arm', 'lexical-stub')
+
+    assert result.exit_code == 1
+    assert 'run' in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    'arguments, message',
+    [
+        (('--arm', 'lexical-stub', '--seed', '1'), '--seed'),
+        (('--arm', 'lexical-stub', '--checkpoint', 'arm.ckpt'), '--checkpoint'),
+        (('--arm', 'lexical-stub', '--table', 'arm.parquet'), '--table'),
+        (
+            ('--arm', 'euclidean-d16', '--checkpoint', 'arm.ckpt', '--table', 'arm.parquet'),
+            '--seed'
+        ),
+        (('--arm', 'euclidean-d16', '--seed', '1', '--table', 'arm.parquet'), '--checkpoint'),
+        (('--arm', 'euclidean-d16', '--seed', '1', '--checkpoint', 'arm.ckpt'), '--table'),
+        (
+            (
+                '--arm', 'euclidean-d16', '--seed', '0', '--checkpoint', 'arm.ckpt', '--table',
+                'arm.parquet'
+            ), '--seed'
+        ),
+        (
+            (
+                '--arm', 'euclidean-d16-s1', '--seed', '1', '--checkpoint', 'arm.ckpt', '--table',
+                'arm.parquet'
+            ), '--arm'
+        ),
+    ],
+    ids=[
+        'stub-seed', 'stub-checkpoint', 'stub-table', 'd16-no-seed', 'd16-no-checkpoint',
+        'd16-no-table', 'd16-seed-0', 'seeded-arm-name'
+    ],
+)
+def test_ita_read_refuses_d16_options_on_the_stub_and_their_absence_on_d16(
+    runner, ita_fixture, arguments, message
+):
+    result = _ita_read(runner, ita_fixture, *arguments)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert message in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+    assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+
+@pytest.mark.unit
+@pytest.mark.parametrize('blank', ['purpose', 'run'])
+def test_ita_read_refuses_a_blank_purpose_or_run(runner, ita_fixture, blank):
+    result = _ita_read(runner, ita_fixture, '--arm', 'lexical-stub', **{blank: '  '})
+
+    assert result.exit_code == 1
+    assert f'--{blank}' in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+
+@pytest.mark.unit
+def test_ita_read_refuses_an_existing_output_before_reading(runner, ita_fixture):
+    ita_fixture.output.parent.mkdir(parents=True)
+    ita_fixture.output.write_text('{}\n', encoding='utf-8')
+
+    result = _ita_read(runner, ita_fixture, '--arm', 'lexical-stub')
+
+    assert result.exit_code == 1
+    assert 'exists' in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+    assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+    assert ita_fixture.output.read_text(encoding='utf-8') == '{}\n'
+
+@pytest.mark.unit
+def test_ita_read_prints_a_bracketed_error_literally(monkeypatch, runner, ita_fixture):
+
+    def refusing_panel(*_args):
+        raise ValueError('[/x] bad')
+
+    monkeypatch.setattr(tools_cli.ItaPanel, 'from_files', staticmethod(refusing_panel))
+
+    result = _ita_read(runner, ita_fixture, '--arm', 'lexical-stub')
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert '[/x] bad' in _ita_output(result)
+
+@pytest.mark.unit
+@pytest.mark.parametrize('dry_run', [False, True], ids=['read', 'dry-run'])
+def test_ita_read_reports_a_bundle_failure_and_logs_nothing(
+    monkeypatch, runner, ita_fixture, dry_run
+):
+
+    def refusing_gate(cfg):
+        raise ValidationError('Descriptions input does not match the supervision bundle')
+
+    monkeypatch.setattr(tools_cli, 'require_valid_supervision_bundle', refusing_gate)
+    arguments = ('--arm', 'lexical-stub', '--outcome') + (('--dry-run', ) if dry_run else ())
+
+    result = _ita_read(runner, ita_fixture, *arguments)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert 'Descriptions input does not match the supervision bundle' in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+    assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
+    assert not ita_fixture.output.exists()
+
+# -------------------------------------------------------------------------------------------------
+# tools ita-gap (plan 20)
+# -------------------------------------------------------------------------------------------------
+
+def _ita_gap(runner, paths, stage8_path, store, output):
+    reads = [argument for path in paths for argument in ('--read', str(path))]
+    return runner.invoke(
+        tools_cli.app,
+        [
+            'ita-gap', *reads, '--stage8',
+            str(stage8_path), '--store',
+            str(store.root), '--output',
+            str(output)
+        ],
+    )
+
+@pytest.mark.unit
+def test_ita_gap_writes_the_record_and_logs_nothing(runner, tmp_path):
+    store = ArtifactStore(tmp_path / 'store')
+    paths, stage8_path = gap_fixture(store, tmp_path / 'fixture')
+    logs_before = sorted((tmp_path / 'fixture' / 'logs').iterdir())
+    lines_before = {path: path.read_text() for path in logs_before}
+    output = tmp_path / 'gap' / 'gap.json'
+
+    result = _ita_gap(runner, paths, stage8_path, store, output)
+
+    assert result.exit_code == 0, result.output
+    record = read_record(output, ItaGapRecord)
+    assert [arm.arm for arm in record.arms] == ['lexical-stub', 'euclidean-d16']
+    assert (record.replicates, record.bootstrap_seed, record.r) == (10000, 20260924, 0.05)
+    printed = _ita_output(result)
+    answer = 'yes' if record.recommend_training_part else 'no'
+    assert f'Recommend a later ITA training part (D2): {answer}' in printed
+    for arm in record.arms:
+        assert f'matched codes: {arm.n_matched_codes}, unmatched codes: ' in printed
+        lower, upper = arm.matched_headline_gap.interval
+        assert (
+            f'matched_headline_gap: {arm.matched_headline_gap.point:.4f} '
+            f'[{lower:.4f}, {upper:.4f}]'
+        ) in printed
+    # No read: the fixture's logs are as they were, and no other log appeared
+    assert sorted((tmp_path / 'fixture' / 'logs').iterdir()) == logs_before
+    assert {path: path.read_text() for path in logs_before} == lines_before
+    assert not (tmp_path / 'logs').exists()
+
+@pytest.mark.unit
+def test_ita_gap_refuses_an_existing_output(runner, tmp_path):
+    store = ArtifactStore(tmp_path / 'store')
+    paths, stage8_path = gap_fixture(store, tmp_path / 'fixture')
+    output = tmp_path / 'gap.json'
+    output.write_text('{}\n', encoding='utf-8')
+
+    result = _ita_gap(runner, paths, stage8_path, store, output)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert 'exists' in _ita_output(result)
+    assert output.read_text(encoding='utf-8') == '{}\n'
+
+@pytest.mark.unit
+def test_ita_gap_refuses_reads_that_do_not_pair_without_writing(runner, tmp_path):
+    store = ArtifactStore(tmp_path / 'store')
+    paths, stage8_path = gap_fixture(store, tmp_path / 'fixture')
+    output = tmp_path / 'gap.json'
+
+    result = _ita_gap(runner, paths[1:], stage8_path, store, output)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "the reads hold arms ['euclidean-d16']" in _ita_output(result)
+    assert not output.exists()
+
+@pytest.mark.unit
+def test_ita_gap_refuses_an_existing_output_before_reading(monkeypatch, runner, tmp_path):
+    calls = []
+    monkeypatch.setattr(tools_cli, 'gap_record', lambda *args, **kwargs: calls.append(args))
+    output = tmp_path / 'gap.json'
+    output.write_text('{}\n', encoding='utf-8')
+    store = ArtifactStore(tmp_path / 'store')
+
+    result = _ita_gap(runner, [tmp_path / 'read.json'], tmp_path / 'stage8.json', store, output)
+
+    assert result.exit_code == 1
+    assert calls == []
+
+@pytest.mark.unit
+def test_ita_gap_takes_r_from_the_settings(runner, tmp_path):
+    store = ArtifactStore(tmp_path / 'store')
+    paths, stage8_path = gap_fixture(store, tmp_path / 'fixture')
+    settings = tmp_path / 'ita_panel.yaml'
+    settings.write_text(
+        yaml.safe_dump({
+            **ITA_SETTINGS.model_dump(), 'relative_margin': 0.1
+        }), encoding='utf-8'
+    )
+    output = tmp_path / 'gap.json'
+    reads = [argument for path in paths for argument in ('--read', str(path))]
+
+    result = runner.invoke(
+        tools_cli.app,
+        [
+            'ita-gap', *reads, '--stage8',
+            str(stage8_path), '--store',
+            str(store.root), '--output',
+            str(output), '--settings',
+            str(settings)
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    record = read_record(output, ItaGapRecord)
+    assert record.r == 0.1
+    for arm in record.arms:
+        assert arm.threshold == pytest.approx(0.1 * arm.census.point)
+
+@pytest.mark.unit
+def test_ita_gap_prints_a_bracketed_error_literally(monkeypatch, runner, tmp_path):
+
+    def refusing(*_args, **_kwargs):
+        raise ValueError('[/x] bad')
+
+    monkeypatch.setattr(tools_cli, 'gap_record', refusing)
+    store = ArtifactStore(tmp_path / 'store')
+
+    result = _ita_gap(
+        runner, [tmp_path / 'read.json'], tmp_path / 'stage8.json', store, tmp_path / 'gap.json'
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert '[/x] bad' in _ita_output(result)
