@@ -2419,6 +2419,14 @@ def test_ita_read_dry_run_logs_and_writes_nothing(runner, ita_fixture, arm):
     assert panel.fingerprint in output
     encoder = 'AssignedStubEncoder' if arm == 'lexical-stub' else 'IdentifiedStubEncoder'
     assert f'encoder: {encoder}, distance cosine' in output
+    beside = outcome_beside_panel(SelectionLog(Path('unused')))
+    if arm == 'lexical-stub':
+        assert f'outcome fingerprint: {beside.fingerprint}' in output
+        assert f'outcome validation data fingerprint: {beside.data_fingerprint("validation")}' in (
+            output
+        )
+    else:
+        assert 'outcome fingerprint' not in output
     assert not ita_fixture.log.exists() or SelectionLog(ita_fixture.log).records() == []
     assert not ita_fixture.output.exists()
     assert not (ita_fixture.store / 'objects').exists()
