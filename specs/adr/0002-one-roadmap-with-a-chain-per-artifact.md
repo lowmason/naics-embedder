@@ -31,12 +31,16 @@ These facts drive the choice:
    predictions match the 2026-10-17 margin read to within 1e-13 (economic-candidates §4.8,
    amended 2026-11-18 from "bit for bit"), under `uv.lock` 6de4fbdc (ADR 0001,
    Context). A stage in another chain that changes the lock, for example to add a graph library
-   for relatedness, can stop that pairing.
+   for relatedness, can stop that pairing. Amended 2026-11-19: Stage 3 adopted no candidate, and
+   no economic read is planned, so this constraint lapsed
+   (`specs/naics-artifact-redesign-roadmap.md`, Decisions, 2026-11-19).
 5. **The embedding roadmap still holds related stages.** Stage 9 is held, Stages 10–11 are
    parked, and Stage 12 holds one sealed opening per judged artifact. Req 28 places text→code's
    sealed opening in that Stage 12, and it gives Stage 9's ablations to text→code. Stage 12's
    amendment at the eighth resume places the economic opening there too. Req 27 leaves
-   relatedness's opening to its own stage spec.
+   relatedness's opening to its own stage spec. Amended 2026-11-19: the embedding roadmap's tenth
+   resume lapsed the economic opening, and the relatedness spec put its opening in its own chain,
+   the redesign roadmap's Stage 7b (U45). Stage 12 now holds text→code's opening only.
 
 ## Decision
 
@@ -56,12 +60,16 @@ stages of its own artifact's chain. A blocked chain therefore never holds back a
 - **Negative:**
   - The lock constraint is a dependency between chains that `Consumes` cannot show. Before the
     economic decision, each stage spec that changes `uv.lock` must say how the economic reads
-    still pair, for example by running them from a checkout at lock 6de4fbdc.
+    still pair, for example by running them from a checkout at lock 6de4fbdc. Amended
+    2026-11-19: the economic decision exists, and no economic read is planned, so the constraint
+    lapsed. A later economic read needs its own spec, which says how it pairs.
   - The text→code and economic chains both build on `text_model/` (ADR 0001). A change that one
     chain makes there reaches the other chain's next training run.
   - The text→code and economic openings sit in another roadmap, the embedding roadmap's Stage 12.
     If the relatedness stage spec puts its opening there too, that stage cannot tick while
-    relatedness is parked.
+    relatedness is parked. Amended 2026-11-19: relatedness's opening is in its own chain (U45),
+    and the economic opening lapsed, so only text→code's opening sits there now. A parked
+    relatedness chain does not hold it.
   - derive-roadmap counts an input as met unless a Handoff or a stamp shows it missing. A gate in
     embedding-data has neither, so each resume checks those gates by hand. Otherwise it can hand
     off a stage that cannot run yet.
@@ -96,5 +104,5 @@ them. Revisit it with a superseding ADR if:
 - one chain comes to need another chain's output, for example if relatedness becomes an economic
   candidate (Req 29, Later);
 - the embedding roadmap's Stage 12 holds back text→code's or the economic sealed opening, for
-  example while it waits for another artifact;
+  example while it waits for another artifact (amended 2026-11-19: the economic opening lapsed);
 - embedding-data's owner does not amend R8.4, so the relatedness chain parks.

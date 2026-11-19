@@ -5,7 +5,8 @@
 > this document wholesale.
 
 **Status: APPROVED (2026-09-23); resumed three times on 2026-09-24, once on 2026-10-03, twice
-on 2026-10-04, once on 2026-10-07, once on 2026-10-12 and once on 2026-11-14.** Derived in a
+on 2026-10-04, once on 2026-10-07, once on 2026-10-12, once on 2026-11-14 and once on
+2026-11-19.** Derived in a
 session that could not ask questions, then the six open questions were answered interactively
 and the eleven-stage partition approved at the human checkpoint
 (decisions D1–D6 below). Stages 1–8 and 6b are complete. The first resume re-validated Stages 2–11
@@ -23,9 +24,12 @@ with completed Plan 10 and the post-merge handoffs (below). The eighth reconcile
 recorded the representation split, user adjudication Q3: Stage 9 is held, Stages 10–11 are
 parked and Stage 12 is one sealed opening per judged artifact (below). The ninth recorded the
 artifact redesign, user adjudication Q4 (`specs/naics-artifact-redesign.md`): the artifacts are
-relatedness, text→code and economic, and the tree is their codebook (below). No stage here routes
-now. The redesign's stages are in `specs/naics-artifact-redesign-roadmap.md`, and the economic
-artifact's first stages are done (`specs/completed/naics-representation-split-roadmap.md`).
+relatedness, text→code and economic, and the tree is their codebook (below). The tenth recorded
+the redesign's economic decision: no candidate was adopted, so Stage 12 has no economic opening,
+and relatedness's opening is in its own chain (below). No stage here routes now. The redesign's
+stages are in `specs/naics-artifact-redesign-roadmap.md`. The economic artifact's first stages are
+done (`specs/completed/naics-representation-split-roadmap.md`), and its chain ended at the
+redesign roadmap's Stage 3 with no candidate adopted.
 
 **Basis.** Source spec `specs/naics-embedding.md` at d9126ce, unchanged through origin/main
 8057916. Evidence was read at origin/main 620bee2 plus the two held, never-pushed config commits
@@ -282,6 +286,30 @@ approval at the redesign's derivation (`specs/naics-artifact-redesign-roadmap.md
 The deferred entries that the eighth resume routed to Stages 9–11 follow the same moves (redesign
 roadmap, Deferred items). `specs/deferred_items.md` was read, not edited. The Gap analysis was
 not re-read. No panel read, selection-log read or opening ran during this resume.
+
+**Resume after the redesign's economic decision (2026-11-19).** No stage here has completed since
+the ninth resume, so no stamp is new. The redesign roadmap's Stage 3 completed on 2026-11-18 (plan
+19, merged as PR #173, b4a8823). Its Handoff names this roadmap's Stage 12 as its only consumer
+(`specs/plans/completed/19-economic-decision-read.md`, Handoff to later stages). This resume
+records it, with the user's answers at the redesign roadmap's resume of the same day
+(`specs/naics-artifact-redesign-roadmap.md`, Decisions, 2026-11-19):
+
+- No economic candidate was adopted, and the reference `covariates+ancestors` stands (decision
+  record `economic`, SHA-256 3d510fa3…; `specs/findings/economic-decision.md`). Stage 12 has no
+  economic opening. Neither growth regime's outer set opens, and both stay sealed for a later
+  economic round, which needs its own spec (amended in its entry).
+- The lock constraint lapsed, because no economic read is planned. Other chains may change
+  `uv.lock`. Plan 19's Handoff names the environment that a later economic read pairs under: macOS
+  arm64, Python 3.12.12, numpy 2.3.4 on Accelerate and `uv.lock` 6de4fbdc, with the reference's
+  predictions within 1e-13 of the margin read's.
+- Relatedness's opening is in its own chain, the redesign roadmap's Stage 7b (U45,
+  `specs/relatedness-artifact.md` §4.8). Stage 12 keeps text→code's opening only, so a parked
+  relatedness chain does not hold it.
+
+Plan 19's Handoff and the finding say that Stage 12 opens each outer set once. They are records
+and stay unedited, and this resume supersedes that line. `specs/deferred_items.md` was read, not
+edited. The Gap analysis was not re-read. No panel read, selection-log read or opening ran during
+this resume.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -1133,6 +1161,17 @@ differs from its own.
       opening goes where its own stage spec puts it (Req 27). If that is here, this stage cannot
       tick while relatedness is parked (`specs/adr/0002-one-roadmap-with-a-chain-per-artifact.md`).
       The economic opening is unchanged.
+      Amended at the tenth resume (2026-11-19), from plan 19's Handoff and the redesign roadmap's
+      Decisions of 2026-11-19. The redesign's economic decision adopted no candidate, so there is
+      no economic table to open. The economic opening lapses: neither growth regime's outer set
+      opens here, and both stay sealed for a later economic round. This supersedes the eighth
+      resume's economic clause and the ninth's "The economic opening is unchanged". The fields'
+      regressor parts (the QCEW slices, `RegressorPanel.open_outer` and the outer sets) now serve
+      no artifact. Text→code's spec keeps the outcome test split sealed here (U38,
+      `specs/completed/text-to-code-ita-panel.md:241`), so `OutcomePanel.open_test` serves none
+      either. Relatedness's opening is the redesign roadmap's Stage 7b, in its own chain (U45), so
+      this stage keeps text→code's opening of the ITA sealed part only. A parked relatedness chain
+      does not hold it.
 
 ## Stage-spec stamp
 
