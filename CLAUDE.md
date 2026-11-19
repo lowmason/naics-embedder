@@ -216,7 +216,9 @@ curriculum. The outcome and two regressor panels decide adoption under Req 5.
 Text→code's own judge is the ITA panel (`ita_text`, `panels/ita.py`), which scores ITA
 employer-written descriptions. Its pairs split by a salted hash of `description_key` into a
 validation part, which selects, and a sealed part. The sealed part opens only through
-`ItaPanel.open_sealed` and is read once, at embedding roadmap Stage 12. The outcome panel's
+`ItaPanel.open_sealed` and is read once, at embedding roadmap Stage 12. Stage 4 measured the gap
+between Census phrases and owner text on the validation part on 2026-11-19
+(`specs/findings/text-to-code-gap.md`), as a development measurement. The outcome panel's
 validation split is reported beside it and decides nothing for text→code, and its test split
 stays sealed. No ITA pair enters training, and no code or test reads a real pair.
 `tools ita-read` reads a reference arm on the ITA validation part after checking the pinned

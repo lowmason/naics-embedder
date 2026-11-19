@@ -1,5 +1,7 @@
 # Text→code Reference Read and Gap Implementation Plan
 
+**Status: COMPLETE (2026-11-19)** — executed via executing-plans; deferred items in specs/deferred_items.md
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -288,7 +290,7 @@ No other source, config or lock file changes. These stay identical to BASE: `pan
 
 ## Pre-flight (controller, inline, before Task 1)
 
-- [ ] **Step 1: The hold and the workspace**
+- [x] **Step 1: The hold and the workspace**
 
 ```bash
 git -c core.fsmonitor=false fetch origin
@@ -300,7 +302,7 @@ git rev-parse origin/main
 Expected: `exit=0`, and one `Stage 3: COMPLETE (…)` stamp line. Without the stamp, stop (D3).
 Record the SHA as BASE in the ledger.
 
-- [ ] **Step 2: Parallel work**
+- [x] **Step 2: Parallel work**
 
 ```bash
 git -c core.fsmonitor=false worktree list
@@ -314,7 +316,7 @@ List the commits, which are plan 19's and any others, in the ledger. Note any pl
 `tools.py` or `text_model/export.py`. Worktrees under `~/Projects/copilot-worktrees/` are review
 tooling, not sessions.
 
-- [ ] **Step 3: Re-read the gates in embedding-data**
+- [x] **Step 3: Re-read the gates in embedding-data**
 
 ```bash
 cd /Users/lowell/Projects/embedding-data && git -c core.fsmonitor=false fetch origin && git rev-parse origin/main
@@ -327,7 +329,7 @@ time, the only change since `fd9e495` was `63c0666`'s copied-pair counts. Record
 EDATA_SHA. Read each changed file in full. A change to the Evidence table, to C1–C6, to the Stage
 10 amendment's validation-part allowance (G2) or to the V9 minimum (G3) is a stop (C5).
 
-- [ ] **Step 4: The files on disk**
+- [x] **Step 4: The files on disk**
 
 ```bash
 cd /Users/lowell/Projects/embedding-data/data/derived/osha/establishment-targets/stage10_ita_establishment_20261116_r1 && shasum -a 256 outputs.json ita_text_pairs.parquet ita_text_pair_codes.parquet
@@ -336,7 +338,7 @@ cd /Users/lowell/Projects/naics-embedder && shasum -a 256 uv.lock data/naics_des
 
 Expected: every SHA-256 is the pinned one. Hashing reads no pair.
 
-- [ ] **Step 5: The ledger and SCRATCH**
+- [x] **Step 5: The ledger and SCRATCH**
 
 ```bash
 mkdir -p logs /tmp/naics_plan20
@@ -382,7 +384,7 @@ the three SHA-256. Its header comment says that the file copies embedding-data's
 before every read, and that under C5 a new run waits for the owner's amendment there before this
 file changes.
 
-- [ ] **Step 1: Write the failing tests** in `tests/unit/test_ita_evidence.py`
+- [x] **Step 1: Write the failing tests** in `tests/unit/test_ita_evidence.py`
 
 ```python
 def test_the_committed_pin_is_the_protocols():
@@ -408,19 +410,19 @@ def test_a_missing_or_other_outputs_file_is_refused(tmp_path): ...
 def test_an_evidence_file_with_an_unknown_key_or_a_short_hash_is_refused(tmp_path): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `uv run pytest tests/unit/test_ita_evidence.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'naics_embedder.panels.ita_evidence'`.
 
-- [ ] **Step 3: Implement the module, the config file and the fixture helper**
+- [x] **Step 3: Implement the module, the config file and the fixture helper**
 
-- [ ] **Step 4: Run them to see them pass**
+- [x] **Step 4: Run them to see them pass**
 
 Run: `uv run pytest tests/unit/test_ita_evidence.py tests/unit/test_ita_panel.py -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 ./scripts/format_code.sh src/naics_embedder/panels/ita_evidence.py tests/unit/test_ita_evidence.py tests/fixtures/ita.py
@@ -507,7 +509,7 @@ escaped (`rich.markup.escape`) message and logs nothing:
 
 It catches `OSError`, `ValueError`, `ValidationError` and `SealedSplitError`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/unit/test_ita_reads.py`, with `ItaPanel(*ita_tables(), ITA_CANDIDATES, ITA_SETTINGS,
 SelectionLog(tmp_path / 'log.jsonl'))`, a store under `tmp_path` and Task 1's evidence:
@@ -569,14 +571,16 @@ def test_ita_read_prints_a_bracketed_error_literally(): ...
     # a ValueError('[/x] bad') from the panel: exit 1, '[/x] bad' printed, no MarkupError
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `uv run pytest tests/unit/test_ita_reads.py tests/unit/test_cli_commands.py -q -k 'ita'`
 Expected: FAIL with `ModuleNotFoundError: No module named 'naics_embedder.decision.ita_reads'`.
 
-- [ ] **Step 3: Implement `decision/ita_reads.py`, the fixture helpers and `tools ita-read`**
+- [x] **Step 3: Implement `decision/ita_reads.py`, the fixture helpers and `tools ita-read`**
 
-- [ ] **Step 4: Run them to see them pass**
+> Deviation: under `--outcome` the dry run also prints the outcome fingerprints, and a d16 seed below 1 is refused up front (ledgered rulings). Final-review fixes then made a dry run create no directory (e6e9024), check the stub's descriptions against the bundle (57d9669) and test the bundle-failure clause (30f7741).
+
+- [x] **Step 4: Run them to see them pass**
 
 ```bash
 uv run pytest tests/unit/test_ita_reads.py tests/unit/test_cli_commands.py tests/unit/test_ita_panel.py tests/unit/test_decision_text_to_code.py -q
@@ -584,7 +588,7 @@ uv run pytest tests/unit/test_ita_reads.py tests/unit/test_cli_commands.py tests
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 ./scripts/format_code.sh src/naics_embedder/decision/ita_reads.py src/naics_embedder/cli/commands/tools.py tests/fixtures/ita.py tests/unit/test_ita_reads.py tests/unit/test_cli_commands.py
@@ -687,7 +691,7 @@ each gap with its interval, `n_matched_codes`, `n_unmatched_codes`, the threshol
 Then it prints `Recommend a later ITA training part (D2): yes|no`. Refusals exit 1 with an
 escaped message.
 
-- [ ] **Step 1: Write the failing tests** in `tests/unit/test_ita_gap.py`
+- [x] **Step 1: Write the failing tests** in `tests/unit/test_ita_gap.py`
 
 ```python
 def test_points_are_the_means_and_their_differences():
@@ -734,14 +738,16 @@ def test_ita_gap_writes_the_record_and_logs_nothing(): ...
 def test_ita_gap_refuses_an_existing_output(): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
 
 Run: `uv run pytest tests/unit/test_ita_gap.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'naics_embedder.decision.ita_gap'`.
 
-- [ ] **Step 3: Implement `decision/ita_gap.py`, `gap_fixture` and `tools ita-gap`**
+- [x] **Step 3: Implement `decision/ita_gap.py`, `gap_fixture` and `tools ita-gap`**
 
-- [ ] **Step 4: Run them to see them pass**
+> Deviation: `arm_gap` and `gap_record` add refusals the plan does not list (no copied or headline pair, no matched code, a seed without a matched code's values, two reads with one file name), and `gap_fixture` gives the d16 runs real outcome rows; ledgered rulings.
+
+- [x] **Step 4: Run them to see them pass**
 
 ```bash
 uv run pytest tests/unit/test_ita_gap.py tests/unit/test_ita_reads.py tests/unit/test_cli_commands.py -q
@@ -749,7 +755,7 @@ uv run pytest tests/unit/test_ita_gap.py tests/unit/test_ita_reads.py tests/unit
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 ./scripts/format_code.sh src/naics_embedder/decision/ita_gap.py src/naics_embedder/cli/commands/tools.py tests/fixtures/ita.py tests/unit/test_ita_gap.py tests/unit/test_cli_commands.py
@@ -763,7 +769,7 @@ git commit -m "feat(decision): measure the gap between Census phrases and owner 
 - Modify: `docs/usage.md`, `docs/api/ita_panel.md`, `docs/api/decision.md`, `CLAUDE.md`,
   `README.md`, `tests/README.md`
 
-- [ ] **Step 1: The docs**
+- [x] **Step 1: The docs**
 
 - `docs/usage.md`: `### tools ita-read` and `### tools ita-gap` after `### tools outcome-panel`.
   Give one example each, with placeholder paths. Say that `ita-read` checks C1 before any table
@@ -782,7 +788,7 @@ git commit -m "feat(decision): measure the gap between Census phrases and owner 
   `uv run pytest --collect-only -q -q | tail -1`. Write the numbers where `CLAUDE.md`,
   `README.md` and `tests/README.md` state them.
 
-- [ ] **Step 2: The untouched seams and the lock**
+- [x] **Step 2: The untouched seams and the lock**
 
 ```bash
 git diff --exit-code BASE -- src/naics_embedder/panels/ita.py src/naics_embedder/panels/ita_split.py src/naics_embedder/panels/ita_scoring.py src/naics_embedder/panels/outcome.py src/naics_embedder/panels/decoding.py src/naics_embedder/panels/selection_log.py src/naics_embedder/decision/text_to_code.py src/naics_embedder/decision/resampling.py src/naics_embedder/decision/rule.py src/naics_embedder/decision/records.py src/naics_embedder/decision/decide.py src/naics_embedder/decision/economic.py conf/data/ita_panel.yaml uv.lock; echo "exit=$?"
@@ -790,7 +796,7 @@ git diff --exit-code BASE -- src/naics_embedder/panels/ita.py src/naics_embedder
 
 Expected: `exit=0`.
 
-- [ ] **Step 3: The gates**
+- [x] **Step 3: The gates**
 
 ```bash
 uv run pytest -n auto -q
@@ -802,7 +808,7 @@ uv run mkdocs build --strict
 Expected: no failure; `All checks passed!`; `exit=0`; no MkDocs warning. Check that
 `site/api/decision/index.html` has the two new modules' headings.
 
-- [ ] **Step 4: No real pair in the tree**
+- [x] **Step 4: No real pair in the tree**
 
 ```bash
 grep -rn "embedding-data\|stage10_ita_establishment" src/ tests/ docs/ | grep -v "tests/fixtures/ita.py"
@@ -811,14 +817,16 @@ grep -rn "embedding-data\|stage10_ita_establishment" src/ tests/ docs/ | grep -v
 Expected: docstrings and docs prose only, with no absolute path. `conf/data/ita_evidence.yaml`
 names the run, which is a pin, not data.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/usage.md docs/api/ita_panel.md docs/api/decision.md CLAUDE.md README.md tests/README.md
 git commit -m "docs: add the ITA read and gap commands"
 ```
 
-- [ ] **Step 6: Local review, then PR A**
+- [x] **Step 6: Local review, then PR A**
+
+> Deviation: the executing-plans final review ran here over PR A's range (Codex at e36c38d and an opus code-reviewer); its fixes and the re-run mutant runs (Task 3's under Python 3.10) landed before the push; ledgered rulings.
 
 ```bash
 mkdir -p /tmp/codex-review && codex exec review -m gpt-6-astra -c sandbox_mode=read-only --base origin/main -o /tmp/codex-review/plan20-pr-a.md; echo "exit=$?"
@@ -840,7 +848,9 @@ Nothing in this task reads real data.
 - Consumes: PR A (Task 4).
 - Produces: READ_SHA, MAIN's HEAD at PR A's merge or later; the environment receipt; a free OUT.
 
-- [ ] **Step 1: Merge PR A**
+- [x] **Step 1: Merge PR A**
+
+> Deviation: the checks were read once with `gh pr checks` after the owner's "Merge when green", not watched; all four had passed on 261b5c6.
 
 Wait for its checks with `gh pr checks <n> --watch`, run in the background. Once every listed
 check has passed on the head SHA, merge with
@@ -848,7 +858,7 @@ check has passed on the head SHA, merge with
 `gh pr view <n> --json state,mergeCommit` shows `MERGED`, and that the remote branch is gone.
 Report `CI passed, PR merged, remote deleted`.
 
-- [ ] **Step 2: Fast-forward MAIN with the guard**
+- [x] **Step 2: Fast-forward MAIN with the guard**
 
 In MAIN: on `main`, `git status --porcelain` empty, `git log --oneline origin/main..main` empty,
 then `git -c core.fsmonitor=false merge --ff-only origin/main`.
@@ -859,7 +869,7 @@ cd /Users/lowell/Projects/naics-embedder && git rev-parse HEAD origin/main && gi
 
 Expected: two equal SHAs, then `exit=0`. Record HEAD as READ_SHA.
 
-- [ ] **Step 3: Sync MAIN's environment**
+- [x] **Step 3: Sync MAIN's environment**
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && shasum -a 256 uv.lock conf/data/ita_evidence.yaml conf/data/ita_panel.yaml
@@ -870,14 +880,14 @@ cd /Users/lowell/Projects/naics-embedder && HF_HUB_OFFLINE=1 COLUMNS=200 uv run 
 
 Expected: the pinned lock; `exit=0` three times.
 
-- [ ] **Step 4: The environment receipt**
+- [x] **Step 4: The environment receipt**
 
 Write `SCRATCH/env.py`. It prints the platform, Python, torch, numpy and polars versions, whether
 MPS is available, and each BLAS thread variable (`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`,
 `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`), or `unset`. Run it from MAIN with
 `uv run --locked --no-sync python /tmp/naics_plan20/env.py`, and copy the output into the ledger.
 
-- [ ] **Step 5: The outputs**
+- [x] **Step 5: The outputs**
 
 ```bash
 ls /Users/lowell/naics-artifacts/records/text_to_code 2>&1
@@ -898,13 +908,13 @@ nothing.
 - Produces: LINES_BEFORE and SHA_BEFORE, the log before the reads; six passing dry runs; the
   validation part's pair count and data fingerprint, DATA_FP.
 
-- [ ] **Step 1: Ask for Gate A**
+- [x] **Step 1: Ask for Gate A**
 
 Tell the user: PR A merged at READ_SHA, EDATA_SHA, and the environment receipt. Ask for approval
 to start the real-data steps: the log check and six dry runs, which load the real tables and the
 arms but score nothing and log nothing. Wait for a clear yes.
 
-- [ ] **Step 2: The log's state**
+- [x] **Step 2: The log's state**
 
 Write `SCRATCH/log_state.py`. It takes the log, then optionally `PREFIX_LINES PREFIX_SHA`, then
 optionally `RUN`. It prints:
@@ -936,7 +946,9 @@ Expected: `exit=0`, and no `ita_text` record. Plan 19's 118 growth reads and any
 validation reads are no stop: list them in the ledger. Record `lines` as LINES_BEFORE and
 `sha256` as SHA_BEFORE.
 
-- [ ] **Step 3: The six dry runs**
+- [x] **Step 3: The six dry runs**
+
+> Deviation: EE is the two-digit epoch, so the files are `epoch=039.ckpt` and, for seed 4, `epoch=038.ckpt`, as the Pinned values name them; ledgered ruling.
 
 PURPOSE is `text-to-code reference gap read: redesign roadmap Stage 4, plan 20 (Req 28)`. The
 dry runs pass a placeholder run, `ita-gap/dry-run`. The stub's dry run, from MAIN's root:
@@ -971,7 +983,7 @@ Expected: SHA_BEFORE, and `No such file or directory`. If the SHA-256 changed, r
 with `LINES_BEFORE SHA_BEFORE`: it must exit 0, and the new records are another session's. List
 them in the ledger.
 
-- [ ] **Step 4: Ledger**
+- [x] **Step 4: Ledger**
 
 Copy Steps 2–3's outputs into the ledger. Estimate each read's memory from the pair count: the
 stub's query matrix is pairs × 4,096 float32 values before its float64 copy.
@@ -985,7 +997,7 @@ and their objects in STORE.
 - Consumes: Task 6's results.
 - Produces: OUT's six read records, each passing `check_read.py`; RUN.
 
-- [ ] **Step 1: Ask for Gate B**
+- [x] **Step 1: Ask for Gate B**
 
 First run `mcp__ccd_session_mgmt__list_sessions`, and note each running session whose `cwd` is
 under MAIN. Generate RUN once with `python3 -c 'import uuid; print("ita-gap/" + uuid.uuid4().hex)'`
@@ -995,7 +1007,7 @@ outcome validation read to MAIN's log, open nothing and are never re-run. Ask th
 passes, no other session merges a PR, syncs MAIN or reads a panel into MAIN's log. Ask for a go,
 and wait for a clear yes.
 
-- [ ] **Step 2: Read each arm**
+- [x] **Step 2: Read each arm**
 
 Right before the first read, run `log_state.py` with `LINES_BEFORE SHA_BEFORE`. Expected:
 `exit=0`. Then, for each read in order, run the drift guard first:
@@ -1010,7 +1022,7 @@ in the background and wait for it to exit. Never start a read before the previou
 passes. Expected: `exit=0`. Record the first d16 read's wall time, and tell the user the estimate
 for the other four.
 
-- [ ] **Step 3: Check each record before the next read**
+- [x] **Step 3: Check each record before the next read**
 
 Write `SCRATCH/check_read.py`. It takes a record path, RUN, the arm and, for d16, the seed. It
 loads the record with `read_record(..., ItaReferenceRead)` and `ArtifactStore(STORE)`. Then it
@@ -1038,7 +1050,9 @@ cd /Users/lowell/Projects/naics-embedder && uv run --locked --no-sync python /tm
 
 Expected: `exit=0`.
 
-- [ ] **Step 4: The log after the reads**
+- [x] **Step 4: The log after the reads**
+
+> Deviation: the scratch `log_state.py` crashed in its RUN check after listing the records (a loop over (line, record) pairs); fixed and re-run read-only, exit=0.
 
 ```bash
 cd /Users/lowell/Projects/naics-embedder && uv run --locked --no-sync python /tmp/naics_plan20/log_state.py /Users/lowell/Projects/naics-embedder/logs/selection_log.jsonl LINES_BEFORE SHA_BEFORE RUN > /tmp/naics_plan20/log_after.txt; echo "exit=$?"
@@ -1047,7 +1061,7 @@ cd /Users/lowell/Projects/naics-embedder && uv run --locked --no-sync python /tm
 Expected: `exit=0`; RUN's seven records; no `ita_text` record but RUN's six reads; no
 `ita-margin/` run. With no other session's records, the log has LINES_BEFORE + 7 lines.
 
-- [ ] **Step 5: Ledger**
+- [x] **Step 5: Ledger**
 
 Copy each read's output, each `check_read.py` output, Step 4's output, and `shasum -a 256` of the
 six records into the ledger.
@@ -1060,7 +1074,7 @@ six records into the ledger.
 - Consumes: the six records (Task 7), RUN, READ_SHA, LINES_BEFORE, SHA_BEFORE.
 - Produces: GAP_SHA, the SHA-256 of `OUT/gap.json`; the tables that the finding copies.
 
-- [ ] **Step 1: The gap**
+- [x] **Step 1: The gap**
 
 ```bash
 test ! -e /Users/lowell/naics-artifacts/records/text_to_code/stage4/gap.json; echo "absent=$?"
@@ -1084,7 +1098,9 @@ cd /Users/lowell/Projects/naics-embedder && HF_HUB_OFFLINE=1 COLUMNS=200 uv run 
 
 Expected: `exit=0`, two arm tables and the D2 line. Either answer is a result, not a failure.
 
-- [ ] **Step 2: Verify — read only**
+- [x] **Step 2: Verify — read only**
+
+> Deviation: `verify.py` takes RUN as a second argument, which its check 1 needs; ledgered ruling.
 
 Write `SCRATCH/verify.py`. It reads `gap.json` with `read_record(..., ItaGapRecord)` and exits 1
 on the first check that fails:
@@ -1117,14 +1133,14 @@ window is closed.
 - Create: `specs/findings/text-to-code-gap.md`
 - Modify: `CLAUDE.md` (the ITA panel paragraph under "Monitor, Epoch Summary and Selection")
 
-- [ ] **Step 1: Cut PR B's branch**
+- [x] **Step 1: Cut PR B's branch**
 
 ```bash
 git -c core.fsmonitor=false fetch origin
 git -c core.fsmonitor=false checkout --no-track -B claude/stage-4-text-to-code-gap origin/main
 ```
 
-- [ ] **Step 2: Write the finding**
+- [x] **Step 2: Write the finding**
 
 `specs/findings/text-to-code-gap.md`, in `specs/findings/growth-margins.md`'s form. It opens with
 `**Status: FINAL (<date>).**`, and names roadmap Stage 4 and plan 20. Its first paragraph gives
@@ -1163,13 +1179,13 @@ a development measurement on the ITA validation part, not evaluation (C3). Its s
 
 No section quotes a description, a representative string, a pair id or a per-pair row.
 
-- [ ] **Step 3: The `CLAUDE.md` sentence**
+- [x] **Step 3: The `CLAUDE.md` sentence**
 
 After the ITA panel paragraph's sentence on the sealed part, add one sentence: "Stage 4 measured
 the gap between Census phrases and owner text on the validation part on <date>
 (`specs/findings/text-to-code-gap.md`), as a development measurement."
 
-- [ ] **Step 4: Check and commit**
+- [x] **Step 4: Check and commit**
 
 Measure the finding's line lengths with Python: at most 100 outside code blocks and tables.
 Then:
@@ -1214,3 +1230,34 @@ Run the writing-plans Plan Completion Protocol on PR B's branch, before it is pu
 Planning ran on Opus. Execute in a fresh session on Sonnet (`claude --model sonnet`), inline with
 executing-plans (P10, D5), from an app worktree, with this file as the handoff. Start no task before
 Pre-flight Step 1 finds Stage 3's COMPLETE stamp.
+
+## Handoff to later stages
+
+- **Stage 5 (text→code candidates and decision).** It consumes the six read records and the gap
+  record in `~/naics-artifacts/records/text_to_code/stage4/`: `lexical-stub.json`
+  (e200e50fd900a0075a4555f269d778de09d3dfe7e0a7cfe522216b1c0a2f2ee1),
+  `euclidean-d16-s1.json` to `-s5.json` (3c6c7d18…45f2, b8ceaabe…8621, 2a546f34…9706,
+  017ddb88…5eaa, 00e48327…0523; full values in the finding's Section 2) and `gap.json`
+  (f126926250d84178636a6bc087b2f520fbea11de971feec62c22bbd71a256997), and the finding
+  `specs/findings/text-to-code-gap.md`. RUN is `ita-gap/d1dd4024708744a9aa33ecf8c346ad36`. DATA_FP,
+  8980e3586ec0a18d4623c3a4b3e81527f8c59e34a1f0b4b73d07b046ed86b1a3, under split fingerprint
+  8602ceb243722dc64e0a29a9ba444fe824baf209a848964d7ddf130a9db5cc7c, is the table build that
+  Stage 5's reads must match. `decision/ita_reads.py`'s `read_reference` (and `tools ita-read`)
+  with the d16 run directories `checkpoints/stage8-euclidean-d16-sN/` (`epoch=039`, `038` for
+  seed 4) is a reusable read path. Stage 4's reads are reference reads under `REFERENCE_ARMS`, so
+  they leave `check_ita_margin_first` open, and the margin record makes its own fresh reads
+  (text-to-code spec §4.5). D2's answer is yes: the finding recommends a later ITA training part,
+  which needs a later spec and G1, and changes nothing in Stage 5.
+- **Differs from the roadmap's Produces.** Nothing: the reference's validation scores and the
+  finding exist as the entry states. Beyond the plan, `tools ita-read` refuses stub descriptions
+  whose SHA-256 is not the bundle's description fingerprint, and a dry run creates nothing.
+- **Traps and deferred items.** `tools ita-read` takes `--outcome` on a d16 read and leaves it off
+  by default for the stub, and it does not check a d16 seed's checkpoint and table against the
+  Stage 8 record before it logs; both are deferred into Stage 5
+  → item: 20-text-to-code-reference-read — 2026-11-19. Plan 17's items for Stage 5 stay open
+  (§ 17-text-to-code-ita-panel). The macOS level pin still fails locally
+  (§ 19-economic-decision-read).
+- **Embedding roadmap Stage 12.** The ITA sealed part is unopened, under split fingerprint
+  8602ceb243722dc64e0a29a9ba444fe824baf209a848964d7ddf130a9db5cc7c. The selection log holds no
+  `ita_text` opening (284 lines, SHA-256
+  5b98c867ed96e7c05d3d3bca46146b45ada2245d351cfeae58ed6efc4980f6f0, finding Section 7).

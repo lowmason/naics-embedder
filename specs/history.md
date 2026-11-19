@@ -73,3 +73,23 @@ Differences from the design:
 
 Closed earlier deferred items:
 - "Pin the shared text-only table's provenance file in the frozen list (plan 16 execution," (deferred by 16-economic-candidates).
+
+## 20-text-to-code-reference-read — 2026-11-19
+Plan: specs/plans/completed/20-text-to-code-reference-read.md · Spec: none · Roadmap: specs/naics-artifact-redesign-roadmap.md, Stage 4
+
+Differences from the design:
+- Ruling (Task 2): under `--outcome`, the dry run also prints the outcome panel's fingerprint and its validation data fingerprint — why: Gate A must show the stub's outcome fingerprints are the pinned ones (a Stop-and-ask condition) before any read; `data_fingerprint` is not a read and logs nothing — cost if wrong: two extra lines of output.
+- Ruling (Task 2): the command refuses a d16 `--seed` below 1 in step 1, with the other option checks — why: a dry run must catch every refusal that read_reference would raise later, so the six dry runs prove the six reads' arguments — cost if wrong: none; read_reference refuses it too.
+- Ruling (Task 2): `escape` is imported from rich.markup in tools.py here — why: plan 18 has not merged (the brief's trap) — cost if wrong: a duplicate import to drop when plan 18 rebases.
+- Ruling (Task 3): gap_fixture replaces each synthetic_arm run's outcome rows with the stub's decoding of outcome_beside_panel (MRR scaled by 1.0, 0.9, … 0.6 over seeds 1–5), stored with `store.put_frame`, and sets the record's panels.outcome / outcome_data to that panel's — why: synthetic_arm scores its outcome rows on synthetic codes, so d16's matched-code set would be empty; the brief requires the fixture's outcome fingerprints to match the d16 reads — cost if wrong: none outside the fixture.
+- Ruling (Task 3): arm_gap refuses a part with no copied or no headline pair, no matched code, or a seed without a matched code's values (ValueError) — why: the brief's algorithm divides by these counts; a clear refusal beats a numpy error — cost if wrong: none on the real data, which has copied and headline pairs and shared codes.
+- Ruling (Task 3): gap_record refuses two read records that share a file name — why: read_sha256 is keyed by file name, so a shared name would hide one read — cost if wrong: none.
+- Ruling (Task 3): tests compute the expected strata from the public resampling primitives (`_expected`) rather than calling ita_gap's private helpers — why: a test of private helpers pins internals, not the plan's algorithm (P5) — cost if wrong: none.
+- Deviation (Task 2): final-review fixes made a dry run create nothing and check the stub's descriptions against the bundle. Source: plan, Task 2.
+- Deviation (Task 3): `arm_gap` and `gap_record` add refusals the plan does not list. Source: plan, Task 3.
+- Deviation (Task 4): the final review (Codex and an opus code-reviewer) ran over PR A before the push. Source: plan, Task 4.
+- Deviation (Task 5): the checks were read once after the owner's "Merge when green", not watched. Source: plan, Task 5.
+- Deviation (Task 6): `epoch=0EE` is read as the two-digit epochs 38 and 39. Source: plan, Task 6.
+- Deviation (Task 7): the scratch `log_state.py` crashed in its RUN check and was fixed and re-run read-only. Source: plan, Task 7.
+- Deviation (Task 8): `verify.py` takes RUN as a second argument. Source: plan, Task 8.
+- Deferred: 2 items. Source: specs/deferred_items.md, § 20-text-to-code-reference-read.
