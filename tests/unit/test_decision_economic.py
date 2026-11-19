@@ -493,6 +493,14 @@ def _two_tolerances_on_the_last_row(values, rows):
 def _two_tolerances_down_on_the_first_row(values, rows):
     values[rows[0]] -= 2 * PAIRING_TOLERANCE
 
+def _the_larger_gap_on_the_first_row(values, rows):
+    values[rows[0]] += 2 * PAIRING_TOLERANCE
+    values[rows[-1]] += 1.5 * PAIRING_TOLERANCE
+
+def _the_larger_gap_on_the_last_row(values, rows):
+    values[rows[0]] += 1.5 * PAIRING_TOLERANCE
+    values[rows[-1]] += 2 * PAIRING_TOLERANCE
+
 def _not_a_number_on_one_row(values, rows):
     values[rows[1]] = np.nan
 
@@ -536,8 +544,13 @@ def test_a_reference_prediction_beyond_the_pairing_tolerance_does_not_pair(
     ):
         check_reference_pairing(margins, record, store)
 
-def test_the_refusal_names_the_largest_difference_and_the_tolerance(arm, margins, store):
-    record = _arm_with_edited_reference(arm, store, 'prediction', _two_tolerances_on_the_last_row)
+@pytest.mark.parametrize(
+    'edit', [_the_larger_gap_on_the_first_row, _the_larger_gap_on_the_last_row]
+)
+def test_the_refusal_names_the_largest_difference_and_the_tolerance(arm, margins, store, edit):
+    '''Two rows are beyond the tolerance, so the largest gap is neither the first nor the last.'''
+
+    record = _arm_with_edited_reference(arm, store, 'prediction', edit)
 
     with pytest.raises(ValueError, match='by up to 2e-13, beyond the tolerance 1e-13'):
         check_reference_pairing(margins, record, store)
