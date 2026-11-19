@@ -289,8 +289,8 @@ run id and, for `euclidean-d16`, the seed, the checkpoint's SHA-256 and the tabl
 fingerprint. The command checks the run's tables against `conf/data/ita_evidence.yaml` (C1) before
 any table loads, so another run's tables, such as a replay, are refused and nothing is logged. It
 never opens the sealed part. `--dry-run` runs every check and loads the panel and the arm, then
-prints the validation part's pair count and fingerprints: it logs nothing, stores nothing and
-writes no record.
+prints the validation part's pair count and fingerprints: it logs nothing, stores nothing,
+writes no record and creates no directory.
 
 ```bash
 uv run naics-embedder tools ita-read --arm lexical-stub --outcome   --pairs RUN_DIR/ita_text_pairs.parquet --pair-codes RUN_DIR/ita_text_pair_codes.parquet   --run ita-gap/RUN_ID --purpose 'text-to-code reference gap read'   --store STORE --output OUT/lexical-stub.json --dry-run

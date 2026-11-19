@@ -2443,6 +2443,31 @@ def test_ita_read_dry_run_logs_and_writes_nothing(runner, ita_fixture, arm):
     assert not (ita_fixture.store / 'objects').exists()
 
 @pytest.mark.unit
+@pytest.mark.parametrize('arm', ['lexical-stub', 'euclidean-d16'])
+def test_ita_read_dry_run_creates_no_directory(runner, ita_fixture, arm):
+    # Gate A's dry runs name the real --output, whose directory must still be absent after them
+    arguments = ('--arm', 'lexical-stub', '--outcome') if arm == 'lexical-stub' else _D16_OPTIONS
+
+    result = _ita_read(runner, ita_fixture, *arguments, '--dry-run')
+
+    assert result.exit_code == 0, result.output
+    assert not ita_fixture.output.parent.exists()
+    assert not ita_fixture.store.exists()
+
+@pytest.mark.unit
+def test_ita_read_dry_run_refuses_an_existing_output(runner, ita_fixture):
+    ita_fixture.output.parent.mkdir(parents=True)
+    ita_fixture.output.write_text('{}\n', encoding='utf-8')
+
+    result = _ita_read(runner, ita_fixture, '--arm', 'lexical-stub', '--dry-run')
+
+    assert result.exit_code == 1
+    assert 'exists' in _ita_output(result)
+    assert 'Dry run' not in _ita_output(result)
+    assert ita_fixture.calls.panels == []
+    assert ita_fixture.output.read_text(encoding='utf-8') == '{}\n'
+
+@pytest.mark.unit
 def test_ita_read_refuses_unpinned_tables_and_logs_nothing(runner, ita_fixture):
     other = ita_fixture.evidence.model_copy(update={'pairs_sha256': 'f' * 64})
     ita_fixture.evidence_file.write_text(yaml.safe_dump(other.model_dump()), encoding='utf-8')

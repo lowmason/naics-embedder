@@ -1844,7 +1844,12 @@ def ita_read_command(
                 raise ValueError(f'{name} must not be blank')
         _check_ita_arm(arm, seed, checkpoint, table)
         output_path = Path(output)
-        _require_new_record(output_path)
+        if dry_run:
+            # A dry run creates nothing: not even the output's directory, which Gate A checks
+            if output_path.exists():
+                raise FileExistsError(f'{output_path} exists; a record is written once')
+        else:
+            _require_new_record(output_path)
         evidence = load_ita_evidence(evidence_file)
         check_ita_run(pairs, pair_codes, evidence)
         cfg = _run_config(config_file, overrides)
