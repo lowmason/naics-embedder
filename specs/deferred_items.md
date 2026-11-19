@@ -597,3 +597,19 @@
       Size: quick-fix. Done when: the owner has reviewed the environment change and the literals
       are re-captured on this macOS, or the pin takes a tolerance, and a full-suite run on the Mac
       passes.
+
+## 20-text-to-code-reference-read — 2026-11-19
+- [ ] `tools ita-read` accepts `--outcome` on a `euclidean-d16` read and leaves it off by default
+      for the stub (plan 20 final review, Declined to judge; owner deferred to Stage 5). A slip logs
+      a one-time read that `tools ita-gap` refuses later; plan 20 guarded it only by its Gate B
+      commands and `check_read.py`. See `ita_read_command` in
+      src/naics_embedder/cli/commands/tools.py and
+      specs/plans/completed/20-text-to-code-reference-read.md (Handoff). Size: quick-fix.
+      Done when: the read path that Stage 5 uses refuses `--outcome` on `euclidean-d16` and logs the
+      stub's outcome read whenever the stub's record must carry C, with a test for each.
+- [ ] `tools ita-read` does not check a d16 seed's `--checkpoint` and `--table` against the Stage 8
+      record before it logs (plan 20 final review, Declined to judge; owner deferred to Stage 5).
+      `gap_seeds` (src/naics_embedder/decision/ita_gap.py) and plan 20's `check_read.py` catch a
+      mismatch only after the one-time read is in the selection log. Size: quick-fix. Done when: a
+      d16 read refuses a checkpoint whose SHA-256, or a table whose matrix fingerprint, is not the
+      Stage 8 record's for that seed, before any log record, with a test.

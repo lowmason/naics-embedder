@@ -306,7 +306,7 @@ qualification (`:560`).
       > Stage 3: COMPLETE (2026-11-18) — implemented by plan 19 (specs/plans/completed/19-economic-decision-read.md). Its Handoff section names what embedding roadmap Stage 12 consumes.
       > Next: resume the roadmap.
 
-- [ ] Stage 4: Text→code — reference read and gap
+- [x] Stage 4: Text→code — reference read and gap
       Objective: With the user's approval at the time, read the reference on the real ITA
       validation part and measure the gap between Census phrases and owner text.
       Spec: Req 28 (Judge, What the ITA text is like, and Later), Req 26 (Size gate), U25, U27,
@@ -331,6 +331,8 @@ qualification (`:560`).
       Planned as plan 20 (`specs/plans/20-text-to-code-reference-read.md`, PR #169, 4ba1f27),
       approved and not executed. Its pre-flight's Stage 3 condition (D3, the COMPLETE stamp) is
       met. Its execution starts after the resume of 2026-11-19 merges (Decisions, 2026-11-19).
+      > Stage 4: COMPLETE (2026-11-19) — implemented by plan 20 (specs/plans/completed/20-text-to-code-reference-read.md). Its Handoff section names what Stage 5 and embedding roadmap Stage 12 consume.
+      > Next: resume the roadmap.
 
 - [ ] Stage 5: Text→code — candidates and decision
       Objective: Record text→code's margins before any candidate read, then build the candidates,
