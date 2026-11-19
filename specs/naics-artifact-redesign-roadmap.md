@@ -443,8 +443,11 @@ qualification (`:560`).
       validation δ) and §4.8, Verification "One role per table or part" and "Gates held".
       Gap closed: Req 27 (the sealed decision).
       Consumes: Stage 6's judging panel, with its one logged opening of the sealed part. Stage 6b's
-      margin record. Stage 7's forward candidate, its seeds' tables and its validation test
-      record. All through their Handoffs.
+      margin record. Stage 7's forward candidate, which beat the reference by δ in the validation
+      test, with its seeds' tables and that test's record. All through their Handoffs. If Stage
+      7's record says that the reference stands, this input is unmet: the relatedness chain ends at
+      Stage 7, and the sealed part stays sealed for a later candidate (relatedness spec §4.6,
+      "Which read decides"; Resolved at resume, 2026-11-19).
       Produces: The logged opening of co-ownership's sealed part, the sealed scores, and
       relatedness's decision record, which names the adopted embedding or says that the reference
       stands. A written finding.
