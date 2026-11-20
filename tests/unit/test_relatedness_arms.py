@@ -188,14 +188,23 @@ def test_cosine_ignores_the_length_of_either_vector():
     assert np.allclose(scaled, plain, rtol=0, atol=1e-12)
 
 def test_the_similarity_is_float64_whatever_the_tables_type():
-    anchors, candidates = ['311211'], ['311212', '311221']
-    for vectors in (
-        seeded_vectors(16, 5).astype(np.float32),
-        np.arange(1, 81).reshape(16, 5),
-    ):
+    anchors, candidates = ['311211', '621210'], ['311212', '311221', '111110']
+    float32_table = seeded_vectors(16, 5).astype(np.float32)
+    int_table = np.arange(1, 81).reshape(16, 5)
+    for vectors in (float32_table, int_table):
         for center in (False, True):
-            arm = VectorArm(RELATEDNESS_CODES, vectors, center=center)
-            assert arm.similarity(anchors, candidates).dtype == np.float64
+            similarity = VectorArm(RELATEDNESS_CODES, vectors,
+                                   center=center).similarity(anchors, candidates)
+            assert similarity.dtype == np.float64
+            # as exact as the oracle on the table's own float64 values: nothing ran in float32
+            expected = reference_cosine(
+                RELATEDNESS_CODES,
+                vectors.astype(np.float64),
+                anchors,
+                candidates,
+                center=center,
+            )
+            assert np.allclose(similarity, expected, rtol=0, atol=1e-13)
 
 def test_a_request_in_any_order_gives_the_same_pairs():
     arm = vector_arm()
@@ -364,6 +373,13 @@ def test_every_unknown_code_is_named_when_there_are_five_or_fewer(make_arm, coun
     assert message.endswith(f'({count}): ' + ', '.join(missing))
 
 @pytest.mark.parametrize('make_arm', TABLE_ARMS)
+def test_one_unknown_code_past_five_is_counted_and_not_named(make_arm):
+    arm = make_arm()
+    message = refusal(lambda: arm.similarity(MISSING[:3], ['311211', *MISSING[3:6]]))
+    assert message.endswith('(6): 999999, 111111, 555555, 222222, 888888 and 1 more')
+    assert MISSING[5] not in message
+
+@pytest.mark.parametrize('make_arm', TABLE_ARMS)
 def test_an_unknown_code_is_refused_whichever_side_it_is_on(make_arm):
     arm = make_arm()
     for anchors, candidates in (
@@ -414,10 +430,10 @@ def test_a_non_finite_value_anywhere_in_the_table_is_refused_naming_the_code(cen
 def test_every_row_with_a_non_finite_value_is_named_in_table_order():
     codes = RELATEDNESS_CODES + OTHER_CODES
     vectors = seeded_vectors(18, 5)
-    vectors[17, 0] = np.inf
-    vectors[3, 4] = np.nan
+    vectors[16, 0] = np.inf
+    vectors[14, 4] = np.nan
     message = refusal(lambda: VectorArm(codes, vectors))
-    assert message.endswith('(2): 111191, 3112')
+    assert message.endswith('(2): 445131, 31')
 
 # -------------------------------------------------------------------------------------------------
 # A zero-norm row of a requested code
@@ -456,8 +472,8 @@ def test_a_zero_row_is_refused_naming_it_whichever_side_it_is_on():
 def test_every_requested_zero_row_is_named_in_request_order():
     codes, vectors = zero_row_table()
     arm = VectorArm(codes, vectors)
-    message = refusal(lambda: arm.similarity(['a', 'y'], ['z', 'b', 'y']))
-    assert message.endswith('(2): y, z')
+    message = refusal(lambda: arm.similarity(['a', 'z'], ['y', 'b', 'z']))
+    assert message.endswith('(2): z, y')
 
 def test_a_zero_row_that_no_request_names_never_refuses_a_read():
     codes, vectors = zero_row_table()
@@ -467,6 +483,11 @@ def test_a_zero_row_that_no_request_names_never_refuses_a_read():
     assert similarity == pytest.approx(
         reference_cosine(codes, vectors, ['a', 'b'], ['c', 'd'], center=False)
     )
+
+def test_a_row_of_tiny_norm_is_not_a_zero_row():
+    vectors = np.array([[1.0, 0.0, 0.0], [1e-13, 0.0, 0.0], [0.0, 1e-13, 0.0]])
+    arm = VectorArm(['a', 'b', 'c'], vectors)
+    assert arm.similarity(['a'], ['b', 'c']).tolist() == [[1.0, 0.0]]
 
 def test_the_zero_check_follows_the_centering():
     codes = ['111110', '111120', '111150', '31']
