@@ -857,9 +857,9 @@ def test_with_no_anchor_that_has_an_auc_the_report_is_none():
 def test_sectors_join_31_to_33():
     frame = per_anchor_frame(
         [
-            ('311211', 2, 0.5, 0.5, 0.5),
-            ('321113', 2, 0.25, 0.25, 0.5),
-            ('445110', 2, 0.75, 0.75, 0.5),
+            ('311211', 2, 0.5, 0.125, 0.5),
+            ('321113', 2, 0.25, 0.0625, 0.5),
+            ('445110', 2, 0.75, 0.875, 0.5),
         ]
     )
     by_sector = summarize(frame).by_sector
@@ -879,7 +879,8 @@ def test_each_joined_sector_is_one_and_the_others_stand_alone():
         ('441110', 0.75),
         ('321113', 0.5),
     ]
-    frame = per_anchor_frame([(code, 1, value, value, 0.5) for code, value in rows])
+    # NDCG@20 is half the NDCG@10, so a sector's mean of one is not the other's
+    frame = per_anchor_frame([(code, 1, value, value / 2, 0.5) for code, value in rows])
     by_sector = summarize(frame).by_sector
     assert by_sector.columns == ['sector', 'n_anchors', 'ndcg_10']
     assert dict(by_sector.schema) == {
@@ -918,6 +919,19 @@ def test_every_mean_is_the_correctly_rounded_sum():
     assert result.reports['ndcg_20'] == math.fsum(ndcg_20) / 9
     assert result.reports['auc'] == math.fsum(auc) / 8
     assert result.by_sector.row(0) == ('31', 9, math.fsum(ndcg_10) / 9)
+
+def test_a_mean_is_the_exactly_rounded_sum_not_the_sum_of_the_sorted_values():
+    # a sorted, compensated sum is independent of order too, but it rounds this mean the other way
+    values = [0.5276294143623982, 0.7637009951314895, 5.528595762929651e-52]
+    assert sum(sorted(values)) / 3 != math.fsum(values) / 3
+    codes = ('311111', '311119', '311211')
+    frame = per_anchor_frame([(code, 1, value, value, value) for code, value in zip(codes, values)])
+    result = summarize(frame)
+    wanted = math.fsum(values) / 3
+    assert result.headline['ndcg_10'] == wanted
+    assert result.reports['ndcg_20'] == wanted
+    assert result.reports['auc'] == wanted
+    assert result.by_sector.row(0) == ('31', 3, wanted)
 
 def test_no_result_depends_on_the_order_of_the_anchors():
     frame = ill_conditioned_frame()
