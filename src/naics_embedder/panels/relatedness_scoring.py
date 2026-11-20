@@ -15,8 +15,9 @@ Scores
 
 Summary
     ``score_anchors`` reads one part's (anchors, candidates) arrays into one row per anchor. An
-    anchor is never one of its own candidates, so its own column is left out before anything else
-    is read. ``summarize_relatedness`` reads those rows into the headline, the reports, the headline
+    anchor is never one of its own candidates, so its own column is left out of every score and
+    every count. A similarity that is not finite is refused wherever it is, the own column
+    included. ``summarize_relatedness`` reads those rows into the headline, the reports, the headline
     by sector and the counts (4.4). The headline is the mean NDCG@10 over the part's anchors, each
     anchor once. The reports never decide and never add to n: the mean NDCG@20, the mean AUC over the
     anchors that have one, and each sector's mean NDCG@10. An anchor's sector is the first level of
@@ -241,7 +242,7 @@ def score_anchors(
     '''
     Score each anchor of a part: its relevant partners, NDCG@10, NDCG@20 and AUC.
 
-    An anchor's own column, when it is a candidate, is left out before anything is read: the
+    An anchor's own column, when it is a candidate, is left out of every score and count: the
     anchor is not one of its own candidates (4.4). A candidate with a positive gain is a relevant
     partner, and one with a gain of 0 has J = 0.
 
