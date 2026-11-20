@@ -72,10 +72,13 @@ SEALED_ONLY_PAIRS = tuple(pair for pair in BASE_PAIRS if {pair[0], pair[1]} <= s
 # -------------------------------------------------------------------------------------------------
 
 class UnwritableLog(SelectionLog):
-    '''A log for a panel that is never read: a record it is asked to write fails the test.'''
+    '''
+    A log for a panel that is never read: a record it is asked to write fails the test. Its
+    directory does not exist, so no file can be made there either.
+    '''
 
     def __init__(self):
-        super().__init__(Path('relatedness-panel-test-never-written.jsonl'))
+        super().__init__(Path(__file__).with_name('no-such-directory') / 'never-written.jsonl')
 
     def append(self, *args, **kwargs):
         raise AssertionError('this panel was not meant to log anything')
@@ -667,12 +670,15 @@ def test_a_similarity_of_another_shape_is_refused_naming_the_arm(tmp_path):
     assert record['event'] == 'read'
 
 def test_a_part_with_one_anchor_is_read(tmp_path):
-    base = panel(logged(tmp_path), co_ownership_tables([('311211', '311212', 3)]))
+    log = logged(tmp_path)
+    base = panel(log, co_ownership_tables([('311211', '311212', 3)]))
 
     result = base.score(tree_arm(), 'validation', 'check')
 
     assert result.per_anchor.get_column('anchor').to_list() == ['311211']
     assert result.counts == dict(zip(COUNT_KEYS, (8, 1, 7, 14, 1, 1)))
+    (record, ) = log.records()
+    assert record['n_queries'] == 1
 
 # -------------------------------------------------------------------------------------------------
 # Counts on other tables
