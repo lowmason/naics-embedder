@@ -854,6 +854,60 @@ def test_with_no_anchor_that_has_an_auc_the_report_is_none():
     assert result.reports['ndcg_20'] == math.fsum([0.6, 0.8]) / 2
     assert result.headline == {'n_anchors': 2, 'ndcg_10': math.fsum([0.5, 0.7]) / 2}
 
+@pytest.mark.parametrize(
+    'aucs, wanted, n_auc',
+    [
+        ((0.0, None, 1.0), 0.5, 2),
+        ((0.0, None, None), 0.0, 1),
+    ],
+    ids=['beside-others-and-a-null', 'alone'],
+)
+def test_an_auc_of_zero_is_an_auc(aucs, wanted, n_auc):
+    # 0.0 is the boundary value: every partner ranks below every unrelated candidate. The anchor
+    # has an AUC all the same, so it counts in the mean and in n_auc_anchors, and a lone 0.0 is a
+    # mean of 0.0, not None
+    codes = ('311211', '321113', '445110')
+    frame = per_anchor_frame([(code, 1, 0.5, 0.5, auc) for code, auc in zip(codes, aucs)])
+    reports = summarize(frame).reports
+    assert reports['auc'] == wanted
+    assert reports['auc'] is not None
+    assert reports['n_auc_anchors'] == n_auc
+
+def test_an_anchor_whose_partners_rank_last_has_an_auc_of_zero_in_the_report():
+    # from the arrays to the report: b ranks below every unrelated candidate, so its AUC is 0.0
+    candidates = ('a', 'b', 'c', 'd')
+    similarity = np.array([[9.0, 1.0, 2.0, 3.0], [1.0, 9.0, 2.0, 3.0]])
+    gains = np.array([[0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.25, 0.0]])
+    scores = score_anchors(similarity, gains, ('a', 'b'), candidates, 'validation')
+    assert scores.get_column('auc').to_list() == [0.0, 0.5]
+    reports = summarize(scores).reports
+    assert reports['auc'] == 0.25
+    assert reports['n_auc_anchors'] == 2
+
+def test_a_score_of_zero_is_a_score():
+    # a partner beyond the cut-off gives an NDCG of 0.0. The anchor still counts, once
+    frame = per_anchor_frame(
+        [
+            ('311211', 1, 0.0, 0.0, 0.5),
+            ('321113', 1, 0.5, 0.25, 0.5),
+            ('445110', 1, 0.0, 0.0, 0.5),
+        ]
+    )
+    result = summarize(frame)
+    assert result.headline == {'n_anchors': 3, 'ndcg_10': math.fsum([0.0, 0.5, 0.0]) / 3}
+    assert result.reports['ndcg_20'] == math.fsum([0.0, 0.25, 0.0]) / 3
+    # 445110 is the only anchor of its sector, and its NDCG@10 is 0.0
+    assert result.by_sector.rows() == [('31', 2, 0.25), ('44', 1, 0.0)]
+
+def test_means_of_zero_are_zero_not_none():
+    frame = per_anchor_frame([('311211', 1, 0.0, 0.0, 0.0), ('445110', 1, 0.0, 0.0, 0.0)])
+    result = summarize(frame)
+    assert result.headline == {'n_anchors': 2, 'ndcg_10': 0.0}
+    assert result.reports == {'ndcg_20': 0.0, 'auc': 0.0, 'n_auc_anchors': 2}
+    assert result.by_sector.rows() == [('31', 1, 0.0), ('44', 1, 0.0)]
+    assert result.headline['ndcg_10'] is not None
+    assert result.reports['auc'] is not None
+
 def test_sectors_join_31_to_33():
     frame = per_anchor_frame(
         [
