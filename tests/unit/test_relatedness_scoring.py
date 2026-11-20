@@ -142,10 +142,11 @@ def test_ndcg_does_not_depend_on_candidate_order(tree_row):
     assert len(places) > 1
 
 def test_the_scores_are_bit_for_bit_the_same_in_any_candidate_order():
-    # a tied group of eight gains whose float sum depends on the order it is added in
+    # the tied group's gains give one float sum when 1.0 comes first (1.0 + 1e-16 is 1.0) and another
+    # when the seven 1e-16 come first (1.0000000000000007)
     rng = np.random.default_rng(21)
     similarity = np.array([3.0] + [2.0] * 8 + [1.0, 1.0, 0.0])
-    gains = np.concatenate(([0.7], rng.random(8), [0.3, 0.9, 0.0]))
+    gains = np.array([0.7, 1.0] + [1e-16] * 7 + [0.3, 0.9, 0.0])
     wanted = expected_dcg(similarity, gains, 10), tie_aware_ndcg(similarity, gains, 10)
     for _ in range(20):
         order = rng.permutation(len(gains))
@@ -201,6 +202,7 @@ CLOSED_FORMS = {
         [2.0, 2.0, 1.0], [0.0, 1.0, 0.5], 3, 0.5 * discounts(1, 2) + 0.5 * discount(3)
     ),
     'zero and negative zero are tied': ([0.0, -0.0, -1.0], [1.0, 0.0, 0.0], 1, 0.5),
+    'no positive gain': ([2.0, 1.0], [0.0, 0.0], 2, 0.0),
     'no candidates': ([], [], 5, 0.0),
 }
 
@@ -252,6 +254,9 @@ def test_the_ideal_dcg_sorts_the_gains_and_cuts_at_k(k, wanted):
 
 def test_the_ideal_dcg_of_no_candidates_is_zero():
     assert ideal_dcg(np.array([]), 3) == 0.0
+
+def test_the_ideal_dcg_of_zero_gains_is_zero():
+    assert ideal_dcg(np.array([0.0, 0.0]), 3) == 0.0
 
 def test_a_perfect_ranking_scores_one_and_no_gain_is_refused():
     similarity = np.array([0.5, 0.9, 0.1, 0.7])
