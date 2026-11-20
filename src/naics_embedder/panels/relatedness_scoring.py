@@ -330,7 +330,7 @@ def _mean(values: Sequence[float]) -> Optional[float]:
     return math.fsum(values) / len(values) if values else None
 
 def _sector_table(anchors: Sequence[str], ndcg_10: Sequence[float]) -> pl.DataFrame:
-    '''The mean NDCG@10 of each sector, sorted by sector. A sector is the first level of a lineage.'''
+    '''The mean NDCG@10 of each sector, sorted by sector.'''
 
     by_sector: Dict[str, List[float]] = {}
     for anchor, value in zip(anchors, ndcg_10):

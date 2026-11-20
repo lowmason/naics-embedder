@@ -611,14 +611,16 @@ def three_anchors():
         ((2, 3), (3, 2), 2, 3),
         ((2, 3), (2, 4), 2, 3),
         ((2, 3), (1, 3), 2, 3),
+        ((3, 3), (2, 3), 2, 3),
+        ((2, 4), (2, 3), 2, 3),
         ((2, 3), (2, 3), 3, 3),
         ((2, 3), (2, 3), 2, 2),
         ((2, 3), (2, 3), 2, 4),
         ((6, ), (6, ), 2, 3),
     ],
     ids=[
-        'transposed', 'wider-gains', 'shorter-gains', 'anchor-short', 'candidate-short',
-        'candidate-long', 'one-dimensional'
+        'transposed', 'wider-gains', 'shorter-gains', 'taller-similarity', 'wider-similarity',
+        'anchor-short', 'candidate-short', 'candidate-long', 'one-dimensional'
     ]
 )
 def test_a_shape_that_does_not_fit_is_refused(
@@ -695,6 +697,17 @@ def test_a_non_finite_similarity_is_refused_before_an_anchor_with_no_gain():
         score_anchors(similarity, gains, anchors, candidates, 'validation')
     assert '311211' in str(caught.value)
     assert '311111' not in str(caught.value)
+
+def test_lists_are_read_as_arrays():
+    scores = score_anchors([[3, 1, 2]], [[0, 1, 0.5]], ['a'], ['a', 'b', 'c'], 'validation')
+    assert scores.row(0, named=True) == {
+        'anchor': 'a',
+        'part': 'validation',
+        'n_relevant': 2,
+        'ndcg_10': tie_aware_ndcg(np.array([1.0, 2.0]), np.array([1.0, 0.5]), 10),
+        'ndcg_20': tie_aware_ndcg(np.array([1.0, 2.0]), np.array([1.0, 0.5]), 20),
+        'auc': None,
+    }
 
 def test_no_anchor_gives_an_empty_frame_in_the_schema():
     scores = score_anchors(np.zeros((0, 3)), np.zeros((0, 3)), (), ('a', 'b', 'c'), 'validation')
@@ -941,6 +954,11 @@ def test_the_counts_come_back_in_the_order_of_count_keys():
     frame = per_anchor_frame([('445110', 2, 0.5, 0.5, 0.5)])
     result = summarize(frame, counts=dict(reversed(list(counts_for(1).items()))))
     assert list(result.counts) == list(COUNT_KEYS)
+
+def test_the_panel_the_part_and_the_counts_are_keywords():
+    frame = per_anchor_frame([('445110', 2, 0.5, 0.5, 0.5)])
+    with pytest.raises(TypeError):
+        summarize_relatedness(frame, 'relatedness_co_ownership', 'validation', counts_for(1))
 
 def test_the_result_is_frozen():
     result = summarize(per_anchor_frame([('445110', 2, 0.5, 0.5, 0.5)]))
