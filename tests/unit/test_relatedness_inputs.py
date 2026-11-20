@@ -348,6 +348,29 @@ def test_a_codebook_entry_that_is_not_six_digits_is_refused(bad):
         co_ownership_inputs(*co_ownership_tables(), codebook)
     assert repr(bad) in str(refusal.value)
 
+def test_a_hand_built_co_ownership_reads_partners_and_gains_from_the_row_from_the_anchor():
+    '''A CoOwnership has no invariant on ``shared``: only ``co_ownership_inputs`` makes it symmetric.'''
+
+    co = CoOwnership(
+        candidates=('311211', '311212', '311221'),
+        multi={
+            '311211': 1,
+            '311212': 1,
+            '311221': 2
+        },
+        shared={
+            ('311211', '311221'): 1,
+            ('311211', '311212'): 1,
+        },
+    )
+    assert co.partners('311211') == ('311212', '311221')
+    assert co.partners('311212') == ()
+    assert co.partners('311221') == ()
+    assert co.gain('311211', '311212') == 1.0
+    assert co.gain('311211', '311221') == 0.5
+    assert co.gain('311212', '311211') == 0.0
+    assert co.gain('311221', '311211') == 0.0
+
 def test_a_co_ownership_is_frozen():
     co = co_ownership_inputs(*co_ownership_tables(), RELATEDNESS_CODES)
     with pytest.raises(dataclasses.FrozenInstanceError):
