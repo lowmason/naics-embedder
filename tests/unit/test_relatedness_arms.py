@@ -312,6 +312,39 @@ def test_from_text_only_is_plain_unless_told_to_center():
     centered = VectorArm.from_text_only(table, center=True).similarity(['311211'], codes)
     assert not np.allclose(plain, centered, rtol=0, atol=1e-3)
 
+@pytest.mark.parametrize('center', [False, True])
+def test_from_text_only_keeps_every_column_of_a_table_wider_than_its_rows(center):
+    # The D9 table is 384 wide and unreduced (spec 4.4). With fewer rows than columns, a reduction
+    # to min(rows, width) components, or a cut of the last or any later column, changes the values
+    codes = list(RELATEDNESS_CODES) + list(OTHER_CODES)
+    vectors = seeded_vectors(18, 384)
+    table = text_only_frame(codes, vectors)
+    assert table.shape == (18, 385)
+    assert table.columns[-1] == 't383'
+    anchors = ['311211', '31', '621210']
+    candidates = list(reversed(codes))
+    similarity = VectorArm.from_text_only(table, center=center).similarity(anchors, candidates)
+    # a frame hands its values over column by column, so the last bits can differ at this width
+    assert np.allclose(
+        similarity,
+        VectorArm(codes, vectors, center=center).similarity(anchors, candidates),
+        rtol=0,
+        atol=1e-12,
+    )
+    assert np.allclose(
+        similarity,
+        reference_cosine(codes, vectors, anchors, candidates, center=center),
+        rtol=0,
+        atol=1e-12,
+    )
+
+    # each column counts: the first, one in the middle and the last
+    for column in (0, 200, 383):
+        moved = vectors.copy()
+        moved[:, column] += np.random.default_rng(column).normal(scale=8.0, size=18)
+        other = VectorArm.from_text_only(text_only_frame(codes, moved), center=center)
+        assert not np.allclose(other.similarity(anchors, candidates), similarity, rtol=0, atol=1e-3)
+
 # -------------------------------------------------------------------------------------------------
 # An empty request, a request of one
 # -------------------------------------------------------------------------------------------------
