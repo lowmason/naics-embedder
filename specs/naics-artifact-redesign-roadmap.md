@@ -99,16 +99,28 @@ The user chose the recommended option in each. Each ruling is the chosen option'
 - **Hold: "Hold both until merge (Recommended)".** Stage 4's execution (plan 20) and Stage 6's
   planning start only after this resume's PR merges.
 
-**Decisions (2026-11-21).** The resume after Stage 4 asked one batched question with two parts.
-It added, split, dropped and reordered no stage. The user chose the recommended option in each.
+**Decisions (2026-11-21, resume after Stage 4).** The resume asked two batched questions, with
+two parts and then four. The second put the defaults of the resume's handoff brief. It added,
+split, dropped and reordered no stage. The user chose the recommended option in each part. Each
+ruling is the chosen option's label.
 
 - **Stage 12: "Eleventh resume here (Recommended)".** Plan 20's Handoff has one bullet for
   embedding roadmap Stage 12. The same PR records it as that roadmap's eleventh resume, with a
   dated amendment to Stage 12.
-- **Push: "Push and open PR now (Recommended)".** Plan 21 (Stage 6) still held unmerged work on
-  its own branch. A `git merge-tree` check of this resume against that branch was clean, so the
-  PR opened without waiting for plan 21. The user merges it, and Stage 5's brainstorming starts
+- **Push: "Push and open PR now (Recommended)", then "Push now (Recommended)".** Plan 21 (Stage 6)
+  still held unmerged work on its own branch, and its session was running at the second answer.
+  A `git merge-tree` check of this resume against that branch was clean both times, so the PR
+  opened without waiting for plan 21. The user merges it, and Stage 5's brainstorming starts
   after the merge.
+- **D2: "Decisions paragraph only (Recommended)".** Plan 20's D2 answered yes, so the finding
+  recommends a later ITA training part (finding: text-to-code-gap §6). It adds no stage here. It
+  is Req 28's Later, which needs a later spec and G1, and it changes nothing in Stage 5 (plan 20,
+  Handoff).
+- **Approval: "Add it (Recommended)".** Stage 5 makes real ITA validation reads, so its Objective
+  opens with "With the user's approval at the time", as Stages 3, 4, 6b and 7b do.
+- **Scope: "Two roadmaps only (Recommended)".** This PR edits the two roadmaps only. It leaves
+  Stage 6's entry and `specs/deferred_items.md` to plan 21's completion and later resumes, and
+  the PR body names the stale lines it leaves.
 
 ## Gap analysis
 
@@ -118,7 +130,7 @@ It added, split, dropped and reordered no stage. The user chose the recommended 
 | 26 | out-of-repo | embedding-data at 60068eb: R8.4 is unamended (spec `:550`). V9 runs "after the first full build" (`:606-609`, `:669-670`), at embedding-data Stage 13, which is unticked (roadmap `:123`, `:299`). Stage 10's anti-goal is unchanged (`ita-establishment-targets.md:124`, `:92-93`). The successor protocol spec does not exist (spec `:634`). In this repository, no `src/` module reads an embedding-data table. Re-read at ec6fb29 on 2026-11-17: no gate opened (Gates, under Stages). Re-read at fd9e495 on 2026-11-18: G2 and G3 opened, and G4 and G5 opened for the ITA text–code pairs only. Re-read at 6be42f2 on 2026-11-19: no gate changed. G6 was added from Stage 6's spec, and it is closed. Re-read at 4942e1d on 2026-11-21: no gate changed. | The owner gates live in embedding-data (Gates, under Stages). For the existing panels, the one-role rule already holds through the selection log and `decide`'s validation-only reads (`decision/decide.py`). Each stage spec lists its tables and parts with one role each. |
 | 27 | missing | `graph_model/` holds the parked HGCN only, and nothing reads a relation family. embedding-data: the ITA area mix is built (embedding-data Stage 6) with `size_gate_pending`. Co-ownership (embedding-data Stage 10) is not built, and none of plan 11's modules is in its `src/`. ACS (Stage 9) and CPS (Stage 11) are unticked there. | Every family waits for its build and its count gate. Training also waits for R8.4. Stages 6 and 7. |
 | 28 | implemented-differently | Training reads the codebook's own text only (`supervision/queries.py:9-19`). Judging uses the outcome panel (`panels/outcome.py:159`, `:217`). No ITA reader exists, and embedding-data Stage 10's pairs are not built. | Spec: judged on the ITA validation and sealed parts, with the outcome panel reported beside them. Code: judged on the outcome panel. Stages 2, 4 and 5. |
-| 29 | implemented-differently | The test is built: `fix_relative_margins` and `decide_economic` (`decision/economic.py:179`, `:537`) and `tools growth-margins` (`cli/commands/tools.py:562`). The margins were fixed once (finding: growth-margins), and `uv.lock` is still 6de4fbdc. `read_deterministic_arm` (`decision/economic.py:250`) has no command. Trained candidates are deferred (`specs/deferred_items.md:622`). | No candidate exists. The Q3 audit gave its candidates row the same verdict. Stages 1 and 3. |
+| 29 | implemented-differently | The test is built: `fix_relative_margins` and `decide_economic` (`decision/economic.py:179`, `:537`) and `tools growth-margins` (`cli/commands/tools.py:562`). The margins were fixed once (finding: growth-margins), and `uv.lock` is still 6de4fbdc. `read_deterministic_arm` (`decision/economic.py:250`) has no command. Trained candidates are deferred (`specs/deferred_items.md` § 14-economic-decision-tooling, "Trained economic candidates", now ticked, re-pointed at resume, 2026-11-21). | No candidate exists. The Q3 audit gave its candidates row the same verdict. Stages 1 and 3. |
 
 No in-code-but-not-in-spec row: the parked HGCN stays with naics-embedding Reqs 15 and 17, and the
 outcome panel stays under Req 28.
@@ -221,14 +233,19 @@ cite text→code's spec as `specs/text-to-code-ita-panel.md`, which is now
 names (Deferred items this touches) go with their chains. Stage 1 takes trained economic
 candidates (`:622`) and the predictions-to-table binding (`:640`), whose trigger the candidates'
 spec may meet. The other plan-14 entries (`:633`, `:650`) touch the same module and may go with
-it. Stage 5 takes the entries that moved with embedding roadmap Stage 9: nothing ties the bundle's
-backbone to training at runtime (`:276`), and the summaries-key watch (`:481`). Stage 5 also takes
-the five entries of § 17-text-to-code-ita-panel (plan 17, Handoff). Stages 6 and 7
-read the graph entries if they reuse `graph_model/`: the curriculum thresholds (`:60`), the
-diagnostics report's interfaces (`:220`), the HGCN half of the Lorentz-distance item (`:244`),
-feeder precision (`:496`), metric mutation coverage (`:522`) and the legacy-input fallback
-(`:662`). A multi-seed Lambda campaign in Stage 1 or 5 first needs the public native
-qualification (`:560`).
+it. Stage 5 takes the entries that moved with embedding roadmap Stage 9: "nothing ties the
+bundle's backbone to training at runtime" (§ 7-supervision-target-and-text), and the
+summaries-key watch, "an export keys the summaries on its tokenizer"
+(§ 9-window-fitting-summaries). Stage 5 also takes the five entries of
+§ 17-text-to-code-ita-panel (plan 17, Handoff) and the two of § 20-text-to-code-reference-read
+(plan 20, Handoff). Stages 6 and 7 read the graph entries if they reuse `graph_model/`: the
+curriculum thresholds (`:60`), the diagnostics report's interfaces (`:220`), the HGCN half of
+the Lorentz-distance item (`:244`), feeder precision (`:496`), metric mutation coverage (`:522`)
+and the legacy-input fallback (`:662`). A multi-seed Lambda campaign in Stage 1 or 5 first needs
+the public native qualification, "Public native-qualification reconciliation"
+(§ 10-objective-anchors-and-live-radius). The resume of 2026-11-21 re-pointed Stage 5's three
+cites by section, because the file's line numbers had moved. The other cites here keep their old
+lines.
 
 - [x] Stage 1: Economic — candidates
       Objective: Build the economic candidates from text and the tree, with a command that reads
@@ -348,16 +365,16 @@ qualification (`:560`).
       Stage 4: HELD lifted (2026-11-18), gates read at embedding-data fd9e495 (Gates, above). G3
       is open. G4 is open for the ITA pairs through `specs/evaluation-protocol.md` Section 1,
       whose pinned run and conditions C1–C6 bind every read. G5 is open for the ITA pairs.
-      Planned as plan 20 (`specs/plans/20-text-to-code-reference-read.md`, PR #169, 4ba1f27),
-      approved and not executed. Its pre-flight's Stage 3 condition (D3, the COMPLETE stamp) is
-      met. Its execution starts after the resume of 2026-11-19 merges (Decisions, 2026-11-19).
+      Planned as plan 20 (PR #169, 4ba1f27) and executed after the resume of 2026-11-19 merged
+      (Decisions, 2026-11-19), as PRs #176 and #177.
       > Stage 4: COMPLETE (2026-11-19) — implemented by plan 20 (specs/plans/completed/20-text-to-code-reference-read.md). Its Handoff section names what Stage 5 and embedding roadmap Stage 12 consume.
       > Next: resume the roadmap.
 
 - [ ] Stage 5: Text→code — candidates and decision
-      Objective: Record text→code's margins before any candidate read, then build the candidates,
-      among them embedding roadmap Stage 9's backbone and one-factor ablations, select them on
-      the ITA validation part, and record text→code's adoption decision.
+      Objective: With the user's approval at the time, record text→code's margins before any
+      candidate read, then build the candidates, among them embedding roadmap Stage 9's backbone
+      and one-factor ablations, select them on the ITA validation part, and record text→code's
+      adoption decision.
       Spec: Req 28 (Training, and its last bullet), split Req 19 (Stage 9 held), U25, U27,
       Verification "One role per table or part" and "Gates held".
       Gap closed: Req 28 (the candidates and the decision).
@@ -376,8 +393,7 @@ qualification (`:560`).
       the margin record makes its own fresh reads (text-to-code spec §4.5). The two entries of
       § 20-text-to-code-reference-read. A known trap: the level-mode `CAPTURED_HERE` pin fails on
       this Mac (§ 19-economic-decision-read), so a local full-suite run shows one failure until
-      that entry is done. D2's answer is yes, and it changes nothing here: an ITA training part is
-      Req 28's Later, which needs a later spec and G1.
+      that entry is done.
       Produces: Text→code's margin record. Each candidate's checkpoint, table and query path, and
       text→code's decision record, which names the adopted candidate or says that the reference
       stands. Embedding roadmap Stage 12's text→code opening reads them.
