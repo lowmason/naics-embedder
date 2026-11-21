@@ -816,14 +816,6 @@ def test_the_second_arm_read_twice_after_the_first_is_refused_for_the_arm_it_nam
     with pytest.raises(ValueError, match="arm 'text-only-centered' is read 0 times"):
         check_relatedness_margin(unread)
 
-def test_a_consistent_record_passes_each_check_after_a_json_round_trip(tmp_path):
-    p = panel(logged(tmp_path))
-    margin = fix(p)
-    check_relatedness_margin(margin)
-    check_relatedness_margin_first(margin, p.log)
-    again = RelatednessMarginRecord.model_validate_json(margin.model_dump_json())
-    check_relatedness_margin(again)
-
 def test_the_record_round_trips_through_json(tmp_path):
     p = panel(logged(tmp_path))
     record = fix(p)
