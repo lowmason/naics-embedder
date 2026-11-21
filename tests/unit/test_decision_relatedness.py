@@ -1123,6 +1123,28 @@ def test_a_naive_fixed_at_or_a_read_after_fixed_at_is_refused(tmp_path):
         check_relatedness_margin_first(early, p.log)
     check_relatedness_margin_first(margin, p.log)
 
+def test_the_refusal_for_a_candidate_read_names_fixed_at_and_the_reads_purpose_and_time(tmp_path):
+    p = panel(logged(tmp_path))
+    early = read(p, role='candidate', purpose='an early candidate read')
+    margin = fix(p)
+    with pytest.raises(ValueError) as refused:
+        check_relatedness_margin_first(margin, p.log)
+    message = str(refused.value)
+    assert f'was fixed at {margin.fixed_at.isoformat()}, after the candidate read' in message
+    assert f"'an early candidate read' at {early['time']}" in message
+    assert early['time'] != margin.fixed_at.isoformat()
+
+def test_the_refusal_for_an_own_read_after_fixed_at_names_fixed_at_and_the_reads_time(tmp_path):
+    p = panel(logged(tmp_path))
+    margin = fix(p)
+    first = read_time(margin.log_records[0], 'read')
+    early = margin.model_copy(update={'fixed_at': first - timedelta(seconds=1)})
+    with pytest.raises(ValueError) as refused:
+        check_relatedness_margin_first(early, p.log)
+    assert f'was fixed at {early.fixed_at.isoformat()}, before its read at {first.isoformat()}' in (
+        str(refused.value)
+    )
+
 def test_each_of_the_margins_own_reads_must_come_by_fixed_at(tmp_path):
     p = panel(logged(tmp_path))
     margin = fix(p)
