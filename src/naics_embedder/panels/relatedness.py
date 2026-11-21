@@ -22,15 +22,15 @@ Panel
     ``RelatednessPanel`` mirrors ``ItaPanel`` under its own panel name,
     ``relatedness_co_ownership``, and shares no class with it. The candidates are the codes with a
     marginal row. A code falls in the part that its salted hash gives, and an anchor is a candidate
-    with at least one partner.
-    Every read of a part appends a ``read`` record to the selection log before the arm is asked for
-    a similarity. A role outside ``READ_ROLES``, a sealed read before ``open_sealed`` and a part
-    with no anchor are refused first, and log nothing. The sealed part is read only after
-    ``open_sealed`` on the same panel object. Openings are keyed on the split fingerprint, which a
-    rebuilt table does not change, so a second opening needs a stated reason and is logged as
-    ``reopen``. The data fingerprint names what a read scores: the part's anchors with their
-    partners and gains, the candidates and the two tables' SHA-256 values. Computing it is not a
-    read. ``from_files`` checks each table's SHA-256 against its pin before it reads a table.
+    with at least one partner. Every read of a part appends a ``read`` record to the selection log
+    before the arm is asked for a similarity. A role outside ``READ_ROLES``, a sealed read before
+    ``open_sealed`` and a part with no anchor are refused first, and log nothing. The sealed part
+    is read only after ``open_sealed`` on the same panel object. Openings are keyed on the split
+    fingerprint, which a rebuilt table does not change, so a second opening needs a stated reason
+    and is logged as ``reopen``. The data fingerprint names what a read scores: the part's anchors
+    with their partners and gains, the candidates and the two tables' SHA-256 values. Computing it
+    is not a read. ``from_files`` checks each table's SHA-256 against its pin before it reads a
+    table.
 '''
 
 # -------------------------------------------------------------------------------------------------
