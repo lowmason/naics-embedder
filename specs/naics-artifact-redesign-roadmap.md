@@ -18,8 +18,9 @@ resume (`specs/relatedness-artifact.md` §8). It re-read the gates at embedding-
 added G6. On the owner's answers (Decisions, 2026-11-19), it added Stage 7b, ended the economic
 chain at Stage 3 with no sealed opening, and recorded the tenth resume of the embedding roadmap.
 The resume of 2026-11-21 read plan 20's Handoff and amended Stage 5 from it. It re-read the gates
-at embedding-data 4942e1d, where no gate changed, and routed Stage 5. Stage 6 is executing as plan
-21 (PR #175). Stages 6b, 7 and 7b are HELD on gates in embedding-data (Gates, under Stages).
+at embedding-data 4942e1d, where no gate changed, and routed Stage 5. On the owner's answers
+(Decisions, 2026-11-21), it recorded the eleventh resume of the embedding roadmap. Stage 6 is
+executing as plan 21 (PR #175). Stages 6b, 7 and 7b are HELD on gates in embedding-data (Gates, under Stages).
 `uv.lock` is still 6de4fbdc at 1f19b1c.
 
 **Basis.** Source spec `specs/naics-artifact-redesign.md` (user adjudication Q4, approved as U31),
@@ -97,6 +98,17 @@ The user chose the recommended option in each. Each ruling is the chosen option'
   the two spec lines above.
 - **Hold: "Hold both until merge (Recommended)".** Stage 4's execution (plan 20) and Stage 6's
   planning start only after this resume's PR merges.
+
+**Decisions (2026-11-21).** The resume after Stage 4 asked one batched question with two parts.
+It added, split, dropped and reordered no stage. The user chose the recommended option in each.
+
+- **Stage 12: "Eleventh resume here (Recommended)".** Plan 20's Handoff has one bullet for
+  embedding roadmap Stage 12. The same PR records it as that roadmap's eleventh resume, with a
+  dated amendment to Stage 12.
+- **Push: "Push and open PR now (Recommended)".** Plan 21 (Stage 6) still held unmerged work on
+  its own branch. A `git merge-tree` check of this resume against that branch was clean, so the
+  PR opened without waiting for plan 21. The user merges it, and Stage 5's brainstorming starts
+  after the merge.
 
 ## Gap analysis
 
