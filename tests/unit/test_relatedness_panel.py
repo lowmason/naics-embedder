@@ -802,6 +802,45 @@ def test_a_second_opening_by_the_same_panel_needs_a_reason(tmp_path):
         base.open_sealed('again')
     assert len(log.records()) == 1
 
+@pytest.mark.parametrize('tables', ['same', 'rebuilt'])
+@pytest.mark.parametrize('reason', [None, '', '   '], ids=['missing', 'empty', 'blank'])
+def test_a_refused_second_opening_leaves_the_sealed_part_sealed(tmp_path, reason, tables):
+    # Panel A opens. Panel B, on the same log and over the same or rebuilt tables (one split
+    # fingerprint), is refused a second opening without a reason, so it must not read the part
+    log = logged(tmp_path)
+    panel(log).open_sealed('decision')
+    other = panel(log, rebuilt_tables() if tables == 'rebuilt' else None)
+
+    with pytest.raises(SplitAlreadyOpenedError):
+        other.open_sealed('again', reopen_reason=reason)
+    with pytest.raises(SealedSplitError):
+        other.score(tree_arm(), 'sealed', 'peek')
+    with pytest.raises(SealedSplitError):
+        other.score_logged(tree_arm(), RelatednessPart.SEALED, 'peek')
+
+    (opening, ) = log.records()
+    assert (opening['event'], opening['panel'], opening['split'], opening['purpose']) == (
+        'open', 'relatedness_co_ownership', 'sealed', 'decision'
+    )
+    assert opening['fingerprint'] == split_fingerprint(RELATEDNESS_SETTINGS)
+
+@pytest.mark.parametrize('purpose', ['', '   '], ids=['empty', 'blank'])
+def test_an_opening_refused_for_a_blank_purpose_leaves_the_sealed_part_sealed(tmp_path, purpose):
+    # The log refuses a record with no purpose, so the opening never happened: the part stays
+    # sealed, and the next opening is the first
+    log = logged(tmp_path)
+    base = panel(log)
+
+    with pytest.raises(ValueError, match='purpose'):
+        base.open_sealed(purpose)
+    with pytest.raises(SealedSplitError):
+        base.score(tree_arm(), 'sealed', 'peek')
+    assert not log.path.exists()
+
+    base.open_sealed('decision')
+    (opening, ) = log.records()
+    assert (opening['event'], opening['purpose']) == ('open', 'decision')
+
 # -------------------------------------------------------------------------------------------------
 # The data fingerprint
 # -------------------------------------------------------------------------------------------------
