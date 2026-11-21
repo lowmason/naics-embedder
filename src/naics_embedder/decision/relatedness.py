@@ -144,8 +144,9 @@ def fix_relatedness_margin(
 
     Raises:
         ValueError: If ``r`` is not a positive finite number, the arms are not exactly
-            ``REFERENCE_ARMS``, ``embedding_data_commit`` is not 7 to 40 lowercase hexadecimal
-            characters, or ``purpose`` is blank, before anything is read.
+            ``REFERENCE_ARMS``, or ``embedding_data_commit`` is not 7 to 40 lowercase hexadecimal
+            characters, before anything is read. A blank ``purpose`` is refused by the first read's
+            log append, which writes nothing.
     '''
 
     if not (math.isfinite(r) and r > 0):

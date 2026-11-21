@@ -509,6 +509,15 @@ REFUSED_BEFORE_READING = {
         },
         COMMIT,
     ),
+    'a-key-that-is-not-text': (
+        0.05,
+        {
+            TREE: FlatArm(),
+            TEXT_ONLY: FlatArm(),
+            3: FlatArm()
+        },
+        COMMIT,
+    ),
     'commit-empty': (0.05, None, ''),
     'commit-short': (0.05, None, 'e6e12b'),
     'commit-long': (0.05, None, 'e' * 41),
@@ -645,6 +654,16 @@ RECORD_CASES = {
     'no-headlines': (lambda m: {
         'reference_headlines': {}
     }, 'not the reference arms'),
+    'a-headline-key-that-is-not-text': (
+        lambda m: {
+            'reference_headlines': {
+                TREE: m.reference_headlines[TREE],
+                TEXT_ONLY: m.reference_headlines[TEXT_ONLY],
+                3: 0.9
+            }
+        },
+        'not the reference arms',
+    ),
     'other-reference': (lambda m: {
         'reference': TEXT_ONLY
     }, 'names the reference'),
