@@ -188,8 +188,13 @@ and files.
    new backbones never read a text longer than 128 tokens, which may understate them.
 3. **Summaries at 128 for each new backbone.** `resolve_channel_texts` tests a text against the
    run's length, so the texts that overflow 128 for MiniLM (753 today) likely overflow for gte and
-   bge too. Each new backbone gets its own artifact from `naics-embedder data summaries --backbone
-   <name>` at window 128, pinned in `WINDOW_SUMMARIES` (`panels/window_summaries.py`). All three
+   bge too. Each new backbone gets its own artifact at window 128, pinned in `WINDOW_SUMMARIES`
+   (`panels/window_summaries.py`). Today `generate_window_summaries` (`data/window_summaries.py`)
+   always fits summaries to `trained_window(backbone)`, which would be 512, and
+   `naics-embedder data summaries` has no length option. Plan A adds a window argument to both,
+   at most the trained window and by default the trained window, so MiniLM's artifact is
+   unchanged. Each new artifact is written with `--backbone <name>` at window 128, and its pin
+   records 128. All three
    backbones appear to share BERT's 30,522-token uncased vocabulary. The plan checks this, and
    reports whether the new summaries equal MiniLM's. If they differ, each arm reads its own, as
    Stage 9 allows.
