@@ -5,8 +5,8 @@
 > this document wholesale.
 
 **Status: APPROVED (2026-09-23); resumed three times on 2026-09-24, once on 2026-10-03, twice
-on 2026-10-04, once on 2026-10-07, once on 2026-10-12, once on 2026-11-14 and once on
-2026-11-19.** Derived in a
+on 2026-10-04, once on 2026-10-07, once on 2026-10-12, once on 2026-11-14, once on 2026-11-19
+and once on 2026-11-21.** Derived in a
 session that could not ask questions, then the six open questions were answered interactively
 and the eleven-stage partition approved at the human checkpoint
 (decisions D1–D6 below). Stages 1–8 and 6b are complete. The first resume re-validated Stages 2–11
@@ -26,7 +26,9 @@ parked and Stage 12 is one sealed opening per judged artifact (below). The ninth
 artifact redesign, user adjudication Q4 (`specs/naics-artifact-redesign.md`): the artifacts are
 relatedness, text→code and economic, and the tree is their codebook (below). The tenth recorded
 the redesign's economic decision: no candidate was adopted, so Stage 12 has no economic opening,
-and relatedness's opening is in its own chain (below). No stage here routes now. The redesign's
+and relatedness's opening is in its own chain (below). The eleventh recorded the redesign's
+text→code reference read: the ITA sealed part is still unopened (below). No stage here routes
+now. The redesign's
 stages are in `specs/naics-artifact-redesign-roadmap.md`. The economic artifact's first stages are
 done (`specs/completed/naics-representation-split-roadmap.md`), and its chain ended at the
 redesign roadmap's Stage 3 with no candidate adopted.
@@ -310,6 +312,23 @@ Plan 19's Handoff and the finding say that Stage 12 opens each outer set once. T
 and stay unedited, and this resume supersedes that line. `specs/deferred_items.md` was read, not
 edited. The Gap analysis was not re-read. No panel read, selection-log read or opening ran during
 this resume.
+
+**Resume after the redesign's text→code reference read (2026-11-21).** No stage here has
+completed since the tenth resume, so no stamp is new. The redesign roadmap's Stage 4 completed on
+2026-11-19 (plan 20, merged as PRs #176 and #177, 1f19b1c). One bullet of its Handoff names this
+roadmap's Stage 12 (`specs/plans/completed/20-text-to-code-reference-read.md`, Handoff to later
+stages). This resume records it, on the user's answer at the redesign roadmap's resume of the same
+day (`specs/naics-artifact-redesign-roadmap.md`, Decisions, 2026-11-21):
+
+- The ITA sealed part is unopened, under split fingerprint 8602ceb2…, the ITA panel's split
+  (`conf/data/ita_panel.yaml`, the redesign's Stage 2). At plan 20's end the selection log held no
+  `ita_text` opening (`specs/findings/text-to-code-gap.md` §7). Text→code's opening reads the
+  sealed part under that fingerprint, after the redesign's Stage 5 records its decision (amended
+  in its entry).
+
+Plan 20's other Handoff bullets name the redesign's Stage 5 only. `specs/deferred_items.md` was
+read, not edited. The Gap analysis was not re-read. No panel read, selection-log read or opening
+ran during this resume.
 
 **Decisions (2026-09-23).** Six ambiguities the spec leaves open, answered by the user at the
 checkpoint. Each fixes the named stage; the stage entries cite them.
@@ -1172,6 +1191,11 @@ differs from its own.
       either. Relatedness's opening is the redesign roadmap's Stage 7b, in its own chain (U45), so
       this stage keeps text→code's opening of the ITA sealed part only. A parked relatedness chain
       does not hold it.
+      Amended at the eleventh resume (2026-11-21), from plan 20's Handoff. Text→code's opening
+      reads the ITA sealed part under split fingerprint 8602ceb2… (`conf/data/ita_panel.yaml`),
+      after the redesign roadmap's Stage 5 records text→code's decision. For that opening, the
+      Exit's "the fingerprint Stage 2 or Stage 3 committed" is this fingerprint. At plan 20's end
+      the selection log held no `ita_text` opening (`specs/findings/text-to-code-gap.md` §7).
 
 ## Stage-spec stamp
 
