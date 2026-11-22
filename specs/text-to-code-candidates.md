@@ -359,6 +359,13 @@ No ITA pair enters training (C3). Every ITA read is of Stage 4's table build, DA
 - **The user approves each real read and run at the time** (the Stage 5 entry's Objective).
 - **`uv.lock`.** New backbones need no new package. If a plan step changes the lock, it says so. No
   economic read is planned, so the economic pairing does not bind (roadmap, Across chains).
+- **The run-settings identity changes on purpose.** `CLAUDE.md` keeps the literal 21-key
+  `run_settings` identity and the finished artifacts unchanged. The retention setting and the frozen
+  switch extend that identity, so `remote/canonical.py`, `remote/sync.py`, exact resume and
+  `tools sweep`'s `ArmSpec` see them. Each new setting defaults to today's behaviour. A checkpoint
+  without the new keys, such as Stage 8's, still loads, exports and reads, and compares equal to a
+  config that leaves the new settings at their defaults. Stage 8's records stay valid. §4.5's
+  margin read depends on this. `CLAUDE.md` is updated to name the new count.
 - **The selection log is append-only.** No step deletes or rewrites a line of it.
 - **The known local failure.** The level-mode `CAPTURED_HERE` pin fails on this Mac (§ 19), so a
   local full-suite run shows one failure until that entry is done. The plans report it and do not
@@ -403,6 +410,8 @@ Plan A (fixtures):
 - [ ] An early-stopped run keeps its grid epochs up to the stop, its last epoch and its
       outcome-best epoch (test).
 - [ ] Exact resume refuses a changed retention setting or frozen switch (test).
+- [ ] A Stage 8-shaped checkpoint without the new settings loads, exports and reads, and compares
+      equal to a config at the new settings' defaults (test).
 - [ ] Training refuses a backbone with no trained window, and one with an over-window text and no
       summaries pin, and accepts each of the three backbones with bundle 301cce28 at length 128
       (test).
