@@ -18,7 +18,7 @@ Typer/Rich, pytest.
 **Spec:** `specs/text-to-code-candidates.md` (approved, U54). This plan is the spec's §7 Plan A.
 Plan B (the real stage) is planned after this plan merges, from `## Handoff to Plan B` below.
 This plan's header deliberately carries no roadmap line, so its completion does not stamp Stage 5
-(D1).
+(D2).
 
 ## Global Constraints
 
@@ -87,10 +87,13 @@ This plan's header deliberately carries no roadmap line, so its completion does 
 
 ## Decisions
 
-- **D1** (owner, plan review, 2026-11-22): PENDING. The brief's three defaults: Plan A only, with
-  Plan B planned later from this plan's Handoff; no roadmap line in Plan A's header; every test
-  on fixtures, with one final gated task for the two downloads. Applied in: the header, Task 11
-  and `## Handoff to Plan B`.
+- **D1** (owner, plan review, 2026-11-22): Plan B is planned after Plan A merges, from this
+  plan's Handoff ("After Plan A"). Applied in: `## Handoff to Plan B`.
+- **D2** (owner, plan review, 2026-11-22): only Plan B's header carries the roadmap line, so Plan
+  A's completion stamps nothing ("Only Plan B has it"). Applied in: the header.
+- **D3** (owner, plan review, 2026-11-22): every test stays on fixtures, and the two downloads are
+  one final task gated on the owner's approval at the time ("Gated Task 11"). Applied in:
+  Task 11.
 
 ---
 
