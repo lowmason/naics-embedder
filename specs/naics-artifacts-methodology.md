@@ -217,7 +217,7 @@ Shared symbols. Each component section extends this table.
 | $\mathbb{H}^{d}$ | Unit-curvature hyperboloid: $p \in \mathbb{R}^{d+1}$ with $\langle p, p\rangle_{\mathcal{L}} = -1$ and $p_{0} > 0$ | |
 | $\langle p, p'\rangle_{\mathcal{L}}$ | Lorentz inner product, $-p_{0}p'_{0} + \sum_{l=1}^{d} p_{l}p'_{l}$ | $\mathbb{R}$ |
 | $z_{c}$, $Z$ | Exported coordinates of code $c$, and the code table of all codes | $\mathbb{R}^{d}$, $2125 \times d$ |
-| $\bar h^{\circ}_{c}$ | Frozen text vector of code $c$: the backbone without adapters, mean-pooled over each present field's tokens, then averaged over its present fields | $\mathbb{R}^{384}$ |
+| $\bar h^{\circ}_{c}$ | Frozen text vector of code $c$: the backbone without adapters reads each present field's text without a field marker (with over-window texts replaced by their summaries), mean-pools its token states, and averages over the present fields | $\mathbb{R}^{384}$ |
 | $\operatorname{PCA}_{d}$ | Projection onto the first $d$ principal components, fitted on all 2,125 codes | $\mathbb{R}^{384} \to \mathbb{R}^{d}$ |
 | $Z'$ | A candidate coordinate table for the economic artifact (S7) | $2125 \times d$ |
 | $\operatorname{RR}$, $\operatorname{MRR}$ | Reciprocal rank of a query's truth, and its mean over a set of queries | $(0, 1]$ |
@@ -482,8 +482,9 @@ is never silently truncated. Absent fields never enter the backbone.
 - Projection: one affine map, $v = W\bar h_{c} + b$, to $d \in \{8, 16, 32\}$.
 - Head: $p = \psi_{g}(v)$, by arm.
 
-The frozen text vector $\bar h^{\circ}_{c}$ of the shared notation is this map's fused vector with
-the adapters removed.
+The frozen text vector $\bar h^{\circ}_{c}$ of the shared notation differs from this map's fused
+vector in two ways: it has no adapters, and its field texts carry no field marker. It reads the
+same summaries for over-window texts.
 
 **Geometry arms.** The three heads share everything before them and differ in the point, the
 distance and the exported coordinates.
@@ -825,7 +826,8 @@ read, nothing has been selected, and the sealed part is closed.
 | $\mathfrak{h}$ | A fixed salted cryptographic hash of a normalized description, read as an unsigned 64-bit integer | |
 | $\mathcal{O}^{\mathrm{val}}$, $\mathcal{O}^{\mathrm{sea}}$ | Validation part and sealed part | partition of $\mathcal{O}$ |
 | $\operatorname{anc}_{l}(c)$ | Level-$l$ ancestor of $c$, which is $c$ itself at $l = 6$ | $\mathcal{C}_{l}$ |
-| $\operatorname{rank}_{i}$, $\operatorname{rank}^{(l)}_{i}$ | Best shortlist rank over $i$'s reported codes, and the first shortlist position that matches a reported code at level $l$ | $1, \dots, 1012$ |
+| $\mathcal{T}^{(l)}_{i}$ | Matching codes of $i$ at level $l$: the six-digit codes $c'$ with $\operatorname{anc}_{l}(c') \in \operatorname{anc}_{l}(T_{i})$, so $\mathcal{T}^{(6)}_{i} = T_{i}$ | subset of $\mathcal{C}_{6}$ |
+| $\operatorname{rank}^{(l)}_{i}$, $\operatorname{rank}_{i}$ | Shortlist rank of $i$'s nearest matching code at level $l$, and its value at level 6 | $1, \dots, 1012$ |
 | $\operatorname{MRR}^{\mathrm{own}}$ | Headline: mean reciprocal rank over a part's non-copied pairs, each pair once | $(0, 1]$ |
 | $\operatorname{MRR}^{\mathrm{cp}}$ | Mean reciprocal rank over a part's copied pairs | $(0, 1]$ |
 | $\operatorname{MRR}^{\mathrm{phr}}$ | Phrasing report: the mean over normalized descriptions of the mean reciprocal rank of their non-copied pairs | $(0, 1]$ |
@@ -876,15 +878,17 @@ $$\operatorname{part}(i) = \mathfrak{h}\bigl(\operatorname{nd}(i)\bigr) \bmod 2,
   so a rebuilt table cannot pass as a fresh sealed part.
 
 **Scoring.** The candidates are the 1,012 six-digit codes, ranked for $q_{i}$ by the encoder's own
-distance, with ties counted against the truth as in S3. Any reported code counts:
-$$\operatorname{rank}_{i} = \min_{c \in T_{i}} \sum_{c' \in \mathcal{C}_{6}} \mathbb{1}\!\left[\operatorname{dist}(p_{q_{i}}, p_{c'}) \le \operatorname{dist}(p_{q_{i}}, p_{c})\right], \qquad \operatorname{RR}_{i} = 1/\operatorname{rank}_{i}.$$
-A pair's other reported codes rank behind its best one, so they never count against it.
+distance. Any matching code counts, and ties with non-matching codes count against the truth, as
+in S3. At level $l$, the matching codes are those that share a reported code's level-$l$
+ancestor, and the rank is one plus the non-matching candidates at a distance no greater than the
+nearest matching one:
+$$\operatorname{rank}^{(l)}_{i} = 1 + \sum_{c' \in \mathcal{C}_{6} \setminus \mathcal{T}^{(l)}_{i}} \mathbb{1}\!\left[\operatorname{dist}(p_{q_{i}}, p_{c'}) \le \min_{c \in \mathcal{T}^{(l)}_{i}} \operatorname{dist}(p_{q_{i}}, p_{c})\right], \qquad \operatorname{rank}_{i} = \operatorname{rank}^{(6)}_{i}, \qquad \operatorname{RR}_{i} = 1/\operatorname{rank}_{i}.$$
+A pair's other reported codes never count against it, even when they tie with its nearest one.
 
 - **Per pair:** reciprocal rank, Hit@1, Hit@5 and Hit@10. For the coarser levels, the highest level
-  of the lowest common ancestor between the top-ranked code and any reported code, and for each
-  $l \in \{2, \dots, 5\}$ the first shortlist position $\operatorname{rank}^{(l)}_{i}$ whose code
-  $c'$ has $\operatorname{anc}_{l}(c') \in \operatorname{anc}_{l}(T_{i})$, with its reciprocal
-  rank and hits. This reads the shortlist that an owner who only knows their sector would see.
+  of the lowest common ancestor between the top-ranked code and any reported code, and
+  $\operatorname{rank}^{(l)}_{i}$ for each $l \in \{2, \dots, 5\}$, with its reciprocal rank and
+  hits. This reads the shortlist that an owner who only knows their sector would see.
 - **Headline:** the mean reciprocal rank over the part's non-copied pairs,
   $$\operatorname{MRR}^{\mathrm{own}} = \operatorname{mean}\bigl\{\operatorname{RR}_{i} : i \in \text{the part},\ \operatorname{cp}(i) = 0\bigr\}.$$
 - **Reports, which never decide:** $\operatorname{MRR}^{\mathrm{cp}}$ over copied pairs, the
