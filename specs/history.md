@@ -93,3 +93,22 @@ Differences from the design:
 - Deviation (Task 7): the scratch `log_state.py` crashed in its RUN check and was fixed and re-run read-only. Source: plan, Task 7.
 - Deviation (Task 8): `verify.py` takes RUN as a second argument. Source: plan, Task 8.
 - Deferred: 2 items. Source: specs/deferred_items.md, § 20-text-to-code-reference-read.
+
+## 21-relatedness-artifact — 2026-11-22
+Plan: specs/plans/completed/21-relatedness-artifact.md · Spec: specs/completed/relatedness-artifact.md (retired) · Roadmap: specs/naics-artifact-redesign-roadmap.md, Stage 6
+
+Differences from the design:
+- Ruling (Task 2): keep the extra _codebook refusal of a non-six-digit codebook entry in co_ownership_inputs — ItaPanel refuses non-six-digit candidates too (panels/ita.py:279), Task 6 passes six-digit codes only, it has its own test and mutants — cost if wrong: a Task 6 panel over a codebook with shorter codes would refuse at construction, which is the intended behavior.
+- Ruling (Task 2): keep the extra TARGETS_TABLE, MARGINALS_TABLE and Pair exports — harmless names for the two TABLES entries and the pair type — no cost.
+- Ruling (Task 7): keep fix_relatedness_margin's extra pre-read check of embedding_data_commit — a bad commit would otherwise log three reference reads and then fail in pydantic, and the plan's rule is that every refusal comes before any read; it has a test (commit-with-a-newline) and mutants — cost if wrong: none (a bad commit is refused earlier).
+- Ruling (Task 8): test_the_point_statistic_is_the_headline compares to 1e-15 absolute, not bit for bit — the plan gives only a comment ("point_statistic over every anchor == result.headline['ndcg_10']"), no assertion code; the headline is math.fsum and point_statistic is a numpy sum (0.5177262150609928 against ...929 on the fixture); Δ's point value is reported and never decides (the verdict reads the interval of replicates against δ) — cost if wrong: a reported Δ off by one ulp. Carry into the Handoff: the margin's headline and a verdict's Δ are not bit-equal to the panel's fsum headline.
+- Ruling (Task 10): docs/api/decision.md gets the "Relatedness margin" section after "Text→code gap", not directly after "Text→code margin" — plan 20 (merged after plan 21 was written) inserted "ITA reference reads" and "Text→code gap" after "Text→code margin", and the three text→code sections stay together; cost if wrong: one heading sits at the end of the page instead of in the middle.
+- Ruling (Task 10): tests/README.md's coverage table gets a relatedness row (commit de5da70, fix round 1) though the brief asked only for counts there — plan 20 added rows for its ITA tests and the table lists every test file's contract; cost if wrong: one extra table row.
+- Deviation (Task 2): the inputs also refuse a codebook entry that is not six digits and export `TARGETS_TABLE`, `MARGINALS_TABLE` and `Pair`. Source: plan, Task 2.
+- Deviation (Task 7): `fix_relatedness_margin` also checks `embedding_data_commit` before any read. Source: plan, Task 7.
+- Deviation (Task 8): the point-statistic test compares at 1e-15, not bit for bit. Source: plan, Task 8.
+- Deviation (Task 10): the rebase onto origin/main replayed the branch's 30 commits with no conflict. Source: plan, Task 10.
+- Deviation (Task 10): "Relatedness margin" goes after "Text→code gap", the last text→code section. Source: plan, Task 10.
+- Deviation (Task 10): `tests/README.md` also gets a coverage-table row. Source: plan, Task 10.
+- Deviation (Task 10): pytest ran with one known macOS failure, the level-predictions digest. Source: plan, Task 10.
+- Deferred: 3 items. Source: specs/deferred_items.md, § 21-relatedness-artifact.
