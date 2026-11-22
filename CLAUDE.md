@@ -29,7 +29,7 @@ artifact. The economic artifact's first roadmap is complete
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
-Python 3.12. The source tree has **136 Python files**; tests have **121 unit** files and two
+Python 3.12. The source tree has **136 Python files**; tests have **122 unit** files and two
 integration files. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
@@ -122,7 +122,7 @@ src/naics_embedder/
 └── utils/                     # config, training, input-window and geometry utilities
 
 tests/
-├── unit/                      # 121 unit test files
+├── unit/                      # 122 unit test files
 ├── integration/               # test_reference_training.py, test_remote_workflow.py
 ├── fixtures/                  # tiny models, bundles, panels and runs
 └── conftest.py
@@ -135,6 +135,8 @@ conf/data/                     # frozen panel pins, roles, summaries and held-ou
 docs/                          # guides and MkDocs API pages
 scripts/format_code.sh         # Ruff fixes/imports, then YAPF layout
 .claude/rules/                 # path-scoped rules: economic, text-to-code, relatedness, remote
+.claude/settings.json          # project Claude Code hooks: evidence guard, format check
+.claude/hooks/                 # the hook scripts (stdlib-only, Python 3.9)
 ```
 
 Generated data, checkpoints, logs and reports are separate artifacts. Do not confuse historical
@@ -298,10 +300,12 @@ of a regime's outer set counts for both outcomes (Req 22). `tools regressor-pane
 `tools sweep` read level mode only, so no candidate's growth error exists before the economic
 margin (Req 24). `tools decide` refuses a candidate that read before the margins, and paired reads
 must share one `uv.lock` on macOS arm64. The growth margins were fixed once, on 2026-10-17
-(`specs/findings/growth-margins.md`). Never run `tools growth-margins` again: nothing refuses a
-second run, and every economic candidate is decided against that record. The economic decision
-was recorded on 2026-11-18 (`specs/findings/economic-decision.md`): no candidate is adopted, and
-the reference `covariates+ancestors` stands. The mechanics are in `.claude/rules/economic.md`.
+(`specs/findings/growth-margins.md`). Never run `tools growth-margins` again: nothing in the
+code refuses a second run, and every economic candidate is decided against that record. In
+Claude Code sessions, the project hook `.claude/hooks/evidence_guard.py` denies it. The economic
+decision was recorded on 2026-11-18 (`specs/findings/economic-decision.md`): no candidate is
+adopted, and the reference `covariates+ancestors` stands. The mechanics are in
+`.claude/rules/economic.md`.
 
 ### Remote Workflow and Phase 2 Boundary
 
@@ -364,7 +368,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **5,636 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **5,710 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -534,7 +538,7 @@ evaluation currently uses curvature 1; a non-unit-curvature correction is a sepa
 
 ## Testing and Validation
 
-There are 121 unit files and two integration files. Important current seams include:
+There are 122 unit files and two integration files. Important current seams include:
 
 - `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
   and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and
@@ -551,6 +555,9 @@ There are 121 unit files and two integration files. Important current seams incl
   them. All of them read fixture tables only.
 - `integration/test_reference_training.py`: tiny-backbone Trainer runs, earliest-best selection,
   schedule/early stopping, health records and exact resume.
+- `test_claude_hooks.py`: the two project Claude Code hooks, run as Claude Code runs them: the
+  evidence guard's denials, asks and silences, the format check's paths and exit codes, and their
+  Python 3.9 syntax.
 - Graph, panel, resampling and decision tests cover their separate interfaces.
 
 Keep generated fixture outputs under `tmp_path`. Use reference fixture bundles instead of real data.
@@ -588,6 +595,32 @@ Format only touched Python files with `scripts/format_code.sh`; the full `--chec
 read-only. Never use `ruff format`. New API pages use mkdocstrings and must appear in
 `docs/.nav.yml`. Re-point links when removing a heading, and check rendered anchors as well as
 the strict build. Public rendered docstrings must document their arguments accurately.
+
+## Claude Code Hooks
+
+`.claude/settings.json` registers two project hooks. They run in every Claude Code session on this
+checkout and on worktrees cut from a commit that has them:
+
+- `.claude/hooks/evidence_guard.py` (PreToolUse, on Bash and the Terminal panel's
+  `mcp__terminal__run_in_terminal`) denies `tools growth-margins` and `ruff format`. It asks for
+  the owner's approval before a tools command that reads a real panel: `outcome-baseline`,
+  `regressor-panel`, `margins`, `decide`, `economic-read`, `outcome-panel`, `ita-read` and
+  `sweep`. `--help`, and the `--dry-run` of `economic-read` and `ita-read`, pass with no prompt.
+  It drops comments, heredoc bodies and redirections, cuts the rest at shell separators and reads
+  `bash -c` scripts. After a launcher such as `uv run`, every later word may be the program, up to
+  a text program such as `echo` or `git`, so a rare false deny is possible. It catches mistakes,
+  not evasion: command substitutions, `eval`, a heredoc fed to a shell and Python that calls the
+  CLI pass unread.
+- `.claude/hooks/format_check.py` (PostToolUse, on Edit and Write) runs
+  `scripts/format_code.sh --check` on an edited Python file under `src/` or `tests/`. A failure
+  exits 2, so Claude reads the output; nothing changes on disk. It never fixes: `ruff check --fix`
+  would delete an import that one edit adds and the next edit uses. Such an import reports F401
+  until its use lands.
+
+Claude Code runs both with the first `python3` on PATH, which is 3.9 on macOS: keep them
+stdlib-only and 3.9-compatible. A payload that either hook cannot read passes. When the panel-read
+list or a never-rerun command changes, update `PANEL_READS` or the deny rules in the guard, and its
+tests in `tests/unit/test_claude_hooks.py`, which run both hooks as Claude Code does.
 
 ## Git Workflow
 

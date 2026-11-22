@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **121 unit** test files and **2 integration** files, with **5,636 collected
+The suite contains **122 unit** test files and **2 integration** files, with **5,710 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -19,7 +19,7 @@ it back on with `monkeypatch` for a temporary checkout.
 
 ```text
 tests/
-├── unit/                         # 121 unit test files
+├── unit/                         # 122 unit test files
 ├── integration/
 │   ├── test_reference_training.py # tiny-backbone Trainer workflows
 │   └── test_remote_workflow.py    # GNU-rsync workflow qualification
@@ -46,6 +46,7 @@ tests/
 | Training and contracts | `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`, `test_export.py`, `test_arm_encoder.py`: objective refusal, settings/directory/seed guards, saved constructor controls, CPU/MPS float64 callback transport and export/read provenance |
 | Campaign runner | `test_checkpoint_runner.py`: all-seed preflight, earliest best, epoch coverage, saved-score/version-sibling refusals and monitor-record pass-through |
 | Verification and summary | `test_radius_report.py`, `test_epoch_summary.py`, `test_visualize_metrics.py`: live gradients, radius/distance checks, durable finite health, resume and SD bands |
+| Claude Code hooks | `test_claude_hooks.py`: the evidence guard's denials (`tools growth-margins`, `ruff format`), its asks before real panel reads and its silences, the format check's paths and exit codes, and both hooks' Python 3.9 syntax. Each test pipes a payload into the hook as Claude Code does |
 | Trainer integration | `integration/test_reference_training.py`: cache/monitor order, earliest tied best, warmup/plateau, early stopping, exact resume and health |
 
 Other unit files cover graph refinement, bundle construction, data preprocessing, panel
