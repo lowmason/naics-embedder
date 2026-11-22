@@ -94,6 +94,8 @@ This plan's header deliberately carries no roadmap line, so its completion does 
 - **D3** (owner, plan review, 2026-11-22): every test stays on fixtures, and the two downloads are
   one final task gated on the owner's approval at the time ("Gated Task 11"). Applied in:
   Task 11.
+- **D4** (owner, plan review, 2026-11-22): plan 22 approved as committed ("Approve, open PR"),
+  to run subagent-driven in a fresh session ("Subagent-Driven"). Applied in: the header.
 
 ---
 
