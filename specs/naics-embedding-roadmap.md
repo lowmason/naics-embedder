@@ -305,8 +305,8 @@ records it, with the user's answers at the redesign roadmap's resume of the same
   arm64, Python 3.12.12, numpy 2.3.4 on Accelerate and `uv.lock` 6de4fbdc, with the reference's
   predictions within 1e-13 of the margin read's.
 - Relatedness's opening is in its own chain, the redesign roadmap's Stage 7b (U45,
-  `specs/relatedness-artifact.md` §4.8). Stage 12 keeps text→code's opening only, so a parked
-  relatedness chain does not hold it.
+  `specs/completed/relatedness-artifact.md` §4.8). Stage 12 keeps text→code's opening only, so a
+  parked relatedness chain does not hold it.
 
 Plan 19's Handoff and the finding say that Stage 12 opens each outer set once. They are records
 and stay unedited, and this resume supersedes that line. `specs/deferred_items.md` was read, not
