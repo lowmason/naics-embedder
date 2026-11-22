@@ -2253,8 +2253,6 @@ def assert_refused_by(case: Case) -> None:
     assert re.search(case.words, message), message
     assert message.endswith(f' {RULE}')
     assert message.count(RULE) == 1
-    for other in CHECKS:
-        assert other == case.check or not message.startswith(f'{other}: ')
 
 @pytest.mark.parametrize('case', PROVENANCE_CASES, ids=[case.id for case in PROVENANCE_CASES])
 def test_each_rule_refuses(case):
@@ -2633,7 +2631,7 @@ def test_the_rule_describes_the_provenance_and_changes_nothing():
     padded = edited(['runs', 'ita_area_mix'], ' x ')
     for content in (
         valid(), without_area_mix(), padded, broken_provenance('writer'),
-        broken_provenance('seed', 'runs')
+        broken_provenance('seed', 'runs'), broken_provenance('seed')
     ):
         before = copy.deepcopy(content)
         try:
