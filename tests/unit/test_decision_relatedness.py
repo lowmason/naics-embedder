@@ -2114,6 +2114,14 @@ VALID: Dict[str, Any] = {
     },
 }
 
+# The entries and the input names of the brief, written out so that the cases below do not read the
+# constants under test
+BRIEF_ENTRIES = (
+    'checkpoint', 'codes', 'configuration', 'dimension', 'generated_at', 'inputs',
+    'library_versions', 'runs', 'seed', 'table_sha256', 'writer'
+)
+BRIEF_INPUTS = ('codebook', 'text_only', 'ita_area_mix')
+
 # The eight checks, in the brief's order
 CHECKS = ('writer', 'entries', 'inputs', 'codebook', 'text_only', 'runs', 'checkpoint', 'seed')
 
@@ -2332,16 +2340,17 @@ def _further_cases() -> List[Case]:
         [
             'Relatedness_Export', ' relatedness_export', 'relatedness_export\n',
             'relatedness_export_v2', 'x_relatedness_export', 'relatedness', '', None, 3,
-            ['relatedness_export'], 'tree_builder'
+            ['relatedness_export'], 'tree_builder',
+            Path('relatedness_export')
         ]
     ):
         add(f'writer-{position}', edited(['writer'], writer), 'writer', 'the writer is')
     # entries
-    for entry in sorted(PROVENANCE_ENTRIES - {'writer'}):
+    for entry in [name for name in BRIEF_ENTRIES if name != 'writer']:
         add(f'missing-{entry}', dropped([entry]), 'entries', rf"no entry \['{entry}'\]")
     add(
         'missing-everything-but-the-writer', {'writer': RELATEDNESS_EXPORT}, 'entries',
-        re.escape(f"no entry {sorted(PROVENANCE_ENTRIES - {'writer'})}")
+        re.escape(f"no entry {[name for name in BRIEF_ENTRIES if name != 'writer']}")
     )
     add(
         'missing-two-sorted', dropped(['seed'], dropped(['checkpoint'])), 'entries',
@@ -2397,6 +2406,16 @@ def _further_cases() -> List[Case]:
         'outside-name-before-a-malformed-file', with_input('ita_co_ownership', 'a string'),
         'inputs', r"the inputs \['ita_co_ownership'\], which"
     )
+    add(
+        'outside-name-before-a-malformed-codebook',
+        edited(['inputs', 'codebook'], None, with_input('ita_co_ownership')), 'inputs',
+        r"the inputs \['ita_co_ownership'\], which"
+    )
+    add(
+        'missing-input-before-a-malformed-file',
+        edited(['inputs', 'codebook'], None, dropped(['inputs', 'text_only'])), 'inputs',
+        r"no input \['text_only'\]"
+    )
     add('a-name-that-is-an-int', edited(['inputs', 7], REF), 'inputs', r"the inputs \['7'\], which")
     add('no-codebook', dropped(['inputs', 'codebook']), 'inputs', r"no input \['codebook'\]")
     add(
@@ -2412,7 +2431,7 @@ def _further_cases() -> List[Case]:
         r"the inputs \['qcew'\], which are outside \['codebook', 'text_only', "
         r"'ita_area_mix'\] and names no input \['text_only'\], which the table must read"
     )
-    for name in CODEBOOK_INPUTS + TRAINING_FAMILY_INPUTS:
+    for name in BRIEF_INPUTS:
         for shape, value in _file_shapes('a' * 64).items():
             add(
                 f'{name}-is-{shape}', edited(['inputs', name], value), 'inputs',
@@ -2450,6 +2469,10 @@ def _further_cases() -> List[Case]:
     # runs
     for position, value in enumerate([None, [], [AREA_MIX_RUN], AREA_MIX_RUN, 3]):
         add(f'not-a-mapping-{position}', edited(['runs'], value), 'runs', 'is not a mapping')
+    add(
+        'other-name-with-a-blank-run', edited(['runs'], {'ita_co_ownership': ' '}), 'runs',
+        r"keyed by \['ita_co_ownership'\], but"
+    )
     for run_id, runs in {
         'another-name': {
             'ita_co_ownership': AREA_MIX_RUN
@@ -2560,6 +2583,11 @@ def test_a_refusal_names_the_sha256_it_found_and_the_one_it_expected():
     message = refusal(found)
     assert OTHER_SHA in message and SHAS['text_only_sha256'] in message
     assert SHAS['codebook_sha256'] not in message
+
+@pytest.mark.parametrize('run', ['', '  ', '\t\n', 3, None, b'run', ['x']])
+def test_a_refused_run_is_shown_in_the_message(run):
+    message = refusal(edited(['runs', 'ita_area_mix'], run))
+    assert f': {run!r} {RULE}' in message
 
 def test_the_shas_are_keyword_only():
     with pytest.raises(TypeError):
