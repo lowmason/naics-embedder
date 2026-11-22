@@ -1,5 +1,7 @@
 # Relatedness Judging Panel Implementation Plan
 
+**Status: COMPLETE (2026-11-22)** — executed via subagent-driven-development; deferred items in specs/deferred_items.md, or specs/completed/deferred_items.md once archived
+
 > **For agentic workers:** REQUIRED SUB-SKILL: implement this plan task-by-task via
 > subagent-driven-development (the default) — or executing-plans when your human partner chose
 > inline execution at the handoff. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -264,7 +266,7 @@ gain fails a test.
 | 211120 | sealed | no marginal row | none: in the codebook, never a candidate |
 | 236220 | validation | no marginal row | none: Task 6's rebuild adds it |
 
-- [ ] **Step 1: Write the failing tests** in `tests/unit/test_relatedness_split.py`:
+- [x] **Step 1: Write the failing tests** in `tests/unit/test_relatedness_split.py`:
 
 ```python
 GOLDEN = {
@@ -312,11 +314,11 @@ def test_fixture_gains_are_asymmetric():
         assert j / BASE_MULTI[a] != j / BASE_MULTI[b]
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run:
+- [x] **Step 2: Run them to see them fail.** Run:
   `uv run pytest tests/unit/test_relatedness_split.py -q`. Expected: FAIL with
   `ModuleNotFoundError: No module named 'naics_embedder.panels.relatedness_split'`.
 
-- [ ] **Step 3: Write `conf/data/relatedness_panel.yaml`.** It holds the five keys. A comment says
+- [x] **Step 3: Write `conf/data/relatedness_panel.yaml`.** It holds the five keys. A comment says
   that the salt was drawn once at plan 21 and never changes, because the sealed part's openings
   are keyed on the split fingerprint (§4.3, §4.5). Another comment says that r is δ as a share of
   the chosen reference's validation headline (§4.6), and that k is the headline's NDCG cut (U44).
@@ -329,14 +331,14 @@ relative_margin: 0.05
 k: 10
 ```
 
-- [ ] **Step 4: Implement `panels/relatedness_split.py` and `tests/fixtures/relatedness.py`**
+- [x] **Step 4: Implement `panels/relatedness_split.py` and `tests/fixtures/relatedness.py`**
   with the interfaces above. Import the rule's constants (`HASH`, `PREFIX_BYTES`, `BYTE_ORDER`,
   `MODULUS`) from `panels/ita_split.py`. Do not import `ItaPart` or `ItaPanelSettings`.
 
-- [ ] **Step 5: Run the tests.** Run: `uv run pytest tests/unit/test_relatedness_split.py -q`.
+- [x] **Step 5: Run the tests.** Run: `uv run pytest tests/unit/test_relatedness_split.py -q`.
   Expected: PASS.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add conf/data/relatedness_panel.yaml src/naics_embedder/panels/relatedness_split.py tests/fixtures/relatedness.py tests/unit/test_relatedness_split.py
@@ -389,7 +391,7 @@ of the table in Step 1:
 12. a pair whose two directions hold different J;
 13. a J above m of either industry.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_the_base_tables_give_the_fixture_gains():
@@ -435,16 +437,18 @@ def test_an_input_that_disagrees_with_the_spec_is_refused(case): ...
 | `unequal-mirror` | J = 2 on the row (311212, 311211) | `mirror` |
 | `j-above-m` | J = 4 in both directions of (311211, 311212) | `exceeds` |
 
-- [ ] **Step 2: Run them to see them fail.** Run:
+- [x] **Step 2: Run them to see them fail.** Run:
   `uv run pytest tests/unit/test_relatedness_inputs.py -q`. Expected: FAIL with
   `ModuleNotFoundError` on `naics_embedder.panels.relatedness`.
 
-- [ ] **Step 3: Implement the "Inputs" section** of `panels/relatedness.py`, with a module
+- [x] **Step 3: Implement the "Inputs" section** of `panels/relatedness.py`, with a module
   docstring in the form of `panels/ita.py`'s (Inputs, then Panel).
 
-- [ ] **Step 4: Run the tests.** Expected: PASS.
+> Deviation: the inputs also refuse a codebook entry that is not six digits, and the module exports `TARGETS_TABLE`, `MARGINALS_TABLE` and `Pair`, which the plan does not list; ledgered rulings.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 4: Run the tests.** Expected: PASS.
+
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/relatedness.py tests/unit/test_relatedness_inputs.py
@@ -477,7 +481,7 @@ git commit -m "feat(panels): read Stage 10's co-ownership tables into relatednes
 Each function takes one anchor's 1-D arrays over its candidates. It raises `ValueError` when the
 arrays differ in length, or when k < 1.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def brute_force_dcg(similarity, gains, k):
@@ -510,15 +514,15 @@ def test_auc_counts_ties_one_half():
 def test_auc_is_none_without_a_relevant_or_an_unrelated_candidate(): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run:
+- [x] **Step 2: Run them to see them fail.** Run:
   `uv run pytest tests/unit/test_relatedness_scoring.py -q`. Expected: FAIL with
   `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement the "Scores" section.**
+- [x] **Step 3: Implement the "Scores" section.**
 
-- [ ] **Step 4: Run the tests.** Expected: PASS.
+- [x] **Step 4: Run the tests.** Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/relatedness_scoring.py tests/unit/test_relatedness_scoring.py
@@ -560,7 +564,7 @@ git commit -m "feat(panels): add relatedness's tie-aware expected NDCG and AUC"
     `ValueError` for an empty `per_anchor`, for counts not keyed by `COUNT_KEYS`, and when
     `counts['n_anchors']` differs from the frame's height.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_an_anchor_is_left_out_of_its_own_candidates():
@@ -584,15 +588,15 @@ def test_a_non_finite_similarity_is_refused_naming_the_anchor(): ...
 def test_an_anchor_with_no_partner_and_an_empty_result_are_refused(): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Expected: FAIL with `ImportError` on
+- [x] **Step 2: Run them to see them fail.** Expected: FAIL with `ImportError` on
   `score_anchors`.
 
-- [ ] **Step 3: Implement the "Summary" section.**
+- [x] **Step 3: Implement the "Summary" section.**
 
-- [ ] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_relatedness_scoring.py -q`.
+- [x] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_relatedness_scoring.py -q`.
   Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/relatedness_scoring.py tests/unit/test_relatedness_scoring.py
@@ -625,7 +629,7 @@ git commit -m "feat(panels): add relatedness's per-anchor scores, headline and r
     for repeated codes, a non-finite value, an unknown code in a request (naming the first five
     missing codes and how many there are), and a zero-norm row of a requested code (naming it).
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_the_tree_arm_is_minus_d_star():
@@ -653,14 +657,14 @@ def test_from_text_only_reads_the_t_columns():
 def test_an_unknown_code_or_a_zero_row_is_refused_naming_it(): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Expected: FAIL with `ModuleNotFoundError`.
+- [x] **Step 2: Run them to see them fail.** Expected: FAIL with `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement `panels/relatedness_arms.py`.**
+- [x] **Step 3: Implement `panels/relatedness_arms.py`.**
 
-- [ ] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_relatedness_arms.py -q`.
+- [x] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_relatedness_arms.py -q`.
   Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/relatedness_arms.py tests/unit/test_relatedness_arms.py
@@ -728,7 +732,7 @@ git commit -m "feat(panels): add the relatedness tree and vector arms"
 `open_sealed` follows `ItaPanel.open_sealed`, with this panel's name, split `sealed` and
 `n_queries` = the sealed anchors.
 
-- [ ] **Step 1: Write the failing tests.** `panel()` builds the base tables with
+- [x] **Step 1: Write the failing tests.** `panel()` builds the base tables with
   `table_sha256={'ita_co_ownership': 'a' * 64, 'co_ownership_marginals': 'b' * 64}`.
 
 ```python
@@ -794,16 +798,16 @@ def test_relatedness_reads_stay_out_of_another_runs_log_records():
     # 'stage7/x': decision.sweep._log_records(..., 'stage7/x') returns that run's records only
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run:
+- [x] **Step 2: Run them to see them fail.** Run:
   `uv run pytest tests/unit/test_relatedness_panel.py -q`. Expected: FAIL with `ImportError` on
   `RelatednessPanel`.
 
-- [ ] **Step 3: Implement the "Panel" section** of `panels/relatedness.py`.
+- [x] **Step 3: Implement the "Panel" section** of `panels/relatedness.py`.
 
-- [ ] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_relatedness_panel.py
+- [x] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_relatedness_panel.py
   tests/unit/test_relatedness_inputs.py -q`. Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/panels/relatedness.py tests/unit/test_relatedness_panel.py
@@ -872,7 +876,7 @@ git commit -m "feat(panels): add RelatednessPanel with pinned tables, logged rea
 - any `read` of `margin.panel`'s validation part before `fixed_at` that is not a reference read
   of a reference arm. The message names the read's purpose and time.
 
-- [ ] **Step 1: Write the failing tests.** `arms()` is `{'tree': TreeArm(...), 'text-only':
+- [x] **Step 1: Write the failing tests.** `arms()` is `{'tree': TreeArm(...), 'text-only':
   VectorArm(codes, vectors), 'text-only-centered': VectorArm(codes, vectors, center=True)}` with
   `vectors = np.random.default_rng(7).normal(size=(16, 8))`. `_hand_record(log, panel_name,
   headlines, data_fingerprint, *, fixed_at=None)` builds a second family's record (P4). It
@@ -925,16 +929,18 @@ def test_the_record_round_trips_through_json():
     check_relatedness_margin_first(again, panel.log)
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run:
+- [x] **Step 2: Run them to see them fail.** Run:
   `uv run pytest tests/unit/test_decision_relatedness.py -q`. Expected: FAIL with
   `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement the module's "Reference and margin" section**, with a module docstring
+- [x] **Step 3: Implement the module's "Reference and margin" section**, with a module docstring
   in the form of `decision/text_to_code.py`'s.
 
-- [ ] **Step 4: Run the tests.** Expected: PASS.
+> Deviation: `fix_relatedness_margin` also checks `embedding_data_commit` before any read, so a bad commit logs nothing; ledgered ruling.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 4: Run the tests.** Expected: PASS.
+
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/decision/relatedness.py tests/unit/test_decision_relatedness.py
@@ -991,7 +997,7 @@ For each family, it then takes the items from the reference, Δ = the candidate'
 reference's, and the paired replicate differences. Its reference is `margins[key].reference`, and
 its margin is `margins[key].margin` (P10).
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_the_verdict_at_n_1_and_n_2():
@@ -1031,15 +1037,17 @@ def test_fewer_than_min_seeds_is_refused():
 def test_seeds_read_on_another_build_or_part_are_refused(): ...
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Expected: FAIL with `ImportError` on
+> Deviation: `test_the_point_statistic_is_the_headline` compares at 1e-15 absolute, because the plan gives only a comment and the `math.fsum` headline and the numpy point statistic differ by one ulp; ledgered ruling.
+
+- [x] **Step 2: Run them to see them fail.** Expected: FAIL with `ImportError` on
   `beat_by_margin`.
 
-- [ ] **Step 3: Implement the "Test" section.**
+- [x] **Step 3: Implement the "Test" section.**
 
-- [ ] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_decision_relatedness.py -q`.
+- [x] **Step 4: Run the tests.** Run: `uv run pytest tests/unit/test_decision_relatedness.py -q`.
   Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/decision/relatedness.py tests/unit/test_decision_relatedness.py
@@ -1079,7 +1087,7 @@ It checks in this order, and each message names its check and ends with
 6. `checkpoint`: exactly a string `path` and a string `sha256`.
 7. `seed`: an `int`, not a `bool`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
 
 ```python
 def test_a_provenance_that_names_co_ownership_is_refused():
@@ -1097,14 +1105,14 @@ def test_each_rule_refuses(case): ...
 # naming 'ita_area_mix' without that input; checkpoint without 'sha256'; seed True
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Expected: FAIL with `ImportError` on
+- [x] **Step 2: Run them to see them fail.** Expected: FAIL with `ImportError` on
   `check_relatedness_provenance`.
 
-- [ ] **Step 3: Implement the "Provenance" section.**
+- [x] **Step 3: Implement the "Provenance" section.**
 
-- [ ] **Step 4: Run the tests.** Expected: PASS.
+- [x] **Step 4: Run the tests.** Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add src/naics_embedder/decision/relatedness.py tests/unit/test_decision_relatedness.py
@@ -1119,11 +1127,13 @@ git commit -m "feat(decision): refuse a relatedness table whose provenance names
 - Create: `docs/api/relatedness_panel.md`
 - Modify: `docs/.nav.yml`, `docs/api/decision.md`, `CLAUDE.md`, `README.md`, `tests/README.md`
 
-- [ ] **Step 1: Bring the branch up to date.** Plans 18 and 20 also edit `CLAUDE.md`. Run
+- [x] **Step 1: Bring the branch up to date.** Plans 18 and 20 also edit `CLAUDE.md`. Run
   `git fetch origin && git rebase origin/main`, then rerun the six new test files. Expected:
   PASS. If the rebase stops on a conflict, stop and report it.
 
-- [ ] **Step 2: Write `docs/api/relatedness_panel.md`.** It has:
+> Deviation: plan 20 had merged, so the rebase onto origin/main (bf45424) replayed the branch's 30 commits with no conflict, and Step 3 recounted.
+
+- [x] **Step 2: Write `docs/api/relatedness_panel.md`.** It has:
   - A one-paragraph intro. ITA co-ownership judges relatedness and never trains it (U42). The
     validation part selects, and the sealed part opens once, at roadmap Stage 7b (U43, U45).
     Stage 6 reads fixture tables only.
@@ -1135,7 +1145,9 @@ git commit -m "feat(decision): refuse a relatedness table whose provenance names
   `docs/.nav.yml`. Add a "Relatedness margin" section with
   `::: naics_embedder.decision.relatedness` to `docs/api/decision.md`, after "Text→code margin".
 
-- [ ] **Step 3: Update `CLAUDE.md`, `README.md` and `tests/README.md`.**
+> Deviation: "Relatedness margin" sits after "Text→code gap", the last of the three text→code sections that plan 20 added; ledgered ruling.
+
+- [x] **Step 3: Update `CLAUDE.md`, `README.md` and `tests/README.md`.**
   - In `CLAUDE.md`, add the five modules to the directory tree's `panels/` and `decision/`
     comments.
   - Add one paragraph after the ITA paragraph under "Monitor, Epoch Summary and Selection". It
@@ -1147,7 +1159,9 @@ git commit -m "feat(decision): refuse a relatedness table whose provenance names
     `uv run pytest --collect-only -q -q | tail -1`. At `c055739` the first two give 128 and 112.
     Write the new numbers wherever the three files state them.
 
-- [ ] **Step 4: Check the untouched seams.** Run:
+> Deviation: `tests/README.md` also gets a coverage-table row (de5da70), the counts are 136 source files, 121 unit files and 5,636 tests, and `CLAUDE.md` says "redesign roadmap Stage 7b"; ledgered rulings.
+
+- [x] **Step 4: Check the untouched seams.** Run:
 
 ```bash
 git diff --exit-code c055739 -- src/naics_embedder/panels/outcome.py src/naics_embedder/panels/ita.py src/naics_embedder/panels/ita_split.py src/naics_embedder/panels/ita_scoring.py src/naics_embedder/panels/decoding.py src/naics_embedder/panels/selection_log.py src/naics_embedder/decision/rule.py src/naics_embedder/decision/resampling.py src/naics_embedder/decision/records.py src/naics_embedder/decision/decide.py src/naics_embedder/decision/economic.py src/naics_embedder/decision/text_to_code.py src/naics_embedder/decision/provenance.py tests/unit/test_outcome_panel.py tests/unit/test_outcome_decoding.py tests/unit/test_ita_split.py tests/unit/test_ita_inputs.py tests/unit/test_ita_scoring.py tests/unit/test_ita_panel.py tests/unit/test_selection_log_guard.py tests/unit/test_decision_rule.py tests/unit/test_decision_resampling.py tests/unit/test_decision.py tests/unit/test_decision_economic.py tests/unit/test_decision_text_to_code.py tests/unit/test_economic_candidates.py; echo exit=$?
@@ -1156,7 +1170,7 @@ git diff --exit-code c055739 -- src/naics_embedder/panels/outcome.py src/naics_e
 Expected: `exit=0`. If the rebase brought in another PR's change to one of these files, compare
 against that PR's merge commit instead, and say so in the ledger.
 
-- [ ] **Step 5: Run the gates.** Each must pass:
+- [x] **Step 5: Run the gates.** Each must pass:
 
 ```bash
 uv run pytest -n auto -q
@@ -1170,11 +1184,13 @@ builds with no warning. Check that the rendered `site/api/relatedness_panel/inde
 four modules' headings, and that `site/api/decision/index.html` has the "Relatedness margin"
 anchor.
 
-- [ ] **Step 6: Confirm that no real table was read.** Run:
+> Deviation: pytest ran with one failure, `tests/unit/test_regressor_panel.py::test_level_predictions_are_the_captured_ones_bit_for_bit`, a macOS digest drift in code this branch does not touch; Ruff, the style gate and the strict docs build passed; ledgered ruling.
+
+- [x] **Step 6: Confirm that no real table was read.** Run:
   `grep -rn "embedding-data\|ita_co_ownership.parquet\|co_ownership_marginals.parquet" src/ tests/ | grep -v "tests/fixtures/relatedness.py"`.
   Expected: only docstrings, comments and file-name constants, with no absolute path.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add docs/api/relatedness_panel.md docs/.nav.yml docs/api/decision.md CLAUDE.md README.md tests/README.md
@@ -1208,3 +1224,58 @@ git commit -m "docs: add the relatedness panel and margin API pages"
 
 §4.7 (the method) and §4.8 (the opening) belong to Stages 7 and 7b. Tasks 6, 8 and 9 build what
 they consume.
+
+## Handoff to later stages
+- **Stage 6b (reference read and margins).** It consumes
+  `RelatednessPanel.from_files(targets_parquet, marginals_parquet, bundle, settings_path, log_path,
+  *, expected_sha256)` in `src/naics_embedder/panels/relatedness.py`, with
+  `conf/data/relatedness_panel.yaml`: panel `relatedness_co_ownership`, salt
+  `4bfd5195916df66d0e1c619c6507f2ad`, rule version 1, r = 0.05, k = 10, and split fingerprint
+  `abb6c1e6b7ed16e73e081bfe682dadb3364041b95ee417ecb4de6712e38906b1` (pinned in
+  `tests/unit/test_relatedness_split.py`). `expected_sha256` names the two tables,
+  `ita_co_ownership` and `co_ownership_marginals`. The reference arms are `TreeArm(codes, D*)`,
+  `VectorArm.from_text_only(table)` and `VectorArm.from_text_only(table, center=True)` in
+  `panels/relatedness_arms.py`. They go to `fix_relatedness_margin(panel, reference_arms, r, name,
+  *, embedding_data_commit, purpose)` in `decision/relatedness.py` under the keys `tree`,
+  `text-only` and `text-only-centered`, and the result is a `RelatednessMarginRecord`. Its reads
+  have role `reference` on the validation part, which `check_relatedness_margin_first` accepts
+  before the record's `fixed_at`, and ITA reads never trip that check.
+- **Differs from the roadmap's Produces.** Nothing: the stage spec and the judging panel exist as
+  the entry states, and the panel reads fixture tables only. Beyond the plan, the inputs refuse a
+  codebook entry that is not six digits, the module exports `TARGETS_TABLE`, `MARGINALS_TABLE` and
+  `Pair`, and `fix_relatedness_margin` checks `embedding_data_commit` before any read.
+- **Traps and deferred items for Stage 6b.** `fix_relatedness_margin` takes r as an argument and
+  never compares it with `panel.settings.relative_margin`, so the read command must bind r from the
+  settings → item: 21-relatedness-artifact — 2026-11-22. Build every arm of one run through the same
+  constructor: `VectorArm`'s cosine sums depend on the memory layout of its input
+  (`text_only_matrix` returns a column-major array, so a `from_text_only` arm and a `VectorArm` over
+  the same values in C order differ in the last bits), and the one-line fix is filed in the same
+  section. A similarity that is not finite refuses the read and names the arm and the anchor, and a
+  read that fails while it scores stays logged. A pair table that disagrees with spec §4.2 is
+  refused at construction before any log record. The real read waits on gates G4 and G6 and on the
+  owner's approval at the time (roadmap Stage 6b).
+- **Stage 7 (model and decision).** It consumes `relatedness_test(candidate, candidate_seeds,
+  references, margins, *, min_seeds, replicates, bootstrap_seed)`, which returns a
+  `RelatednessVerdict` with a `FamilyVerdict` for each family: the interval's lower bound must
+  exceed δ on every family, at level 1 − 0.05/n, where n is the number of judging families passed.
+  It also consumes
+  `check_relatedness_provenance(content, *, codebook_sha256, text_only_sha256)`, with writer
+  `RELATEDNESS_EXPORT`, the entries in `PROVENANCE_ENTRIES` and the inputs `codebook`, `text_only`
+  and the optional `ita_area_mix`. Traps: the caller loads, for each family, the validation read of
+  the arm that `margins[key].reference` names, and nothing ties the read to that arm
+  (`RelatednessResult` has no arm field), so a wrong read gives a mislabelled verdict. The caller
+  passes `replicates`, `bootstrap_seed` and `min_seeds` from `conf/data/decision.yaml` and every
+  judging family, because n = `len(deltas)` sets the level. The margin's headline is a `math.fsum`
+  mean and a verdict's Δ is a numpy sum, so they differ by one ulp, and the verdict reads the
+  interval, not Δ. The provenance check reads no file and inspects names and shapes only: it does
+  not verify the area-mix file, the checkpoint's `path` and `sha256`, a free-form entry or a run
+  value, or that `table_sha256` belongs to the table decided on, and a co-ownership file under the
+  `ita_area_mix` name passes. The loader that reads a candidate must bind them.
+- **Stage 7b (sealed opening).** It consumes `RelatednessPanel.open_sealed(purpose, *,
+  reopen_reason=None)`, which logs one `open` under the split fingerprint. A repeat needs a
+  non-blank `reopen_reason` and logs `reopen`, or raises `SplitAlreadyOpenedError`. Scored sealed
+  reads follow it, each logged, and `relatedness_test` runs on them with δ fixed on validation. A
+  settings file with another salt gives another fingerprint, so `open_sealed` finds no earlier
+  opening and logs a fresh `open` → item: 21-relatedness-artifact — 2026-11-22. The sealed part's
+  raw rows (`panel.co_ownership`) can be read without a log record, as `ItaPanel`'s pairs can: the
+  owner accepted it as built at the gate (2026-11-22).

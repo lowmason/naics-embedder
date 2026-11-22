@@ -413,7 +413,7 @@ lines.
       Its `Consumes` are met. The resume of 2026-11-21 routed it to brainstorming, which starts
       after that resume's PR merges.
 
-- [ ] Stage 6: Relatedness — stage spec and judging panel
+- [x] Stage 6: Relatedness — stage spec and judging panel
       Objective: Write the relatedness stage spec and build its judging panel on fixtures of
       whole held-out embedding-data families, with no real read.
       Spec: Req 27 (all but Training input), Req 26, Req 25, U18–U22, U29, U30, Verification "One
@@ -439,6 +439,8 @@ lines.
       names co-ownership to judge and the 2023 ITA area mix to train (§5), and its header routes
       the plan to writing-plans. Its planning starts after the resume of 2026-11-19 merges
       (Decisions, 2026-11-19).
+      > Stage 6: COMPLETE (2026-11-22) — implemented by plan 21 (specs/plans/completed/21-relatedness-artifact.md). Its Handoff section names what Stages 6b, 7 and 7b consume.
+      > Next: resume the roadmap.
 
 - [ ] Stage 6b: Relatedness — reference read and margins
       Objective: With the user's approval at the time, read the reference (the better of the
