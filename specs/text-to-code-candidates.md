@@ -1,6 +1,6 @@
 # Text→code candidates and decision — Design Spec
 
-**Status:** DRAFT (2026-11-22), for the user's review. Written in a brainstorming session. A
+**Status:** APPROVED (2026-11-22, U54). Written in a brainstorming session. A
 builder check raised three points. The user ruled on one (U53, the input length). The other two
 are folded into §4.4 as my calls: the outcome-best epoch is selectable, and no checkpoint is
 deleted.
@@ -45,6 +45,7 @@ specs. Each ruling is the user's words as given.
 | U51 | Which two backbones does this round train? | "gte-small + bge-small" |
 | U52 | How does the native qualification run? | "First campaign run" |
 | U53 | Which input length do gte-small and bge-small use? | "128 for every arm" |
+| U54 | Do you approve the committed Stage 5 spec? | "Approve, push PR" |
 
 ## 1. Intent
 
