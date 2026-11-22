@@ -30,6 +30,14 @@ Relatedness's decision on the co-ownership panel (spec ``relatedness-artifact``,
   and a seed read on another table build than its family's reference. The same test runs on the
   sealed part with δ fixed on validation, so it compares neither the part nor the reference's build
   with the margin's.
+- **Provenance.** ``check_relatedness_provenance`` enforces the first anti-goal in code, as
+  ``decision/provenance.py`` does for economic candidates. A table's provenance may name only the
+  codebook, the text-only table and the training families (``ita_area_mix``, optional) as inputs, so
+  a provenance that names co-ownership, the very data the panel judges on, is refused. The rule is
+  a whitelist of inputs and a fixed set of entries. It describes the provenance and checks no file:
+  it reads nothing and imports nothing beyond ``typing``. Eight checks run in a fixed order, each
+  refusing with a ``ValueError`` that names its check first and ends with the rule's tag: ``writer``,
+  ``entries``, ``inputs``, ``codebook``, ``text_only``, ``runs``, ``checkpoint`` and ``seed``.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -42,7 +50,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Mapping, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Literal, Mapping, NoReturn, Sequence, Tuple
 
 import numpy as np
 import polars as pl
@@ -74,6 +82,32 @@ REFERENCE_ARMS = (TREE, TEXT_ONLY, TEXT_ONLY_CENTERED)
 
 # An embedding-data commit: 7 to 40 lowercase hexadecimal characters
 COMMIT_PATTERN = r'^[0-9a-f]{7,40}$'
+
+# The writer a relatedness table's provenance names, and the entries it writes (4.6)
+RELATEDNESS_EXPORT = 'relatedness_export'
+PROVENANCE_ENTRIES: FrozenSet[str] = frozenset(
+    {
+        'writer',
+        'codes',
+        'dimension',
+        'inputs',
+        'runs',
+        'configuration',
+        'seed',
+        'checkpoint',
+        'table_sha256',
+        'generated_at',
+        'library_versions',
+    }
+)
+
+# The inputs a table may read: the codebook and the text-only table, which are required, and the
+# training families of 4.1, which are optional (after G1: the area mix)
+CODEBOOK_INPUTS = ('codebook', 'text_only')
+TRAINING_FAMILY_INPUTS = ('ita_area_mix', )
+
+_RULE = '(relatedness §4.6: codebook, text-only table and training families only)'
+_FILE_ENTRIES = frozenset({'path', 'sha256'})
 
 # -------------------------------------------------------------------------------------------------
 # Reference and margin
@@ -624,3 +658,133 @@ def relatedness_test(
             )
         )
     return beat_by_margin(candidate, deltas)
+
+# -------------------------------------------------------------------------------------------------
+# Provenance
+# -------------------------------------------------------------------------------------------------
+
+def check_relatedness_provenance(
+    content: Mapping[str, Any], *, codebook_sha256: str, text_only_sha256: str
+) -> None:
+    '''
+    Require a relatedness table's provenance to name only the codebook, the text-only table and the
+    training families as inputs (spec 4.6).
+
+    The rule is a whitelist, so an input that names co-ownership, or any other input outside
+    ``CODEBOOK_INPUTS`` and ``TRAINING_FAMILY_INPUTS``, is refused by that fact. It describes the
+    provenance and checks no file. The checks run in this order, and each refusal names the check
+    that refused (``writer``, ``entries``, ``inputs``, ``codebook``, ``text_only``, ``runs``,
+    ``checkpoint`` or ``seed``):
+
+    1. ``writer``: ``content`` is a mapping whose ``writer`` is ``RELATEDNESS_EXPORT``.
+    2. ``entries``: the entries are exactly ``PROVENANCE_ENTRIES``. An unknown entry, such as
+       ``co_ownership``, is refused by name.
+    3. ``inputs``: a mapping that holds every name of ``CODEBOOK_INPUTS``, holds no name outside
+       ``CODEBOOK_INPUTS`` and ``TRAINING_FAMILY_INPUTS``, and maps each name to exactly a string
+       ``path`` and a string ``sha256``.
+    4. ``codebook`` and ``text_only``: each input's ``sha256`` equals its argument.
+    5. ``runs``: a mapping keyed by exactly the training-family inputs present in ``inputs``, each
+       value a string that holds a character other than whitespace.
+    6. ``checkpoint``: exactly a string ``path`` and a string ``sha256``.
+    7. ``seed``: an ``int`` that is not a ``bool``.
+
+    Args:
+        content: The provenance's JSON content.
+        codebook_sha256: The SHA-256 of the codebook the decision reads.
+        text_only_sha256: The SHA-256 of the text-only table the decision reads.
+
+    Raises:
+        ValueError: At the first check that fails, with the check's name first and
+            ``(relatedness §4.6: codebook, text-only table and training families only)`` last.
+            An earlier problem is always the one reported, and a later one never hides behind it.
+    '''
+
+    if not isinstance(content, Mapping):
+        _refuse('writer', f'the provenance is not a mapping, so it has no writer: {content!r}')
+    if 'writer' not in content:
+        _refuse(
+            'writer',
+            f"the provenance has no 'writer' entry, and the writer must be {RELATEDNESS_EXPORT!r}"
+        )
+    if content['writer'] != RELATEDNESS_EXPORT:
+        _refuse('writer', f"the writer is {content['writer']!r}, not {RELATEDNESS_EXPORT!r}")
+    _check_entries(content)
+    inputs = _check_inputs(content['inputs'])
+    if inputs['codebook']['sha256'] != codebook_sha256:
+        _refuse(
+            'codebook', f"the codebook input has sha256 {inputs['codebook']['sha256']!r}, not the "
+            f'{codebook_sha256!r} that the decision reads'
+        )
+    if inputs['text_only']['sha256'] != text_only_sha256:
+        _refuse(
+            'text_only', f"the text_only input has sha256 {inputs['text_only']['sha256']!r}, not "
+            f'the {text_only_sha256!r} that the decision reads'
+        )
+    _check_runs(content['runs'], [name for name in TRAINING_FAMILY_INPUTS if name in inputs])
+    _check_file(content['checkpoint'], 'checkpoint', 'the checkpoint')
+    seed = content['seed']
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        _refuse('seed', f'the seed is {seed!r}, not an int')
+
+def _check_entries(content: Mapping[str, Any]) -> None:
+    '''Require exactly ``PROVENANCE_ENTRIES``, naming each entry that is extra or missing.'''
+
+    extra = sorted(map(str, set(content) - PROVENANCE_ENTRIES))
+    missing = sorted(PROVENANCE_ENTRIES - set(content))
+    if extra or missing:
+        problems = []
+        if extra:
+            problems.append(f'the entries {extra}, which the writer does not write')
+        if missing:
+            problems.append(f'no entry {missing}, which the writer writes')
+        _refuse('entries', f'the provenance has {" and has ".join(problems)}')
+
+def _check_inputs(inputs: Any) -> Mapping[str, Any]:
+    '''
+    Require the inputs to be the codebook's, the text-only table's and optional training families,
+    each a path and a sha256. Returns them.
+    '''
+
+    if not isinstance(inputs, Mapping):
+        _refuse('inputs', f'inputs is not a mapping of input names to files: {inputs!r}')
+    allowed = CODEBOOK_INPUTS + TRAINING_FAMILY_INPUTS
+    extra = sorted(map(str, set(inputs) - set(allowed)))
+    missing = sorted(set(CODEBOOK_INPUTS) - set(inputs))
+    if extra or missing:
+        problems = []
+        if extra:
+            problems.append(f'the inputs {extra}, which are outside {list(allowed)}')
+        if missing:
+            problems.append(f'no input {missing}, which the table must read')
+        _refuse('inputs', f'the provenance names {" and names ".join(problems)}')
+    for name in allowed:
+        if name in inputs:
+            _check_file(inputs[name], 'inputs', f'the input {name!r}')
+    return inputs
+
+def _check_runs(runs: Any, present: List[str]) -> None:
+    '''Require the runs to be keyed by exactly the ``present`` training families, each non-blank.'''
+
+    if not isinstance(runs, Mapping):
+        _refuse('runs', f'runs is not a mapping of training-family inputs to runs: {runs!r}')
+    if set(runs) != set(present):
+        _refuse(
+            'runs', f'the runs are keyed by {sorted(map(str, runs))}, but the training-family '
+            f'inputs present are {present}'
+        )
+    for name in present:
+        if not isinstance(runs[name], str) or not runs[name].strip():
+            _refuse('runs', f'the run of {name!r} is not a non-blank string: {runs[name]!r}')
+
+def _check_file(value: Any, check: str, what: str) -> None:
+    '''Require a file reference: a mapping of a ``path`` and a ``sha256``, both strings.'''
+
+    if (
+        not isinstance(value, Mapping) or set(value) != _FILE_ENTRIES or not all(
+            isinstance(value[field], str) for field in _FILE_ENTRIES
+        )
+    ):
+        _refuse(check, f"{what} is not exactly a string 'path' and a string 'sha256'")
+
+def _refuse(check: str, detail: str) -> NoReturn:
+    raise ValueError(f'{check}: {detail} {_RULE}')

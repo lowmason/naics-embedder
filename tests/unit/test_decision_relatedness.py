@@ -12,6 +12,10 @@ family's record is judged on its own panel's reads, and it counts each reference
 Task 8 adds the beat-by-δ test (spec 4.6): a candidate beats the reference on a judging family when
 the lower bound of the interval on Δ exceeds +δ, and it goes forward when it beats on every family,
 at the level 1 − 0.05/n for n families. Each family has its own unit stream and its own margin.
+
+Task 9 adds the provenance check (spec 4.6): a table whose provenance names a judging input, such
+as co-ownership, is never decided on. Each of its eight checks runs in the brief's order, and each
+refusal names its check first. The check reads no file, so every provenance here is a dictionary.
 '''
 
 import copy
@@ -22,6 +26,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence
 
 import numpy as np
@@ -32,9 +37,13 @@ from pydantic import ValidationError
 from naics_embedder.decision import relatedness
 from naics_embedder.decision.decide import read_time
 from naics_embedder.decision.relatedness import (
+    CODEBOOK_INPUTS,
+    PROVENANCE_ENTRIES,
     REFERENCE_ARMS,
+    RELATEDNESS_EXPORT,
     TEXT_ONLY,
     TEXT_ONLY_CENTERED,
+    TRAINING_FAMILY_INPUTS,
     TREE,
     FamilyDelta,
     FamilyVerdict,
@@ -44,6 +53,7 @@ from naics_embedder.decision.relatedness import (
     beat_by_margin,
     check_relatedness_margin,
     check_relatedness_margin_first,
+    check_relatedness_provenance,
     choose_reference,
     fix_relatedness_margin,
     headline_values,
@@ -2054,3 +2064,580 @@ def test_nothing_is_drawn_before_a_refusal(tmp_path, monkeypatch, kind):
     monkeypatch.setattr(relatedness, 'seed_draws', draws)
     with pytest.raises(ValueError):
         run(BREAKS[kind][0](two_families(tmp_path)))
+
+# -------------------------------------------------------------------------------------------------
+# The provenance check: helpers
+# -------------------------------------------------------------------------------------------------
+
+RULE = '(relatedness §4.6: codebook, text-only table and training families only)'
+SHAS = {'codebook_sha256': 'c' * 64, 'text_only_sha256': 'd' * 64}
+OTHER_SHA = 'e' * 64
+AREA_MIX_RUN = 'stage6_ita_area_mix_20261014_1000_csv'
+REF = {'path': 'x', 'sha256': 'y'}
+
+# A provenance as the export writes it, with the area-mix input present: the codebook, the text-only
+# table and the area mix, each a path and a sha256, and the area mix's run
+VALID: Dict[str, Any] = {
+    'writer': RELATEDNESS_EXPORT,
+    'codes': 2125,
+    'dimension': 16,
+    'inputs': {
+        'codebook': {
+            'path': 'data/codebook.parquet',
+            'sha256': SHAS['codebook_sha256']
+        },
+        'text_only': {
+            'path': 'checkpoints/plan9_exit/text_only.parquet',
+            'sha256': SHAS['text_only_sha256']
+        },
+        'ita_area_mix': {
+            'path': 'data/ita_area_mix.parquet',
+            'sha256': 'a' * 64
+        },
+    },
+    'runs': {
+        'ita_area_mix': AREA_MIX_RUN
+    },
+    'configuration': {
+        'epochs': 20,
+        'learning_rate': 0.001
+    },
+    'seed': 3,
+    'checkpoint': {
+        'path': 'checkpoints/relatedness/seed3.pt',
+        'sha256': 'b' * 64
+    },
+    'table_sha256': 'f' * 64,
+    'generated_at': '2026-11-21T00:00:00+00:00',
+    'library_versions': {
+        'torch': '2.9.1'
+    },
+}
+
+# The eight checks, in the brief's order
+CHECKS = ('writer', 'entries', 'inputs', 'codebook', 'text_only', 'runs', 'checkpoint', 'seed')
+
+def valid() -> Dict[str, Any]:
+    '''A copy of ``VALID`` that a test can change.'''
+
+    return copy.deepcopy(VALID)
+
+def with_input(name: str, ref: Optional[Any] = None) -> Dict[str, Any]:
+    '''``VALID`` with one more input, ``name``, which is a path and a sha256 unless ``ref`` is given.'''
+
+    content = valid()
+    content['inputs'][name] = {
+        'path': f'data/{name}.parquet',
+        'sha256': OTHER_SHA
+    } if ref is None else ref
+    return content
+
+def without_area_mix() -> Dict[str, Any]:
+    '''``VALID`` with no area-mix input and so no run.'''
+
+    content = valid()
+    del content['inputs']['ita_area_mix']
+    content['runs'] = {}
+    return content
+
+def edited(path: Sequence[Any], value: Any,
+           content: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    '''``VALID``, or ``content``, with the value at ``path`` replaced by ``value``.'''
+
+    content = valid() if content is None else content
+    holder = content
+    for key in path[:-1]:
+        holder = holder[key]
+    holder[path[-1]] = value
+    return content
+
+def dropped(path: Sequence[Any], content: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    '''``VALID``, or ``content``, with the entry at ``path`` removed.'''
+
+    content = valid() if content is None else content
+    holder = content
+    for key in path[:-1]:
+        holder = holder[key]
+    del holder[path[-1]]
+    return content
+
+def refusal(content: Any, **shas: str) -> str:
+    '''The message of the refusal that ``check_relatedness_provenance`` raises for ``content``.'''
+
+    with pytest.raises(ValueError) as raised:
+        check_relatedness_provenance(content, **{**SHAS, **shas})
+    return str(raised.value)
+
+class Case(NamedTuple):
+    '''A provenance that one check refuses, and the words that its message holds.'''
+
+    id: str
+    content: Any
+    check: str
+    words: str
+
+# -------------------------------------------------------------------------------------------------
+# The provenance check
+# -------------------------------------------------------------------------------------------------
+
+def test_the_constants_are_the_briefs():
+    assert RELATEDNESS_EXPORT == 'relatedness_export'
+    assert PROVENANCE_ENTRIES == frozenset(
+        {
+            'writer', 'codes', 'dimension', 'inputs', 'runs', 'configuration', 'seed', 'checkpoint',
+            'table_sha256', 'generated_at', 'library_versions'
+        }
+    )
+    assert CODEBOOK_INPUTS == ('codebook', 'text_only')
+    assert TRAINING_FAMILY_INPUTS == ('ita_area_mix', )
+
+def test_the_valid_provenance_is_the_exports_entries():
+    assert set(VALID) == PROVENANCE_ENTRIES
+
+def test_a_provenance_that_names_co_ownership_is_refused():
+    with pytest.raises(ValueError, match='inputs.*ita_co_ownership'):
+        check_relatedness_provenance(with_input('ita_co_ownership'), **SHAS)
+    with pytest.raises(ValueError, match='entries.*co_ownership'):
+        check_relatedness_provenance({**VALID, 'co_ownership': {}}, **SHAS)
+
+def test_a_valid_provenance_passes_with_and_without_the_area_mix():
+    assert check_relatedness_provenance(VALID, **SHAS) is None
+    assert check_relatedness_provenance(without_area_mix(), **SHAS) is None
+
+PROVENANCE_CASES = [
+    Case(
+        'writer-export', {
+            **VALID, 'writer': 'export'
+        }, 'writer', "the writer is 'export', not 'relatedness_export'"
+    ),
+    Case(
+        'missing-seed', dropped(['seed']), 'entries', r"no entry \['seed'\], which the writer writes"
+    ),
+    Case(
+        'inputs-without-text-only', dropped(['inputs', 'text_only']), 'inputs',
+        r"no input \['text_only'\]"
+    ),
+    Case(
+        'input-with-a-run-key', edited(['inputs', 'codebook', 'run'], AREA_MIX_RUN), 'inputs',
+        "the input 'codebook' is not exactly a string 'path' and a string 'sha256'"
+    ),
+    Case(
+        'another-codebook-sha256', edited(['inputs', 'codebook', 'sha256'], OTHER_SHA), 'codebook',
+        'the codebook input has sha256'
+    ),
+    Case(
+        'another-text-only-sha256', edited(['inputs', 'text_only', 'sha256'], OTHER_SHA),
+        'text_only', 'the text_only input has sha256'
+    ),
+    Case(
+        'no-runs-with-the-area-mix', edited(['runs'], {}), 'runs',
+        r"keyed by \[\], but the training-family inputs present are \['ita_area_mix'\]"
+    ),
+    Case(
+        'runs-naming-an-absent-area-mix', edited(['inputs'],
+                                                 without_area_mix()['inputs']), 'runs',
+        r"keyed by \['ita_area_mix'\], but the training-family inputs present are \[\]"
+    ),
+    Case(
+        'checkpoint-without-sha256', dropped(['checkpoint', 'sha256']), 'checkpoint',
+        "the checkpoint is not exactly a string 'path' and a string 'sha256'"
+    ),
+    Case('seed-true', edited(['seed'], True), 'seed', 'the seed is True, not an int'),
+]
+
+def assert_refused_by(case: Case) -> None:
+    '''The check refuses ``case.content`` by ``case.check`` alone, with ``case.words`` and the tag.'''
+
+    message = refusal(case.content)
+    assert message.startswith(f'{case.check}: ')
+    assert re.search(case.words, message), message
+    assert message.endswith(f' {RULE}')
+    assert message.count(RULE) == 1
+    for other in CHECKS:
+        assert other == case.check or not message.startswith(f'{other}: ')
+
+@pytest.mark.parametrize('case', PROVENANCE_CASES, ids=[case.id for case in PROVENANCE_CASES])
+def test_each_rule_refuses(case):
+    assert_refused_by(case)
+
+def _quoted(value: Any) -> str:
+    '''``value`` as a regular expression that matches its ``repr``.'''
+
+    return re.escape(repr(value))
+
+def _file_shapes(good_sha256: str) -> Dict[str, Any]:
+    '''What a file reference must not be: each a wrong form of a path and a sha256.'''
+
+    return {
+        'an-extra-key': {
+            'path': 'x',
+            'sha256': good_sha256,
+            'run': AREA_MIX_RUN
+        },
+        'no-path': {
+            'sha256': good_sha256
+        },
+        'no-sha256': {
+            'path': 'x'
+        },
+        'a-renamed-key': {
+            'file': 'x',
+            'sha256': good_sha256
+        },
+        'empty': {},
+        'a-path-that-is-an-int': {
+            'path': 3,
+            'sha256': good_sha256
+        },
+        'a-path-that-is-none': {
+            'path': None,
+            'sha256': good_sha256
+        },
+        'a-path-that-is-bytes': {
+            'path': b'x',
+            'sha256': good_sha256
+        },
+        'a-sha256-that-is-an-int': {
+            'path': 'x',
+            'sha256': 3
+        },
+        'a-sha256-that-is-none': {
+            'path': 'x',
+            'sha256': None
+        },
+        'a-sha256-that-is-bytes': {
+            'path': 'x',
+            'sha256': b'x'
+        },
+        'the-two-key-names-in-a-list': ['path', 'sha256'],
+        'none': None,
+        'a-string': 'data/x.parquet',
+    }
+
+def _further_cases() -> List[Case]:
+    '''
+    The shapes of each check's rule beyond the plan's ten: boundaries, empties, wrong types and
+    values that look like the right one.
+    '''
+
+    cases = []
+
+    def add(case_id: str, content: Any, check: str, words: str) -> None:
+        cases.append(Case(f'{check}-{case_id}', content, check, words))
+
+    # writer
+    for position, value in enumerate([[], None, 'relatedness_export', 3, ['writer']]):
+        add(f'content-{position}-{type(value).__name__}', value, 'writer', 'is not a mapping')
+    add('no-writer-entry', dropped(['writer']), 'writer', "has no 'writer' entry")
+    add('no-writer-and-nothing-else', {}, 'writer', "has no 'writer' entry")
+    for position, writer in enumerate(
+        [
+            'Relatedness_Export', ' relatedness_export', 'relatedness_export\n',
+            'relatedness_export_v2', 'x_relatedness_export', 'relatedness', '', None, 3,
+            ['relatedness_export'], 'tree_builder'
+        ]
+    ):
+        add(f'writer-{position}', edited(['writer'], writer), 'writer', 'the writer is')
+    # entries
+    for entry in sorted(PROVENANCE_ENTRIES - {'writer'}):
+        add(f'missing-{entry}', dropped([entry]), 'entries', rf"no entry \['{entry}'\]")
+    add(
+        'missing-everything-but-the-writer', {'writer': RELATEDNESS_EXPORT}, 'entries',
+        re.escape(f"no entry {sorted(PROVENANCE_ENTRIES - {'writer'})}")
+    )
+    add(
+        'missing-two-sorted', dropped(['seed'], dropped(['checkpoint'])), 'entries',
+        r"no entry \['checkpoint', 'seed'\]"
+    )
+    for name in ['co_ownership', 'ita_co_ownership', 'selection_log', 'qcew', 'builder', 'Seed']:
+        add(
+            f'unknown-{name}', {
+                **VALID, name: {}
+            }, 'entries', rf"the entries \['{name}'\], which the writer does not write"
+        )
+    add(
+        'unknown-two-sorted', {
+            **VALID, 'qcew': 1,
+            'co_ownership': 2
+        }, 'entries', r"the entries \['co_ownership', 'qcew'\], which"
+    )
+    add(
+        'unknown-and-missing', {
+            **dropped(['seed']), 'co_ownership': {}
+        }, 'entries', r"the entries \['co_ownership'\], which the writer does not write and has "
+        r"no entry \['seed'\], which the writer writes"
+    )
+    add(
+        'unknown-keys-of-two-types', {
+            **VALID, 1: 'x',
+            'co_ownership': {}
+        }, 'entries', r"\['1', 'co_ownership'\]"
+    )
+    # inputs
+    for position, value in enumerate(
+        [None, [], ['codebook', 'text_only'], 'codebook', 3, ('codebook', 'text_only')]
+    ):
+        add(f'not-a-mapping-{position}', edited(['inputs'], value), 'inputs', 'is not a mapping')
+    for name in [
+        'ita_co_ownership', 'co_ownership_marginals', 'co_ownership', 'qcew', 'selection_log',
+        'ITA_AREA_MIX', 'ita_area_mix_2023', 'Codebook', ''
+    ]:
+        add(
+            f'outside-name-{name or "empty"}', with_input(name), 'inputs',
+            rf"the inputs \['{name}'\], which are outside"
+        )
+    add(
+        'outside-name-beside-no-area-mix',
+        edited(['runs'], {}, dropped(['inputs', 'ita_area_mix'], with_input('qcew'))), 'inputs',
+        r"the inputs \['qcew'\]"
+    )
+    add(
+        'outside-names-sorted', edited(['inputs', 'qcew'], REF, with_input('co_ownership')),
+        'inputs', r"the inputs \['co_ownership', 'qcew'\], which"
+    )
+    add(
+        'outside-name-before-a-malformed-file', with_input('ita_co_ownership', 'a string'),
+        'inputs', r"the inputs \['ita_co_ownership'\], which"
+    )
+    add('a-name-that-is-an-int', edited(['inputs', 7], REF), 'inputs', r"the inputs \['7'\], which")
+    add('no-codebook', dropped(['inputs', 'codebook']), 'inputs', r"no input \['codebook'\]")
+    add(
+        'no-codebook-and-no-text-only',
+        edited(['inputs'], {'ita_area_mix': VALID['inputs']['ita_area_mix']}), 'inputs',
+        r"no input \['codebook', 'text_only'\]"
+    )
+    add(
+        'no-inputs-at-all', edited(['inputs'], {}), 'inputs', r"no input \['codebook', 'text_only'\]"
+    )
+    add(
+        'outside-and-missing', dropped(['inputs', 'text_only'], with_input('qcew')), 'inputs',
+        r"the inputs \['qcew'\], which are outside \['codebook', 'text_only', "
+        r"'ita_area_mix'\] and names no input \['text_only'\], which the table must read"
+    )
+    for name in CODEBOOK_INPUTS + TRAINING_FAMILY_INPUTS:
+        for shape, value in _file_shapes('a' * 64).items():
+            add(
+                f'{name}-is-{shape}', edited(['inputs', name], value), 'inputs',
+                f"the input '{name}' is not exactly a string 'path' and a string 'sha256'"
+            )
+    # codebook and text_only
+    codebook = SHAS['codebook_sha256']
+    text_only = SHAS['text_only_sha256']
+    for sha_id, sha in {
+        'another': OTHER_SHA,
+        'a-prefix': codebook[:-1],
+        'a-longer-one': codebook + '0',
+        'upper-case': codebook.upper(),
+        'padded': f'{codebook} ',
+        'empty': '',
+        'the-other-inputs': text_only
+    }.items():
+        add(
+            f'its-sha256-is-{sha_id}', edited(['inputs', 'codebook', 'sha256'], sha), 'codebook',
+            rf'the codebook input has sha256 {_quoted(sha)}, not the {_quoted(codebook)}'
+        )
+    for sha_id, sha in {
+        'another': OTHER_SHA,
+        'a-prefix': text_only[:-1],
+        'a-longer-one': text_only + '0',
+        'upper-case': text_only.upper(),
+        'padded': f'{text_only} ',
+        'empty': '',
+        'the-other-inputs': codebook
+    }.items():
+        add(
+            f'its-sha256-is-{sha_id}', edited(['inputs', 'text_only', 'sha256'], sha), 'text_only',
+            rf'the text_only input has sha256 {_quoted(sha)}, not the {_quoted(text_only)}'
+        )
+    # runs
+    for position, value in enumerate([None, [], [AREA_MIX_RUN], AREA_MIX_RUN, 3]):
+        add(f'not-a-mapping-{position}', edited(['runs'], value), 'runs', 'is not a mapping')
+    for run_id, runs in {
+        'another-name': {
+            'ita_co_ownership': AREA_MIX_RUN
+        },
+        'the-area-mix-and-co-ownership': {
+            'ita_area_mix': AREA_MIX_RUN,
+            'ita_co_ownership': 'x'
+        },
+        'the-area-mix-and-a-codebook-input': {
+            'ita_area_mix': AREA_MIX_RUN,
+            'codebook': 'x'
+        },
+    }.items():
+        add(
+            run_id, edited(['runs'], runs), 'runs',
+            r"but the training-family inputs present are \['ita_area_mix'\]"
+        )
+    for run_id, runs in {
+        'a-codebook-input': {
+            'codebook': AREA_MIX_RUN
+        },
+        'the-area-mix-and-another': {
+            'ita_area_mix': AREA_MIX_RUN,
+            'x': 'y'
+        },
+    }.items():
+        add(
+            f'no-area-mix-with-{run_id}', edited(['runs'], runs, without_area_mix()), 'runs',
+            r'but the training-family inputs present are \[\]'
+        )
+    for position, blank in enumerate(['', ' ', '\t\n', ' ', '  ']):
+        add(
+            f'blank-run-{position}', edited(['runs', 'ita_area_mix'], blank), 'runs',
+            "the run of 'ita_area_mix' is not a non-blank string"
+        )
+    for position, value in enumerate(
+        [None, 3, 0, False, [AREA_MIX_RUN], {
+            'path': AREA_MIX_RUN
+        }, b'run']
+    ):
+        add(
+            f'non-string-run-{position}', edited(['runs', 'ita_area_mix'], value), 'runs',
+            "the run of 'ita_area_mix' is not a non-blank string"
+        )
+    # checkpoint
+    for shape, value in _file_shapes('b' * 64).items():
+        add(
+            f'is-{shape}', edited(['checkpoint'], value), 'checkpoint',
+            "the checkpoint is not exactly a string 'path' and a string 'sha256'"
+        )
+    # seed
+    for value in [True, False, 3.0, 0.0, -1.5, '3', None, [3], 3 + 0j, b'3', {3}]:
+        add(
+            f'seed-{type(value).__name__}-{value!r}', edited(['seed'], value), 'seed',
+            rf'the seed is {_quoted(value)}, not an int'
+        )
+    return cases
+
+FURTHER_CASES = _further_cases()
+
+@pytest.mark.parametrize('case', FURTHER_CASES, ids=[case.id for case in FURTHER_CASES])
+def test_each_further_shape_of_each_rule_refuses(case):
+    assert_refused_by(case)
+
+def _frozen(value: Any) -> Any:
+    '''``value`` with every dictionary replaced by a read-only mapping that is not a ``dict``.'''
+
+    if isinstance(value, dict):
+        return MappingProxyType({key: _frozen(item) for key, item in value.items()})
+    return value
+
+@pytest.mark.parametrize('seed', [0, 1, -1, -2**31, 2**63, 20261121])
+def test_any_int_seed_passes(seed):
+    assert check_relatedness_provenance(edited(['seed'], seed), **SHAS) is None
+    assert check_relatedness_provenance(edited(['seed'], seed, without_area_mix()), **SHAS) is None
+
+@pytest.mark.parametrize('run', ['x', ' x ', 'a b', 'stage6_ita_area_mix_20261014_1000_csv', '0'])
+def test_any_run_with_a_character_other_than_whitespace_passes(run):
+    assert check_relatedness_provenance(edited(['runs', 'ita_area_mix'], run), **SHAS) is None
+
+def test_a_mapping_that_is_not_a_dict_passes_at_every_level():
+    for content in (valid(), without_area_mix()):
+        assert check_relatedness_provenance(_frozen(content), **SHAS) is None
+
+def test_the_arguments_are_what_the_inputs_are_compared_with():
+    content = valid()
+    content['inputs']['codebook']['sha256'] = OTHER_SHA
+    content['inputs']['text_only']['sha256'] = 'a' * 64
+    assert check_relatedness_provenance(
+        content, codebook_sha256=OTHER_SHA, text_only_sha256='a' * 64
+    ) is None
+    swapped = {
+        'codebook_sha256': SHAS['text_only_sha256'],
+        'text_only_sha256': SHAS['codebook_sha256']
+    }
+    assert refusal(VALID, **swapped).startswith('codebook: ')
+    assert refusal(VALID, text_only_sha256=OTHER_SHA).startswith('text_only: ')
+    assert refusal(VALID, codebook_sha256=OTHER_SHA).startswith('codebook: ')
+
+def test_a_refusal_names_the_sha256_it_found_and_the_one_it_expected():
+    found = valid()
+    found['inputs']['codebook']['sha256'] = OTHER_SHA
+    message = refusal(found)
+    assert OTHER_SHA in message and SHAS['codebook_sha256'] in message
+    assert SHAS['text_only_sha256'] not in message
+    found = valid()
+    found['inputs']['text_only']['sha256'] = OTHER_SHA
+    message = refusal(found)
+    assert OTHER_SHA in message and SHAS['text_only_sha256'] in message
+    assert SHAS['codebook_sha256'] not in message
+
+def test_the_shas_are_keyword_only():
+    with pytest.raises(TypeError):
+        check_relatedness_provenance(VALID, SHAS['codebook_sha256'], SHAS['text_only_sha256'])
+    with pytest.raises(TypeError):
+        check_relatedness_provenance(VALID)
+
+# One breaking of a valid provenance for each check, which changes only what its own check reads
+def _break_provenance_writer(content: Dict[str, Any]) -> None:
+    content['writer'] = 'export'
+
+def _break_provenance_entries(content: Dict[str, Any]) -> None:
+    content['co_ownership'] = {}
+
+def _break_provenance_inputs(content: Dict[str, Any]) -> None:
+    content['inputs']['ita_co_ownership'] = REF
+
+def _break_provenance_codebook(content: Dict[str, Any]) -> None:
+    content['inputs']['codebook']['sha256'] = OTHER_SHA
+
+def _break_provenance_text_only(content: Dict[str, Any]) -> None:
+    content['inputs']['text_only']['sha256'] = OTHER_SHA
+
+def _break_provenance_runs(content: Dict[str, Any]) -> None:
+    content['runs'] = {}
+
+def _break_provenance_checkpoint(content: Dict[str, Any]) -> None:
+    del content['checkpoint']['sha256']
+
+def _break_provenance_seed(content: Dict[str, Any]) -> None:
+    content['seed'] = True
+
+PROVENANCE_BREAKS = {
+    'writer': _break_provenance_writer,
+    'entries': _break_provenance_entries,
+    'inputs': _break_provenance_inputs,
+    'codebook': _break_provenance_codebook,
+    'text_only': _break_provenance_text_only,
+    'runs': _break_provenance_runs,
+    'checkpoint': _break_provenance_checkpoint,
+    'seed': _break_provenance_seed,
+}
+PROVENANCE_BREAK_PAIRS = [(a, b) for index, a in enumerate(CHECKS) for b in CHECKS[index + 1:]]
+
+def broken_provenance(*kinds: str) -> Dict[str, Any]:
+    '''``VALID`` broken in each of the given ways.'''
+
+    content = valid()
+    for kind in kinds:
+        PROVENANCE_BREAKS[kind](content)
+    return content
+
+@pytest.mark.parametrize('kind', CHECKS)
+def test_each_break_is_refused_by_its_own_check_alone(kind):
+    message = refusal(broken_provenance(kind))
+    assert message.startswith(f'{kind}: ') and message.endswith(f' {RULE}')
+    assert broken_provenance(kind) != VALID
+
+@pytest.mark.parametrize('earlier, later', PROVENANCE_BREAK_PAIRS)
+def test_the_checks_run_in_the_briefs_order(earlier, later):
+    for kinds in ((earlier, later), (later, earlier)):
+        assert refusal(broken_provenance(*kinds)).startswith(f'{earlier}: ')
+
+def test_every_check_refuses_with_the_earlier_ones_passed_and_the_later_ones_broken():
+    for position, kind in enumerate(CHECKS):
+        assert refusal(broken_provenance(*CHECKS[position:])).startswith(f'{kind}: ')
+
+def test_the_rule_describes_the_provenance_and_changes_nothing():
+    padded = edited(['runs', 'ita_area_mix'], ' x ')
+    for content in (
+        valid(), without_area_mix(), padded, broken_provenance('writer'),
+        broken_provenance('seed', 'runs')
+    ):
+        before = copy.deepcopy(content)
+        try:
+            check_relatedness_provenance(content, **SHAS)
+        except ValueError:
+            pass
+        assert content == before
