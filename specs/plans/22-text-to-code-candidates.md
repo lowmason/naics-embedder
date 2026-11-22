@@ -96,6 +96,10 @@ This plan's header deliberately carries no roadmap line, so its completion does 
   Task 11.
 - **D4** (owner, plan review, 2026-11-22): plan 22 approved as committed ("Approve, open PR"),
   to run subagent-driven in a fresh session ("Subagent-Driven"). Applied in: the header.
+- **D5** (owner, plan review, 2026-11-22): the local Codex review's four fixes are accepted ("Accept,
+  open PR"): one staged model cache for every pinned backbone, the margin reads every Stage 8
+  seed, Task 11 downloads `main` and checks it against the pin, and Task 11's bundle check runs
+  the worktree's code. Applied in: Task 4, Task 7, Task 11 and `## Handoff to Plan B`.
 
 ---
 
@@ -439,6 +443,7 @@ git commit -m 'feat(text_model): add a frozen-backbone control that keeps the d1
 - Modify: `src/naics_embedder/utils/input_window.py:1-12, :19` (docstring and `TRAINED_WINDOWS`)
 - Modify: `src/naics_embedder/remote/model_cache.py:14-16, :35-38, :82-85`
 - Modify: `src/naics_embedder/utils/config.py` (a `model_validator` on `Config`)
+- Modify: `src/naics_embedder/remote/launch.py:240-258` (`_session_model_cache`: subset check)
 - Modify: `tests/unit/test_input_window.py`, `tests/unit/test_remote_model_cache.py`,
   `tests/unit/test_config.py`, `tests/unit/test_cli_training.py:405-416`,
   `tests/unit/test_tokenization_cache.py`, `tests/unit/test_remote_launch.py`
@@ -450,6 +455,16 @@ git commit -m 'feat(text_model): add a frozen-backbone control that keeps the d1
     Constraints. `MINILM` and `MINILM_REVISION` stay as names. `verify_model_cache` and
     `stage_model_cache` refuse a name that is not in `PINNED_REVISIONS` ("no revision is pinned
     for {name}") and a revision that differs from its pin.
+  - **One cache for every pinned backbone.** Today `remote up` re-verifies an existing
+    `.remote/model-cache/hub` against the new config's model names, so a MiniLM cache refuses a
+    gte config (`offline model cache inventory or SHA256 differs`), on the Mac and on the
+    instance. Instead, `stage_model_cache(root, cfg, *, hub=None)` stages every name in
+    `PINNED_REVISIONS`, whatever the config, and requires the config's three names to be among
+    them. Launch's `_session_model_cache` (`remote/launch.py:240-258`) requires the config's names
+    to be a subset of `cache['revisions']`, not equal to it. Each arm then reuses one verified
+    cache. Nothing is repaired: an existing staged cache with another name set is refused with
+    "the staged offline model cache holds {names}, not every pinned backbone: remove
+    .remote/model-cache and run remote up again".
   - `Config` validator `the_backbone_is_the_tokenizer`: refuses unless `model.base_model_name`,
     `data_loader.tokenization.tokenizer_name` and `data_loader.streaming.tokenizer_name` are one
     name. The message names all three. The tokenization validators already refuse a name with no
@@ -500,6 +515,11 @@ def test_an_over_window_text_without_a_pin_is_refused_for_a_new_backbone(...):
 def test_the_cache_refuses_an_unpinned_name(...): ...
 def test_the_cache_refuses_a_new_backbone_at_another_revision(...): ...
 def test_the_cache_accepts_each_pinned_backbone(...): ...
+def test_one_staged_cache_launches_each_backbone(...):
+    # fake hub with the three pinned snapshots: stage once, then _session_model_cache accepts a
+    # MiniLM, a gte and a bge config from the same record
+def test_a_staged_cache_with_another_name_set_is_refused(...):
+    # an existing MiniLM-only .remote/model-cache: stage_model_cache raises 'remove .remote/model-cache'
 ```
 
   `tie(name)` returns the three overrides. Update `test_cli_training.py:405-416`, which overrides
@@ -511,9 +531,10 @@ def test_the_cache_accepts_each_pinned_backbone(...): ...
   Run: `uv run pytest tests/unit/test_input_window.py tests/unit/test_config.py tests/unit/test_remote_model_cache.py -q`
   Expected: FAIL (no window for gte-small, no tie refusal, unpinned names pass).
 
-- [ ] **Step 3: Implement the windows, the pins and the tie.** `remote/launch.py` needs no
-  change: its effective config is a `Config`, so the tie runs on the Mac before launch. Add one
+- [ ] **Step 3: Implement the windows, the pins, the one cache and the tie.** Launch's effective
+  config is a `Config`, so the tie runs on the Mac before launch with no launch change. Add one
   test to `test_remote_launch.py` that renders an untied override and expects the refusal.
+  Update `.claude/rules/remote.md`'s model-cache sentence: every pinned backbone is staged.
 
 - [ ] **Step 4: Run them to verify they pass**
 
@@ -683,8 +704,9 @@ git commit -m 'fix(cli): check a d16 read against the Stage 8 record and read th
     exists yet, so the schema change breaks nothing stored.
   - `fix_ita_margin(panel, reference_arms, r, name, *, purpose, store: ArtifactStore, stage8: ArmRecord, data_fingerprint: str) -> ItaMarginRecord`.
     Before any read, it refuses: `panel.data_fingerprint(ItaPart.VALIDATION) != data_fingerprint`;
-    a `euclidean-d16` encoder without `checkpoint_sha256` or `table_fingerprint`; and any d16 seed
-    that fails `check_d16_seed`. Each d16 read logs `checkpoint` and `table` in its detail, as
+    a `euclidean-d16` encoder without `checkpoint_sha256` or `table_fingerprint`; d16 seeds that
+    are not exactly the seeds of `stage8.runs` ("the margin reads every Stage 8 seed: missing
+    [..], extra [..]"); and any d16 seed that fails `check_d16_seed`. Each d16 read logs `checkpoint` and `table` in its detail, as
     `read_reference` does. Each read's `per_pair` goes to `store` as `ita_per_pair.parquet`.
     It uses `panel.score_logged`.
   - `check_ita_margin` also refuses: a record whose `log_records` lack a read of either reference
@@ -706,6 +728,8 @@ git commit -m 'fix(cli): check a d16 read against the Stage 8 record and read th
 def test_fix_refuses_a_d16_seed_not_in_stage8_before_any_read(...):
     # the log is byte-equal after the ValueError
 def test_fix_refuses_another_table_build_before_any_read(...): ...
+def test_fix_refuses_a_missing_stage8_seed_before_any_read(...):
+    # four of the record's five seeds: ValueError naming missing [5], the log is byte-equal
 def test_fix_logs_each_d16_checkpoint_and_table(...):
     assert [r['detail'].get('checkpoint') for r in margin.log_records][1:] == [...]
 def test_fix_stores_each_reads_per_pair_frame(...):
@@ -980,9 +1004,11 @@ git commit -m 'docs: describe retention, the frozen control and the Stage 5 ITA 
 - Modify: `tests/unit/test_committed_window_summaries.py` (the two pins' sha256 and window)
 - Modify: this plan (the recorded local check)
 
-- [ ] **Step 1: Download each model at its pinned revision** with
-  `huggingface_hub.snapshot_download(repo_id, revision=REV)`. Check `refs/main` and the snapshot
-  directory name equal the revision.
+- [ ] **Step 1: Download each model's `main`, then check it is the pin.** Use
+  `huggingface_hub.snapshot_download(repo_id)` with no `revision`. A commit-hash `revision` writes
+  no `refs/main`, and `load_backbone` and `stage_model_cache` read `refs/main` offline. Then check
+  that `refs/main` and the snapshot directory name equal the pinned revision. If `main` has moved
+  since 2026-11-22, stop and ask your human partner before you change a pin.
 
 - [ ] **Step 2: Check the shared vocabulary.** Load the three tokenizers. Record whether their
   vocabularies are equal and whether each counts the bundle's marked channel texts the same.
@@ -999,12 +1025,17 @@ cd <worktree> && HF_HUB_OFFLINE=1 uv run naics-embedder data summaries --backbon
   Commit the pins, and record each over-window count and whether each artifact's rows equal
   MiniLM's.
 
-- [ ] **Step 4: The bundle-301cce28 check.** Run this from the main checkout, which holds
-  `data/` and the gitignored `conf/local.yaml`. For each of the three backbones, build the tied
-  config at length 128 and resolve the bundle's channel texts through `resolve_channel_texts`
-  (the token cache's path). Record: the backbone, the over-window count, `resolve` succeeded,
-  `stage_model_cache` accepted the snapshot. Write the record under this step as a `> Check:`
-  line.
+- [ ] **Step 4: The bundle-301cce28 check.** Run the worktree's code and pins (`cd <worktree> &&
+  HF_HUB_OFFLINE=1 uv run python <script>`, with the script kept outside the repository), never
+  the main checkout's package, which lacks Task 4's windows and this task's pins. Read the main
+  checkout's inputs by absolute path: the manifest that its gitignored `conf/local.yaml` names,
+  joined to `/Users/lowell/Projects/naics-embedder/`, loaded with `load_validated_bundle`, and
+  the descriptions that the bundle's `generation_parameters` name. For each of the three
+  backbones, build the tied config at length 128 and resolve the descriptions' channel texts
+  through `resolve_channel_texts` with that backbone's tokenizer (the token cache's path), and
+  run `stage_model_cache` into a temporary root. Record the backbone, the over-window count,
+  that resolution succeeded and that the cache staged. Write the record under this step as a
+  `> Check:` line.
 
 - [ ] **Step 5: Run the committed-artifact tests and commit**
 
@@ -1055,6 +1086,9 @@ Written at planning time from the planned interfaces. Execution updates it where
 - **Token cache.** It is rebuilt on the instance from its identity, which names the tokenizer, so
   arms that share `data_loader.tokenization.output_path` rebuild it at each backbone change.
   Plan B may give each backbone its own path to skip the rebuilds.
+- **The staged model cache.** The Mac's `.remote/model-cache` from Stage 8 holds MiniLM only,
+  so the first `remote up` after this plan refuses it (Task 4). Plan B removes it once, with the
+  owner's approval, before that `up`. Every instance starts fresh.
 - **Pins.** If Task 11 was skipped, Plan B starts with it: the summaries pins and the
   bundle-301cce28 check come before any gte or bge run.
 - **Deferred.** Plan B files the checkpoint-cleanup entry of spec §4.4 and carries the
