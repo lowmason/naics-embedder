@@ -747,11 +747,13 @@ $$\operatorname{rank}_{i} = \sum_{c \in \mathcal{C}_{6}} \mathbb{1}\!\left[\oper
 
 **The seal.** The test split may be read only after an explicit, logged opening, and a second
 opening requires a stated reason. Every read and opening is appended to an append-only selection
-log with the split's fingerprint, the purpose and the reading arm. Enforcement is procedural:
-roles are visible in the committed files, and the panel is the only path through which later
-stages read queries. On 2026-11-19 the log held 284 validation reads over all panels and no
-opening of any sealed split. No opening of this test split is planned: it would serve only a
-report, and a sealed split spent on a report can judge nothing later.
+log with the split's fingerprint, the purpose and the reading arm. Each training host keeps its
+own log, which holds the training monitor's reads. The analysis machine's log holds the decision
+reads. Enforcement is procedural: roles are visible in the committed files, and the panel is the
+only path through which later stages read queries. On 2026-11-19 the analysis machine's log held
+284 validation reads over all panels, 56 of them of this panel, and no opening of any sealed
+split. No opening of this test split is planned: it would serve only a report, and a sealed split
+spent on a report can judge nothing later.
 
 **Comparator.** The only non-trained comparator is a lexical baseline. A code's text (title,
 description and examples field) and the query are hashed into 4,096 character-trigram features,
@@ -1756,8 +1758,9 @@ the lower bound of the two-sided $1 - 0.05/n$ interval. Text-to-code has one pan
 the level is 95%. Relatedness has $n = n_{\mathcal{F}}$ judging families, so 95% with co-ownership
 alone and 97.5% if a second family joins. The rule exists because Rule 1's margin never binds on a
 single panel: with one panel, Rule 1 reduces to plain superiority. Rule 2 turns the margin into a
-required minimum gain. A candidate under Rule 2 needs at least five seeds, and a reference arm
-without seeds is one replicate.
+required minimum gain. A reference arm without seeds is one replicate. The relatedness test
+refuses a candidate with fewer than five seeds. The text-to-code test has no such check, and S5's
+outline plans at least five seeds per candidate.
 
 **Several arms** (Rule 1). Every ordered pair of arms is compared. An arm is dominated when some
 other arm is adopted over it, and the survivors are the non-dominated arms. If dominance cycles so
