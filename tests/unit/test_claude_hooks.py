@@ -62,6 +62,9 @@ GROWTH_MARGINS_RUNS = [
     "bash -c 'uv run naics-embedder tools growth-margins'",
     'echo start\nuv run naics-embedder tools growth-margins',
     'uv run naics-embedder tools growth-margins 2>&1 | tee log.txt',
+    "uv run naics-embedder tools growth-margins # don't rerun",
+    'echo hi # a note\nuv run naics-embedder tools growth-margins',
+    "cat <<'EOF' > notes.txt\ndon't\nEOF\nuv run naics-embedder tools growth-margins",
 ]
 
 RUFF_FORMAT_RUNS = [
@@ -69,6 +72,10 @@ RUFF_FORMAT_RUNS = [
     'ruff format',
     'uvx ruff format --check src',
     'uv run python -m ruff format x.py',
+    'uv run ruff --config pyproject.toml format src/',
+    "grep -n '#' CLAUDE.md && uv run ruff format",
+    'echo a#b && uv run ruff format',
+    "cat <<< 'x' && uv run ruff format",
 ]
 
 PANEL_READS = [
@@ -100,6 +107,8 @@ ALLOWED = [
     'uv --directory /home/u/naics-embedder run --locked --no-sync pytest -n auto',
     'uv run pytest tests/unit/test_cli_commands.py -k growth_margins',
     "echo 'unterminated",
+    "git commit -F - <<'EOF'\nuv run naics-embedder tools sweep\nEOF",
+    'cat <<-EOF\n\tuv run ruff format\n\tEOF',
 ]
 
 @pytest.mark.parametrize('command', GROWTH_MARGINS_RUNS)
@@ -123,6 +132,10 @@ def test_guard_asks_before_a_panel_read(command_name):
 @pytest.mark.parametrize('command', ALLOWED)
 def test_guard_stays_silent_on_other_commands(command):
     assert guard_decision(command) == (None, '')
+
+def test_guard_ignores_a_dry_run_flag_inside_a_comment():
+    decision, _ = guard_decision('uv run naics-embedder tools ita-read # --dry-run')
+    assert decision == 'ask'
 
 def test_guard_denial_outranks_a_panel_read_on_the_same_line():
     decision, _ = guard_decision('uv run naics-embedder tools sweep --runs r && uv run ruff format')

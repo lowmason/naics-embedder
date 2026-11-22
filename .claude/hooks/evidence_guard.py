@@ -15,10 +15,10 @@ Claude Code pipes the hook payload in on stdin. For a shell command, the guard p
 
 A deny outranks an ask. Any other command gets no output, and the normal permission flow applies.
 
-The guard catches mistakes, not evasion. It cuts a command into simple commands at ``;``, ``&&``,
-``||``, ``|``, ``&``, parentheses and newlines, and it reads the script of ``bash -c`` (and of
-``sh`` and ``zsh``). It does not read command substitutions, ``eval``, heredocs, or Python that
-calls the CLI itself.
+The guard catches mistakes, not evasion. It drops shell comments and heredoc bodies, cuts the rest
+into simple commands at ``;``, ``&&``, ``||``, ``|``, ``&``, parentheses and newlines, and reads the
+script of ``bash -c`` (and of ``sh`` and ``zsh``). It does not read command substitutions, ``eval``,
+a heredoc fed to a shell, or Python that calls the CLI itself.
 
 Claude Code runs it with the first python3 on PATH, which is 3.9 on macOS. So it uses the standard
 library and 3.9 syntax only. A payload or a command that it cannot read gets no output: the guard
@@ -108,18 +108,99 @@ LEADING_WORDS = frozenset({'!', 'if', 'then', 'elif', 'else', 'while', 'until', 
 
 PUNCTUATION = '();<>|&\n'
 SEPARATOR_CHARS = frozenset(';&|()\n')
+WORD_BREAKS = frozenset(' \t\r\n;&|()<>')
 ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=')
 PYTHON = re.compile(r'python[0-9.]*$')
 PYTHON_VALUE_OPTIONS = frozenset({'-W', '-X', '-Q'})
+RUFF_VALUE_OPTIONS = frozenset({'--config'})
 CLI_MODULES = frozenset({'naics_embedder', 'naics_embedder.cli'})
 MAX_SHELL_DEPTH = 3
+
+# A heredoc operator and its delimiter word: 'EOF', "EOF", \EOF or EOF, after << or <<-.
+HEREDOC = re.compile(r'<<(-?)[ \t]*(?:\'([^\'\n]*)\'|"([^"\n]*)"|\\?([^\s;&|()<>\'"]+))')
+
+def skip_heredoc_bodies(command, index, pending):
+    '''The index just past the bodies of the pending heredocs, the first of which starts at index.
+
+    Each body ends at its delimiter's line. Under <<- the shell strips leading tabs first.
+    '''
+    for delimiter, strip_tabs in pending:
+        while index < len(command):
+            newline = command.find('\n', index)
+            end = len(command) if newline < 0 else newline
+            line = command[index:end]
+            index = end + 1
+            if (line.lstrip('\t') if strip_tabs else line) == delimiter:
+                break
+    return min(index, len(command))
+
+def readable_text(command):
+    '''The command without its comments and heredoc bodies, and otherwise unchanged.
+
+    A comment is an unquoted # at the start of a word, up to the end of its line. Its newline
+    stays, so the next line is still a command of its own. A heredoc body is text for a program's
+    stdin, not commands, and prose there often holds an unmatched apostrophe. Quotes and
+    backslashes are followed as a POSIX shell reads them, so a # inside quotes or a word stays.
+    '''
+    out = []
+    pending = []  # (delimiter, strip_tabs) for each heredoc whose body starts on the next line
+    quote = None
+    word_start = True
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            if char == '\\' and quote == '"':
+                out.append(command[index:index + 2])
+                index += 2
+                continue
+            quote = None if char == quote else quote
+            out.append(char)
+            index += 1
+            continue
+        if char == '\\':
+            out.append(command[index:index + 2])
+            index += 2
+            word_start = False
+            continue
+        if char in '\'"':
+            quote = char
+            out.append(char)
+            index += 1
+            word_start = False
+            continue
+        if char == '#' and word_start:
+            newline = command.find('\n', index)
+            index = len(command) if newline < 0 else newline
+            continue
+        if command.startswith('<<<', index):
+            out.append('<<<')
+            index += 3
+            word_start = True
+            continue
+        heredoc = HEREDOC.match(command, index) if char == '<' else None
+        if heredoc:
+            delimiter = next(group for group in heredoc.groups()[1:] if group is not None)
+            pending.append((delimiter, heredoc.group(1) == '-'))
+            out.append(heredoc.group())
+            index = heredoc.end()
+            word_start = False
+            continue
+        out.append(char)
+        index += 1
+        word_start = char in WORD_BREAKS
+        if char == '\n' and pending:
+            index = skip_heredoc_bodies(command, index, pending)
+            pending = []
+    return ''.join(out)
 
 def simple_commands(command):
     '''Cut a command line into the word lists of its simple commands.
 
     Raises ValueError, as shlex does, for an unclosed quote or a trailing backslash.
     '''
-    lexer = shlex.shlex(command.replace('\\\n', ' '), posix=True, punctuation_chars=PUNCTUATION)
+    text = readable_text(command).replace('\\\n', ' ')
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=PUNCTUATION)
     lexer.whitespace = ' \t\r'
     lexer.whitespace_split = True
     lexer.commenters = ''
@@ -137,8 +218,18 @@ def simple_commands(command):
 def name(word):
     return os.path.basename(word)
 
-def positionals(words):
-    return [word for word in words if not word.startswith('-')]
+def positionals(words, value_options=frozenset()):
+    '''The words that are not options, skipping the value after each option in value_options.'''
+    found = []
+    skip = False
+    for word in words:
+        if skip:
+            skip = False
+        elif word.startswith('-'):
+            skip = word in value_options
+        else:
+            found.append(word)
+    return found
 
 def shell_script(args):
     '''The script after a shell's -c option, or None.'''
@@ -180,7 +271,7 @@ def cli_decision(args):
     return None
 
 def ruff_decision(args):
-    words = positionals(args)
+    words = positionals(args, RUFF_VALUE_OPTIONS)
     if words and words[0] == 'format':
         return 'deny', RUFF_FORMAT_REASON
     return None
