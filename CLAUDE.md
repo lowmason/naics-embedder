@@ -29,7 +29,7 @@ artifact. The economic artifact's first roadmap is complete
 
 The project uses Python 3.10+, uv, PyTorch/Lightning, Transformers/PEFT, Polars/PyArrow, Pydantic,
 Typer/Rich, pytest, Ruff/YAPF and MkDocs. `.python-version` pins the local locked environment to
-Python 3.12. The source tree has **131 Python files**; tests have **115 unit** files and two
+Python 3.12. The source tree has **136 Python files**; tests have **121 unit** files and two
 integration files. File counts exclude generated and ignored artifacts.
 
 ## Architecture Summary
@@ -100,7 +100,11 @@ src/naics_embedder/
 │                              # ita_split.py: the ITA panel's settings and salted split;
 │                              # ita_evidence.py: the pinned ITA run and its C1 check;
 │                              # ita.py: the ITA panel, its pair tables and sealed opening;
-│                              # ita_scoring.py: the ITA shortlist ranks and summaries
+│                              # ita_scoring.py: the ITA shortlist ranks and summaries;
+│                              # relatedness_split.py: the relatedness panel's settings and split;
+│                              # relatedness.py: the relatedness panel and its sealed opening;
+│                              # relatedness_scoring.py: tie-aware NDCG and AUC for relatedness;
+│                              # relatedness_arms.py: the tree and text-only arms' similarities
 ├── decision/                  # paired resampling, margins, arm records and decisions;
 │                              # economic.py: the growth margin read and economic decision;
 │                              # candidates.py: the frozen candidate list;
@@ -108,7 +112,8 @@ src/naics_embedder/
 │                              # trained.py: a trained candidate's import;
 │                              # text_to_code.py: text→code's margin and decision on the ITA panel;
 │                              # ita_reads.py: Stage 4's reference reads on the ITA panel;
-│                              # ita_gap.py: the gap between Census phrases and owner text
+│                              # ita_gap.py: the gap between Census phrases and owner text;
+│                              # relatedness.py: relatedness's margin, test and provenance rule
 ├── tree_model/                # deterministic economic candidates: scaling, smoothing, builders
 ├── graph_model/               # HGCN, graph data loading and four-phase curriculum
 ├── metrics/                   # structural and retrieval diagnostics
@@ -116,7 +121,7 @@ src/naics_embedder/
 └── utils/                     # config, training, input-window and geometry utilities
 
 tests/
-├── unit/                      # 115 unit test files
+├── unit/                      # 121 unit test files
 ├── integration/               # test_reference_training.py, test_remote_workflow.py
 ├── fixtures/                  # tiny models, bundles, panels and runs
 └── conftest.py
@@ -224,6 +229,13 @@ stays sealed. No ITA pair enters training, and no code or test reads a real pair
 `tools ita-read` reads a reference arm on the ITA validation part after checking the pinned
 run (`conf/data/ita_evidence.yaml`), and `tools ita-gap` measures the gap from those reads
 without reading a panel.
+
+Relatedness's own judge is the relatedness panel (`relatedness_co_ownership`,
+`panels/relatedness.py`), which scores ITA co-ownership. Its anchor industries split by a salted
+hash of the six-digit code into a validation part, which selects, and a sealed part. The headline
+is NDCG@10, and NDCG@20 is reported. The sealed part opens only through
+`RelatednessPanel.open_sealed` and is read once, at redesign roadmap Stage 7b. No co-ownership
+row enters training, and no code or test reads a real table.
 
 ### Checkpoint Contract and Exact Resume
 
@@ -391,7 +403,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **4,630 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **5,636 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -566,7 +578,7 @@ evaluation currently uses curvature 1; a non-unit-curvature correction is a sepa
 
 ## Testing and Validation
 
-There are 115 unit files and two integration files. Important current seams include:
+There are 121 unit files and two integration files. Important current seams include:
 
 - `test_supervision_queries.py` and `test_supervision_code_targets.py`: query/target identities
   and unary masks. `test_loss.py` and `test_hyperbolic.py`: three terms, live-radius head and
@@ -596,6 +608,11 @@ There are 115 unit files and two integration files. Important current seams incl
 - `test_ita_evidence.py`, `test_ita_reads.py` and `test_ita_gap.py`: the ITA run pin and its C1
   check, Stage 4's reference reads and their refusals before logging, and the gap's strata,
   matched codes, refusals of reads that do not pair and D2. All read fixture tables only.
+- `test_relatedness_split.py`, `test_relatedness_inputs.py`, `test_relatedness_scoring.py`,
+  `test_relatedness_arms.py`, `test_relatedness_panel.py` and `test_decision_relatedness.py`:
+  the relatedness panel's salted anchor split, input refusals, tie-aware scores, reference arms,
+  logged reads and sealed opening, and relatedness's margin, test and provenance rule. All read
+  `tests/fixtures/relatedness.py` tables only.
 - `integration/test_reference_training.py`: tiny-backbone Trainer runs, earliest-best selection,
   schedule/early stopping, health records and exact resume.
 - Graph, panel, resampling and decision tests cover their separate interfaces.

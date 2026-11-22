@@ -74,3 +74,11 @@ The gap between Census phrases and owner text for each reference arm, with paire
 intervals, and the recommendation on a later ITA training part (D2).
 
 ::: naics_embedder.decision.ita_gap
+
+## Relatedness margin
+
+The relatedness decision on the co-ownership panel's headline NDCG@10. It fixes the margin δ from
+the reference arms' own reads, before any candidate read, and compares a candidate with the
+reference on every judging family. It also refuses a table whose provenance names co-ownership.
+
+::: naics_embedder.decision.relatedness

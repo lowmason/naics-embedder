@@ -50,6 +50,7 @@ nav:
           - Hierarchy Structure: api/hierarchy_structure_metrics.md
           - Outcome Panel: api/outcome_panel.md
           - ITA Panel: api/ita_panel.md
+          - Relatedness Panel: api/relatedness_panel.md
           - Regressor Panel: api/regressor_panel.md
           - Decision Rule: api/decision.md
           - Diagnostics: api/diagnostics.md

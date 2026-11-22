@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **115 unit** test files and **2 integration** files, with **4,630 collected
+The suite contains **121 unit** test files and **2 integration** files, with **5,636 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -19,7 +19,7 @@ it back on with `monkeypatch` for a temporary checkout.
 
 ```text
 tests/
-├── unit/                         # 115 unit test files
+├── unit/                         # 121 unit test files
 ├── integration/
 │   ├── test_reference_training.py # tiny-backbone Trainer workflows
 │   └── test_remote_workflow.py    # GNU-rsync workflow qualification
