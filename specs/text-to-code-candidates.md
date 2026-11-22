@@ -416,6 +416,8 @@ Plan A (fixtures):
 - [ ] Training refuses a backbone with no trained window, and one with an over-window text and no
       summaries pin, and accepts each of the three backbones with bundle 301cce28 at length 128
       (test).
+- [ ] The summaries generator and `data summaries` write an artifact at a given window below the
+      trained window, refuse one above it, and keep MiniLM's default artifact unchanged (test).
 - [ ] The frozen control's backbone weights do not change over a step, and its projection does
       (test).
 - [ ] A seed's selected checkpoint is the earliest kept epoch with the highest headline MRR (test).
