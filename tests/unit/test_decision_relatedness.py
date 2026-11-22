@@ -8,35 +8,59 @@ before any candidate read. The margin-first check keys on the record's ``panel``
 family's record is judged on its own panel's reads, and it counts each reference arm's read once
 (P9). Every table is built from ``tests/fixtures/relatedness.py``, and every log is under
 ``tmp_path``. No test reads a real table.
+
+Task 8 adds the beat-by-δ test (spec 4.6): a candidate beats the reference on a judging family when
+the lower bound of the interval on Δ exceeds +δ, and it goes forward when it beats on every family,
+at the level 1 − 0.05/n for n families. Each family has its own unit stream and its own margin.
 '''
 
 import copy
+import dataclasses
 import json
 import math
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence
 
 import numpy as np
+import polars as pl
 import pytest
 from pydantic import ValidationError
 
+from naics_embedder.decision import relatedness
 from naics_embedder.decision.decide import read_time
 from naics_embedder.decision.relatedness import (
     REFERENCE_ARMS,
     TEXT_ONLY,
     TEXT_ONLY_CENTERED,
     TREE,
+    FamilyDelta,
+    FamilyVerdict,
     RelatednessMarginRecord,
+    RelatednessVerdict,
+    arm_replicates,
+    beat_by_margin,
     check_relatedness_margin,
     check_relatedness_margin_first,
     choose_reference,
     fix_relatedness_margin,
+    headline_values,
+    relatedness_test,
 )
+from naics_embedder.decision.resampling import (
+    PanelItems,
+    percentile_interval,
+    point_statistic,
+    replicate_statistics,
+    seed_draws,
+    unit_draws,
+)
+from naics_embedder.decision.rule import superiority_level
 from naics_embedder.panels.relatedness import RelatednessPanel
 from naics_embedder.panels.relatedness_arms import RelatednessArm, TreeArm, VectorArm
+from naics_embedder.panels.relatedness_scoring import RelatednessResult
 from naics_embedder.panels.relatedness_split import RelatednessPart, split_fingerprint
 from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog
 from tests.fixtures.relatedness import (
@@ -1234,3 +1258,753 @@ def test_a_hand_records_fixed_at_can_be_given(tmp_path):
     before = _hand_record(p.log, SECOND_FAMILY, HEADLINES, 'c' * 64, fixed_at=earlier)
     with pytest.raises(ValueError, match='before its read'):
         check_relatedness_margin_first(before, p.log)
+
+# -------------------------------------------------------------------------------------------------
+# The beat-by-δ test: helpers
+# -------------------------------------------------------------------------------------------------
+
+REPLICATES = 2000
+BOOTSTRAP_SEED = 20260924
+FLOOR = 5
+SECOND_FINGERPRINT = 'd' * 64
+OTHER_FINGERPRINT = 'f' * 64
+
+class Inputs(NamedTuple):
+    '''The three mappings ``relatedness_test`` takes, keyed by family.'''
+
+    candidate_seeds: Dict[str, List[RelatednessResult]]
+    references: Dict[str, RelatednessResult]
+    margins: Dict[str, RelatednessMarginRecord]
+
+    def only(self, *keys: str) -> 'Inputs':
+        '''The same inputs on the given families, in that order.'''
+
+        return Inputs(
+            {key: self.candidate_seeds[key]
+             for key in keys},
+            {key: self.references[key]
+             for key in keys},
+            {key: self.margins[key]
+             for key in keys},
+        )
+
+def offset(result: RelatednessResult, amount: float) -> RelatednessResult:
+    '''``result`` with every anchor's NDCG@10 raised by ``amount``.'''
+
+    return dataclasses.replace(
+        result, per_anchor=result.per_anchor.with_columns(pl.col('ndcg_10') + amount)
+    )
+
+def candidate_seeds_of(reference: RelatednessResult, count: int = FLOOR) -> List[RelatednessResult]:
+    '''Candidate seeds i = 0 to ``count`` - 1: ``reference`` with NDCG@10 + 0.1 + 0.001 × i.'''
+
+    return [offset(reference, 0.1 + 0.001 * i) for i in range(count)]
+
+def two_families(tmp_path: Path) -> Inputs:
+    '''
+    Two judging families, five candidate seeds on each, all read on the validation part.
+
+    The first family is the panel's: its margin is fixed from the three reference reads, its
+    reference is the arm that margin chooses (the tree on the fixture), and its fingerprint is the
+    panel's. The second family is ``SECOND_FAMILY`` with the text-only arm's validation read as its
+    reference, a hand-made margin that chooses text-only (δ = 0.05 × 0.42) and a fingerprint of its
+    own, so the two families differ in every input.
+    '''
+
+    p = panel(logged(tmp_path))
+    margin = fix(p)
+    reads = {
+        name: p.score(
+            arm, 'validation', 'a reference read', {
+                'arm': name,
+                'role': 'reference',
+                'run': 'stage11/reference'
+            }
+        )
+        for name, arm in arms().items()
+    }
+    first = reads[margin.reference]
+    second = dataclasses.replace(
+        reads[TEXT_ONLY], panel=SECOND_FAMILY, data_fingerprint=SECOND_FINGERPRINT
+    )
+    return Inputs(
+        {
+            PANEL: candidate_seeds_of(first),
+            SECOND_FAMILY: candidate_seeds_of(second)
+        },
+        {
+            PANEL: first,
+            SECOND_FAMILY: second
+        },
+        {
+            PANEL: margin,
+            SECOND_FAMILY: _hand_record(p.log, SECOND_FAMILY, HEADLINES, SECOND_FINGERPRINT)
+        },
+    )
+
+def one_family(tmp_path: Path) -> Inputs:
+    '''The first family of ``two_families``.'''
+
+    return two_families(tmp_path).only(PANEL)
+
+def run(inputs: Inputs, candidate: str = 'c', **overrides: Any) -> RelatednessVerdict:
+    '''``relatedness_test`` on the inputs, with the floor, replicates and seed the tests use.'''
+
+    settings = {
+        'min_seeds': FLOOR,
+        'replicates': REPLICATES,
+        'bootstrap_seed': BOOTSTRAP_SEED,
+        **overrides
+    }
+    return relatedness_test(
+        candidate, inputs.candidate_seeds, inputs.references, inputs.margins, **settings
+    )
+
+def expected_delta(inputs: Inputs, key: str, candidate: str = 'c') -> FamilyDelta:
+    '''
+    The family's Δ built from ``arm_replicates``, which its own tests pin to the draw primitives:
+    the candidate's seeds and the one reference result, both on the stream of the family.
+    '''
+
+    reference = inputs.references[key]
+    margin = inputs.margins[key]
+    items = PanelItems.from_values(headline_values(reference))
+    settings = {'replicates': REPLICATES, 'bootstrap_seed': BOOTSTRAP_SEED}
+    candidate_point, candidate_draws = arm_replicates(
+        items, key, candidate, inputs.candidate_seeds[key], **settings
+    )
+    reference_point, reference_draws = arm_replicates(
+        items, key, margin.reference, [reference], **settings
+    )
+    return FamilyDelta(
+        key,
+        margin.reference,
+        candidate_point - reference_point,
+        candidate_draws - reference_draws,
+        margin.margin,
+    )
+
+def with_seed(inputs: Inputs, key: str, position: int, **changes: Any) -> Inputs:
+    '''``inputs`` with ``changes`` made to one candidate seed of the family.'''
+
+    seeds = list(inputs.candidate_seeds[key])
+    seeds[position] = dataclasses.replace(seeds[position], **changes)
+    return inputs._replace(candidate_seeds={**inputs.candidate_seeds, key: seeds})
+
+def with_reference(inputs: Inputs, key: str, **changes: Any) -> Inputs:
+    '''``inputs`` with ``changes`` made to the family's reference result.'''
+
+    reference = dataclasses.replace(inputs.references[key], **changes)
+    return inputs._replace(references={**inputs.references, key: reference})
+
+def without_anchor(result: RelatednessResult, anchor: str) -> RelatednessResult:
+    '''``result`` with the anchor's row dropped.'''
+
+    return dataclasses.replace(
+        result, per_anchor=result.per_anchor.filter(pl.col('anchor') != anchor)
+    )
+
+# -------------------------------------------------------------------------------------------------
+# Headline values and replicates
+# -------------------------------------------------------------------------------------------------
+
+def test_the_headline_values_are_each_anchors_ndcg_10_with_the_anchor_as_unit_and_item(tmp_path):
+    result = one_family(tmp_path).references[PANEL]
+    values = headline_values(result)
+    assert values.columns == ['unit', 'item', 'value']
+    anchors = result.per_anchor.get_column('anchor').to_list()
+    assert values.get_column('unit').to_list() == anchors
+    assert values.get_column('item').to_list() == anchors
+    assert values.get_column('value').to_list() == result.per_anchor.get_column('ndcg_10').to_list()
+    # NDCG@20 is a report, not the headline
+    assert values.get_column('value').to_list() != result.per_anchor.get_column('ndcg_20').to_list()
+    items = PanelItems.from_values(values)
+    assert len(items.items) == len(items.units) == result.headline['n_anchors'] == 7
+    assert items.sizes.tolist() == [1.0] * 7
+
+def test_the_point_statistic_is_the_headline(tmp_path):
+    p = panel(logged(tmp_path))
+    p.open_sealed('the decision')
+    for part in ('validation', 'sealed'):
+        for name, arm in arms().items():
+            result = p.score(arm, part, 'a read', {'arm': name})
+            values = headline_values(result)
+            items = PanelItems.from_values(values)
+            point = point_statistic(items.sums(items.values(values)), items.sizes)
+            # The panel's headline is a correctly rounded fsum mean, and the point statistic a
+            # float sum over the same values: they agree to the last bit or two
+            assert point == pytest.approx(result.headline['ndcg_10'], rel=0, abs=1e-15)
+
+@pytest.mark.parametrize('panel_name', [PANEL, SECOND_FAMILY])
+@pytest.mark.parametrize('arm', ['c', 'd'])
+def test_arm_replicates_draw_units_on_the_panel_and_seeds_on_the_panel_and_arm(
+    tmp_path, panel_name, arm
+):
+    reference = one_family(tmp_path).references[PANEL]
+    seeds = candidate_seeds_of(reference, 3)
+    items = PanelItems.from_values(headline_values(reference))
+    point, replicates = arm_replicates(
+        items, panel_name, arm, seeds, replicates=REPLICATES, bootstrap_seed=BOOTSTRAP_SEED
+    )
+    sums = items.sums(np.stack([items.values(headline_values(seed)) for seed in seeds]))
+    units = unit_draws(panel_name, 7, REPLICATES, BOOTSTRAP_SEED)
+    seed_counts = seed_draws(panel_name, arm, 3, REPLICATES, BOOTSTRAP_SEED)
+    assert point == point_statistic(sums, items.sizes)
+    np.testing.assert_array_equal(
+        replicates, replicate_statistics(sums, items.sizes, units, seed_counts)
+    )
+    assert replicates.shape == (REPLICATES, )
+
+def test_a_one_seed_arm_draws_no_seeds(tmp_path):
+    # Its point is the seed's headline and its replicates the headline on each unit resample
+    reference = one_family(tmp_path).references[PANEL]
+    items = PanelItems.from_values(headline_values(reference))
+    point, replicates = arm_replicates(
+        items, PANEL, 'tree', [reference], replicates=REPLICATES, bootstrap_seed=BOOTSTRAP_SEED
+    )
+    assert point == pytest.approx(reference.headline['ndcg_10'], abs=1e-15)
+    values = items.values(headline_values(reference))
+    units = unit_draws(PANEL, 7, REPLICATES, BOOTSTRAP_SEED)
+    np.testing.assert_allclose(replicates, units @ values / 7, rtol=0, atol=1e-14)
+
+def test_arm_replicates_refuses_an_arm_with_no_seed(tmp_path):
+    items = PanelItems.from_values(headline_values(one_family(tmp_path).references[PANEL]))
+    with pytest.raises(ValueError, match="arm 'c' has no seed"):
+        arm_replicates(items, PANEL, 'c', [], replicates=REPLICATES, bootstrap_seed=BOOTSTRAP_SEED)
+
+def test_arm_replicates_refuses_a_seed_on_other_anchors(tmp_path):
+    reference = one_family(tmp_path).references[PANEL]
+    items = PanelItems.from_values(headline_values(reference))
+    renamed = dataclasses.replace(
+        reference,
+        per_anchor=reference.per_anchor.with_columns(
+            pl.col('anchor').str.replace('111110', '999999')
+        )
+    )
+    settings = {'replicates': REPLICATES, 'bootstrap_seed': BOOTSTRAP_SEED}
+    for seeds in (
+        [without_anchor(reference, '111110')],
+        [reference, without_anchor(reference, '445110')],
+        [renamed],
+    ):
+        with pytest.raises(ValueError, match='items'):
+            arm_replicates(items, PANEL, 'c', seeds, **settings)
+
+# -------------------------------------------------------------------------------------------------
+# The verdict over n families
+# -------------------------------------------------------------------------------------------------
+
+def test_the_verdict_at_n_1_and_n_2():
+    a = FamilyDelta('relatedness_co_ownership', 'tree', 0.02, np.linspace(0.0, 0.04, 1001), 0.0008)
+    one = beat_by_margin('c', [a])
+    assert one.level == 0.95 and one.families[0].interval[0] == pytest.approx(0.001) and one.beats
+    b = FamilyDelta(SECOND_FAMILY, 'tree', 0.04, np.linspace(0.02, 0.06, 1001), 0.01)
+    two = beat_by_margin('c', [a, b])
+    assert two.level == pytest.approx(0.975)
+    assert two.families[0].interval[0] == pytest.approx(0.0005) and not two.families[0].beats
+    assert two.families[1].beats and not two.beats
+
+def test_a_superior_candidate_that_does_not_beat_by_delta_does_not_go_forward():
+    a = FamilyDelta('relatedness_co_ownership', 'tree', 0.02, np.linspace(0.0, 0.04, 1001), 0.0015)
+    verdict = beat_by_margin('c', [a])
+    assert verdict.families[0].interval[0] > 0 and not verdict.beats
+
+def test_beat_by_margin_refuses_no_family_or_a_repeated_one():
+    spread = np.linspace(0.0, 0.04, 1001)
+    a = FamilyDelta(PANEL, 'tree', 0.02, spread, 0.001)
+    b = FamilyDelta(SECOND_FAMILY, 'tree', 0.02, spread, 0.001)
+    with pytest.raises(ValueError, match='got none'):
+        beat_by_margin('c', [])
+    with pytest.raises(ValueError, match='repeats'):
+        beat_by_margin('c', [a, a])
+    # A family repeated beside another one, and not next to its first
+    with pytest.raises(ValueError, match='repeats') as raised:
+        beat_by_margin('c', [a, b, dataclasses.replace(a, reference='text-only')])
+    assert repr(PANEL) in str(raised.value) and SECOND_FAMILY not in str(raised.value)
+    assert beat_by_margin('c', [a, b]).level == pytest.approx(0.975)
+
+def test_the_level_is_one_minus_five_percent_over_the_number_of_families():
+    spread = np.linspace(0.0, 0.04, 1001)
+    names = [PANEL, SECOND_FAMILY, 'relatedness_third_family']
+    deltas = [FamilyDelta(name, 'tree', 0.02, spread, 0.0) for name in names]
+    for n in (1, 2, 3):
+        verdict = beat_by_margin('c', deltas[:n])
+        assert verdict.level == superiority_level(n) == 1.0 - 0.05 / n
+        assert len(verdict.families) == n
+        for family in verdict.families:
+            assert family.interval == percentile_interval(spread, verdict.level)
+
+def test_a_family_beats_only_when_the_lower_bound_exceeds_its_margin():
+
+    def beats(margin, replicates):
+        deltas = [FamilyDelta(PANEL, 'tree', 0.03, replicates, margin)]
+        return beat_by_margin('c', deltas).families[0].beats
+
+    flat = np.full(100, 0.03)
+    assert beats(0.03, flat) is False
+    assert beats(0.0299999, flat) is True
+    assert beats(0.0300001, flat) is False
+    # The upper bound is not the test: this interval is (0.001, 0.039)
+    spread = np.linspace(0.0, 0.04, 1001)
+    assert beats(0.01, spread) is False
+    assert beats(0.0009, spread) is True
+
+@pytest.mark.parametrize('failing', [0, 1, 2])
+def test_the_candidate_goes_forward_only_when_it_beats_on_every_family(failing):
+    spread = np.linspace(0.0, 0.04, 1001)
+    names = [PANEL, SECOND_FAMILY, 'relatedness_third_family']
+    deltas = [
+        FamilyDelta(name, 'tree', 0.02, spread, 0.04 if index == failing else 0.0002)
+        for index, name in enumerate(names)
+    ]
+    verdict = beat_by_margin('c', deltas)
+    assert [family.beats for family in verdict.families] == [index != failing for index in range(3)]
+    assert verdict.beats is False
+    everyone = [dataclasses.replace(delta, margin=0.0002) for delta in deltas]
+    assert beat_by_margin('c', everyone).beats is True
+
+def test_the_verdict_keeps_each_familys_fields_in_the_order_given():
+    spread = np.linspace(0.0, 0.04, 1001)
+    first = FamilyDelta(SECOND_FAMILY, 'text-only', 0.011, spread, 0.0004)
+    second = FamilyDelta(PANEL, 'tree', 0.022, spread + 0.001, 0.0007)
+    verdict = beat_by_margin('a candidate', [first, second])
+    assert verdict.candidate == 'a candidate'
+    assert [(f.panel, f.reference, f.delta, f.margin) for f in verdict.families] == [
+        (SECOND_FAMILY, 'text-only', 0.011, 0.0004),
+        (PANEL, 'tree', 0.022, 0.0007),
+    ]
+    assert verdict.families[1].interval == percentile_interval(spread + 0.001, verdict.level)
+
+def test_the_verdict_holds_plain_python_values():
+    spread = np.linspace(0.0, 0.04, 1001)
+    delta = FamilyDelta(PANEL, 'tree', np.float64(0.02), spread, np.float64(0.0008))
+    verdict = beat_by_margin('c', [delta])
+    family = verdict.families[0]
+    assert type(verdict.level) is float and type(verdict.beats) is bool
+    assert type(verdict.families) is tuple
+    assert type(family.beats) is bool and type(family.delta) is float
+    assert type(family.margin) is float and type(family.interval) is tuple
+    assert [type(end) for end in family.interval] == [float, float]
+    assert isinstance(family, FamilyVerdict) and isinstance(verdict, RelatednessVerdict)
+
+def test_the_verdicts_and_the_deltas_are_frozen():
+    delta = FamilyDelta(PANEL, 'tree', 0.02, np.linspace(0.0, 0.04, 1001), 0.0008)
+    verdict = beat_by_margin('c', [delta])
+    for frozen, name in ((delta, 'delta'), (verdict, 'beats'), (verdict.families[0], 'margin')):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(frozen, name, 1)
+
+# -------------------------------------------------------------------------------------------------
+# The test over the judging families
+# -------------------------------------------------------------------------------------------------
+
+def test_relatedness_test_is_reproducible_and_paired(tmp_path):
+    inputs = one_family(tmp_path)
+    first = run(inputs)
+    assert first == run(inputs)
+    family = first.families[0]
+    assert family.delta == pytest.approx(0.102) and first.level == 0.95
+    assert family.panel == PANEL and family.reference == inputs.margins[PANEL].reference
+    assert family.margin == inputs.margins[PANEL].margin and first.candidate == 'c'
+    # The paired difference of the two arms' resamples, each on the family's own streams
+    assert first == beat_by_margin('c', [expected_delta(inputs, PANEL)])
+    assert first.beats is True and family.interval[0] > family.margin
+
+def test_a_candidate_that_copies_the_reference_differs_by_zero_on_every_resample(tmp_path):
+    # Paired arms share each unit draw, so a one-seed copy of the reference has Δ = 0 throughout
+    inputs = one_family(tmp_path)
+    reference = inputs.references[PANEL]
+    copy_of = inputs._replace(candidate_seeds={PANEL: [reference]})
+    verdict = run(copy_of, candidate='copy', min_seeds=1)
+    assert verdict.families[0].delta == 0.0
+    assert verdict.families[0].interval == (0.0, 0.0)
+    assert verdict.beats is False
+
+def test_the_candidates_name_sets_its_seed_draws_and_not_its_delta(tmp_path):
+    inputs = one_family(tmp_path)
+    under_c = run(inputs, candidate='c')
+    under_d = run(inputs, candidate='d')
+    assert under_c.families[0].delta == under_d.families[0].delta
+    assert under_d == beat_by_margin('d', [expected_delta(inputs, PANEL, candidate='d')])
+    assert under_c.families[0].interval != under_d.families[0].interval
+
+def test_relatedness_test_at_two_families(tmp_path):
+    inputs = two_families(tmp_path)
+    verdict = run(inputs)
+    assert verdict.level == pytest.approx(0.975)
+    assert len(verdict.families) == 2
+    assert [family.panel for family in verdict.families] == [PANEL, SECOND_FAMILY]
+    assert verdict == beat_by_margin(
+        'c', [expected_delta(inputs, key) for key in (PANEL, SECOND_FAMILY)]
+    )
+    assert verdict.beats is True and all(family.beats for family in verdict.families)
+
+def test_each_family_is_judged_on_its_own_reference_margin_and_data(tmp_path):
+    inputs = two_families(tmp_path)
+    verdict = run(inputs)
+    first, second = verdict.families
+    assert (first.reference, second.reference) == (TREE, TEXT_ONLY)
+    assert first.margin == inputs.margins[PANEL].margin
+    assert second.margin == inputs.margins[SECOND_FAMILY].margin == 0.05 * 0.42
+    assert first.margin != second.margin
+    # Each Δ is that family's candidate minus its reference, on its own results
+    for family, key in ((first, PANEL), (second, SECOND_FAMILY)):
+        expected = expected_delta(inputs, key)
+        assert family.delta == expected.delta and family.delta == pytest.approx(0.102)
+    # The two references read differently, so the families do not share their replicates
+    assert first.interval != second.interval
+
+def test_a_second_family_leaves_the_first_familys_draws_alone(tmp_path):
+    inputs = two_families(tmp_path)
+    one, two = run(inputs.only(PANEL)), run(inputs)
+    assert one.level == 0.95 and two.level == pytest.approx(0.975)
+    assert one.families[0].delta == two.families[0].delta
+    # The same draws, read at the higher level: the interval widens on both ends
+    spread = expected_delta(inputs, PANEL).replicates
+    assert one.families[0].interval == percentile_interval(spread, 0.95)
+    assert two.families[0].interval == percentile_interval(spread, two.level)
+    assert two.families[0].interval[0] < one.families[0].interval[0]
+    assert two.families[0].interval[1] > one.families[0].interval[1]
+
+@pytest.mark.parametrize('order', [(PANEL, SECOND_FAMILY), (SECOND_FAMILY, PANEL)])
+def test_the_verdict_does_not_depend_on_the_mappings_order(tmp_path, order):
+    inputs = two_families(tmp_path)
+    reordered = inputs.only(*order)
+    assert list(reordered.margins) == list(order)
+    verdict = run(reordered)
+    assert verdict == run(inputs)
+    assert [family.panel for family in verdict.families] == sorted(order)
+
+def test_relatedness_test_beats_only_on_every_family_by_its_own_margin(tmp_path):
+    inputs = two_families(tmp_path)
+    margins = {key: inputs.margins[key].margin for key in inputs.margins}
+
+    # Every seed of a family is its reference plus one amount, so Δ is that amount on every resample
+    def lifted(first_amount: float, second_amount: float) -> Inputs:
+        seeds = {
+            key: [offset(inputs.references[key], amount)] * FLOOR
+            for key, amount in ((PANEL, first_amount), (SECOND_FAMILY, second_amount))
+        }
+        return inputs._replace(candidate_seeds=seeds)
+
+    big = {key: 2 * margin for key, margin in margins.items()}
+    small = {key: margin / 2 for key, margin in margins.items()}
+    both = run(lifted(big[PANEL], big[SECOND_FAMILY]))
+    assert [family.beats for family in both.families] == [True, True] and both.beats is True
+    only_first = run(lifted(big[PANEL], small[SECOND_FAMILY]))
+    assert [family.beats for family in only_first.families] == [True, False]
+    assert only_first.beats is False
+    only_second = run(lifted(small[PANEL], big[SECOND_FAMILY]))
+    assert [family.beats for family in only_second.families] == [False, True]
+    assert only_second.beats is False
+    # Superior to the reference on the second family, and still not by δ
+    assert only_first.families[1].interval[0] > 0 and not only_first.families[1].beats
+
+def test_a_candidate_worse_than_the_reference_has_a_negative_delta_and_does_not_beat_it(tmp_path):
+    inputs = one_family(tmp_path)
+    worse = inputs._replace(
+        candidate_seeds={PANEL: [offset(inputs.references[PANEL], -0.1)] * FLOOR}
+    )
+    verdict = run(worse)
+    family = verdict.families[0]
+    assert family.delta == pytest.approx(-0.1)
+    assert family.interval == pytest.approx((-0.1, -0.1), abs=1e-12)
+    assert family.beats is False and verdict.beats is False
+
+def test_relatedness_test_runs_on_the_sealed_part_with_the_margin_fixed_on_validation(tmp_path):
+    p = panel(logged(tmp_path))
+    margin = fix(p)
+    p.open_sealed('the decision')
+    reference = p.score(
+        arms()[margin.reference], 'sealed', 'the opening', {
+            'arm': margin.reference,
+            'role': 'reference',
+            'run': 'stage12/reference'
+        }
+    )
+    assert reference.part == 'sealed' and reference.headline['n_anchors'] == 6
+    assert reference.data_fingerprint != margin.data_fingerprint
+    verdict = relatedness_test(
+        'c',
+        {PANEL: candidate_seeds_of(reference)},
+        {PANEL: reference},
+        {PANEL: margin},
+        min_seeds=FLOOR,
+        replicates=REPLICATES,
+        bootstrap_seed=BOOTSTRAP_SEED,
+    )
+    assert verdict.beats is True and verdict.families[0].margin == margin.margin
+    assert verdict.families[0].delta == pytest.approx(0.102)
+
+# -------------------------------------------------------------------------------------------------
+# The test's refusals
+# -------------------------------------------------------------------------------------------------
+
+def test_fewer_than_min_seeds_is_refused(tmp_path):
+    inputs = one_family(tmp_path)
+    seeds = inputs.candidate_seeds[PANEL]
+    with pytest.raises(ValueError, match='4 .*5'):
+        relatedness_test(
+            'c', {PANEL: seeds[:4]},
+            inputs.references,
+            inputs.margins,
+            min_seeds=5,
+            replicates=REPLICATES,
+            bootstrap_seed=BOOTSTRAP_SEED
+        )
+
+def test_the_floor_names_the_family_the_count_and_the_floor(tmp_path):
+    inputs = two_families(tmp_path)
+    short = inputs._replace(
+        candidate_seeds={
+            **inputs.candidate_seeds, SECOND_FAMILY: inputs.candidate_seeds[SECOND_FAMILY][:3]
+        }
+    )
+    with pytest.raises(ValueError, match='candidate seeds, fewer than') as raised:
+        run(short)
+    assert f'the family {SECOND_FAMILY!r} has 3 candidate seeds, fewer than the 5' in str(
+        raised.value
+    )
+
+def test_exactly_min_seeds_passes_and_one_fewer_is_refused(tmp_path):
+    inputs = one_family(tmp_path)
+    assert len(run(inputs, min_seeds=5).families) == 1
+    assert len(run(inputs, min_seeds=1).families) == 1
+    with pytest.raises(ValueError, match='has 5 candidate seeds, fewer than the 6'):
+        run(inputs, min_seeds=6)
+    four = inputs._replace(candidate_seeds={PANEL: inputs.candidate_seeds[PANEL][:4]})
+    assert run(four, min_seeds=4).families[0].delta == pytest.approx(0.1015)
+    with pytest.raises(ValueError, match='has 4 candidate seeds, fewer than the 5'):
+        run(four, min_seeds=5)
+
+@pytest.mark.parametrize('floor', [0, -1])
+def test_a_floor_below_one_is_refused(tmp_path, floor):
+    with pytest.raises(ValueError, match='min_seeds must be at least 1'):
+        run(one_family(tmp_path), min_seeds=floor)
+
+@pytest.mark.parametrize(
+    'empty, named',
+    [
+        (('candidate_seeds', ), 'candidate_seeds'),
+        (('references', ), 'references'),
+        (('margins', ), 'margins'),
+        (('candidate_seeds', 'references', 'margins'), 'candidate_seeds, references, margins'),
+    ],
+)
+def test_empty_mappings_are_refused(tmp_path, empty, named):
+    inputs = one_family(tmp_path)
+    emptied = inputs._replace(**{name: {} for name in empty})
+    with pytest.raises(ValueError, match='no family is in') as raised:
+        run(emptied)
+    assert named in str(raised.value)
+
+def _keyed_differently(inputs: Inputs, field: str, change: str) -> Inputs:
+    mapping = getattr(inputs, field)
+    if change == 'extra':
+        extra = {**mapping, 'relatedness_extra_family': next(iter(mapping.values()))}
+        return inputs._replace(**{field: extra})
+    return inputs._replace(
+        **{field: {
+            key: v
+            for key, v in mapping.items() if key != SECOND_FAMILY
+        }}
+    )
+
+@pytest.mark.parametrize('change', ['extra', 'missing'])
+@pytest.mark.parametrize('field', ['candidate_seeds', 'references', 'margins'])
+def test_mappings_keyed_differently_are_refused(tmp_path, field, change):
+    keyed = _keyed_differently(two_families(tmp_path), field, change)
+    with pytest.raises(ValueError, match='must name the same families'):
+        run(keyed)
+
+def test_a_margin_for_another_panel_is_refused(tmp_path):
+    inputs = two_families(tmp_path)
+    swapped = inputs._replace(
+        margins={
+            PANEL: inputs.margins[SECOND_FAMILY],
+            SECOND_FAMILY: inputs.margins[PANEL]
+        }
+    )
+    with pytest.raises(ValueError, match='is for panel') as raised:
+        run(swapped)
+    assert repr(SECOND_FAMILY) in str(raised.value) and repr(PANEL) in str(raised.value)
+    assert inputs.margins[SECOND_FAMILY].name in str(raised.value)
+
+@pytest.mark.parametrize('key', [PANEL, SECOND_FAMILY])
+def test_a_margin_that_disagrees_with_itself_is_refused(tmp_path, key):
+    inputs = two_families(tmp_path)
+    broken = inputs.margins[key].model_copy(update={'margin': 1.0})
+    with pytest.raises(ValueError, match='holds δ') as raised:
+        run(inputs._replace(margins={**inputs.margins, key: broken}))
+    assert inputs.margins[key].name in str(raised.value)
+
+@pytest.mark.parametrize('key', [PANEL, SECOND_FAMILY])
+@pytest.mark.parametrize('position', [0, 2, 4])
+def test_a_candidate_seed_of_another_panel_is_refused(tmp_path, key, position):
+    broken = with_seed(two_families(tmp_path), key, position, panel='relatedness_other')
+    with pytest.raises(ValueError, match='was read on panel') as raised:
+        run(broken)
+    assert f'candidate seed {position}' in str(raised.value)
+    assert repr(key) in str(raised.value) and repr('relatedness_other') in str(raised.value)
+
+@pytest.mark.parametrize('key', [PANEL, SECOND_FAMILY])
+def test_a_reference_result_of_another_panel_is_refused(tmp_path, key):
+    broken = with_reference(two_families(tmp_path), key, panel='relatedness_other')
+    with pytest.raises(ValueError, match='was read on panel') as raised:
+        run(broken)
+    assert 'the reference' in str(raised.value) and repr(key) in str(raised.value)
+
+def test_a_result_read_on_the_other_familys_panel_is_refused(tmp_path):
+    inputs = two_families(tmp_path)
+    with pytest.raises(ValueError, match='was read on panel'):
+        run(with_seed(inputs, SECOND_FAMILY, 1, panel=PANEL))
+
+@pytest.mark.parametrize('key', [PANEL, SECOND_FAMILY])
+@pytest.mark.parametrize('position', [0, 1, 4])
+def test_a_candidate_seed_of_another_part_is_refused(tmp_path, key, position):
+    broken = with_seed(two_families(tmp_path), key, position, part='sealed')
+    with pytest.raises(ValueError, match='more than one part') as raised:
+        run(broken)
+    assert 'sealed' in str(raised.value) and 'validation' in str(raised.value)
+
+@pytest.mark.parametrize('key', [PANEL, SECOND_FAMILY])
+def test_a_reference_of_another_part_is_refused(tmp_path, key):
+    with pytest.raises(ValueError, match='more than one part'):
+        run(with_reference(two_families(tmp_path), key, part='sealed'))
+
+def on_part(inputs: Inputs, part: str, *keys: str) -> Inputs:
+    '''``inputs`` with every result of the given families read on ``part``.'''
+
+    seeds, references = dict(inputs.candidate_seeds), dict(inputs.references)
+    for key in keys:
+        seeds[key] = [dataclasses.replace(seed, part=part) for seed in seeds[key]]
+        references[key] = dataclasses.replace(references[key], part=part)
+    return inputs._replace(candidate_seeds=seeds, references=references)
+
+def test_a_second_family_on_another_part_than_the_first_is_refused(tmp_path):
+    # Each family is one part in itself: the parts differ across the families
+    inputs = two_families(tmp_path)
+    with pytest.raises(ValueError, match='more than one part'):
+        run(on_part(inputs, 'sealed', SECOND_FAMILY))
+    with pytest.raises(ValueError, match='more than one part'):
+        run(on_part(inputs, 'sealed', PANEL))
+    # Every result on the sealed part is one part, so the test runs
+    assert len(run(on_part(inputs, 'sealed', PANEL, SECOND_FAMILY)).families) == 2
+
+def test_seeds_read_on_another_build_or_part_are_refused(tmp_path):
+    inputs = one_family(tmp_path)
+    with pytest.raises(ValueError, match='data fingerprint'):
+        run(with_seed(inputs, PANEL, 2, data_fingerprint=OTHER_FINGERPRINT))
+    with pytest.raises(ValueError, match='more than one part'):
+        run(with_seed(inputs, PANEL, 2, part='sealed'))
+
+@pytest.mark.parametrize('key', [PANEL, SECOND_FAMILY])
+@pytest.mark.parametrize('position', [0, 2, 4])
+def test_a_seed_read_on_another_build_is_refused_naming_the_family_and_the_seed(
+    tmp_path, key, position
+):
+    inputs = two_families(tmp_path)
+    broken = with_seed(inputs, key, position, data_fingerprint=OTHER_FINGERPRINT)
+    with pytest.raises(ValueError, match='data fingerprint') as raised:
+        run(broken)
+    message = str(raised.value)
+    assert f'the family {key!r} candidate seed {position}' in message
+    assert OTHER_FINGERPRINT in message and inputs.references[key].data_fingerprint in message
+
+def test_a_seed_is_compared_with_its_own_familys_reference(tmp_path):
+    # The two families are on different builds: a seed on the first family's build is another build
+    inputs = two_families(tmp_path)
+    first_build = inputs.references[PANEL].data_fingerprint
+    assert first_build != SECOND_FINGERPRINT
+    with pytest.raises(ValueError, match='data fingerprint'):
+        run(with_seed(inputs, SECOND_FAMILY, 3, data_fingerprint=first_build))
+
+def test_a_reference_on_another_build_than_its_seeds_is_refused(tmp_path):
+    inputs = one_family(tmp_path)
+    broken = with_reference(inputs, PANEL, data_fingerprint=OTHER_FINGERPRINT)
+    with pytest.raises(ValueError, match='data fingerprint') as raised:
+        run(broken)
+    assert 'candidate seed 0' in str(raised.value)
+
+def test_seeds_scored_on_other_anchors_are_refused(tmp_path):
+    inputs = one_family(tmp_path)
+    for position in (0, 3):
+        per_anchor = inputs.candidate_seeds[PANEL][position].per_anchor
+        for other in (
+            per_anchor.filter(pl.col('anchor') != '445110'),
+            per_anchor.with_columns(pl.col('anchor').str.replace('445110', '999999')),
+        ):
+            with pytest.raises(ValueError, match='items'):
+                run(with_seed(inputs, PANEL, position, per_anchor=other))
+
+# One breaking of a valid pair of families for each refusal, in the order the brief lists them, and
+# the words only that refusal's message uses. The first family's seeds 1, 2 and 3 take the part, the
+# panel and the fingerprint, so the floor's truncation to four seeds leaves each of them
+def _break_keys(inputs: Inputs) -> Inputs:
+    return inputs._replace(
+        references={
+            key: v
+            for key, v in inputs.references.items() if key != SECOND_FAMILY
+        }
+    )
+
+def _break_margin(inputs: Inputs) -> Inputs:
+    return inputs._replace(margins={**inputs.margins, PANEL: inputs.margins[SECOND_FAMILY]})
+
+def _break_margin_check(inputs: Inputs) -> Inputs:
+    broken = inputs.margins[SECOND_FAMILY].model_copy(update={'margin': 1.0})
+    return inputs._replace(margins={**inputs.margins, SECOND_FAMILY: broken})
+
+def _break_floor(inputs: Inputs) -> Inputs:
+    return inputs._replace(
+        candidate_seeds={
+            **inputs.candidate_seeds, PANEL: inputs.candidate_seeds[PANEL][:4]
+        }
+    )
+
+def _break_panel(inputs: Inputs) -> Inputs:
+    return with_seed(inputs, PANEL, 2, panel='relatedness_other')
+
+def _break_part(inputs: Inputs) -> Inputs:
+    return with_seed(inputs, PANEL, 1, part='sealed')
+
+def _break_fingerprint(inputs: Inputs) -> Inputs:
+    return with_seed(inputs, PANEL, 3, data_fingerprint=OTHER_FINGERPRINT)
+
+BREAKS = {
+    'keys': (_break_keys, 'must name the same families'),
+    'margin': (_break_margin, 'is for panel'),
+    'margin check': (_break_margin_check, 'holds δ'),
+    'floor': (_break_floor, 'candidate seeds, fewer than'),
+    'panel': (_break_panel, 'was read on panel'),
+    'part': (_break_part, 'more than one part'),
+    'fingerprint': (_break_fingerprint, 'data fingerprint'),
+}
+BREAK_PAIRS = [(a, b) for index, a in enumerate(BREAKS) for b in list(BREAKS)[index + 1:]]
+
+@pytest.mark.parametrize('earlier, later', BREAK_PAIRS)
+def test_the_refusals_come_in_the_briefs_order(tmp_path, earlier, later):
+    inputs = two_families(tmp_path)
+    for kind in (later, earlier):
+        inputs = BREAKS[kind][0](inputs)
+    with pytest.raises(ValueError, match=BREAKS[earlier][1]):
+        run(inputs)
+
+@pytest.mark.parametrize('kind', list(BREAKS))
+def test_each_refusal_says_its_own_words_only(tmp_path, kind):
+    broken = BREAKS[kind][0](two_families(tmp_path))
+    with pytest.raises(ValueError) as raised:
+        run(broken)
+    for other, (_, words) in BREAKS.items():
+        assert (re.search(words, str(raised.value)) is not None) == (other == kind)
+
+@pytest.mark.parametrize('kind', list(BREAKS))
+def test_nothing_is_drawn_before_a_refusal(tmp_path, monkeypatch, kind):
+
+    def draws(*args, **kwargs):
+        raise AssertionError('a draw ran before the refusal')
+
+    monkeypatch.setattr(relatedness, 'unit_draws', draws)
+    monkeypatch.setattr(relatedness, 'seed_draws', draws)
+    with pytest.raises(ValueError):
+        run(BREAKS[kind][0](two_families(tmp_path)))

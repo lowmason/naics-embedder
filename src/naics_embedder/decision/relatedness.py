@@ -15,6 +15,21 @@ Relatedness's decision on the co-ownership panel (spec ``relatedness-artifact``,
   read: one with role ``candidate``, with no role, or with role ``reference`` but an arm outside
   ``REFERENCE_ARMS``. Training-monitor reads count as candidate reads. Reads of the sealed part,
   of another panel and records that are not reads do not count.
+- **Test.** For each judging family, Δ = the candidate's headline minus the reference's, and a
+  candidate beats the reference on the family when the lower bound of the interval on Δ exceeds +δ.
+  It goes forward when it beats on every family, at the level ``superiority_level(n)`` = 1 − 0.05/n
+  for n the number of judging families when the test runs. The interval is the paired two-stage
+  bootstrap of ``decision/resampling.py``: anchors are the units, with one item each, a candidate's
+  seeds are nested within each resample, and the reference arms are deterministic, so each is one
+  read. A family's unit draws are on the stream of its panel name and an arm's seed draws on
+  ``(panel, arm)``, so a second family has streams of its own and the first family's draws do not
+  change when it joins. ``relatedness_test`` takes the families from the shared keys of its
+  mappings, in sorted order, and refuses before any draw: a ``min_seeds`` below 1; empty or
+  differently keyed mappings; a margin that is not its family's or does not agree with itself; fewer
+  than ``min_seeds`` seeds on a family; a result of another panel; results of more than one part;
+  and a seed read on another table build than its family's reference. The same test runs on the
+  sealed part with δ fixed on validation, so it compares neither the part nor the reference's build
+  with the margin's.
 '''
 
 # -------------------------------------------------------------------------------------------------
@@ -25,15 +40,28 @@ import math
 import re
 import uuid
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Mapping
+from typing import Any, Dict, List, Literal, Mapping, Sequence, Tuple
 
+import numpy as np
+import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from naics_embedder.decision.decide import read_time
+from naics_embedder.decision.resampling import (
+    PanelItems,
+    percentile_interval,
+    point_statistic,
+    replicate_statistics,
+    seed_draws,
+    unit_draws,
+)
+from naics_embedder.decision.rule import superiority_level
 from naics_embedder.decision.sweep import _log_records
 from naics_embedder.panels.relatedness import RelatednessPanel
 from naics_embedder.panels.relatedness_arms import RelatednessArm
+from naics_embedder.panels.relatedness_scoring import RelatednessResult
 from naics_embedder.panels.relatedness_split import RelatednessPart
 from naics_embedder.panels.selection_log import SelectionEvent, SelectionLog
 
@@ -311,3 +339,288 @@ def check_relatedness_margin_first(margin: RelatednessMarginRecord, log: Selecti
                 f'{record.get("purpose")!r} at {time.isoformat()}: the margin comes first '
                 '(spec 4.6)'
             )
+
+# -------------------------------------------------------------------------------------------------
+# Test
+# -------------------------------------------------------------------------------------------------
+
+def headline_values(result: RelatednessResult) -> pl.DataFrame:
+    '''
+    The headline's values for the bootstrap: one row per anchor.
+
+    Args:
+        result: A part's ``RelatednessResult``.
+
+    Returns:
+        ``unit`` and ``item`` (both the anchor: anchors are the units, with one item each) and
+        ``value`` (its ``ndcg_10``).
+    '''
+
+    return result.per_anchor.select(
+        pl.col('anchor').alias('unit'),
+        pl.col('anchor').alias('item'),
+        pl.col('ndcg_10').alias('value'),
+    )
+
+def arm_replicates(
+    items: PanelItems,
+    panel: str,
+    arm: str,
+    seeds: Sequence[RelatednessResult],
+    *,
+    replicates: int,
+    bootstrap_seed: int,
+) -> Tuple[float, np.ndarray]:
+    '''
+    One arm's headline NDCG@10 as a point estimate and on each paired resample.
+
+    Unit draws are on the stream ``panel``, shared by every arm of the family, and the arm's seed
+    draws on ``(panel, arm)``. A second family has its own panel name, so its streams are its own.
+
+    Args:
+        items: The headline's items, shared by every arm compared.
+        panel: The family's panel name.
+        arm: The arm's name.
+        seeds: The arm's results, one per seed.
+        replicates: The number of resamples.
+        bootstrap_seed: The bootstrap's seed.
+
+    Returns:
+        The mean over seeds of each seed's NDCG@10, and the NDCG@10 on each resample,
+        (replicates,).
+
+    Raises:
+        ValueError: If the arm has no seed, or a seed's headline holds other items than ``items``.
+    '''
+
+    if not seeds:
+        raise ValueError(f'arm {arm!r} has no seed')
+    values = np.stack([items.values(headline_values(seed)) for seed in seeds])
+    sums = items.sums(values)
+    units = unit_draws(panel, len(items.units), replicates, bootstrap_seed)
+    seed_counts = seed_draws(panel, arm, len(seeds), replicates, bootstrap_seed)
+    return (
+        point_statistic(sums, items.sizes),
+        replicate_statistics(sums, items.sizes, units, seed_counts),
+    )
+
+@dataclass(frozen=True)
+class FamilyDelta:
+    '''
+    A candidate's Δ on one judging family, before its interval is read.
+
+    Attributes:
+        panel: The family's panel name.
+        reference: The family's reference arm.
+        delta: Δ, the candidate's headline minus the reference's, as point estimates.
+        replicates: Δ on each paired resample, oriented the same way.
+        margin: The family's δ.
+    '''
+
+    panel: str
+    reference: str
+    delta: float
+    replicates: np.ndarray
+    margin: float
+
+@dataclass(frozen=True)
+class FamilyVerdict:
+    '''
+    A candidate's verdict on one judging family.
+
+    Attributes:
+        panel: The family's panel name.
+        reference: The family's reference arm.
+        delta: Δ, the candidate's headline minus the reference's, as point estimates.
+        interval: The two-sided percentile interval on Δ at the verdict's level.
+        margin: The family's δ.
+        beats: Whether the interval's lower bound exceeds δ.
+    '''
+
+    panel: str
+    reference: str
+    delta: float
+    interval: Tuple[float, float]
+    margin: float
+    beats: bool
+
+@dataclass(frozen=True)
+class RelatednessVerdict:
+    '''
+    A candidate's verdict against the reference on every judging family.
+
+    Attributes:
+        candidate: The candidate arm.
+        level: The intervals' level, ``superiority_level(n)`` for n judging families.
+        families: Each family's verdict, in the order the families were given.
+        beats: Whether the candidate beats the reference by δ on every family: only then does it
+            go forward.
+    '''
+
+    candidate: str
+    level: float
+    families: Tuple[FamilyVerdict, ...]
+    beats: bool
+
+def beat_by_margin(candidate: str, deltas: Sequence[FamilyDelta]) -> RelatednessVerdict:
+    '''
+    Whether the candidate beats the reference by δ on every judging family (spec 4.6).
+
+    The number of judging families is ``len(deltas)``, so the level is ``superiority_level(n)``
+    and is the same on every family. A family beats when the lower bound of its interval exceeds its
+    own δ, and the candidate beats when every family does.
+
+    Args:
+        candidate: The candidate arm.
+        deltas: Each judging family's Δ, its replicates and its δ.
+
+    Returns:
+        The verdict, its families in the order given.
+
+    Raises:
+        ValueError: If there is no family, or a panel repeats.
+    '''
+
+    if not deltas:
+        raise ValueError('beat_by_margin needs at least one judging family, got none')
+    panels = [delta.panel for delta in deltas]
+    repeated = sorted({name for name in panels if panels.count(name) > 1})
+    if repeated:
+        raise ValueError(f'a judging family repeats: {repeated}')
+    level = superiority_level(len(deltas))
+    families = []
+    for delta in deltas:
+        interval = percentile_interval(delta.replicates, level)
+        families.append(
+            FamilyVerdict(
+                panel=delta.panel,
+                reference=delta.reference,
+                delta=float(delta.delta),
+                interval=interval,
+                margin=float(delta.margin),
+                beats=bool(interval[0] > delta.margin),
+            )
+        )
+    return RelatednessVerdict(
+        candidate=candidate,
+        level=level,
+        families=tuple(families),
+        beats=all(family.beats for family in families),
+    )
+
+def relatedness_test(
+    candidate: str,
+    candidate_seeds: Mapping[str, Sequence[RelatednessResult]],
+    references: Mapping[str, RelatednessResult],
+    margins: Mapping[str, RelatednessMarginRecord],
+    *,
+    min_seeds: int,
+    replicates: int,
+    bootstrap_seed: int,
+) -> RelatednessVerdict:
+    '''
+    A candidate's verdict against the reference on paired resamples of every judging family (spec
+    4.6).
+
+    The families are the mappings' shared keys, each a panel name, taken in sorted order so that
+    the verdict does not depend on the mappings' order. A family's reference arm is its margin's
+    ``reference``, its items come from the reference's result, and Δ is the candidate's headline
+    minus the reference's, the reference being one deterministic read. The same test runs on the
+    sealed part with δ fixed on validation, so it compares neither the part nor the reference's
+    table build with the margin's.
+
+    Args:
+        candidate: The candidate arm.
+        candidate_seeds: Its results on each family, one per seed, keyed by panel name.
+        references: Each family's reference result, keyed by panel name.
+        margins: Each family's margin record, keyed by panel name.
+        min_seeds: The fewest seeds a candidate has on each family (spec 4.6: 5).
+        replicates: The number of resamples.
+        bootstrap_seed: The bootstrap's seed.
+
+    Returns:
+        The verdict, its families in sorted order of their panel names.
+
+    Raises:
+        ValueError: Before any draw, in this order: if ``min_seeds`` is below 1; if any mapping is
+            empty, or the three have not the same keys; if a margin is for another panel than its
+            key, or fails ``check_relatedness_margin``; if a family has fewer than ``min_seeds``
+            candidate seeds, naming the family, the count and the floor; if a result is of another
+            panel than its key; if the results are of more than one part; or if a candidate seed
+            was read on another data fingerprint than its family's reference, naming the family and
+            the seed's position. Then, if a seed is scored on other anchors than the reference.
+    '''
+
+    if min_seeds < 1:
+        raise ValueError(f'min_seeds must be at least 1, got {min_seeds}')
+    inputs = {'candidate_seeds': candidate_seeds, 'references': references, 'margins': margins}
+    empty = [name for name, mapping in inputs.items() if not mapping]
+    if empty:
+        raise ValueError(
+            f"the test needs at least one judging family, but no family is in {', '.join(empty)}"
+        )
+    if not set(candidate_seeds) == set(references) == set(margins):
+        listed = ', '.join(
+            f'{name} {sorted(map(str, mapping))}' for name, mapping in inputs.items()
+        )
+        raise ValueError(
+            f'candidate_seeds, references and margins must name the same families: {listed}'
+        )
+    keys = sorted(candidate_seeds)
+    for key in keys:
+        margin = margins[key]
+        if margin.panel != key:
+            raise ValueError(
+                f'the margin {margin.name!r} is for panel {margin.panel!r}, not for the family {key!r}'
+            )
+        check_relatedness_margin(margin)
+    for key in keys:
+        if len(candidate_seeds[key]) < min_seeds:
+            raise ValueError(
+                f'the family {key!r} has {len(candidate_seeds[key])} candidate seeds, fewer than '
+                f'the {min_seeds} that the test needs'
+            )
+    for key in keys:
+        results = [('reference', references[key])]
+        results += [
+            (f'candidate seed {position}', seed)
+            for position, seed in enumerate(candidate_seeds[key])
+        ]
+        for what, result in results:
+            if result.panel != key:
+                raise ValueError(
+                    f'the {what} of the family {key!r} was read on panel {result.panel!r}'
+                )
+    parts = {references[key].part for key in keys}
+    parts |= {seed.part for key in keys for seed in candidate_seeds[key]}
+    if len(parts) > 1:
+        raise ValueError(f'the results are of more than one part: {sorted(parts)}')
+    for key in keys:
+        expected = references[key].data_fingerprint
+        for position, seed in enumerate(candidate_seeds[key]):
+            if seed.data_fingerprint != expected:
+                raise ValueError(
+                    f'the family {key!r} candidate seed {position} was read on data fingerprint '
+                    f"{seed.data_fingerprint}, not the reference's {expected}: the test needs the "
+                    'same table build'
+                )
+    settings = {'replicates': replicates, 'bootstrap_seed': bootstrap_seed}
+    deltas = []
+    for key in keys:
+        reference = references[key]
+        arm = margins[key].reference
+        items = PanelItems.from_values(headline_values(reference))
+        candidate_point, candidate_draws = arm_replicates(
+            items, key, candidate, candidate_seeds[key], **settings
+        )
+        reference_point, reference_draws = arm_replicates(items, key, arm, [reference], **settings)
+        deltas.append(
+            FamilyDelta(
+                panel=key,
+                reference=arm,
+                delta=candidate_point - reference_point,
+                replicates=candidate_draws - reference_draws,
+                margin=margins[key].margin,
+            )
+        )
+    return beat_by_margin(candidate, deltas)
