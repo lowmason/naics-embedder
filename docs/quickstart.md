@@ -42,7 +42,8 @@ Trainer uses one device. Fusion, projection, geometry and losses stay float32 un
 For a fresh experiment, set a new name before changing settings:
 
 ```bash
-uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5
+uv run naics-embedder train experiment_name=reference-small \
+  data_loader.queries_per_step=64 training.learning_rate=1e-5
 ```
 
 A fresh start refuses a directory that already contains checkpoints. A resume requires the

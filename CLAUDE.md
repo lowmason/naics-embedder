@@ -116,6 +116,7 @@ src/naics_embedder/
 │                              # relatedness.py: relatedness's margin, test and provenance rule
 ├── tree_model/                # deterministic economic candidates: scaling, smoothing, builders
 ├── graph_model/               # HGCN, graph data loading and four-phase curriculum
+├── losses/                    # level_radius.py: HGCN's per-level radial loss
 ├── metrics/                   # structural and retrieval diagnostics
 ├── tools/                     # config display, epoch-summary plotting and metrics API
 └── utils/                     # config, training, input-window and geometry utilities
@@ -128,6 +129,7 @@ tests/
 
 conf/config.yaml               # reference text configuration
 conf/graph.yaml                # separate HGCN configuration
+conf/remote.yaml               # remote transport settings
 conf/local.example.yaml        # form of the gitignored conf/local.yaml: this machine's manifests
 conf/data/                     # frozen panel pins, roles, summaries and held-out groups
 docs/                          # guides and MkDocs API pages
@@ -236,6 +238,8 @@ hash of the six-digit code into a validation part, which selects, and a sealed p
 is NDCG@10, and NDCG@20 is reported. The sealed part opens only through
 `RelatednessPanel.open_sealed` and is read once, at redesign roadmap Stage 7b. No co-ownership
 row enters training, and no code or test reads a real table.
+Stage 6 (2026-11-22) built the panel and `decision/relatedness.py`. No `tools` command reads the
+panel yet. Stage 6b adds that read.
 
 ### Checkpoint Contract and Exact Resume
 
@@ -501,7 +505,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 logger.info('Starting training...')
-logger.warning('Curvature out of bounds, clamping to safe range')
+logger.warning('Skipping hierarchy metrics: node codes unavailable')
 logger.error('Failed to load checkpoint')
 ```
 
@@ -510,13 +514,7 @@ logger.error('Failed to load checkpoint')
 Use type hints for function signatures:
 
 ```python
-from typing import Optional, Dict, List, Tuple
-
-def compute_distance(
-    x: torch.Tensor,
-    y: torch.Tensor,
-    curvature: float = 1.0
-) -> torch.Tensor:
+def radial_loss(radius: torch.Tensor, levels: torch.Tensor, radial_step: float) -> torch.Tensor:
     ...
 ```
 
@@ -554,7 +552,8 @@ settings are compared on exact resume and campaign preflight.
 Use Pydantic models in `utils/config.py` and keys that the current code reads. For a fresh run:
 
 ```bash
-uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5
+uv run naics-embedder train experiment_name=reference-small \
+  data_loader.queries_per_step=64 training.learning_rate=1e-5
 ```
 
 Do not reintroduce removed objective/mining/curvature settings or bypass bundle validation.
@@ -623,6 +622,16 @@ a developer's `conf/local.yaml`; `test_local_config.py` turns it on in a tmp che
 meaningful target tests and the full suite before claiming completion. Measure coverage with
 pytest-cov when needed; test counts alone do not establish it.
 
+### Platform Gotchas
+
+- Rich output wraps at 80 columns on CI but not locally. Match CLI output on
+  `output.replace('\n', '')`, and reproduce a CI failure with `COLUMNS=80`.
+- On MPS, `.to(device='cpu', dtype=torch.float64)` raises. Use `.cpu().to(torch.float64)`.
+  CI has no MPS, so guard such code with a test that skips unless MPS is present.
+- `pl.DataFrame(array, schema=...)` transposes a square array. Pass `orient='row'`, and avoid
+  fixtures where the code count equals the dimension.
+- `addopts` sets `-v`, so count tests with `uv run pytest --collect-only -q -q`.
+
 ## CI/CD and Documentation
 
 `.github/workflows/tests.yml` runs on pull requests and pushes to main/master. With locked
@@ -647,41 +656,27 @@ the strict build. Public rendered docstrings must document their arguments accur
 
 ### Branch Naming
 
-Follow the pattern: `claude/<descriptive-name>-<session-id>`
-
-**Examples:**
-
-- `claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U`
-- `claude/add-graph-curriculum-ABC123XYZ`
+Name a branch `claude/<descriptive-name>`. Desktop-app worktrees add a six-character hex suffix,
+for example `claude/naics-embedder-execution-f9a8b6`. Cut every branch from `origin/main` and
+land it by PR.
 
 ### Commit Messages
 
-Use clear, descriptive commit messages:
+Use Conventional Commits, `type(scope): subject`. The types are `feat`, `fix`, `test`, `docs`,
+`chore`, `refactor` and `style`. The scope names the package or area:
 
 ```bash
-# Good
-git commit -m "Add hierarchy preservation loss to training loop"
-git commit -m "Fix gradient flow issue in hyperbolic convolution"
-git commit -m "Implement 4-phase graph curriculum system"
-git commit -m "Update CLAUDE.md to reflect current codebase structure"
-
-# Bad
-git commit -m "fix bug"
-git commit -m "updates"
-git commit -m "yo brah!"
+git commit -m 'feat(decision): refuse a relatedness table whose provenance names a judging input'
+git commit -m 'test(decision): pin that each judging family takes its own anchors'
+git commit -m 'docs(specs): complete plan 21, stamp Stage 6 and file three deferred items'
+git commit -m 'chore(specs): retire plan 21'
 ```
 
 ### Push Workflow
 
-Always push to the designated Claude branch:
-
-```bash
-# Push with upstream tracking
-git push -u origin claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U
-
-# If push fails due to network, retry with exponential backoff
-# (2s, 4s, 8s, 16s - up to 4 retries)
-```
+Push only the named branch, with `git push -u origin <branch>`. Never push `main` or `refs/held/*`.
+The primary clone's local pre-push hook refuses held commits, a pinned manifest or `/Users/` path
+in the config files, and `conf/local.yaml`. Never bypass it with `--no-verify`.
 
 ## File Modification Guidelines
 
