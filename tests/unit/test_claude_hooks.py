@@ -65,6 +65,11 @@ GROWTH_MARGINS_RUNS = [
     "uv run naics-embedder tools growth-margins # don't rerun",
     'echo hi # a note\nuv run naics-embedder tools growth-margins',
     "cat <<'EOF' > notes.txt\ndon't\nEOF\nuv run naics-embedder tools growth-margins",
+    "bash -o pipefail -c 'uv run naics-embedder tools growth-margins'",
+    '2>/dev/null uv run naics-embedder tools growth-margins',
+    'naics-embedder 2>/dev/null tools growth-margins',
+    'uv --directory /home/u/naics-embedder run naics-embedder tools growth-margins',
+    'uv run --python python3.12 naics-embedder tools growth-margins',
 ]
 
 RUFF_FORMAT_RUNS = [
@@ -109,6 +114,8 @@ ALLOWED = [
     "echo 'unterminated",
     "git commit -F - <<'EOF'\nuv run naics-embedder tools sweep\nEOF",
     'cat <<-EOF\n\tuv run ruff format\n\tEOF',
+    'uv run echo naics-embedder tools growth-margins',
+    "env printf '%s\\n' ruff format",
 ]
 
 @pytest.mark.parametrize('command', GROWTH_MARGINS_RUNS)

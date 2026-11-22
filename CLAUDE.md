@@ -406,7 +406,7 @@ uv run pytest --cov=naics_embedder
 UV_PYTHON=3.10 UV_PROJECT_ENVIRONMENT=/tmp/naics-py310 uv run pytest -n auto
 ```
 
-The current suite collects **5,703 tests**. Actual skip counts depend on local data and hardware
+The current suite collects **5,710 tests**. Actual skip counts depend on local data and hardware
 capabilities, including MPS. Tests use fixture data and tiny models. Collection counts are not
 coverage percentages. Do not read real sealed splits or run a real campaign to verify
 an ordinary code/doc change.
@@ -659,9 +659,11 @@ checkout and on worktrees cut from a commit that has them:
   the owner's approval before a tools command that reads a real panel: `outcome-baseline`,
   `regressor-panel`, `margins`, `decide`, `economic-read`, `outcome-panel`, `ita-read` and
   `sweep`. `--help`, and the `--dry-run` of `economic-read` and `ita-read`, pass with no prompt.
-  It drops comments and heredoc bodies, cuts the rest at shell separators and reads `bash -c`
-  scripts. It catches mistakes, not evasion: command substitutions, `eval`, a heredoc fed to a
-  shell and Python that calls the CLI pass unread.
+  It drops comments, heredoc bodies and redirections, cuts the rest at shell separators and reads
+  `bash -c` scripts. After a launcher such as `uv run`, every later word may be the program, up to
+  a text program such as `echo` or `git`, so a rare false deny is possible. It catches mistakes,
+  not evasion: command substitutions, `eval`, a heredoc fed to a shell and Python that calls the
+  CLI pass unread.
 - `.claude/hooks/format_check.py` (PostToolUse, on Edit and Write) runs
   `scripts/format_code.sh --check` on an edited Python file under `src/` or `tests/`. A failure
   exits 2, so Claude reads the output; nothing changes on disk. It never fixes: `ruff check --fix`

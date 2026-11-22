@@ -16,9 +16,10 @@ Claude Code pipes the hook payload in on stdin. For a shell command, the guard p
 A deny outranks an ask. Any other command gets no output, and the normal permission flow applies.
 
 The guard catches mistakes, not evasion. It drops shell comments and heredoc bodies, cuts the rest
-into simple commands at ``;``, ``&&``, ``||``, ``|``, ``&``, parentheses and newlines, and reads the
-script of ``bash -c`` (and of ``sh`` and ``zsh``). It does not read command substitutions, ``eval``,
-a heredoc fed to a shell, or Python that calls the CLI itself.
+into simple commands at ``;``, ``&&``, ``||``, ``|``, ``&``, parentheses and newlines, drops
+redirections, and reads the script of ``bash -c`` (and of ``sh`` and ``zsh``). After a launcher
+such as ``uv run`` it reads each later word as a possible program (see TEXT_PROGRAMS). It does not
+read command substitutions, ``eval``, a heredoc fed to a shell, or Python that calls the CLI itself.
 
 Claude Code runs it with the first python3 on PATH, which is 3.9 on macOS. So it uses the standard
 library and 3.9 syntax only. A payload or a command that it cannot read gets no output: the guard
@@ -101,13 +102,42 @@ LAUNCHERS = frozenset(
     }
 )
 
+# A launcher's scan stops at these programs, because their arguments are text, not a command.
+# The scan does not try to find the launcher's child exactly: that needs each launcher's option
+# table, and an option value (uv's --directory .../naics-embedder) read as the child would hide
+# the real command. So it reads every later word, and a rare false deny is the price.
+TEXT_PROGRAMS = frozenset(
+    {
+        'echo',
+        'printf',
+        'cat',
+        'grep',
+        'egrep',
+        'rg',
+        'sed',
+        'awk',
+        'head',
+        'tail',
+        'wc',
+        'jq',
+        'ls',
+        'find',
+        'git',
+        'gh',
+        'pytest',
+    }
+)
+
 SHELLS = frozenset({'bash', 'sh', 'zsh'})
+SHELL_VALUE_OPTIONS = frozenset({'-o', '+o', '-O', '+O'})
 
 # Words that can come before a command without being one.
 LEADING_WORDS = frozenset({'!', 'if', 'then', 'elif', 'else', 'while', 'until', 'do', '{'})
 
 PUNCTUATION = '();<>|&\n'
+PUNCTUATION_CHARS = frozenset(PUNCTUATION)
 SEPARATOR_CHARS = frozenset(';&|()\n')
+REDIRECTION_CHARS = frozenset('<>')
 WORD_BREAKS = frozenset(' \t\r\n;&|()<>')
 ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=')
 PYTHON = re.compile(r'python[0-9.]*$')
@@ -215,6 +245,25 @@ def simple_commands(command):
     if current:
         yield current
 
+def without_redirections(words):
+    '''The words without each redirection operator, the file descriptor before it and its operand.
+
+    shlex cuts 2>/dev/null into 2, > and /dev/null. A digit word just before an operator is taken
+    as its file descriptor, so a spaced `cmd 2 > f` loses the argument 2 here, which is harmless.
+    '''
+    kept = []
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if PUNCTUATION_CHARS.issuperset(word) and REDIRECTION_CHARS & set(word):
+            if kept and kept[-1].isdigit():
+                kept.pop()
+            index += 2
+            continue
+        kept.append(word)
+        index += 1
+    return kept
+
 def name(word):
     return os.path.basename(word)
 
@@ -232,12 +281,18 @@ def positionals(words, value_options=frozenset()):
     return found
 
 def shell_script(args):
-    '''The script after a shell's -c option, or None.'''
-    for index, word in enumerate(args):
-        if not word.startswith('-'):
+    '''The script after a shell's -c option, or None. -o and -O take an operand.'''
+    index = 0
+    while index < len(args):
+        word = args[index]
+        if word in SHELL_VALUE_OPTIONS:
+            index += 2
+            continue
+        if not word.startswith(('-', '+')) or word in ('-', '--'):
             return None
-        if not word.startswith('--') and 'c' in word[1:]:
+        if word.startswith('-') and not word.startswith('--') and 'c' in word[1:]:
             return args[index + 1] if index + 1 < len(args) else None
+        index += 1
     return None
 
 def python_module(args):
@@ -276,8 +331,28 @@ def ruff_decision(args):
         return 'deny', RUFF_FORMAT_REASON
     return None
 
+def program_decision(program, args):
+    '''The decision for one program and its arguments, or None.'''
+    if program == 'naics-embedder':
+        return cli_decision(args)
+    if program == 'ruff':
+        return ruff_decision(args)
+    if PYTHON.match(program):
+        module, module_args = python_module(args)
+        if module in CLI_MODULES:
+            return cli_decision(module_args)
+        if module == 'ruff':
+            return ruff_decision(module_args)
+    return None
+
 def word_decisions(words, depth):
-    '''Yield the decisions for one simple command.'''
+    '''Yield the decisions for one simple command.
+
+    After a launcher, every later word may be the child program. The scan stops at a text
+    program, at a shell and at the first decision. A target that gives no decision does not stop
+    it, because that word may be an option's value.
+    '''
+    words = without_redirections(words)
     while words and (words[0] in LEADING_WORDS or ASSIGNMENT.match(words[0])):
         words = words[1:]
     if not words:
@@ -285,20 +360,17 @@ def word_decisions(words, depth):
     starts = range(1, len(words)) if name(words[0]) in LAUNCHERS else [0]
     for start in starts:
         program, args = name(words[start]), words[start + 1:]
+        if program in TEXT_PROGRAMS:
+            return
         if program in SHELLS:
             script = shell_script(args)
             if script is not None and depth < MAX_SHELL_DEPTH:
                 yield from line_decisions(script, depth + 1)
-        elif program == 'naics-embedder':
-            yield cli_decision(args)
-        elif program == 'ruff':
-            yield ruff_decision(args)
-        elif PYTHON.match(program):
-            module, module_args = python_module(args)
-            if module in CLI_MODULES:
-                yield cli_decision(module_args)
-            elif module == 'ruff':
-                yield ruff_decision(module_args)
+            return
+        decision = program_decision(program, args)
+        if decision is not None:
+            yield decision
+            return
 
 def line_decisions(command, depth=0):
     for words in simple_commands(command):
