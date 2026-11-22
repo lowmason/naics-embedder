@@ -22,7 +22,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence
 
 import numpy as np
 import polars as pl
@@ -1404,6 +1404,28 @@ def without_anchor(result: RelatednessResult, anchor: str) -> RelatednessResult:
         result, per_anchor=result.per_anchor.filter(pl.col('anchor') != anchor)
     )
 
+def renamed_anchor(result: RelatednessResult, old: str, new: str) -> RelatednessResult:
+    '''``result`` with the anchor ``old`` named ``new``: the same count of anchors, another set.'''
+
+    return dataclasses.replace(
+        result, per_anchor=result.per_anchor.with_columns(pl.col('anchor').str.replace(old, new))
+    )
+
+def on_anchors(
+    inputs: Inputs, key: str, change: Callable[[RelatednessResult], RelatednessResult]
+) -> Inputs:
+    '''``inputs`` with ``change`` made to the family's reference and to each of its candidate seeds.'''
+
+    seeds = [change(seed) for seed in inputs.candidate_seeds[key]]
+    return inputs._replace(
+        candidate_seeds={
+            **inputs.candidate_seeds, key: seeds
+        },
+        references={
+            **inputs.references, key: change(inputs.references[key])
+        },
+    )
+
 # -------------------------------------------------------------------------------------------------
 # Headline values and replicates
 # -------------------------------------------------------------------------------------------------
@@ -1653,6 +1675,30 @@ def test_each_family_is_judged_on_its_own_reference_margin_and_data(tmp_path):
         assert family.delta == expected.delta and family.delta == pytest.approx(0.102)
     # The two references read differently, so the families do not share their replicates
     assert first.interval != second.interval
+
+@pytest.mark.parametrize('key', [PANEL, SECOND_FAMILY])
+@pytest.mark.parametrize('change', ['drops an anchor', 'renames an anchor'])
+def test_each_family_takes_its_own_anchors(tmp_path, key, change):
+    # Anchors are the units, so a family's items are its own reference's: one family has 6 anchors
+    # and the other 7, or both have 7 and the sets differ
+    alter = {
+        'drops an anchor': lambda result: without_anchor(result, '445110'),
+        'renames an anchor': lambda result: renamed_anchor(result, '445110', '999999'),
+    }[change]
+    inputs = on_anchors(two_families(tmp_path), key, alter)
+    first, second = (
+        set(inputs.references[name].per_anchor.get_column('anchor'))
+        for name in (PANEL, SECOND_FAMILY)
+    )
+    assert first != second
+    assert sorted((len(first), len(second))) == ([6, 7] if change == 'drops an anchor' else [7, 7])
+    verdict = run(inputs)
+    expected = beat_by_margin(
+        'c', [expected_delta(inputs, name) for name in (PANEL, SECOND_FAMILY)]
+    )
+    assert verdict == expected
+    assert [family.panel for family in verdict.families] == [PANEL, SECOND_FAMILY]
+    assert verdict.beats is True
 
 def test_a_second_family_leaves_the_first_familys_draws_alone(tmp_path):
     inputs = two_families(tmp_path)
