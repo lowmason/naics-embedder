@@ -116,6 +116,7 @@ src/naics_embedder/
 │                              # relatedness.py: relatedness's margin, test and provenance rule
 ├── tree_model/                # deterministic economic candidates: scaling, smoothing, builders
 ├── graph_model/               # HGCN, graph data loading and four-phase curriculum
+├── losses/                    # level_radius.py: HGCN's per-level radial loss
 ├── metrics/                   # structural and retrieval diagnostics
 ├── tools/                     # config display, epoch-summary plotting and metrics API
 └── utils/                     # config, training, input-window and geometry utilities
@@ -128,16 +129,30 @@ tests/
 
 conf/config.yaml               # reference text configuration
 conf/graph.yaml                # separate HGCN configuration
+conf/remote.yaml               # remote transport settings
 conf/local.example.yaml        # form of the gitignored conf/local.yaml: this machine's manifests
 conf/data/                     # frozen panel pins, roles, summaries and held-out groups
 docs/                          # guides and MkDocs API pages
 scripts/format_code.sh         # Ruff fixes/imports, then YAPF layout
+.claude/rules/                 # path-scoped rules: economic, text-to-code, relatedness, remote
 .claude/settings.json          # project Claude Code hooks: evidence guard, format check
 .claude/hooks/                 # the hook scripts (stdlib-only, Python 3.9)
 ```
 
 Generated data, checkpoints, logs and reports are separate artifacts. Do not confuse historical
 training logs or a real panel campaign with fixture verification.
+
+## Scoped Rules
+
+Each artifact's mechanics and the remote workflow's contracts live in `.claude/rules/`. Claude
+Code loads a rule when it reads or edits a file that the rule's `paths` match. A rule does not
+load for a command run or a diff review, so this file keeps every guardrail. Other agents, Codex
+included, read the rule before they change its area:
+
+- `.claude/rules/economic.md`: regressor outcome modes, economic reads, `decide` and pairing.
+- `.claude/rules/text-to-code.md`: the ITA panel's reads and tools, and their traps.
+- `.claude/rules/relatedness.md`: the relatedness panel's scores and status, and its traps.
+- `.claude/rules/remote.md`: the remote adapters, launch requirements, model cache and Plan 10.
 
 ## Key Concepts and Patterns
 
@@ -223,21 +238,18 @@ curriculum. The outcome and two regressor panels decide adoption under Req 5.
 Text→code's own judge is the ITA panel (`ita_text`, `panels/ita.py`), which scores ITA
 employer-written descriptions. Its pairs split by a salted hash of `description_key` into a
 validation part, which selects, and a sealed part. The sealed part opens only through
-`ItaPanel.open_sealed` and is read once, at embedding roadmap Stage 12. Stage 4 measured the gap
-between Census phrases and owner text on the validation part on 2026-11-19
-(`specs/findings/text-to-code-gap.md`), as a development measurement. The outcome panel's
+`ItaPanel.open_sealed` and is read once, at embedding roadmap Stage 12. The outcome panel's
 validation split is reported beside it and decides nothing for text→code, and its test split
-stays sealed. No ITA pair enters training, and no code or test reads a real pair.
-`tools ita-read` reads a reference arm on the ITA validation part after checking the pinned
-run (`conf/data/ita_evidence.yaml`), and `tools ita-gap` measures the gap from those reads
-without reading a panel.
+stays sealed. No ITA pair enters training, and no code or test reads a real pair. The reads, the
+tools and the traps are in `.claude/rules/text-to-code.md`.
 
 Relatedness's own judge is the relatedness panel (`relatedness_co_ownership`,
 `panels/relatedness.py`), which scores ITA co-ownership. Its anchor industries split by a salted
-hash of the six-digit code into a validation part, which selects, and a sealed part. The headline
-is NDCG@10, and NDCG@20 is reported. The sealed part opens only through
-`RelatednessPanel.open_sealed` and is read once, at redesign roadmap Stage 7b. No co-ownership
-row enters training, and no code or test reads a real table.
+hash of the six-digit code into a validation part, which selects, and a sealed part. The sealed
+part opens only through `RelatednessPanel.open_sealed` and is read once, at redesign roadmap
+Stage 7b. No co-ownership row enters training, and no code or test reads a real table. Nothing
+logs a read of either panel's raw sealed rows (`ItaPanel`'s pairs, `panel.co_ownership`), so a
+review must catch one. The scores, the status and the traps are in `.claude/rules/relatedness.md`.
 
 ### Checkpoint Contract and Exact Resume
 
@@ -283,84 +295,34 @@ reading a panel. It verifies anchor-radius gradients, per-level SD > 1e-3, posit
 sector radii, manifold error and chunked distance precision, plus gradients for the three terms
 and both scales. A failed criterion writes the report and exits 1.
 
-The regressor panel's `outcome` (`conf/data/regressor_panel.yaml`, Req 21) is `level` by default,
-the levels history read as `regressor_seen` and `regressor_heldout`. `growth` reads
-log E(t+1) − log E(t) on the same rows, partition and folds, as `growth_seen` and
-`growth_heldout`. One opening of a regime's outer set counts for both outcomes (Req 22).
-`tools regressor-panel` and `tools sweep` read level mode only, so no candidate's growth error
-exists before the economic margin (Req 24). The fixture panel pins level mode's rows, data
-fingerprints, folds and scores at d61f49b (`test_regressor_panel.py`).
-
-The economic decision (Req 24, `decision/economic.py`) reads `growth_seen` and `growth_heldout`
-against the reference `covariates+ancestors`. `tools growth-margins` reads growth whatever the
-config says, scoring only the comparators that read no candidate, and records δ = r × the
-reference's validation MSE, with r = `relative_margin` (0.05) in `conf/data/decision.yaml`.
-A deterministic candidate is one replicate, read by `read_deterministic_arm` with its table's
-provenance and no checkpoint or monitor reads. `tools economic-build` builds the nine
-deterministic tables from the frozen list. `tools economic-read` reads one frozen-list candidate,
-deterministic or trained, after the checks that run before the panel loads. Under `--dry-run` it
-stops after those checks: it loads no panel and logs nothing. The table's width, its panel-code
-coverage and a deterministic candidate's D9 comparison wait for the real read, and a deterministic
-row must pin its built table's sha256 before the read accepts it. A trained candidate is imported
-from its Stage 7/8 arm record and run directories (`--runs-root`) and read once per seed.
-`tools decide` makes the economic decision from a relative margin record and takes `--candidates`,
-the frozen list (default `conf/data/economic_candidates.yaml`). It requires exactly the list's
-candidates and records the list's sha256. It also reports whether each smoothed candidate is
-adopted over its text-only twin, and chooses nothing by it. It refuses a candidate whose reference
-rows differ from the margin read's, or whose reference predictions differ from its by more than
-`PAIRING_TOLERANCE` (1e-13, absolute; the prediction alone has a tolerance), or that read before
-the margins.
-Superiority is 1 − 0.05/n: 97.5 % over the two growth panels, 98⅓ % over D8's three. Only a
-candidate adopted over the reference is eligible; with none, the reference stands. The growth
-margins were fixed once, on 2026-10-17 (`specs/findings/growth-margins.md`). Never run
-`tools growth-margins` again: nothing in the code refuses a second run, and every economic
-candidate is decided against that record. In Claude Code sessions, the project hook
-`.claude/hooks/evidence_guard.py` denies it. The economic decision was recorded on 2026-11-18
-(`specs/findings/economic-decision.md`): no candidate is adopted, and the reference
-`covariates+ancestors` stands.
+The regressor panel reads `level` by default and `growth` on the same rows and folds. One opening
+of a regime's outer set counts for both outcomes (Req 22). `tools regressor-panel` and
+`tools sweep` read level mode only, so no candidate's growth error exists before the economic
+margin (Req 24). `tools decide` refuses a candidate that read before the margins, and paired reads
+must share one `uv.lock` on macOS arm64. The growth margins were fixed once, on 2026-10-17
+(`specs/findings/growth-margins.md`). Never run `tools growth-margins` again: nothing in the
+code refuses a second run, and every economic candidate is decided against that record. In
+Claude Code sessions, the project hook `.claude/hooks/evidence_guard.py` denies it. The economic
+decision was recorded on 2026-11-18 (`specs/findings/economic-decision.md`): no candidate is
+adopted, and the reference `covariates+ancestors` stands. The mechanics are in
+`.claude/rules/economic.md`.
 
 ### Remote Workflow and Phase 2 Boundary
 
-Five `remote` CLI adapters call `RemoteWorkflow`: up/train/sync/finish/status. Transport config is
-separate in `conf/remote.yaml`; later operations use the complete persisted session config. Help
-never bootstraps or reads state/config. Canonical inputs travel explicitly and are never rebuilt on
-an instance; committed `conf/config.yaml` keeps its manifest null, and the Mac's gitignored
-`conf/local.yaml` names it. That file is never pushed: launch passes the manifest explicitly. Every
-kept checkpoint, last and both histories travel together. Exact continuation only uses last under
-the same absolute checkpoint path/user, settings/seed and LoRA/active-MoE controls. Empty/new fresh
-directories pass; finished runs skip; budgets and checkpoints are never rewritten.
+Five `remote` CLI adapters call `RemoteWorkflow`: up/train/sync/finish/status. Canonical inputs
+travel explicitly and are never rebuilt on an instance. Only safe=true finish prints
+`Safe to terminate`; abandon records possible loss and stays unsafe. The adapters' contracts,
+launch requirements, model cache and Plan 10 history are in `.claude/rules/remote.md`. See
+[remote workflow](docs/remote_workflow.md) and [remote API](docs/api/remote.md).
 
-Bootstrap and immediate launch require NTP and native BF16 on logical CUDA 0 using
-`including_emulation=False`, identical CUDA visibility and one device. No GPU whitelist, VRAM
-threshold, workload-fit inference or precision fallback. Status GPU evidence is observational.
-Only safe=true finish prints `Safe to terminate`; abandon records possible loss and stays unsafe.
-Mac tampering, pending promotions, active training and unhandled edits withhold readiness.
-A CUDA `up` copies the Mac's cached Hub snapshots into `.remote/model-cache/hub` and verifies
-their SHA-256 inventory on both hosts (`remote/model_cache.py`; MiniLM's revision is pinned).
-Launch rechecks it, and the wrappers run with `HF_HUB_OFFLINE=1`: nothing downloads or repairs.
-
-See [remote workflow](docs/remote_workflow.md) and [remote API](docs/api/remote.md). Plan 10's
-Phase 2 (Task 18 onward) is finished history. Its qualification experiment, ten-seed Lambda
-campaign and Mac reads fixed the reference configuration and δ = 3 SD
-(`specs/findings/reference-configuration.md`); Stage 7 is stamped COMPLETE (2026-10-07) in
-`specs/naics-embedding-roadmap.md`, and Plan 10 is under `specs/plans/completed/`. Phase 1
-evidence/counts remain historical, including its queued lint truth. That qualification covers the
-recorded private source only: native readiness for a public release or a later campaign needs its
-own qualification on a new experiment, never `plan10_smoke`, and stays an open item in
-`specs/deferred_items.md`. These fixtures execute no real Lambda campaign. A session on the
-primary checkout sets the manifests in its gitignored `conf/local.yaml`; no private config commit
-is replayed or held. Held config SHAs that completed plans and findings cite stay reachable
-locally under `refs/held/*` in the primary clone; never push them. Exports, QCEW, stores and
-decisions stay on the Mac; remote selection logs stay separate and sealed test/outer splits stay
-closed.
-
-The `uv.lock` freeze held from Plan 10's first campaign launch through Stage 8's decision and was
-released when `specs/naics-representation-split.md` merged (Req 19). `decide` pairs reads only on
-identical regressor rows and reference predictions equal to within `PAIRING_TOLERANCE`, so the
-growth margin read and every economic candidate read share one `uv.lock` and run on macOS arm64.
-The tolerance exists because plan 19's first real read, on macOS 27.2.1 against the margin read's
-26.6.2, differed in the last bits (at most 6.9e-16) and moved the reference's validation MSE by
-one ulp.
+Plan 10's qualification covers the recorded private source only: native readiness for a public
+release or a later campaign needs its own qualification on a new experiment, never
+`plan10_smoke`, and stays an open item in `specs/deferred_items.md`. These fixtures execute no
+real Lambda campaign. A session on the primary checkout sets the manifests in its gitignored
+`conf/local.yaml`; no private config commit is replayed or held. Held config SHAs that completed
+plans and findings cite stay reachable locally under `refs/held/*` in the primary clone; never
+push them. Exports, QCEW, stores and decisions stay on the Mac; remote selection logs stay
+separate and sealed test/outer splits stay closed.
 
 ## Development Setup
 
@@ -504,7 +466,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 logger.info('Starting training...')
-logger.warning('Curvature out of bounds, clamping to safe range')
+logger.warning('Skipping hierarchy metrics: node codes unavailable')
 logger.error('Failed to load checkpoint')
 ```
 
@@ -513,13 +475,7 @@ logger.error('Failed to load checkpoint')
 Use type hints for function signatures:
 
 ```python
-from typing import Optional, Dict, List, Tuple
-
-def compute_distance(
-    x: torch.Tensor,
-    y: torch.Tensor,
-    curvature: float = 1.0
-) -> torch.Tensor:
+def radial_loss(radius: torch.Tensor, levels: torch.Tensor, radial_step: float) -> torch.Tensor:
     ...
 ```
 
@@ -557,7 +513,8 @@ settings are compared on exact resume and campaign preflight.
 Use Pydantic models in `utils/config.py` and keys that the current code reads. For a fresh run:
 
 ```bash
-uv run naics-embedder train experiment_name=reference-small   data_loader.queries_per_step=64 training.learning_rate=1e-5
+uv run naics-embedder train experiment_name=reference-small \
+  data_loader.queries_per_step=64 training.learning_rate=1e-5
 ```
 
 Do not reintroduce removed objective/mining/curvature settings or bypass bundle validation.
@@ -592,30 +549,10 @@ There are 122 unit files and two integration files. Important current seams incl
   contracts, exact resume, stopped runs and settings guards.
 - `test_checkpoint_runner.py`, `test_radius_report.py`, `test_epoch_summary.py`,
   `test_visualize_metrics.py`: campaign preflight, radius checks and durable health artifacts.
-- `test_regressor_panel.py`, `test_regressor_qcew_rows.py`: level mode pinned at d61f49b, the
-  growth outcome on the same rows and folds, and one seal per regime's split (Reqs 21–22).
-- `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates'
-  records and pairing, eligibility, the tie order, margin-first refusals and the economic
-  decision record (Req 24).
-- `test_tree_model.py`: classical scaling and its cut refusals, lineage smoothing, and the three
-  builders' tables, codebook order and byte-for-byte determinism.
-- `test_economic_candidates.py`: the frozen list and its pins, the text-and-tree-only provenance
-  rule and trained imports. `test_cli_commands.py` covers `tools economic-build`,
-  `tools economic-read` (with its dry run) and `tools decide --candidates`.
 - `test_local_config.py`: `conf/local.yaml`'s two keys and `data/` paths, its place between the
   tracked YAML and overrides, its root and env var, and the graph config's explicit fields.
-- `test_ita_split.py`, `test_ita_inputs.py`, `test_ita_scoring.py`, `test_ita_panel.py` and
-  `test_decision_text_to_code.py`: the ITA panel's salted split, input refusals, shortlist ranks
-  and summaries, logged reads and sealed opening, and text→code's margin and decision. All read
-  `tests/fixtures/ita.py` tables only.
-- `test_ita_evidence.py`, `test_ita_reads.py` and `test_ita_gap.py`: the ITA run pin and its C1
-  check, Stage 4's reference reads and their refusals before logging, and the gap's strata,
-  matched codes, refusals of reads that do not pair and D2. All read fixture tables only.
-- `test_relatedness_split.py`, `test_relatedness_inputs.py`, `test_relatedness_scoring.py`,
-  `test_relatedness_arms.py`, `test_relatedness_panel.py` and `test_decision_relatedness.py`:
-  the relatedness panel's salted anchor split, input refusals, tie-aware scores, reference arms,
-  logged reads and sealed opening, and relatedness's margin, test and provenance rule. All read
-  `tests/fixtures/relatedness.py` tables only.
+- Each artifact's tests: the economic, text→code and relatedness rules in `.claude/rules/` list
+  them. All of them read fixture tables only.
 - `integration/test_reference_training.py`: tiny-backbone Trainer runs, earliest-best selection,
   schedule/early stopping, health records and exact resume.
 - `test_claude_hooks.py`: the two project Claude Code hooks, run as Claude Code runs them: the
@@ -628,6 +565,16 @@ Keep generated fixture outputs under `tmp_path`. Use reference fixture bundles i
 a developer's `conf/local.yaml`; `test_local_config.py` turns it on in a tmp checkout. Run
 meaningful target tests and the full suite before claiming completion. Measure coverage with
 pytest-cov when needed; test counts alone do not establish it.
+
+### Platform Gotchas
+
+- Rich output wraps at 80 columns on CI but not locally. Match CLI output on
+  `output.replace('\n', '')`, and reproduce a CI failure with `COLUMNS=80`.
+- On MPS, `.to(device='cpu', dtype=torch.float64)` raises. Use `.cpu().to(torch.float64)`.
+  CI has no MPS, so guard such code with a test that skips unless MPS is present.
+- `pl.DataFrame(array, schema=...)` transposes a square array. Pass `orient='row'`, and avoid
+  fixtures where the code count equals the dimension.
+- `addopts` sets `-v`, so count tests with `uv run pytest --collect-only -q -q`.
 
 ## CI/CD and Documentation
 
@@ -679,41 +626,27 @@ tests in `tests/unit/test_claude_hooks.py`, which run both hooks as Claude Code 
 
 ### Branch Naming
 
-Follow the pattern: `claude/<descriptive-name>-<session-id>`
-
-**Examples:**
-
-- `claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U`
-- `claude/add-graph-curriculum-ABC123XYZ`
+Name a branch `claude/<descriptive-name>`. Desktop-app worktrees add a six-character hex suffix,
+for example `claude/naics-embedder-execution-f9a8b6`. Cut every branch from `origin/main` and
+land it by PR.
 
 ### Commit Messages
 
-Use clear, descriptive commit messages:
+Use Conventional Commits, `type(scope): subject`. The types are `feat`, `fix`, `test`, `docs`,
+`chore`, `refactor` and `style`. The scope names the package or area:
 
 ```bash
-# Good
-git commit -m "Add hierarchy preservation loss to training loop"
-git commit -m "Fix gradient flow issue in hyperbolic convolution"
-git commit -m "Implement 4-phase graph curriculum system"
-git commit -m "Update CLAUDE.md to reflect current codebase structure"
-
-# Bad
-git commit -m "fix bug"
-git commit -m "updates"
-git commit -m "yo brah!"
+git commit -m 'feat(decision): refuse a relatedness table whose provenance names a judging input'
+git commit -m 'test(decision): pin that each judging family takes its own anchors'
+git commit -m 'docs(specs): complete plan 21, stamp Stage 6 and file three deferred items'
+git commit -m 'chore(specs): retire plan 21'
 ```
 
 ### Push Workflow
 
-Always push to the designated Claude branch:
-
-```bash
-# Push with upstream tracking
-git push -u origin claude/update-claude-md-01FgsKX3pMhy1GMWM6ivoh4U
-
-# If push fails due to network, retry with exponential backoff
-# (2s, 4s, 8s, 16s - up to 4 retries)
-```
+Push only the named branch, with `git push -u origin <branch>`. Never push `main` or `refs/held/*`.
+The primary clone's local pre-push hook refuses held commits, a pinned manifest or `/Users/` path
+in the config files, and `conf/local.yaml`. Never bypass it with `--no-verify`.
 
 ## File Modification Guidelines
 
