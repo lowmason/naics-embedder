@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The suite contains **115 unit** test files and **2 integration** files, with **4,630 collected
+The suite contains **121 unit** test files and **2 integration** files, with **5,636 collected
 nodes**. Actual skip counts depend on local data and hardware capabilities, including MPS.
 Collection counts describe the suite inventory, not measured coverage percentages.
 
@@ -19,7 +19,7 @@ it back on with `monkeypatch` for a temporary checkout.
 
 ```text
 tests/
-├── unit/                         # 115 unit test files
+├── unit/                         # 121 unit test files
 ├── integration/
 │   ├── test_reference_training.py # tiny-backbone Trainer workflows
 │   └── test_remote_workflow.py    # GNU-rsync workflow qualification
@@ -42,6 +42,7 @@ tests/
 | Economic decision | `test_decision_economic.py`: the reference-only margin read and δ, deterministic candidates' records and the reference's tolerance pairing, eligibility, the tie order, margin-first refusals and the decision record (Req 24) |
 | ITA panel and text→code margin | `test_ita_split.py`, `test_ita_inputs.py`, `test_ita_scoring.py`, `test_ita_panel.py`, `test_decision_text_to_code.py`: the salted `description_key` split, input refusals, shortlist ranks and summaries, logged reads and sealed opening, and the margin and decision on the headline. All read `tests/fixtures/ita.py` tables only |
 | ITA reads and gap | `test_ita_evidence.py`, `test_ita_reads.py`, `test_ita_gap.py`: the ITA run pin and its C1 check, Stage 4's reference reads and their refusals before logging, and the gap's strata, matched codes, refusals of reads that do not pair and D2. All read `tests/fixtures/ita.py` tables only |
+| Relatedness panel and margin | `test_relatedness_split.py`, `test_relatedness_inputs.py`, `test_relatedness_scoring.py`, `test_relatedness_arms.py`, `test_relatedness_panel.py`, `test_decision_relatedness.py`: the salted anchor split, input refusals in a fixed order, tie-aware scores, the tree and text-only reference arms, logged reads and the sealed opening, and the reference choice, margin, beat-by-δ test and provenance check. All read `tests/fixtures/relatedness.py` tables only |
 | Training and contracts | `test_cli_training.py`, `test_utils_training.py`, `test_checkpoint_contract.py`, `test_export.py`, `test_arm_encoder.py`: objective refusal, settings/directory/seed guards, saved constructor controls, CPU/MPS float64 callback transport and export/read provenance |
 | Campaign runner | `test_checkpoint_runner.py`: all-seed preflight, earliest best, epoch coverage, saved-score/version-sibling refusals and monitor-record pass-through |
 | Verification and summary | `test_radius_report.py`, `test_epoch_summary.py`, `test_visualize_metrics.py`: live gradients, radius/distance checks, durable finite health, resume and SD bands |

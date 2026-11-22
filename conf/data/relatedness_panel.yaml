@@ -1,0 +1,18 @@
+# The relatedness co-ownership panel (redesign roadmap Stage 6): its name, the split rule's version
+# and salt, the relative margin r and the headline's NDCG cut k
+
+panel: relatedness_co_ownership
+
+# The split rule's version, part of the split fingerprint
+rule_version: 1
+
+# The salt was drawn once at plan 21 and never changes: every opening of the sealed part is keyed on
+# the split fingerprint, which names the salt, so a new salt would move six-digit codes between the
+# validation part and the sealed part (spec 4.3, 4.5)
+salt: '4bfd5195916df66d0e1c619c6507f2ad'
+
+# r: delta is r times the chosen reference's validation headline, the mean NDCG@k (spec 4.6)
+relative_margin: 0.05
+
+# k: the headline's NDCG cut (U44); NDCG@20 is a report beside it
+k: 10

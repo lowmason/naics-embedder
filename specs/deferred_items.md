@@ -613,3 +613,36 @@
       mismatch only after the one-time read is in the selection log. Size: quick-fix. Done when: a
       d16 read refuses a checkpoint whose SHA-256, or a table whose matrix fingerprint, is not the
       Stage 8 record's for that seed, before any log record, with a test.
+
+## 21-relatedness-artifact — 2026-11-22
+- [ ] A settings file with another salt gives the relatedness sealed part a fresh opening (plan 21
+      final review, Declined to judge; owner deferred to Stage 7b). `RelatednessPanel.open_sealed`
+      (src/naics_embedder/panels/relatedness.py) looks up earlier openings by the split
+      fingerprint, so a `settings_path` with another salt gives another fingerprint, a logged
+      `open` where a `reopen` belongs, and anchors that move between the validation and sealed
+      parts. `ItaPanel` behaves the same, spec §4.3 says the salt never changes, and
+      tests/unit/test_relatedness_split.py pins the committed YAML, but nothing refuses another
+      file at run time. See specs/plans/completed/21-relatedness-artifact.md (Handoff). Size: plan.
+      Done when: Stage 7b's opening path refuses a split fingerprint that is not the committed
+      `conf/data/relatedness_panel.yaml`'s, before any log record, and a test shows that a settings
+      file with another salt is refused.
+- [ ] `fix_relatedness_margin` does not bind r to the committed relative margin (plan 21 final
+      review, Declined to judge; owner deferred to Stage 6b). It takes `r` as an argument
+      (src/naics_embedder/decision/relatedness.py) and never compares it with
+      `panel.settings.relative_margin` (0.05, `conf/data/relatedness_panel.yaml`).
+      `check_relatedness_margin` tests δ only against the record's own `r`, so a margin fixed with
+      another r passes every check. `tools ita-gap` binds r with
+      `load_ita_settings(settings).relative_margin` (src/naics_embedder/cli/commands/tools.py).
+      Size: quick-fix. Done when: Stage 6b's margin command passes the panel's
+      `relative_margin` as r, and a test shows that another r is refused before any read.
+- [ ] `VectorArm`'s cosine depends on the memory layout of its input (plan 21 Task 5 ruling; the
+      controller filed it for Stage 6b). `VectorArm.__init__`
+      (src/naics_embedder/panels/relatedness_arms.py) copies its vectors with
+      `np.array(vectors, dtype=np.float64)`, which keeps a column-major input's layout, and
+      `text_only_matrix` returns one. A `from_text_only` arm and a `VectorArm` over the same
+      values in C order then differ in the last bits at d = 384 (1,593 of 2,100 cells in the
+      implementer's check). Within one arm nothing depends on it, and every reference read goes
+      through `from_text_only`, so only a comparison across the two constructors sees it. Size:
+      quick-fix. Done when: `VectorArm.__init__` builds its matrix with `order='C'`, and a test
+      shows that a column-major and a row-major input of the same values give bit-equal
+      similarities.

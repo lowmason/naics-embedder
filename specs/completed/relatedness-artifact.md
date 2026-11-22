@@ -1,5 +1,8 @@
 # Relatedness artifact — Design Spec
 
+**Status: COMPLETE (2026-11-22)** — implemented by plan 21
+(`specs/plans/completed/21-relatedness-artifact.md`); deferred items in `specs/deferred_items.md`.
+
 **Status:** APPROVED (2026-11-18, U48). Written in a brainstorming session. A
 builder check raised five points. One was the user's to rule (U47, the relevance floor). The other
 four are folded in as my calls: the gain's base (§4.4), five seeds (§4.6, §4.7), when TRI may join
